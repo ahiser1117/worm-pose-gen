@@ -1,0 +1,132 @@
+{
+  "experiment": "EXP-0003",
+  "status": "REJECT",
+  "evidence_tier": "Candidate proxy-referenced real-texture crops; not anatomical accuracy evidence",
+  "proxy_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+  "proxy_sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+  "accepted_proxy_frames": 90,
+  "accepted_by_recording": {
+    "2023-09-19-01": 33,
+    "2023-09-27-01": 26,
+    "2023-10-11-01": 31
+  },
+  "attempted_conditions": 900,
+  "valid_crops": 65,
+  "valid_crop_yield": 0.07222222222222222,
+  "complete_frames_all_ten_conditions": 0,
+  "complete_by_recording": {
+    "2023-09-19-01": 0,
+    "2023-09-27-01": 0,
+    "2023-10-11-01": 0
+  },
+  "minimum_complete_frames": 60,
+  "per_condition": {
+    "head_0.05": {
+      "valid": 1,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 0,
+        "2023-10-11-01": 1
+      }
+    },
+    "tail_0.05": {
+      "valid": 1,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 1,
+        "2023-10-11-01": 0
+      }
+    },
+    "head_0.10": {
+      "valid": 1,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 0,
+        "2023-10-11-01": 1
+      }
+    },
+    "tail_0.10": {
+      "valid": 1,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 1,
+        "2023-10-11-01": 0
+      }
+    },
+    "head_0.20": {
+      "valid": 2,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 1,
+        "2023-10-11-01": 1
+      }
+    },
+    "tail_0.20": {
+      "valid": 2,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 0,
+        "2023-10-11-01": 2
+      }
+    },
+    "head_0.30": {
+      "valid": 9,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 2,
+        "2023-09-27-01": 3,
+        "2023-10-11-01": 4
+      }
+    },
+    "tail_0.30": {
+      "valid": 6,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 0,
+        "2023-09-27-01": 2,
+        "2023-10-11-01": 4
+      }
+    },
+    "head_0.40": {
+      "valid": 23,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 8,
+        "2023-09-27-01": 6,
+        "2023-10-11-01": 9
+      }
+    },
+    "tail_0.40": {
+      "valid": 19,
+      "attempted": 90,
+      "by_recording": {
+        "2023-09-19-01": 3,
+        "2023-09-27-01": 9,
+        "2023-10-11-01": 7
+      }
+    }
+  },
+  "rejection_reason_counts": {
+    "no_exact_support_window": 17,
+    "visible_support_does_not_fit": 818
+  },
+  "maximum_roundtrip_error_px": 0.0,
+  "roundtrip_limit_px": 1e-05,
+  "pixel_provenance_checks_passed": 65,
+  "deterministic_repeat_checks_passed": 65,
+  "external_output_retained": false,
+  "case_manifest_sha256": "5cd4a56026aa5bbc59104c8d6e8788e0ae0d9421449c94cb6c11b6bdce27214a",
+  "runtime_seconds": 7.341187675483525,
+  "runtime_limit_seconds": 600.0,
+  "host": {
+    "python": "3.13.15",
+    "platform": "Linux-6.12.0-211.22.1.el10_2.x86_64-x86_64-with-glibc2.39"
+  },
+  "case_manifest_entries": 900
+}
