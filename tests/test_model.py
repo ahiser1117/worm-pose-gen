@@ -22,6 +22,7 @@ from scripts.train import (
     FullyVisibleCountContract,
     ImmutableStepCheckpoint,
     checkpoint_training_elapsed_seconds,
+    fixed_training_order,
     resolve_protocol,
     resolve_resume_checkpoint,
 )
@@ -175,6 +176,19 @@ class ModelTests(unittest.TestCase):
                 resolve_resume_checkpoint(output, resume_last=True, resume_from=None),
                 output / "last.ckpt",
             )
+
+    def test_fixed_training_order_is_repeatable_and_seed_specific(self) -> None:
+        first, first_hash = fixed_training_order(571, 20260818)
+        repeated, repeated_hash = fixed_training_order(571, 20260818)
+        other, other_hash = fixed_training_order(571, 20260819)
+        self.assertEqual(first, repeated)
+        self.assertEqual(first_hash, repeated_hash)
+        self.assertNotEqual(first, other)
+        self.assertNotEqual(first_hash, other_hash)
+        self.assertEqual(sorted(first), list(range(571)))
+        # A mid-epoch restart enumerates the identical suffix after Lightning
+        # skips already-consumed batches.
+        self.assertEqual(first[12 * 16 :], repeated[12 * 16 :])
 
     def test_calibration_includes_probability_one(self) -> None:
         probability = torch.tensor([0.0, 1.0])

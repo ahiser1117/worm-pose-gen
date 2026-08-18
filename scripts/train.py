@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import timedelta
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -145,6 +146,19 @@ def checkpoint_training_elapsed_seconds(checkpoint: dict) -> float:
     return elapsed
 
 
+def fixed_training_order(length: int, model_seed: int) -> tuple[list[int], str]:
+    """Return one repeat-seed-specific permutation reused identically every epoch."""
+
+    if length < 1:
+        raise ValueError("training dataset must be non-empty")
+    generator = torch.Generator().manual_seed(model_seed)
+    order = torch.randperm(length, generator=generator).tolist()
+    digest = hashlib.sha256(
+        json.dumps(order, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    return order, digest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -228,10 +242,11 @@ def main() -> int:
         synthetic_validation_count=int(config["training"]["synthetic_validation_samples"]),
     )
     workers = int(config["training"]["num_workers"])
+    training_order, training_order_sha256 = fixed_training_order(len(train), seed)
     train_loader = DataLoader(
         train,
         batch_size=int(config["training"]["train_batch_size"]),
-        shuffle=True,
+        sampler=training_order,
         num_workers=workers,
     )
     proxy_validation_loader = DataLoader(
@@ -256,12 +271,13 @@ def main() -> int:
         encoder_pool_output=pool_output,
         model_seed=seed,
         data_seed=data_seed,
+        training_order_sha256=training_order_sha256,
     )
     if sum(parameter.numel() for parameter in module.parameters()) > int(config["model"]["maximum_parameters"]):
         raise RuntimeError("model exceeds configured parameter ceiling")
     latest_checkpoint = ModelCheckpoint(
         dirpath=args.output_dir,
-        filename=f"{variant}-fold{args.fold}-step{{step}}",
+        filename=f"{variant}-fold{args.fold}-{{step}}",
         monitor=None,
         save_top_k=1,
         save_last=True,
@@ -294,8 +310,10 @@ def main() -> int:
         if config["experiment"] == "EXP-0007" and (
             int(resumed_hparams.get("model_seed", -1)) != seed
             or int(resumed_hparams.get("data_seed", -1)) != data_seed
+            or resumed_hparams.get("training_order_sha256")
+            != training_order_sha256
         ):
-            raise RuntimeError("resume checkpoint model/data seed identity mismatch")
+            raise RuntimeError("resume checkpoint model/data/order identity mismatch")
         if (
             config["experiment"] == "EXP-0007"
             and int(resumed.get("global_step", -1)) >= int(config["early_elimination"]["checkpoint_step"])
@@ -363,7 +381,11 @@ def main() -> int:
             )
         )
     logger = (
-        CSVLogger(save_dir=str(args.output_dir), name="csv", version="")
+        CSVLogger(
+            save_dir=str(args.output_dir),
+            name=f"csv_segment_step{0 if resumed is None else int(resumed['global_step'])}",
+            version="",
+        )
         if config["experiment"] == "EXP-0007"
         else False
     )

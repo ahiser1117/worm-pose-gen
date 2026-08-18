@@ -82,6 +82,7 @@ class WormProposalModule(L.LightningModule):
         encoder_pool_output: tuple[int, int] = (2, 2),
         model_seed: int | None = None,
         data_seed: int | None = None,
+        training_order_sha256: str | None = None,
     ) -> None:
         super().__init__()
         if variant not in ("coordinate", "intrinsic"):
