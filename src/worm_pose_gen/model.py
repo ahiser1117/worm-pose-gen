@@ -1,4 +1,4 @@
-"""Compact Lightning proposal models for the EXP-0004 representation ablation.
+"""Compact Lightning proposal models for EXP-0004 and EXP-0007.
 
 Inference batch contract: ``model(images)`` accepts float images shaped
 ``[B, 1, 192, 256]`` in the closed interval [0, 1]. It returns a dictionary
@@ -35,8 +35,13 @@ def smooth_tangent_basis(num_points: int = 100, coefficients: int = 16) -> Tenso
 class SmallEncoder(nn.Module):
     """Shared encoder used unchanged by both representation variants."""
 
-    def __init__(self) -> None:
+    def __init__(self, pool_output: tuple[int, int] = (2, 2)) -> None:
         super().__init__()
+        if len(pool_output) != 2 or any(value < 1 for value in pool_output):
+            raise ValueError("pool_output must contain two positive integers")
+        feature_shape = (12, 16)
+        if any(size % output for size, output in zip(feature_shape, pool_output, strict=True)):
+            raise ValueError("pool_output must evenly divide the fixed 12x16 feature map")
         channels = (1, 24, 48, 96, 128)
         blocks: list[nn.Module] = []
         for input_channels, output_channels in zip(channels[:-1], channels[1:], strict=True):
@@ -50,10 +55,12 @@ class SmallEncoder(nn.Module):
                 ]
             )
         # The fixed 192x256 input is 12x16 after four stride-2 blocks. A fixed
-        # average pool preserves the intended 2x2 feature map and, unlike
+        # average pool preserves the configured spatial map and, unlike
         # adaptive_avg_pool2d_backward, has a deterministic CUDA backward path.
-        self.network = nn.Sequential(*blocks, nn.AvgPool2d((6, 8)), nn.Flatten())
-        self.output_features = 128 * 2 * 2
+        kernel = tuple(size // output for size, output in zip(feature_shape, pool_output, strict=True))
+        self.network = nn.Sequential(*blocks, nn.AvgPool2d(kernel), nn.Flatten())
+        self.output_features = 128 * pool_output[0] * pool_output[1]
+        self.pool_output = pool_output
 
     def forward(self, image: Tensor) -> Tensor:
         return self.network(image)
@@ -72,6 +79,9 @@ class WormProposalModule(L.LightningModule):
         num_points: int = 100,
         intrinsic_coefficients: int = 16,
         anchor_index: int = 50,
+        encoder_pool_output: tuple[int, int] = (2, 2),
+        model_seed: int | None = None,
+        data_seed: int | None = None,
     ) -> None:
         super().__init__()
         if variant not in ("coordinate", "intrinsic"):
@@ -80,7 +90,8 @@ class WormProposalModule(L.LightningModule):
             raise ValueError("EXP-0004 requires exactly 16 intrinsic coefficients")
         self.save_hyperparameters()
         self.variant = variant
-        self.encoder = SmallEncoder()
+        encoder_pool_output = tuple(int(value) for value in encoder_pool_output)
+        self.encoder = SmallEncoder(encoder_pool_output)
         representation_size = 2 * num_points if variant == "coordinate" else 2 + 1 + 2 + 16
         self.head = nn.Sequential(
             nn.Linear(self.encoder.output_features, 256),
@@ -190,6 +201,25 @@ class WormProposalModule(L.LightningModule):
                 angle_mae_degrees,
                 on_step=False,
                 on_epoch=True,
+                add_dataloader_idx=False,
+            )
+            fully_visible = batch["image_support_target"].all(-1)
+            if bool(fully_visible.any()):
+                fully_visible_angle = torch.minimum(forward, reverse)[fully_visible]
+                self.log(
+                    "val_tier_c_fully_visible_angle_mae_degrees",
+                    fully_visible_angle.mean() * 180 / torch.pi,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=int(fully_visible.sum()),
+                    add_dataloader_idx=False,
+                )
+            self.log(
+                "val_tier_c_fully_visible_count",
+                fully_visible.sum().to(torch.float32),
+                on_step=False,
+                on_epoch=True,
+                reduce_fx="sum",
                 add_dataloader_idx=False,
             )
         return loss

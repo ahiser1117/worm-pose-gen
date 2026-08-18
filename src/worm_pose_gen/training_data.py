@@ -214,18 +214,11 @@ class SyntheticTierCDataset(Dataset[dict[str, Tensor | str | int]]):
         return self.count
 
     def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
-        sample_seed = self.seed + int(index)
-        pose = generate_synthetic_pose(sample_seed, self.config, profile=self.profile)
-        original = pose["centerline_xy"]
-        # A fixed index-derived censoring schedule makes support/FOV behavior reproducible.
-        if index % 3:
-            fraction = (0.05, 0.10, 0.20, 0.30, 0.40)[index % 5]
-            end = "head" if index % 2 else "tail"
-            _, camera, support = anatomical_crop_transform(original, fraction, end, self.config)
-        else:
-            camera = original
-            support = torch.ones(self.config.num_points, dtype=torch.bool)
-        centerline = original_to_render(camera, self.config).float()
+        geometry = generate_tier_c_geometry(index, seed=self.seed, profile=self.profile)
+        sample_seed = int(geometry["sample_seed"])
+        pose = geometry["pose"]
+        support = geometry["image_support_target"]
+        centerline = geometry["centerline_xy"]
         width = pose["width_profile_render"].float()
         generator = torch.Generator().manual_seed(sample_seed + 10_000_000)
         noise = torch.randn((192, 256), generator=generator) * 0.015
@@ -248,6 +241,35 @@ class SyntheticTierCDataset(Dataset[dict[str, Tensor | str | int]]):
             "frame_index": -1,
             "sample_seed": sample_seed,
         }
+
+
+def generate_tier_c_geometry(
+    index: int, *, seed: int, profile: str
+) -> dict[str, Tensor | int | dict]:
+    """Generate the exact geometry used by :class:`SyntheticTierCDataset`.
+
+    This renderer-free path is also the executable EXP-0007 baseline source.
+    """
+
+    if index < 0:
+        raise ValueError("index must be non-negative")
+    config = SyntheticConfig()
+    sample_seed = seed + int(index)
+    pose = generate_synthetic_pose(sample_seed, config, profile=profile)
+    original = pose["centerline_xy"]
+    if index % 3:
+        fraction = (0.05, 0.10, 0.20, 0.30, 0.40)[index % 5]
+        end = "head" if index % 2 else "tail"
+        _, camera, support = anatomical_crop_transform(original, fraction, end, config)
+    else:
+        camera = original
+        support = torch.ones(config.num_points, dtype=torch.bool)
+    return {
+        "sample_seed": sample_seed,
+        "pose": pose,
+        "centerline_xy": original_to_render(camera, config).float(),
+        "image_support_target": support,
+    }
 
 
 def make_datasets(

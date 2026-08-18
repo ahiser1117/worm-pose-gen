@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -65,6 +66,9 @@ def aligned_geometry_metrics(
         "proximity": proximity,
         "endpoint": point[:, [0, -1]],
         "body_length_error": (predicted_length - target_length).abs(),
+        "body_length_error_fraction": (
+            (predicted_length - target_length).abs() / target_length.clamp_min(1e-12)
+        ),
         "aligned_support": aligned_support,
         "support_probability": support_probability,
         "support_squared_error": (
@@ -108,7 +112,16 @@ def summarize_cases(cases: list[dict], *, failed_inference_count: int = 0) -> di
         "mean_angle_degrees": float(all_angle.mean()),
         "p95_frame_angle_degrees": float(torch.quantile(torch.tensor([float(case["angle"].mean()) for case in cases]), .95)),
         "mean_endpoint_error_px": float(torch.cat([case["endpoint"] for case in cases]).mean()),
+        "mean_head_endpoint_error_px": float(
+            torch.stack([case["endpoint"][0] for case in cases]).mean()
+        ),
+        "mean_tail_endpoint_error_px": float(
+            torch.stack([case["endpoint"][1] for case in cases]).mean()
+        ),
         "mean_body_length_error_px": float(torch.stack([case["body_length_error"] for case in cases]).mean()),
+        "median_body_length_error_fraction": float(
+            torch.stack([case["body_length_error_fraction"] for case in cases]).median()
+        ),
         "visible_mean_point_px": float(visible_point.mean()) if len(visible_point) else None,
         "hidden_mean_point_px": float(hidden_point.mean()) if len(hidden_point) else None,
         "visible_mean_angle_degrees": float(visible_angle.mean()) if len(visible_angle) else None,
@@ -369,14 +382,20 @@ def main() -> int:
     parser.add_argument("--fold", type=int, choices=(0, 1, 2))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--model-seed", type=int)
+    parser.add_argument("--baseline-metadata", type=Path)
     parser.add_argument("--aggregate", type=Path, nargs="+")
     parser.add_argument("--coordinate-throughput", type=float)
     parser.add_argument("--intrinsic-throughput", type=float)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
+    if config.get("experiment") not in ("EXP-0004", "EXP-0007"):
+        raise ValueError("evaluate.py supports only EXP-0004 and EXP-0007")
     if config["input"].get("audited_holdout_allowed", False): raise RuntimeError("audited holdout forbidden")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.aggregate:
+        if config["experiment"] != "EXP-0004":
+            raise ValueError("the two-variant aggregate mode applies only to EXP-0004")
         aggregate = aggregate_results(
             args.aggregate,
             config,
@@ -388,11 +407,51 @@ def main() -> int:
         return 0
     if args.checkpoint is None or args.fold is None:
         parser.error("evaluation requires --checkpoint and --fold unless --aggregate is used")
+    baseline_identity = None
+    if config["experiment"] == "EXP-0007":
+        if args.baseline_metadata is None:
+            parser.error("EXP-0007 evaluation requires --baseline-metadata")
+        baseline = json.loads(args.baseline_metadata.read_text())
+        if (
+            baseline.get("experiment") != "EXP-0007"
+            or int(baseline.get("fold", -1)) != args.fold
+            or int(baseline.get("data_seed", -1)) != int(config["data_seed"])
+            or baseline.get("config_sha256") != sha256_file(args.config)
+        ):
+            raise RuntimeError("baseline metadata does not match evaluation identity")
+        tensor_path = args.baseline_metadata.parent / baseline["tensor_file"]
+        if sha256_file(tensor_path) != baseline["tensor_file_sha256"]:
+            raise RuntimeError("baseline tensor-file hash mismatch")
+        baseline_identity = {
+            "metadata_path": str(args.baseline_metadata.resolve(strict=True)),
+            "metadata_sha256": sha256_file(args.baseline_metadata),
+            "tensor_sha256": baseline["tensor_sha256"],
+            "tensor_file_sha256": baseline["tensor_file_sha256"],
+            "median_point_error_px": baseline["validation"]["median_point_error_px"],
+        }
+    elif args.baseline_metadata is not None:
+        parser.error("--baseline-metadata applies only to EXP-0007")
     device = torch.device(args.device)
     module = WormProposalModule.load_from_checkpoint(args.checkpoint, map_location=device).to(device).eval()
+    expected_variant = (
+        config["model"]["variant"]
+        if config["experiment"] == "EXP-0007"
+        else module.variant
+    )
+    expected_pool = tuple(config["model"].get("encoder_pool_output", (2, 2)))
+    if module.variant != expected_variant or tuple(module.encoder.pool_output) != expected_pool:
+        raise RuntimeError("checkpoint variant/pool does not match the evaluation config")
+    configured_model_seed = int(config.get("model_seed", config.get("seed", 20260818)))
+    data_seed = int(config.get("data_seed", config.get("seed", 20260818)))
+    evaluated_model_seed = args.model_seed if args.model_seed is not None else configured_model_seed
+    if config["experiment"] == "EXP-0007" and (
+        int(module.hparams.get("model_seed", -1)) != evaluated_model_seed
+        or int(module.hparams.get("data_seed", -1)) != data_seed
+    ):
+        raise RuntimeError("checkpoint model/data seed does not match evaluation identity")
     datasets = {
         "B": ProxyDataset(config["input"]["proxy_hdf5"], expected_sha256=config["input"]["proxy_sha256"], fold=args.fold, split="validation"),
-        "C": SyntheticTierCDataset(int(config["training"]["synthetic_validation_samples"]), seed=int(config["seed"]) + 5_000_000 + args.fold * 100_000, profile="held_out"),
+        "C": SyntheticTierCDataset(int(config["training"]["synthetic_validation_samples"]), seed=data_seed + 5_000_000 + args.fold * 100_000, profile=config["input"]["synthetic_validation_profile"]),
     }
     results = {tier: evaluate(module, dataset, int(config["training"]["evaluation_batch_size"]), device) for tier, dataset in datasets.items()}
     tier_c_cases, _ = results["C"]
@@ -407,7 +466,7 @@ def main() -> int:
     if len(tier_c_fully_visible) + len(tier_c_cropped) != len(tier_c_cases):
         raise RuntimeError("Tier C visibility strata do not partition the cases")
     results["C"] = (tier_c_fully_visible, summarize_cases(tier_c_fully_visible))
-    rng = np.random.default_rng(int(config["seed"]) + args.fold)
+    rng = np.random.default_rng(data_seed + args.fold)
     for tier, (cases, _) in results.items():
         count = min(12, len(cases))
         random_indices = sorted(rng.choice(len(cases), count, replace=False).tolist())
@@ -417,8 +476,25 @@ def main() -> int:
         overlays(cases, worst, args.output_dir / f"tier_{tier}_worst.png", f"{stratum} worst")
     diagnostics(results, args.output_dir)
     metrics = {
-        "experiment": "EXP-0004",
+        "experiment": config["experiment"],
         "variant": module.variant,
+        "encoder_pool_output": list(module.encoder.pool_output),
+        "model_seed": evaluated_model_seed,
+        "data_seed": data_seed,
+        "config_sha256": sha256_file(args.config),
+        "git_commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "baseline_identity": baseline_identity,
+        "advancement_scope": (
+            "geometry_only_rescue_no_temporal_authorization"
+            if config["experiment"] == "EXP-0007"
+            else "representation_ablation"
+        ),
         "fold": args.fold,
         "checkpoint_path": str(args.checkpoint.resolve(strict=True)),
         "checkpoint_sha256": sha256_file(args.checkpoint),
@@ -445,7 +521,12 @@ def main() -> int:
                     "median_point_px": float(case["point"].median()),
                     "p95_point_px": float(torch.quantile(case["point"], .95)),
                     "mean_endpoint_error_px": float(case["endpoint"].mean()),
+                    "head_endpoint_error_px": float(case["endpoint"][0]),
+                    "tail_endpoint_error_px": float(case["endpoint"][1]),
                     "body_length_error_px": float(case["body_length_error"]),
+                    "body_length_error_fraction": float(
+                        case["body_length_error_fraction"]
+                    ),
                     "mean_angle_degrees": float(case["angle"].mean()),
                     "p95_angle_degrees": float(torch.quantile(case["angle"], .95)),
                 }
@@ -467,7 +548,12 @@ def main() -> int:
                 "median_point_px": float(case["point"].median()),
                 "p95_point_px": float(torch.quantile(case["point"], .95)),
                 "mean_endpoint_error_px": float(case["endpoint"].mean()),
+                "head_endpoint_error_px": float(case["endpoint"][0]),
+                "tail_endpoint_error_px": float(case["endpoint"][1]),
                 "body_length_error_px": float(case["body_length_error"]),
+                "body_length_error_fraction": float(
+                    case["body_length_error_fraction"]
+                ),
                 "mean_angle_degrees": float(case["angle"].mean()),
                 "p95_angle_degrees": float(torch.quantile(case["angle"], .95)),
             }

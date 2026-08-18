@@ -7,7 +7,13 @@ import h5py
 import numpy as np
 import torch
 
-from worm_pose_gen.training_data import EXPECTED_RECORDS, ProxyDataset, SyntheticTierCDataset, normalize_image
+from worm_pose_gen.training_data import (
+    EXPECTED_RECORDS,
+    ProxyDataset,
+    SyntheticTierCDataset,
+    generate_tier_c_geometry,
+    normalize_image,
+)
 
 
 def _proxy(path: Path) -> str:
@@ -28,6 +34,19 @@ def _proxy(path: Path) -> str:
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_exp7_data_seed_is_invariant_to_model_seed_and_has_43_full_cases(self) -> None:
+        data_seed = 20260818 + 5_000_000 + 2 * 100_000
+        torch.manual_seed(20260818)
+        first = generate_tier_c_geometry(7, seed=data_seed, profile="held_out")
+        torch.manual_seed(20260820)
+        second = generate_tier_c_geometry(7, seed=data_seed, profile="held_out")
+        torch.testing.assert_close(first["centerline_xy"], second["centerline_xy"], rtol=0, atol=0)
+        full = sum(
+            bool(generate_tier_c_geometry(index, seed=data_seed, profile="held_out")["image_support_target"].all())
+            for index in range(128)
+        )
+        self.assertEqual(full, 43)
+
     def test_normalization_is_deterministic(self) -> None:
         image = np.arange(35, dtype=np.uint8).reshape(5, 7)
         first = normalize_image(image); second = normalize_image(image)

@@ -14,6 +14,13 @@ from scripts.evaluate import (
     expected_calibration_error,
     summarize_cases,
 )
+from scripts.exp_0007_baseline import tensor_sha256, validate_exp_0007_config
+from scripts.train import (
+    FullyVisibleCountContract,
+    ImmutableStepCheckpoint,
+    resolve_protocol,
+    resolve_resume_checkpoint,
+)
 from worm_pose_gen.model import WormProposalModule
 
 
@@ -27,6 +34,97 @@ class _TinyDataset(Dataset):
 
 
 class ModelTests(unittest.TestCase):
+    def test_step_checkpoint_and_visible_count_callbacks_are_exact(self) -> None:
+        class _Trainer:
+            global_step = 300
+            sanity_checking = False
+            callback_metrics = {"val_tier_c_fully_visible_count": torch.tensor(43.0)}
+
+            @staticmethod
+            def save_checkpoint(path: Path) -> None:
+                path.write_bytes(b"checkpoint")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "step300.ckpt"
+            callback = ImmutableStepCheckpoint(path, 300)
+            callback.on_train_batch_end(_Trainer(), None, None, None, 0)
+            self.assertEqual(path.read_bytes(), b"checkpoint")
+            with self.assertRaises(FileExistsError):
+                callback.on_train_batch_end(_Trainer(), None, None, None, 0)
+        FullyVisibleCountContract(43).on_validation_epoch_end(_Trainer(), None)
+        with self.assertRaises(RuntimeError):
+            FullyVisibleCountContract(42).on_validation_epoch_end(_Trainer(), None)
+
+    def test_fully_visible_checkpoint_metric_ignores_cropped_case(self) -> None:
+        from unittest.mock import patch
+
+        module = WormProposalModule("intrinsic")
+        horizontal = torch.stack(
+            (torch.linspace(20, 220, 100), torch.full((100,), 96.0)), -1
+        )
+        vertical = torch.stack(
+            (torch.full((100,), 128.0), torch.linspace(10, 182, 100)), -1
+        )
+        target = torch.stack((horizontal, horizontal))
+        support = torch.ones(2, 100, dtype=torch.bool)
+        support[1, -20:] = False
+        prediction = torch.stack((horizontal, vertical))
+        output = {
+            "centerline_xy": prediction,
+            "image_support_logits": torch.zeros(2, 100),
+        }
+        logged: dict[str, torch.Tensor] = {}
+
+        def capture(name, value, **kwargs):
+            logged[name] = value.detach()
+
+        batch = {
+            "image": torch.zeros(2, 1, 192, 256),
+            "centerline_xy": target,
+            "image_support_target": support,
+        }
+        with patch.object(module, "forward", return_value=output), patch.object(
+            module, "log", side_effect=capture
+        ):
+            module.validation_step(batch, 0, dataloader_idx=1)
+        self.assertAlmostEqual(
+            float(logged["val_tier_c_fully_visible_angle_mae_degrees"]), 0.0, places=5
+        )
+
+    def test_exp7_pool_shape_parameter_budget_and_protocol(self) -> None:
+        config = yaml.safe_load(Path("configs/spatial_rescue.yaml").read_text())
+        validate_exp_0007_config(config)
+        variant, pool = resolve_protocol(config, None)
+        model = WormProposalModule(
+            variant,
+            encoder_pool_output=pool,
+            model_seed=config["model_seed"],
+            data_seed=config["data_seed"],
+        )
+        self.assertEqual(model.encoder.pool_output, (4, 4))
+        self.assertLess(sum(parameter.numel() for parameter in model.parameters()), 1_000_000)
+        self.assertEqual(model(torch.zeros(1, 1, 192, 256))["centerline_xy"].shape, (1, 100, 2))
+        self.assertEqual(resolve_protocol(yaml.safe_load(Path("configs/representation_ablation.yaml").read_text()), "intrinsic")[1], (2, 2))
+
+    def test_tensor_hash_is_canonical_little_endian_float32(self) -> None:
+        import hashlib
+        import numpy as np
+
+        tensor = torch.tensor([[1.0, 2.0]], dtype=torch.float64)
+        expected = hashlib.sha256(np.asarray([[1.0, 2.0]], dtype="<f4").tobytes(order="C")).hexdigest()
+        self.assertEqual(tensor_sha256(tensor), expected)
+
+    def test_resume_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "last.ckpt").touch()
+            with self.assertRaises(FileExistsError):
+                resolve_resume_checkpoint(output, resume_last=False, resume_from=None)
+            self.assertEqual(
+                resolve_resume_checkpoint(output, resume_last=True, resume_from=None),
+                output / "last.ckpt",
+            )
+
     def test_calibration_includes_probability_one(self) -> None:
         probability = torch.tensor([0.0, 1.0])
         target = torch.tensor([0, 0], dtype=torch.bool)
@@ -41,6 +139,7 @@ class ModelTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(metrics["point"].mean()), 968 / 256, places=6)
         self.assertAlmostEqual(float(metrics["endpoint"].mean()), 968 / 256, places=6)
+        self.assertAlmostEqual(float(metrics["body_length_error_fraction"]), 0.0)
 
     def test_fully_visible_summary_does_not_invent_hidden_evidence(self) -> None:
         target = torch.stack((torch.linspace(20, 220, 100), torch.full((100,), 96.0)), -1)[None]
@@ -54,6 +153,9 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(summary["median_point_px"], 0.0)
         self.assertEqual(summary["visible_mean_point_px"], 0.0)
         self.assertIsNone(summary["hidden_mean_point_px"])
+        self.assertEqual(summary["mean_head_endpoint_error_px"], 0.0)
+        self.assertEqual(summary["mean_tail_endpoint_error_px"], 0.0)
+        self.assertEqual(summary["median_body_length_error_fraction"], 0.0)
 
     def test_aggregate_decision_reliability_branches(self) -> None:
         config = yaml.safe_load(Path("configs/representation_ablation.yaml").read_text())
