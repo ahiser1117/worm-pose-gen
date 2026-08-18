@@ -26,15 +26,21 @@ training:
   devices: 1
   num_workers: 0
   synthetic_samples_per_epoch: 512
+  synthetic_validation_samples: 128
   orientation_loss: symmetric_minimum_forward_reverse
 decision:
   minimum_angle_improvement_fraction: 0.05
   maximum_proxy_point_regression_fraction: 0.05
   minimum_throughput_ratio: 0.90
-  minimum_fold_wins: 2
-  reliability_tier_c_median_point_px: 8.0
-  reliability_tier_c_p95_point_px: 20.0
-  reliability_tier_c_mean_angle_degrees: 15.0
+  require_positive_angle_improvement_every_fold: true
+  require_proxy_guardrail_every_fold: true
+  bootstrap_resamples: 2000
+  near_gate_repeat_seeds: [20260819, 20260820]
+  near_gate_relative_band_fraction: 0.10
+  reliability_tier_c_median_point_px: 4.0
+  reliability_tier_c_p95_point_px: 10.0
+  reliability_tier_c_mean_angle_degrees: 8.0
+  reliability_tier_c_p95_frame_angle_degrees: 18.0
 resources:
   maximum_minutes_per_run: 12
   maximum_primary_gpu_hours: 1.5

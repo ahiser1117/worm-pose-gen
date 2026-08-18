@@ -3,7 +3,8 @@
   "seed": 20260818,
   "source_dataset_path": "/img_nir",
   "frame_ranges_are_half_open": true,
-  "grouping_priority": ["project_family", "acquisition_date", "recording"],
+  "split_grouping_priority": ["acquisition_date", "recording"],
+  "project_family_scope": "All readable records are starvation; project family cannot be a development split key and limits generalization scope.",
   "records": {
     "2023-09-19-01": {
       "configured_path": "nir_videos/2023-09-19-01.h5",
