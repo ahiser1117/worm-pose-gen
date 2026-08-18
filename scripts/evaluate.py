@@ -15,7 +15,7 @@ import yaml
 
 from worm_pose_gen.geometry import in_fov_mask, tangent_angles, wrap_angle
 from worm_pose_gen.model import WormProposalModule
-from worm_pose_gen.training_data import ProxyDataset, SyntheticTierCDataset
+from worm_pose_gen.training_data import ProxyDataset, SyntheticTierCDataset, sha256_file
 
 
 def aligned_geometry_metrics(
@@ -89,6 +89,45 @@ def expected_calibration_error(probability: torch.Tensor, target: torch.Tensor) 
     return float(result)
 
 
+def summarize_cases(cases: list[dict], *, failed_inference_count: int = 0) -> dict:
+    """Summarize one homogeneous evidence stratum without mixing crop regimes."""
+
+    if not cases:
+        raise ValueError("cannot summarize an empty evaluation stratum")
+    all_point = torch.cat([case["point"] for case in cases])
+    all_angle = torch.cat([case["angle"] for case in cases])
+    all_probability = torch.cat([case["support_probability"] for case in cases])
+    all_support = torch.cat([case["aligned_support"] for case in cases])
+    visible_point = torch.cat([case["point"][case["aligned_support"]] for case in cases])
+    hidden_point = torch.cat([case["point"][~case["aligned_support"]] for case in cases])
+    visible_angle = torch.cat([case["angle"][case["aligned_support"]] for case in cases])
+    hidden_angle = torch.cat([case["angle"][~case["aligned_support"]] for case in cases])
+    return {
+        "samples": len(cases), "median_point_px": float(all_point.median()),
+        "p95_point_px": float(torch.quantile(all_point, .95)),
+        "mean_angle_degrees": float(all_angle.mean()),
+        "p95_frame_angle_degrees": float(torch.quantile(torch.tensor([float(case["angle"].mean()) for case in cases]), .95)),
+        "mean_endpoint_error_px": float(torch.cat([case["endpoint"] for case in cases]).mean()),
+        "mean_body_length_error_px": float(torch.stack([case["body_length_error"] for case in cases]).mean()),
+        "visible_mean_point_px": float(visible_point.mean()) if len(visible_point) else None,
+        "hidden_mean_point_px": float(hidden_point.mean()) if len(hidden_point) else None,
+        "visible_mean_angle_degrees": float(visible_angle.mean()) if len(visible_angle) else None,
+        "hidden_mean_angle_degrees": float(hidden_angle.mean()) if len(hidden_angle) else None,
+        "support_brier": float(torch.cat([case["support_squared_error"] for case in cases]).mean()),
+        "support_ece_10_bin": expected_calibration_error(all_probability, all_support),
+        "reported_vs_recomputed_in_fov_exact_agreement": bool(
+            torch.cat([case["reported_fov_agreement"] for case in cases]).all()
+        ),
+        "reported_vs_recomputed_in_fov_note": "contract consistency only; not FOV accuracy",
+        "predicted_geometric_fov_accuracy": float(
+            torch.cat(
+                [case["predicted_geometric_fov"] == case["aligned_support"] for case in cases]
+            ).float().mean()
+        ),
+        "failed_inference_count": failed_inference_count,
+    }
+
+
 @torch.inference_mode()
 def evaluate(module: WormProposalModule, dataset: torch.utils.data.Dataset, batch_size: int, device: torch.device):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -130,38 +169,7 @@ def evaluate(module: WormProposalModule, dataset: torch.utils.data.Dataset, batc
             })
     if not cases:
         raise RuntimeError("evaluation produced no finite inference cases")
-    all_point = torch.cat([case["point"] for case in cases])
-    all_angle = torch.cat([case["angle"] for case in cases])
-    all_probability = torch.cat([case["support_probability"] for case in cases])
-    all_support = torch.cat([case["aligned_support"] for case in cases])
-    visible_point = torch.cat([case["point"][case["aligned_support"]] for case in cases])
-    hidden_point = torch.cat([case["point"][~case["aligned_support"]] for case in cases])
-    visible_angle = torch.cat([case["angle"][case["aligned_support"]] for case in cases])
-    hidden_angle = torch.cat([case["angle"][~case["aligned_support"]] for case in cases])
-    return cases, {
-        "samples": len(cases), "median_point_px": float(all_point.median()),
-        "p95_point_px": float(torch.quantile(all_point, .95)),
-        "mean_angle_degrees": float(all_angle.mean()),
-        "p95_frame_angle_degrees": float(torch.quantile(torch.tensor([float(case["angle"].mean()) for case in cases]), .95)),
-        "mean_endpoint_error_px": float(torch.cat([case["endpoint"] for case in cases]).mean()),
-        "mean_body_length_error_px": float(torch.stack([case["body_length_error"] for case in cases]).mean()),
-        "visible_mean_point_px": float(visible_point.mean()) if len(visible_point) else None,
-        "hidden_mean_point_px": float(hidden_point.mean()) if len(hidden_point) else None,
-        "visible_mean_angle_degrees": float(visible_angle.mean()) if len(visible_angle) else None,
-        "hidden_mean_angle_degrees": float(hidden_angle.mean()) if len(hidden_angle) else None,
-        "support_brier": float(torch.cat([case["support_squared_error"] for case in cases]).mean()),
-        "support_ece_10_bin": expected_calibration_error(all_probability, all_support),
-        "reported_vs_recomputed_in_fov_exact_agreement": bool(
-            torch.cat([case["reported_fov_agreement"] for case in cases]).all()
-        ),
-        "reported_vs_recomputed_in_fov_note": "contract consistency only; not FOV accuracy",
-        "predicted_geometric_fov_accuracy": float(
-            torch.cat(
-                [case["predicted_geometric_fov"] == case["aligned_support"] for case in cases]
-            ).float().mean()
-        ),
-        "failed_inference_count": failed_inference_count,
-    }
+    return cases, summarize_cases(cases, failed_inference_count=failed_inference_count)
 
 
 def overlays(cases, indices, path: Path, title: str) -> None:
@@ -387,6 +395,18 @@ def main() -> int:
         "C": SyntheticTierCDataset(int(config["training"]["synthetic_validation_samples"]), seed=int(config["seed"]) + 5_000_000 + args.fold * 100_000, profile="held_out"),
     }
     results = {tier: evaluate(module, dataset, int(config["training"]["evaluation_batch_size"]), device) for tier, dataset in datasets.items()}
+    tier_c_cases, _ = results["C"]
+    tier_c_fully_visible = [
+        case for case in tier_c_cases if bool(case["aligned_support"].all())
+    ]
+    tier_c_cropped = [
+        case for case in tier_c_cases if not bool(case["aligned_support"].all())
+    ]
+    if not tier_c_fully_visible or not tier_c_cropped:
+        raise RuntimeError("Tier C evaluation must contain fully-visible and cropped strata")
+    if len(tier_c_fully_visible) + len(tier_c_cropped) != len(tier_c_cases):
+        raise RuntimeError("Tier C visibility strata do not partition the cases")
+    results["C"] = (tier_c_fully_visible, summarize_cases(tier_c_fully_visible))
     rng = np.random.default_rng(int(config["seed"]) + args.fold)
     for tier, (cases, _) in results.items():
         count = min(12, len(cases))
@@ -400,6 +420,13 @@ def main() -> int:
         "experiment": "EXP-0004",
         "variant": module.variant,
         "fold": args.fold,
+        "checkpoint_path": str(args.checkpoint.resolve(strict=True)),
+        "checkpoint_sha256": sha256_file(args.checkpoint),
+        "checkpoint_global_step": int(
+            torch.load(args.checkpoint, map_location="cpu", weights_only=False).get(
+                "global_step", -1
+            )
+        ),
         "evidence": {
             "tier_B_candidate_proxy": "candidate-proxy engineering evidence; not manual-label truth",
             "tier_C": "controlled analytic synthetic evidence",
@@ -425,6 +452,28 @@ def main() -> int:
                 for case in cases
             ],
         }
+    metrics["tier_C_cropped"] = {
+        **summarize_cases(tier_c_cropped),
+        "point_error_units": "original_image_pixels_968x732",
+        "ordinary_reliability_gate_applicable": False,
+        "case_partition_note": (
+            "artificially truncated Tier C cases; evaluated separately from the "
+            "frozen fully-visible ordinary-frame gate"
+        ),
+        "cases": [
+            {
+                "case_id": case["case_id"],
+                "mean_point_px": float(case["point"].mean()),
+                "median_point_px": float(case["point"].median()),
+                "p95_point_px": float(torch.quantile(case["point"], .95)),
+                "mean_endpoint_error_px": float(case["endpoint"].mean()),
+                "body_length_error_px": float(case["body_length_error"]),
+                "mean_angle_degrees": float(case["angle"].mean()),
+                "p95_angle_degrees": float(torch.quantile(case["angle"], .95)),
+            }
+            for case in tier_c_cropped
+        ],
+    }
     (args.output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
     print(json.dumps(metrics, indent=2))
     return 0

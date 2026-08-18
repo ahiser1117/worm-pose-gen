@@ -1,0 +1,76 @@
+{
+  "gpu": {
+    "logical_device": 0,
+    "physical_device": {
+      "physical_index": 0,
+      "uuid": "GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6",
+      "pci_bus_id": "00000000:01:00.0",
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "total_memory": "49140 MiB",
+      "driver_version": "610.43.02"
+    },
+    "mapping": {
+      "physical_index": 0,
+      "visible_logical_index": 0
+    },
+    "name": "NVIDIA RTX 6000 Ada Generation",
+    "total_memory_bytes": 50895519744,
+    "cuda_runtime": "13.0"
+  },
+  "environment": {
+    "python": "3.13.15",
+    "torch": "2.13.0+cu130",
+    "lightning": "2.6.5"
+  },
+  "checkpoint": {
+    "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0004/intrinsic_fold2_seed20260818/intrinsic-fold2-best.ckpt",
+    "sha256": "e780d318b82b4ea529a8b6badfe7c980f1ac9bf992395fcd92fad2b2da75d62b"
+  },
+  "variant": "intrinsic",
+  "parameters": 328921,
+  "protocol": {
+    "warmup_iterations": 10,
+    "measured_iterations": 100,
+    "precision": "float32",
+    "input": "grayscale uint8 732x968 for preprocessing/end-to-end; float32 [B,1,192,256] in [0,1] for forward-only",
+    "cuda_synchronization": "before and after every measured forward/end-to-end iteration"
+  },
+  "forward_batch1": {
+    "batch_size": 1,
+    "p50_milliseconds": 0.8689910173416138,
+    "p95_milliseconds": 0.8861172944307327,
+    "samples_per_second_from_total": 1149.9132998930108,
+    "peak_memory_bytes": 13040128
+  },
+  "forward_batched": {
+    "batch_size": 32,
+    "p50_milliseconds": 1.069554127752781,
+    "p95_milliseconds": 1.0823722463101149,
+    "samples_per_second_from_total": 29909.136004048592,
+    "peak_memory_bytes": 91641344
+  },
+  "preprocessing_batch1": {
+    "batch_size": 1,
+    "p50_milliseconds": 0.3948560915887356,
+    "p95_milliseconds": 0.43221241794526577,
+    "samples_per_second_from_total": 1334.2956622379436
+  },
+  "end_to_end_batch1": {
+    "batch_size": 1,
+    "p50_milliseconds": 1.3382085599005222,
+    "p95_milliseconds": 1.3870983384549618,
+    "samples_per_second_from_total": 230.4335863650369
+  },
+  "preprocessing_batched": {
+    "batch_size": 32,
+    "p50_milliseconds": 11.786025948822498,
+    "p95_milliseconds": 12.079006899148226,
+    "samples_per_second_from_total": 2724.6888614765694
+  },
+  "end_to_end_batched": {
+    "batch_size": 32,
+    "p50_milliseconds": 13.412479776889086,
+    "p95_milliseconds": 13.714642031118274,
+    "samples_per_second_from_total": 2320.377940742334
+  }
+}

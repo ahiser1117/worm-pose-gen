@@ -12,6 +12,7 @@ from scripts.evaluate import (
     aggregate_results,
     aligned_geometry_metrics,
     expected_calibration_error,
+    summarize_cases,
 )
 from worm_pose_gen.model import WormProposalModule
 
@@ -40,6 +41,19 @@ class ModelTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(metrics["point"].mean()), 968 / 256, places=6)
         self.assertAlmostEqual(float(metrics["endpoint"].mean()), 968 / 256, places=6)
+
+    def test_fully_visible_summary_does_not_invent_hidden_evidence(self) -> None:
+        target = torch.stack((torch.linspace(20, 220, 100), torch.full((100,), 96.0)), -1)[None]
+        support = torch.ones(1, 100, dtype=torch.bool)
+        metrics = aligned_geometry_metrics(
+            target, target, support.float(), support, torch.ones_like(support)
+        )
+        case = {name: value[0] for name, value in metrics.items() if name != "chosen_target"}
+        summary = summarize_cases([case])
+        self.assertEqual(summary["samples"], 1)
+        self.assertEqual(summary["median_point_px"], 0.0)
+        self.assertEqual(summary["visible_mean_point_px"], 0.0)
+        self.assertIsNone(summary["hidden_mean_point_px"])
 
     def test_aggregate_decision_reliability_branches(self) -> None:
         config = yaml.safe_load(Path("configs/representation_ablation.yaml").read_text())

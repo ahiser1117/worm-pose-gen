@@ -63,31 +63,87 @@ proxy-referenced stratum.
 
 ## Results
 
-Pending. The first two-step CUDA smoke reached training after strict preflight
-and both validation loaders, then failed before its first optimizer update
-because `adaptive_avg_pool2d_backward_cuda` has no deterministic implementation
-in the installed PyTorch. No metric or checkpoint from that invalid smoke is
-used. The fixed-size encoder pool was replaced by an equivalent fixed average
-pool before the experiment run; the rerun uses a fresh output directory.
+The first two-step CUDA smoke reached training after strict preflight and both
+validation loaders, then failed before its first optimizer update because
+`adaptive_avg_pool2d_backward_cuda` has no deterministic implementation in the
+installed PyTorch. No metric or checkpoint from that invalid smoke was used.
+The fixed-size encoder pool was replaced by an equivalent fixed average pool,
+and the corrected smoke passed before the primary runs.
+
+The original evaluator then exposed a protocol implementation defect: it mixed
+85 artificially cropped Tier C cases into the ordinary fully-visible gate,
+contrary to the frozen `docs/EVALUATION.md`. The same checkpoints were rerun
+after separating 43 fully-visible cases from 85 cropped cases. The invalid
+mixed outputs remain in external storage; all results below use the corrected
+strata and record checkpoint path, digest, and step.
+
+Primary fold 2 reached the frozen 20-epoch cap. Because a periodic mid-epoch
+resume is not exactly resumable, the retained latest periodic checkpoint is
+step 600 rather than the nominal 720-step epoch total. The best coordinate
+checkpoint is step 576, SHA-256
+`7757ded321d16bdbc35e8aa26a119d3bb80fd7757d6982d5054c020f6e596843`;
+the best intrinsic checkpoint is step 360, SHA-256
+`e780d318b82b4ea529a8b6badfe7c980f1ac9bf992395fcd92fad2b2da75d62b`.
+
+| Corrected primary-fold metric | Coordinate | Intrinsic | frozen gate |
+|---|---:|---:|---:|
+| fully-visible Tier C median point error | 208.66 px | 116.92 px | <=4 px |
+| fully-visible Tier C p95 point error | 382.69 px | 275.84 px | <=10 px |
+| fully-visible Tier C mean angle MAE | 46.49 deg | 23.35 deg | <=8 deg |
+| fully-visible Tier C p95 frame angle MAE | 69.53 deg | 31.59 deg | <=18 deg |
+| candidate-proxy median point error | 142.12 px | 72.00 px | <=8 px |
+| candidate-proxy mean angle MAE | 66.06 deg | 55.81 deg | <=15 deg |
+
+The retained step-600 intrinsic state improved fully-visible median point error
+to 108.06 px but worsened mean angle to 25.02 degrees; it still failed every
+geometry gate. Direct coordinates developed a decisive topology defect: mean
+body-length error exceeded 9,300 original-image pixels because independently
+predicted points formed a high-frequency zigzag. Intrinsic reconstruction
+prevented that defect, but regressed toward mean location/length and remained
+far from a reliable proposal. Neither variant advanced to the other two folds.
+
+The preregistered early-elimination phrase "centerline-mean predictor" was not
+fully specified or implemented. Post-hoc diagnostic definitions put the
+baseline median above 328 px, so both models beat it at step 300; the ambiguous
+clause was therefore not used to terminate or accept a run. EXP-0007 freezes an
+executable mean artifact and comparison before training.
 
 ## Figures
 
-Pending random/worst overlays, angle-by-body-position, error distributions,
-FOV-proximity error, and accuracy-throughput comparison.
+The repository evidence bundles contain corrected metrics, random/worst
+candidate-proxy and Tier C overlays, and body-position/error/FOV diagnostics in
+`results/coordinate_best/` and `results/intrinsic_best/`. Random and worst
+overlays show that coordinate outputs are jagged and poorly localized, while
+intrinsic outputs are smooth but frequently centered away from the worm or too
+short. These visuals agree with the point, angle, and length metrics.
 
 ## Runtime
 
-Pending.
+Each first 300-step CUDA segment took about two minutes; continuation to the
+retained step-600 state remained well below the 12-minute per-run limit. On the
+specified RTX 6000 Ada physical device 0, synchronized best-checkpoint
+benchmarks measured coordinate/intrinsic batch-1 end-to-end p50 latency of
+1.01/1.34 ms and batch-32 throughput of 2,418/2,320 samples/s. Both easily clear
+the 20 fps runtime target, but speed cannot compensate for failed accuracy.
 
 ## Interpretation
 
-Pending.
+The intrinsic representation is structurally preferable to independent points,
+but EXP-0004 does not establish an acceptable proposal or a valid all-fold
+representation win. The shared 2x2 spatial bottleneck is a plausible cause of
+the severe localization/scale underfit. Because the intrinsic head already
+removes the coordinate topology failure, the next experiment changes only
+spatial bottleneck resolution rather than repeating a two-variant sweep.
 
 ## Decision
 
-INCONCLUSIVE
+REJECT — neither frozen variant passes the primary-fold ordinary-frame gate, so
+the experiment stops before all-fold comparison, refinement, temporal, or
+probabilistic phases.
 
 ## Next experiment
 
-If a proposal passes the reliability gate, compare centered 1/5/11-frame
-context with that representation held fixed.
+EXP-0007: retain intrinsic geometry and change only the encoder pool from 2x2
+to 4x4, with an executable frozen mean-centerline early-elimination baseline
+and exact epoch logging. Continue to temporal context only if the revised
+proposal passes the unchanged gates.
