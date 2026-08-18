@@ -1,5 +1,6 @@
 experiment_id,datetime_utc,git_commit,parent,hypothesis,primary_metrics,fps,status,notes_path
 EXP-0001,2026-08-18T21:36:06Z,10c413c,,Classical processing yields conservative real proxy labels,90/144 accepted; 0/24 gross visual failures,,ACCEPT_LIMITED,experiments/exp_0001_classical_proxy/notes.md
 EXP-0002,2026-08-18T21:36:06Z,10c413c,,Analytic rendering supports exact controlled crop truth,6400/6400 crops valid; 3.41e-13 px max round trip,,ACCEPT,experiments/exp_0002_synthetic_crop/notes.md
-EXP-0003,2026-08-18T22:03:55Z,b0cfd26,EXP-0001,Real proxy frames support exact texture-preserving camera crops,complete-case yield and transform contract,,PLANNED,experiments/exp_0003_real_texture_crop/notes.md
+EXP-0003,2026-08-18T22:03:55Z,06df23d,EXP-0001,Real proxy frames support exact texture-preserving camera crops,0/90 complete; 65/900 valid; 0 px round trip,,REJECT,experiments/exp_0003_real_texture_crop/notes.md
 EXP-0004,2026-08-18T22:03:55Z,b0cfd26,EXP-0001+EXP-0002,Intrinsic representation improves proposal angle fidelity,angle MAE point error and throughput,,PLANNED,experiments/exp_0004_representation/notes.md
+EXP-0005,2026-08-18T22:18:00Z,06df23d,EXP-0003,Variable isotropic real camera windows recover the strict crop benchmark,complete-case yield and transform contract,,PLANNED,experiments/exp_0005_scaled_real_crop/notes.md

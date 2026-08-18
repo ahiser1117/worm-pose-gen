@@ -38,3 +38,11 @@ simple and cannot support a real-image accuracy claim. See
 Together these experiments permit a small learned proposal comparison while
 keeping evidence roles separate: real texture with imperfect proxy geometry
 versus exact geometry with simplified appearance.
+
+**EXP-0003 (REJECT)** tested the first real-texture crop design: a literal
+`256 x 192` source window. Only 65/900 requested conditions were geometrically
+valid and 0/90 frames supported all ten required head/tail fractions, far below
+the predeclared 60-frame gate. Exact transforms, pixel provenance, and support
+all passed for the 65 emitted cases, so the failure is informative: the physical
+window was too small to retain the long visible complement. EXP-0005 revises
+the camera geometry while retaining the original gate.
