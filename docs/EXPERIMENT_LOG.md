@@ -65,3 +65,15 @@ byte atomic artifact has SHA-256
 Its rows reuse 87 source frames, and its centerlines remain candidate proxies;
 acceptance establishes a balanced static engineering benchmark, not anatomical
 accuracy, temporal truth, or success of EXP-0005's rejected same-frame claim.
+
+**EXP-0004 (REJECT)** tested direct coordinates against a 16-coefficient
+intrinsic proposal on the primary development fold. A corrected rerun separated
+the frozen 43 fully-visible Tier C cases from 85 artificial crops after the
+initial evaluator incorrectly mixed them. Direct coordinates produced a severe
+zigzag/topology failure. Intrinsic geometry removed that failure and was faster
+to learn, but its best fully-visible result was still 116.92 px median point
+error and 23.35 degrees mean angle error versus 4 px and 8 degree gates. Both
+were fast (intrinsic batch-1 end-to-end p50 1.34 ms; batch-32 2,320 samples/s),
+but neither was reliable enough to advance beyond the cheap-elimination fold.
+The evidence supports intrinsic structure but rejects the shared 2x2-bottleneck
+proposal family.

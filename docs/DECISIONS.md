@@ -44,3 +44,12 @@
 - **Decision:** freeze the EXP-0006 condition-level artifact as a static candidate-proxy engineering stratum without relaxing geometry or reinterpreting EXP-0005.
 - **Consequence:** the benchmark has 300 rows but only 87 unique source frames; it cannot establish anatomical accuracy, biological independence, or temporal performance.
 - **Revisit if:** independently annotated real sequences support a complete temporal benchmark.
+
+## D-0006 — Reject the 2x2-bottleneck proposal family
+
+- **Question:** Is either direct-coordinate or intrinsic regression reliable enough to initialize later phases?
+- **Options:** accept coordinates; accept intrinsic; reject both and revise one factor.
+- **Evidence:** EXP-0004 coordinate predictions formed extreme zigzags; intrinsic predictions were smooth but the best primary-fold fully-visible result was 116.92 px median point error and 23.35 degrees mean angle error against 4 px and 8 degree gates.
+- **Decision:** reject both frozen candidates, retaining intrinsic structure only as the controlled baseline for a 4x4 spatial-bottleneck rescue.
+- **Consequence:** do not run other folds, temporal context, refinement, or uncertainty until a revised ordinary-frame proposal passes unchanged gates.
+- **Revisit if:** EXP-0007 passes its executable early-elimination rule and all reliability gates.

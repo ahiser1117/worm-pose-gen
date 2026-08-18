@@ -107,3 +107,28 @@ shows exact cell coverage, while
 exposes the hardest selected condition rather than hiding failures. The change
 of experimental unit and 87-frame reuse are explicit limitations; quantitative
 hidden-anatomy claims continue to rely on Tier C truth.
+
+## H1 — Does intrinsic regression yield a reliable proposal?
+
+```text
+same 2x2 encoder bottleneck
+        /                         \
+direct 100-point coordinates     intrinsic 16-coefficient curve
+zigzag; 208.66 px / 46.49 deg    smooth; 116.92 px / 23.35 deg
+        \                         /
+         \                       /
+          v                     v
+   REJECT: both miss 4 px / 8 deg ordinary-frame gates
+                         |
+                         v
+       EXP-0007: one-factor 4x4 spatial rescue
+```
+
+The representation hypothesis is **not accepted** because neither variant
+produced a reliable proposal. The decisive random overlays are the
+[`coordinate failures`](../experiments/exp_0004_representation/results/coordinate_best/tier_C_random.png)
+and the smoother but misplaced
+[`intrinsic outputs`](../experiments/exp_0004_representation/results/intrinsic_best/tier_C_random.png).
+Intrinsic geometry is retained only as the less pathological starting point
+for a prospectively declared spatial-resolution rescue; temporal, refinement,
+and probabilistic branches remain gated off.
