@@ -128,12 +128,13 @@ and independent-background generalization remain unevaluated.
 
 ## Decision
 
-ACCEPT (limited): retain these 90 cases as high-confidence Tier B candidate
-training labels and engineering-consistency scaffolding. Do not use this
+ACCEPT (limited): retain these 90 cases as candidate training labels and
+engineering-consistency scaffolding. Only the 24 independently reviewed
+overlays form a limited qualitative Tier B subset. Do not use this
 generator as the sole evaluator of a learned method, do not claim anatomical
 head/tail truth, and do not generalize beyond the three development sessions.
 
 ## Next experiment
 
-Use only accepted candidates as Tier B proxy labels; independently validate
-geometry with the Tier C synthetic generator before any learned proposal.
+Use accepted candidates only for training/QC; independently validate geometry
+with the Tier C synthetic generator before any learned proposal.

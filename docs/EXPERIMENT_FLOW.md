@@ -40,19 +40,21 @@ Conservative real extraction                  Analytic synthetic geometry
              \                                /
               \                              /
                v                            v
-       Tier B texture/proxy shape + Tier C exact geometry
+ candidate real texture/proxy shape + Tier C exact geometry
                               |
                               v
              coordinate-versus-intrinsic proposal test
 ```
 
 The hypothesis is **partially supported**. EXP-0001 supplies useful real-image
-training candidates but not independent truth; its most informative visual is
+training candidates but not independent truth; 24 reviewed overlays form the
+limited qualitative Tier B subset. Its most informative visual is
 [`random_accepted_overlays.png`](../experiments/exp_0001_classical_proxy/figures/random_accepted_overlays.png).
 EXP-0002 supplies exact geometry/crop contracts but simplified appearance; see
 [`crop_sequence_montage.png`](../experiments/exp_0002_synthetic_crop/figures/crop_sequence_montage.png).
 The consequence is a deliberately small learned proposal experiment that must
-report Tier B and Tier C evidence separately.
+report candidate-proxy, reviewed Tier B qualitative, and Tier C evidence
+separately.
 
 ## H0b — Can a literal training-size window create the real crop benchmark?
 

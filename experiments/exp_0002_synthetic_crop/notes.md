@@ -97,8 +97,9 @@ ACCEPT
 
 ## Next experiment
 
-Use the frozen Tier B proxy and Tier C generators for representation and
-temporal-context comparisons.
+Use the frozen candidate proxies and Tier C generators for representation and
+temporal-context comparisons, retaining the 24 reviewed overlays as a separate
+limited qualitative Tier B subset.
 
 Synthetic crops validate geometry and controlled hidden-body behavior. They do
 not replace the required proxy-real crop benchmark that preserves real visible

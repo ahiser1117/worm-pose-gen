@@ -20,11 +20,12 @@ other frame remains unread until selection is frozen.
 
 ## Phase 3 — Proxy and controlled-geometry baselines
 
-**EXP-0001 (ACCEPT, limited)** generated 90 conservative Tier B proxy
+**EXP-0001 (ACCEPT, limited)** generated 90 conservative candidate proxy
 centerlines from 144 uniformly sampled development frames (62.5%). Per-session
 yield was 68.8%, 54.2%, and 64.6%; the 24-case deterministic visual audit found
-no gross midline failures. These labels are training/QC scaffolding rather than
-ground truth, and anatomical head/tail identity remains unvalidated. See
+no gross midline failures. All 90 are training/QC scaffolding rather than ground
+truth; only the 24 independently reviewed overlays form even a limited
+qualitative Tier B subset. Anatomical head/tail identity remains unvalidated. See
 `experiments/exp_0001_classical_proxy/notes.md` and its accepted/rejected
 overlay montages.
 
@@ -36,7 +37,7 @@ simple and cannot support a real-image accuracy claim. See
 `experiments/exp_0002_synthetic_crop/notes.md`.
 
 Together these experiments permit a small learned proposal comparison while
-keeping evidence roles separate: real texture with imperfect proxy geometry
+keeping evidence roles separate: real texture with candidate proxy geometry
 versus exact geometry with simplified appearance.
 
 **EXP-0003 (REJECT)** tested the first real-texture crop design: a literal

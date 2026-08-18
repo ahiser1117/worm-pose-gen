@@ -1,8 +1,8 @@
 # Annotation Recommendations
 
-No true manual centerline labels were supplied. The current Tier B centerlines
-are conservative classical proxies and cannot measure real-image anatomical
-accuracy. The smallest useful initial tranche is **256 annotated frames**, not
+No true manual centerline labels were supplied. The current centerlines are
+conservative classical candidate proxies and cannot measure real-image
+anatomical accuracy. The smallest useful initial tranche is **256 annotated frames**, not
 an attempt to label the full 79,704-frame readable inventory.
 
 ## Recommended tranche
