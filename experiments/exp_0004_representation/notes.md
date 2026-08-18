@@ -63,7 +63,12 @@ proxy-referenced stratum.
 
 ## Results
 
-Pending.
+Pending. The first two-step CUDA smoke reached training after strict preflight
+and both validation loaders, then failed before its first optimizer update
+because `adaptive_avg_pool2d_backward_cuda` has no deterministic implementation
+in the installed PyTorch. No metric or checkpoint from that invalid smoke is
+used. The fixed-size encoder pool was replaced by an equivalent fixed average
+pool before the experiment run; the rerun uses a fresh output directory.
 
 ## Figures
 

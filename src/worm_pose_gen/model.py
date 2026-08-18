@@ -49,7 +49,10 @@ class SmallEncoder(nn.Module):
                     nn.SiLU(),
                 ]
             )
-        self.network = nn.Sequential(*blocks, nn.AdaptiveAvgPool2d((2, 2)), nn.Flatten())
+        # The fixed 192x256 input is 12x16 after four stride-2 blocks. A fixed
+        # average pool preserves the intended 2x2 feature map and, unlike
+        # adaptive_avg_pool2d_backward, has a deterministic CUDA backward path.
+        self.network = nn.Sequential(*blocks, nn.AvgPool2d((6, 8)), nn.Flatten())
         self.output_features = 128 * 2 * 2
 
     def forward(self, image: Tensor) -> Tensor:
