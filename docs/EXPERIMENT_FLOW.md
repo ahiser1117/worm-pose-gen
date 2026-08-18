@@ -12,7 +12,7 @@ Reproducible CUDA + uv bootstrap [complete]
 Bounded source audit + leakage-safe split [complete: 4/12 readable]
                     |
                     v
-Classical proxy-label baseline + synthetic crop benchmark
+Classical proxy-label baseline + synthetic crop benchmark [accepted, limited]
                     |
                     v
 Representation -> temporal context -> optional refinement/uncertainty
@@ -30,3 +30,26 @@ is unavailable because all readable inputs are in the starvation family.
 Development therefore uses whole-session cross-validation. The distinct 2025
 Hamamatsu-condition session is an audited holdout with its 32 pre-split audit
 indices excluded, not a pristine final test.
+
+## H0 — Can inexpensive labels and controlled truth support model research?
+
+```text
+Conservative real extraction                  Analytic synthetic geometry
+90 / 144 accepted                             6,400 / 6,400 crops valid
+0 / 24 gross visual failures                  <=3.41e-13 px round-trip error
+             \                                /
+              \                              /
+               v                            v
+       Tier B texture/proxy shape + Tier C exact geometry
+                              |
+                              v
+             coordinate-versus-intrinsic proposal test
+```
+
+The hypothesis is **partially supported**. EXP-0001 supplies useful real-image
+training candidates but not independent truth; its most informative visual is
+[`random_accepted_overlays.png`](../experiments/exp_0001_classical_proxy/figures/random_accepted_overlays.png).
+EXP-0002 supplies exact geometry/crop contracts but simplified appearance; see
+[`crop_sequence_montage.png`](../experiments/exp_0002_synthetic_crop/figures/crop_sequence_montage.png).
+The consequence is a deliberately small learned proposal experiment that must
+report Tier B and Tier C evidence separately.

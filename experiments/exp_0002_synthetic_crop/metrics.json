@@ -1,0 +1,96 @@
+{
+  "status": "ACCEPT",
+  "evidence_tier": "Tier C controlled synthetic truth",
+  "dev_samples": 512,
+  "held_out_samples": 128,
+  "num_points": 100,
+  "crop_cases": 6400,
+  "all_finite": true,
+  "exact_half_open_fov_agreement": true,
+  "exact_hidden_counts": true,
+  "max_crop_roundtrip_error_px": 3.410605131648481e-13,
+  "max_raster_roundtrip_error_px": 5.684341886080802e-14,
+  "renderer_gradient_finite": true,
+  "renderer_gradient_l1": 47.28113282753536,
+  "development_body_length_range_px": [
+    300.3493811366219,
+    598.9511168568295
+  ],
+  "held_out_body_length_range_px": [
+    250.59167157081592,
+    699.9991775194533
+  ],
+  "held_out_lower_band_count": 59,
+  "held_out_upper_band_count": 69,
+  "development_bend_amplitude_range_rad": [
+    0.2509991858629311,
+    0.5497487415103521
+  ],
+  "held_out_bend_amplitude_range_rad": [
+    0.6520385908052811,
+    0.8955077956555555
+  ],
+  "temporal_crop_audits": {
+    "head": {
+      "frames": 21,
+      "hidden_counts": [
+        5,
+        7,
+        8,
+        10,
+        12,
+        13,
+        15,
+        17,
+        19,
+        20,
+        22,
+        24,
+        26,
+        28,
+        29,
+        31,
+        33,
+        35,
+        37,
+        38,
+        40
+      ],
+      "max_transform_roundtrip_error_px": 1.1368683772161603e-13,
+      "max_offset_second_difference_px": 1.1368683772161603e-13,
+      "exact_half_open_support": true
+    },
+    "tail": {
+      "frames": 21,
+      "hidden_counts": [
+        5,
+        7,
+        8,
+        10,
+        12,
+        14,
+        15,
+        17,
+        19,
+        21,
+        22,
+        24,
+        26,
+        28,
+        30,
+        31,
+        33,
+        35,
+        37,
+        38,
+        40
+      ],
+      "max_transform_roundtrip_error_px": 1.4210854715202004e-13,
+      "max_offset_second_difference_px": 2.2737367544323206e-13,
+      "exact_half_open_support": true
+    }
+  },
+  "runtime_seconds": 4.8214830523356795,
+  "most_curved_seed": 20270090,
+  "most_curved_profile": "held_out"
+}

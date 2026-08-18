@@ -26,3 +26,12 @@
 - **Decision:** use three leave-one-session-out development folds across the readable 2023 sessions. Reserve the unaudited frames of 2025-03-06 for a one-time post-freeze audited-holdout evaluation and exclude the 32 pre-split audit indices.
 - **Consequence:** claims are limited to session/camera-shift evidence and cannot establish pristine-test or cross-project/background generalization.
 - **Revisit if:** readable independent-background recordings or a separately approved dataset become available; do not alter the frozen audited holdout within this study.
+
+## D-0004 — Mixed proxy/synthetic training evidence
+
+- **Question:** What supervision is defensible without supplied manual centerlines?
+- **Options:** classical labels alone; analytic synthetic data alone; explicitly separated Tier B proxy and Tier C controlled evidence.
+- **Evidence:** EXP-0001 accepted 90/144 conservative real candidates with 0/24 gross visual failures, while EXP-0002 passed all 6,400 exact crop contracts and differentiable-renderer checks.
+- **Decision:** train proposals from both sources, but never treat proxy agreement as independent real accuracy or synthetic success as appearance validation.
+- **Consequence:** every model result must identify its evidence tier; head/tail supervision stays symmetric/ambiguous until true orientation labels exist.
+- **Revisit if:** manually annotated Tier A labels become available.

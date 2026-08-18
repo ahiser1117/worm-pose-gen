@@ -1,0 +1,32 @@
+{
+  "experiment": "EXP-0001",
+  "seed": 20260818,
+  "split_manifest_schema_version": 2,
+  "development_records": [
+    "2023-09-19-01",
+    "2023-09-27-01",
+    "2023-10-11-01"
+  ],
+  "audited_holdout_opened": false,
+  "external_root_configured": "/temp_data4/alex/external_artifacts",
+  "external_root_resolved": "/storage/fs/temp_data4/alex/external_artifacts",
+  "samples_per_recording": 48,
+  "sampling": "deterministic uniform inclusive of first and last frame",
+  "classical_config": {
+    "local_radius": 31,
+    "smooth_radius": 2,
+    "foreground_z": 2.6,
+    "support_z": 0.0,
+    "close_radius": 2,
+    "min_area": 2500,
+    "max_area": 30000,
+    "min_length": 250.0,
+    "max_length": 750.0,
+    "boundary_margin": 13.0,
+    "min_support": 0.95,
+    "n_points": 100,
+    "max_branch_pixels": 50,
+    "max_raw_endpoints": 16
+  },
+  "command": "scripts/project_env.sh uv run --no-sync --frozen python scripts/generate_proxy_labels.py --samples-per-recording 48"
+}

@@ -17,3 +17,24 @@ were established before model development. `configs/split_manifest.json`
 freezes three whole-session development folds. The 2025 recording is an audited
 holdout: its 32 pre-split audit frames are disclosed and excluded, and every
 other frame remains unread until selection is frozen.
+
+## Phase 3 — Proxy and controlled-geometry baselines
+
+**EXP-0001 (ACCEPT, limited)** generated 90 conservative Tier B proxy
+centerlines from 144 uniformly sampled development frames (62.5%). Per-session
+yield was 68.8%, 54.2%, and 64.6%; the 24-case deterministic visual audit found
+no gross midline failures. These labels are training/QC scaffolding rather than
+ground truth, and anatomical head/tail identity remains unvalidated. See
+`experiments/exp_0001_classical_proxy/notes.md` and its accepted/rejected
+overlay montages.
+
+**EXP-0002 (ACCEPT)** validated the Tier C intrinsic generator, differentiable
+tube renderer, and exact static/temporal FOV crops. All 6,400 crop cases passed;
+the maximum coordinate round-trip residual was `3.41e-13 px`, and renderer
+gradients were finite and nonzero. The synthetic appearance is deliberately
+simple and cannot support a real-image accuracy claim. See
+`experiments/exp_0002_synthetic_crop/notes.md`.
+
+Together these experiments permit a small learned proposal comparison while
+keeping evidence roles separate: real texture with imperfect proxy geometry
+versus exact geometry with simplified appearance.

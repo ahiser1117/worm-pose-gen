@@ -1,0 +1,132 @@
+{
+  "experiment": "EXP-0001",
+  "status": "completed",
+  "evidence_tier": "Tier B candidate proxies; no manual ground truth",
+  "seed": 20260818,
+  "development_records": [
+    "2023-09-19-01",
+    "2023-09-27-01",
+    "2023-10-11-01"
+  ],
+  "audited_holdout_opened": false,
+  "samples_per_recording": 48,
+  "config": {
+    "local_radius": 31,
+    "smooth_radius": 2,
+    "foreground_z": 2.6,
+    "support_z": 0.0,
+    "close_radius": 2,
+    "min_area": 2500,
+    "max_area": 30000,
+    "min_length": 250.0,
+    "max_length": 750.0,
+    "boundary_margin": 13.0,
+    "min_support": 0.95,
+    "n_points": 100,
+    "max_branch_pixels": 50,
+    "max_raw_endpoints": 16
+  },
+  "per_recording": {
+    "2023-09-19-01": {
+      "sampled": 48,
+      "accepted": 33,
+      "yield": 0.6875,
+      "yield_wilson_95": [
+        0.5466692858410841,
+        0.8005431655341219
+      ],
+      "rejection_reason_counts_nonexclusive": {
+        "boundary_contact": 11,
+        "implausible_length": 2,
+        "unstable_endpoints": 3
+      },
+      "runtime_seconds": 21.896920229308307
+    },
+    "2023-09-27-01": {
+      "sampled": 48,
+      "accepted": 26,
+      "yield": 0.5416666666666666,
+      "yield_wilson_95": [
+        0.40291074545649797,
+        0.6742475770713254
+      ],
+      "rejection_reason_counts_nonexclusive": {
+        "boundary_contact": 10,
+        "implausible_length": 1,
+        "low_ridge_support": 12,
+        "unstable_endpoints": 1
+      },
+      "runtime_seconds": 29.876942365430295
+    },
+    "2023-10-11-01": {
+      "sampled": 48,
+      "accepted": 31,
+      "yield": 0.6458333333333334,
+      "yield_wilson_95": [
+        0.504390570103431,
+        0.7656635587439515
+      ],
+      "rejection_reason_counts_nonexclusive": {
+        "boundary_contact": 16,
+        "low_ridge_support": 2
+      },
+      "runtime_seconds": 33.33455806411803
+    }
+  },
+  "total_sampled": 144,
+  "total_accepted": 90,
+  "internal_qc_note": "foreground-tube and dark-ridge support share extractor preprocessing and are correlated internal QC",
+  "visual_overlay_audit": {
+    "sample_count": 24,
+    "grossly_off_midline": 0,
+    "review_status": "completed qualitative review",
+    "independent_of_internal_qc": true,
+    "note": "Qualitative only; no manual coordinate labels or accuracy statistic."
+  },
+  "accepted_contract_validation": {
+    "all_checks_passed": true,
+    "point_count": 100,
+    "backbone_endpoint_count": 2,
+    "minimum_boundary_distance_px": 13.0,
+    "minimum_tube_support_fraction": 0.99,
+    "minimum_dark_ridge_support_fraction": 0.95,
+    "minimum_length_px": 513.2941866145146,
+    "maximum_length_px": 744.6799491786585
+  },
+  "worst_case_review": {
+    "case_count": 3,
+    "systematic_topology_defect": false,
+    "review_status": "completed qualitative review"
+  },
+  "worst_quality_cases": [
+    {
+      "record": "2023-09-19-01",
+      "frame": 1710,
+      "quality_score": 0.599294325705028
+    },
+    {
+      "record": "2023-09-27-01",
+      "frame": 16694,
+      "quality_score": 0.729690151136018
+    },
+    {
+      "record": "2023-10-11-01",
+      "frame": 861,
+      "quality_score": 0.6916925569897243
+    }
+  ],
+  "runtime_seconds": 99.17616762313992,
+  "decision": "ACCEPT_LIMITED",
+  "output_hdf5": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+  "external_root_configured": "/temp_data4/alex/external_artifacts",
+  "external_root_resolved": "/storage/fs/temp_data4/alex/external_artifacts",
+  "output_hdf5_bytes": 50656504,
+  "output_hdf5_sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+  "environment": {
+    "python": "3.13.15",
+    "numpy": "2.5.2",
+    "h5py": "3.16.0",
+    "git_commit": "19412beeb2b56bfc95f7d79f15820144c7ebd246",
+    "device": "CPU"
+  }
+}

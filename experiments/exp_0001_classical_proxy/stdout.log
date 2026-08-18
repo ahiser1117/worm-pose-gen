@@ -1,0 +1,7 @@
+EXP-0001 completed in 99.176 s on CPU
+development records only: 2023-09-19-01, 2023-09-27-01, 2023-10-11-01
+audited holdout opened: false
+2023-09-19-01: 33/48 accepted (0.688), Wilson95=[0.5466692858410841, 0.8005431655341219], rejections={'boundary_contact': 11, 'implausible_length': 2, 'unstable_endpoints': 3}
+2023-09-27-01: 26/48 accepted (0.542), Wilson95=[0.40291074545649797, 0.6742475770713254], rejections={'boundary_contact': 10, 'implausible_length': 1, 'low_ridge_support': 12, 'unstable_endpoints': 1}
+2023-10-11-01: 31/48 accepted (0.646), Wilson95=[0.504390570103431, 0.7656635587439515], rejections={'boundary_contact': 16, 'low_ridge_support': 2}
+proxy output: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5 (50656504 bytes, sha256=1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c)

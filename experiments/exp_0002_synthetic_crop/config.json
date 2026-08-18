@@ -1,0 +1,150 @@
+{
+  "dev_seed_range": [
+    20260818,
+    20261329
+  ],
+  "held_out_seed_range": [
+    20270000,
+    20270127
+  ],
+  "parameter_profiles": {
+    "development": {
+      "name": "development",
+      "length_bands": [
+        [
+          300.0,
+          600.0
+        ]
+      ],
+      "bend_amplitude_range": [
+        0.25,
+        0.55
+      ]
+    },
+    "held_out": {
+      "name": "held_out",
+      "length_bands": [
+        [
+          250.0,
+          299.0
+        ],
+        [
+          601.0,
+          700.0
+        ]
+      ],
+      "bend_amplitude_range": [
+        0.65,
+        0.9
+      ]
+    }
+  },
+  "geometry_distributions_shared": {
+    "phase_rad": {
+      "distribution": "uniform independent",
+      "range": [
+        -3.141592653589793,
+        3.141592653589793
+      ]
+    },
+    "global_orientation_rad": {
+      "distribution": "uniform",
+      "range": [
+        -3.141592653589793,
+        3.141592653589793
+      ]
+    },
+    "mode_direction": {
+      "distribution": "uniform independent then normalized to exact bend amplitude",
+      "raw_range": [
+        -1.0,
+        1.0
+      ],
+      "mode_weights": [
+        1.0,
+        0.55,
+        0.25
+      ]
+    },
+    "mean_width_px": {
+      "distribution": "uniform",
+      "range": [
+        10.0,
+        15.0
+      ]
+    },
+    "placement": "uniform over feasible fully-visible anchors with 18 px margin"
+  },
+  "render_nuisance_distributions": {
+    "foreground_intensity": {
+      "distribution": "uniform",
+      "range": [
+        0.12,
+        0.28
+      ]
+    },
+    "background_intensity": {
+      "distribution": "uniform",
+      "range": [
+        0.68,
+        0.88
+      ]
+    },
+    "illumination_gradient_xy": {
+      "distribution": "uniform independent",
+      "range": [
+        -0.07,
+        0.07
+      ]
+    },
+    "noise_standard_deviation": {
+      "distribution": "uniform",
+      "range": [
+        0.005,
+        0.02
+      ]
+    },
+    "noise_samples": {
+      "distribution": "normal",
+      "mean": 0.0
+    },
+    "edge_softness_px": {
+      "distribution": "uniform",
+      "range": [
+        0.45,
+        0.75
+      ]
+    }
+  },
+  "hidden_fractions": [
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.4
+  ],
+  "hidden_ends": [
+    "head",
+    "tail"
+  ],
+  "temporal_crop": {
+    "frames": 21,
+    "start_hidden_fraction": 0.05,
+    "end_hidden_fraction": 0.4,
+    "boundary_motion": "linear in longitudinal source-coordinate position"
+  },
+  "coordinate_convention": "pixel centers; x right, y down; half-open bounds",
+  "original_canvas_hw": [
+    732,
+    968
+  ],
+  "render_canvas_hw": [
+    192,
+    256
+  ],
+  "mapping": "u=x*(render_size/original_size) per axis; preserves half-open FOV membership",
+  "python": "3.13.15",
+  "torch": "2.13.0+cu130",
+  "device": "cpu",
+  "data_persistence": "none; deterministic arrays generated on demand"
+}

@@ -46,23 +46,54 @@ temporally coherent sequences with smoothly moving crop boundaries.
 
 ## Results
 
-Pending corrected-environment rerun.
+ACCEPTED on the full predeclared budget: 512 development poses, 128 held-out
+poses, 100 body points per pose, and all 6,400 static pose/end/fraction crop
+cases. All geometry was finite and fully inside the initial audited 732x968
+canvas. Every static crop hid exactly 5/10/20/30/40 points, geometric support
+agreed exactly with independently recomputed half-open FOV membership in both
+original and 192x256 render coordinates, and the largest camera/source
+round-trip residual was 3.41e-13 px (raster mapping: 5.68e-14 px).
+
+Development lengths were 300.349--598.951 px with bend amplitudes
+0.2510--0.5497 rad. Held-out lengths were 250.592--699.999 px, with 59 samples
+in the 250--299 band and 69 in the 601--700 band; held-out bend amplitudes were
+0.6520--0.8955 rad, disjoint from development. Renderer pose/width gradients
+were finite and nonzero (combined L1 47.2811).
+
+The 21-frame head and tail crop sequences moved the camera boundary linearly
+from 5% to 40% hidden. Hidden counts were monotone, support agreed exactly in
+every frame, transform round-trip residuals were at most 1.42e-13 px, and the
+largest camera-offset second difference was 2.27e-13 px (floating-point zero).
+No synthetic array dataset was persisted; poses regenerate exactly from seed
+and profile. No real recording was read.
 
 ## Figures
 
-Pending generator and crop-sequence montages.
+- `figures/generator_montage.png`: deterministic development examples, a
+  held-out example, and the most-curved pose (held-out seed 20270090).
+- `figures/crop_sequence_montage.png`: frames 0/5/10/15/20 from each smooth
+  21-frame head/tail moving-camera sequence. Inputs are rendered directly in
+  the camera window and contain no padding or composited crop border.
 
 ## Runtime
 
-Pending.
+4.811 seconds for generation, exhaustive static checks, temporal audits,
+renderer gradient audit, and figures on CPU with Python 3.13.15 and PyTorch
+2.13.0+cu130. Repository output remains below 0.5 MiB and external storage use
+is zero.
 
 ## Interpretation
 
-Pending.
+The split-specific generator, differentiable renderer, fixed-fraction crop
+benchmark, and temporally coherent crop utility satisfy the Tier C geometry,
+coordinate, support, distribution-shift, and gradient contracts. The complete
+geometry and image-nuisance distributions were serialized to `config.json`
+before generation. This is controlled synthetic evidence only: visual
+plausibility does not establish accuracy or robustness on real NIR images.
 
 ## Decision
 
-INCONCLUSIVE
+ACCEPT
 
 ## Next experiment
 
