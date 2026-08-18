@@ -1,0 +1,60 @@
+experiment: EXP-0007
+seed: 20260818
+input:
+  height: 192
+  width: 256
+  body_points: 100
+  proxy_hdf5: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5
+  proxy_sha256: 1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c
+  synthetic_train_profile: development
+  synthetic_validation_profile: held_out
+  audited_holdout_allowed: false
+model:
+  variant: intrinsic
+  intrinsic_coefficients: 16
+  body_anchor_index: 50
+  encoder_pool_output: [4, 4]
+  maximum_parameters: 1000000
+training:
+  maximum_steps: 1200
+  maximum_epochs: 34
+  checkpoint_every_steps: 300
+  train_batch_size: 16
+  evaluation_batch_size: 32
+  precision: 32-true
+  folds: [0, 1, 2]
+  accelerator: gpu
+  devices: 1
+  num_workers: 0
+  synthetic_samples_per_epoch: 512
+  synthetic_validation_samples: 128
+  orientation_loss: symmetric_minimum_forward_reverse
+  metric_log: csv
+early_elimination:
+  checkpoint_step: 300
+  baseline_definition: pointwise_arithmetic_mean_in_generator_order
+  baseline_training_stratum: 512_fold_specific_development_tier_c_centerlines
+  validation_stratum: fully_visible_cases_from_exact_128_held_out_tier_c_cases
+  orientation_alignment: symmetric_forward_reverse_only_during_error_evaluation
+  metric: median_per_point_euclidean_error_original_image_pixels_968x732
+  eliminate_if_model_greater_than_or_equal_to_baseline: true
+  require_baseline_tensor_sha256: true
+decision:
+  minimum_primary_fold_median_improvement_fraction_vs_exp_0004_intrinsic: 0.20
+  minimum_throughput_ratio_vs_exp_0004_intrinsic: 0.90
+  near_gate_repeat_seeds: [20260819, 20260820]
+  near_gate_relative_band_fraction: 0.10
+  reliability_tier_b_median_point_px: 8.0
+  reliability_tier_b_p95_point_px: 20.0
+  reliability_tier_b_mean_angle_degrees: 15.0
+  reliability_tier_b_p95_frame_angle_degrees: 30.0
+  reliability_tier_c_median_point_px: 4.0
+  reliability_tier_c_p95_point_px: 10.0
+  reliability_tier_c_mean_angle_degrees: 8.0
+  reliability_tier_c_p95_frame_angle_degrees: 18.0
+  require_all_folds: true
+resources:
+  maximum_minutes_per_run: 12
+  maximum_primary_gpu_hours: 0.75
+  maximum_repeat_gpu_hours: 1.5
+  maximum_external_storage_gib: 3
