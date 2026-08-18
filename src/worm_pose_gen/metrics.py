@@ -69,9 +69,8 @@ def masked_point_mae(
 def binary_brier_score(probability: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
     """Mean squared probability error for image-support/orientation targets."""
 
-    if bool(torch.any((probability < 0) | (probability > 1))):
-        raise ValueError("probabilities must lie in [0, 1]")
-    return _masked_mean((probability - target.to(probability.dtype)).square(), mask)
+    p, y = _validated_binary_evidence(probability, target)
+    return _masked_mean((p - y).square(), mask)
 
 
 def binary_calibration_bins(
@@ -81,12 +80,18 @@ def binary_calibration_bins(
 
     if num_bins <= 0:
         raise ValueError("num_bins must be positive")
-    if bool(torch.any((probability < 0) | (probability > 1))):
-        raise ValueError("probabilities must lie in [0, 1]")
-    p, y = probability.reshape(-1), target.to(probability.dtype).reshape(-1)
+    probability, target = _validated_binary_evidence(probability, target)
+    p, y = probability.reshape(-1), target.reshape(-1)
     if mask is not None:
-        selected = torch.broadcast_to(mask, probability.shape).reshape(-1).bool()
+        try:
+            selected = torch.broadcast_to(
+                mask.to(dtype=torch.bool, device=probability.device), probability.shape
+            ).reshape(-1)
+        except RuntimeError as error:
+            raise ValueError("mask is not broadcastable to binary evidence") from error
         p, y = p[selected], y[selected]
+    if p.numel() == 0:
+        raise ValueError("binary evidence mask selects no values")
     bin_index = torch.clamp((p * num_bins).long(), max=num_bins - 1)
     count = torch.bincount(bin_index, minlength=num_bins)
     confidence_sum = torch.zeros(num_bins, dtype=p.dtype, device=p.device).scatter_add_(0, bin_index, p)
@@ -96,6 +101,33 @@ def binary_calibration_bins(
     confidence = torch.where(count > 0, confidence_sum / denominator, nan)
     accuracy = torch.where(count > 0, accuracy_sum / denominator, nan)
     return {"count": count, "confidence": confidence, "accuracy": accuracy}
+
+
+def _validated_binary_evidence(
+    probability: Tensor, target: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Broadcast and validate finite probabilities and binary targets."""
+
+    if probability.is_complex() or target.is_complex():
+        raise TypeError("binary probabilities and targets must be real-valued")
+    if not probability.is_floating_point():
+        probability = probability.to(torch.get_default_dtype())
+    target = target.to(dtype=probability.dtype, device=probability.device)
+    try:
+        probability, target = torch.broadcast_tensors(probability, target)
+    except RuntimeError as error:
+        raise ValueError("probability and target shapes are not broadcastable") from error
+    if probability.numel() == 0:
+        raise ValueError("binary evidence must contain at least one value")
+    if not bool(torch.all(torch.isfinite(probability))):
+        raise ValueError("probabilities must be finite")
+    if not bool(torch.all(torch.isfinite(target))):
+        raise ValueError("binary targets must be finite")
+    if bool(torch.any((probability < 0) | (probability > 1))):
+        raise ValueError("probabilities must lie in [0, 1]")
+    if bool(torch.any((target != 0) & (target != 1))):
+        raise ValueError("binary targets must contain only 0 or 1")
+    return probability, target
 
 
 def expected_calibration_error(bins: dict[str, Tensor]) -> Tensor:
@@ -133,20 +165,17 @@ def anatomical_support_mask(
 
 
 def support_regions(support_mask: Tensor, boundary_points: int = 1) -> dict[str, Tensor]:
-    """Split a 1-D support target into visible, hidden, and boundary strata."""
+    """Split support into strata with N samples per side of each transition."""
 
     if support_mask.ndim != 1 or boundary_points < 0:
         raise ValueError("support_mask must be 1-D and boundary_points nonnegative")
     support = support_mask.bool()
-    transitions = torch.zeros_like(support)
-    transitions[1:] |= support[1:] != support[:-1]
-    transitions[:-1] |= support[1:] != support[:-1]
-    boundary = transitions.clone()
-    for _ in range(boundary_points):
-        expanded = boundary.clone()
-        expanded[1:] |= boundary[:-1]
-        expanded[:-1] |= boundary[1:]
-        boundary = expanded
+    boundary = torch.zeros_like(support)
+    transitions = torch.where(support[1:] != support[:-1])[0]
+    for left_index in transitions.tolist():
+        transition = left_index + 1
+        boundary[max(0, transition - boundary_points) : transition] = True
+        boundary[transition : min(len(support), transition + boundary_points)] = True
     return {"visible": support & ~boundary, "hidden": ~support & ~boundary, "boundary": boundary}
 
 

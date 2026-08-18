@@ -23,6 +23,6 @@
 - **Question:** What is the strongest leakage-safe split supported by readable data?
 - **Options:** frame split; temporal blocks; whole recordings/sessions; background-family holdout.
 - **Evidence:** only four recordings are readable and all share the starvation project family; one 2025 session records a different camera condition.
-- **Decision:** train on whole 2023-09-19 and 2023-09-27 sessions, validate on whole 2023-10-11, and reserve whole 2025-03-06 as untouched final test.
-- **Consequence:** claims are limited to session/camera-shift evidence and cannot establish cross-project/background generalization.
-- **Revisit if:** readable independent-background recordings or a separately approved dataset become available; do not alter the frozen final test within this study.
+- **Decision:** use three leave-one-session-out development folds across the readable 2023 sessions. Reserve the unaudited frames of 2025-03-06 for a one-time post-freeze audited-holdout evaluation and exclude the 32 pre-split audit indices.
+- **Consequence:** claims are limited to session/camera-shift evidence and cannot establish pristine-test or cross-project/background generalization.
+- **Revisit if:** readable independent-background recordings or a separately approved dataset become available; do not alter the frozen audited holdout within this study.

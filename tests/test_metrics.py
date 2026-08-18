@@ -48,6 +48,62 @@ class MetricTests(unittest.TestCase):
         torch.testing.assert_close(bins["accuracy"], torch.tensor([0.0, 1.0]))
         self.assertAlmostEqual(float(expected_calibration_error(bins)), 0.15, places=6)
 
+    def test_binary_metrics_validate_evidence_and_masks(self) -> None:
+        invalid_probabilities = (
+            torch.tensor([float("nan")]),
+            torch.tensor([float("inf")]),
+            torch.tensor([-0.1]),
+            torch.tensor([1.1]),
+        )
+        for probability in invalid_probabilities:
+            with self.subTest(probability=probability):
+                with self.assertRaises(ValueError):
+                    binary_brier_score(probability, torch.tensor([1.0]))
+                with self.assertRaises(ValueError):
+                    binary_calibration_bins(probability, torch.tensor([1.0]))
+        for target in (
+            torch.tensor([float("nan")]),
+            torch.tensor([float("inf")]),
+            torch.tensor([0.5]),
+            torch.tensor([2.0]),
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(ValueError):
+                    binary_brier_score(torch.tensor([0.5]), target)
+                with self.assertRaises(ValueError):
+                    binary_calibration_bins(torch.tensor([0.5]), target)
+        with self.assertRaisesRegex(ValueError, "not broadcastable"):
+            binary_brier_score(torch.zeros(2), torch.zeros(3))
+        with self.assertRaisesRegex(ValueError, "not broadcastable"):
+            binary_calibration_bins(torch.zeros(2), torch.zeros(3))
+        with self.assertRaisesRegex(ValueError, "mask is not broadcastable"):
+            binary_brier_score(
+                torch.tensor([0.2, 0.8]), torch.tensor([0.0, 1.0]),
+                torch.ones(3, dtype=torch.bool),
+            )
+        with self.assertRaisesRegex(ValueError, "mask is not broadcastable"):
+            binary_calibration_bins(
+                torch.tensor([0.2, 0.8]), torch.tensor([0.0, 1.0]),
+                mask=torch.ones(3, dtype=torch.bool),
+            )
+        with self.assertRaisesRegex(ValueError, "selects no values"):
+            binary_brier_score(
+                torch.tensor([0.2, 0.8]), torch.tensor([0.0, 1.0]),
+                torch.zeros(2, dtype=torch.bool),
+            )
+        with self.assertRaisesRegex(ValueError, "selects no values"):
+            binary_calibration_bins(
+                torch.tensor([0.2, 0.8]), torch.tensor([0.0, 1.0]),
+                mask=torch.zeros(2, dtype=torch.bool),
+            )
+
+    def test_binary_metrics_broadcast_shapes_deliberately(self) -> None:
+        probability = torch.tensor([[0.0], [1.0]])
+        target = torch.tensor([0.0, 1.0])
+        self.assertAlmostEqual(float(binary_brier_score(probability, target)), 0.5)
+        bins = binary_calibration_bins(probability, target, num_bins=2)
+        self.assertEqual(bins["count"].tolist(), [2, 2])
+
     def test_anatomical_support_hidden_fractions(self) -> None:
         tail = anatomical_support_mask(100, 0.2, hidden_end="tail")
         self.assertEqual(int((~tail).sum()), 20)
@@ -56,9 +112,32 @@ class MetricTests(unittest.TestCase):
         head = anatomical_support_mask(10, 0.3, hidden_end="head")
         self.assertEqual(head.tolist(), [False, False, False, True, True, True, True, True, True, True])
         regions = support_regions(tail, boundary_points=1)
-        self.assertTrue(bool(regions["boundary"][79]))
-        self.assertTrue(bool(regions["boundary"][80]))
+        expected_boundary = torch.zeros(100, dtype=torch.bool)
+        expected_boundary[79:81] = True
+        torch.testing.assert_close(regions["boundary"], expected_boundary)
         self.assertFalse(bool((regions["visible"] & regions["hidden"]).any()))
+
+    def test_support_regions_exact_five_per_side_and_multiple_transitions(self) -> None:
+        support = anatomical_support_mask(100, 0.2, hidden_end="tail")
+        regions = support_regions(support, boundary_points=5)
+        expected = torch.zeros(100, dtype=torch.bool)
+        expected[75:85] = True
+        torch.testing.assert_close(regions["boundary"], expected)
+        self.assertEqual(int(regions["boundary"].sum()), 10)
+
+        alternating = torch.tensor(
+            [True, True, False, False, True, True, False, False]
+        )
+        multiple = support_regions(alternating, boundary_points=1)
+        expected_multiple = torch.tensor(
+            [False, True, True, True, True, True, True, False]
+        )
+        torch.testing.assert_close(multiple["boundary"], expected_multiple)
+        self.assertFalse(bool((multiple["visible"] & multiple["boundary"]).any()))
+        self.assertFalse(bool((multiple["hidden"] & multiple["boundary"]).any()))
+
+        no_band = support_regions(alternating, boundary_points=0)
+        self.assertFalse(bool(no_band["boundary"].any()))
 
     def test_crop_transform_roundtrip_and_half_open_support(self) -> None:
         transform = FOVCropTransform(x0=10, y0=20, width=5, height=4)

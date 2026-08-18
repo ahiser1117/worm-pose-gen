@@ -121,6 +121,7 @@ class PoseHDF5Writer:
     def open(self) -> None:
         if self._file is not None:
             raise RuntimeError("writer is already open")
+        self._validate_output_paths_are_not_source()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         if self.output_path.exists() and not self.overwrite:
             raise FileExistsError(f"completed output already exists: {self.output_path}")
@@ -137,6 +138,28 @@ class PoseHDF5Writer:
         self._write_provenance(group)
         self._create_datasets(group)
         self._file.flush()
+
+    def _validate_output_paths_are_not_source(self) -> None:
+        """Reject lexical and symlink aliases of the read-only source path."""
+
+        source_paths = {
+            Path(self.provenance.source.configured_path).absolute(),
+            Path(self.provenance.source.resolved_path).absolute(),
+            Path(self.provenance.source.configured_path).resolve(strict=False),
+            Path(self.provenance.source.resolved_path).resolve(strict=False),
+        }
+        for label, candidate in (
+            ("output", self.output_path),
+            ("partial output", self.partial_path),
+        ):
+            candidate_paths = {
+                candidate.absolute(),
+                candidate.resolve(strict=False),
+            }
+            if not source_paths.isdisjoint(candidate_paths):
+                raise ValueError(
+                    f"{label} path aliases the read-only source recording: {candidate}"
+                )
 
     def _write_provenance(self, group: h5py.Group) -> None:
         metadata = group.create_group("provenance")

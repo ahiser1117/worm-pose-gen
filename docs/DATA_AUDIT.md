@@ -110,7 +110,14 @@ The canonical grouping keys are recorded in JSON:
 
 The preferred evaluation is leave-one-background-family-out grouped cross-validation. Whole sessions/recordings are held out, so a temporal guard interval is not applicable. This is conservative because project family is the strongest currently observable background/setup key.
 
-That protocol cannot currently be executed: every readable recording belongs to `starvation`, while every `neuropal` and `sexsharedneurons` recording is quarantined. Within-starvation leave-one-session-out validation may be used for engineering checks, but it is not an independent-background generalization claim. If a single fixed development allocation is urgently needed, use whole 2023 sessions for training/validation and reserve the 2025 Hamamatsu-condition session untouched as a session/camera-shift test; label the remaining shared-background risk prominently. Do not assign frames from one recording to different splits.
+That protocol cannot currently be executed: every readable recording belongs to
+`starvation`, while every `neuropal` and `sexsharedneurons` recording is
+quarantined. The frozen protocol therefore uses leave-one-session-out development
+folds across the three 2023 sessions. The 2025 Hamamatsu-condition session is an
+audited holdout, not an untouched test: this audit's 32 declared indices are
+excluded from later evaluation, while every other frame remains unread until
+selection is frozen. This does not establish independent-background
+generalization. Do not split any development recording within a fold.
 
 Model-development claims that require cross-background or cross-project generalization should pause until source owners provide readable recordings or an approved independent dataset. The audit does not recommend repairing these source files in place.
 

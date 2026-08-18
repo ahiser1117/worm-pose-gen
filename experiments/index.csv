@@ -1,1 +1,3 @@
 experiment_id,datetime_utc,git_commit,parent,hypothesis,primary_metrics,fps,status,notes_path
+EXP-0001,2026-08-18T21:36:06Z,77c5231,,Classical processing yields conservative real proxy labels,accepted yield and QC,,PLANNED,experiments/exp_0001_classical_proxy/notes.md
+EXP-0002,2026-08-18T21:36:06Z,77c5231,,Analytic rendering supports exact controlled crop truth,contract validity,,PLANNED,experiments/exp_0002_synthetic_crop/notes.md

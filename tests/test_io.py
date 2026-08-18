@@ -86,6 +86,57 @@ class PoseHDF5WriterTest(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             PoseHDF5Writer(self.output, body_points=3, provenance=self.provenance).open()
 
+    def test_rejects_source_as_output_before_creating_partial(self) -> None:
+        for overwrite in (False, True):
+            writer = PoseHDF5Writer(
+                self.source, body_points=3, provenance=self.provenance,
+                overwrite=overwrite,
+            )
+            with self.assertRaisesRegex(ValueError, "aliases.*source"):
+                writer.open()
+            self.assertFalse(writer.partial_path.exists())
+            with h5py.File(self.source, "r") as handle:
+                self.assertIn("frames", handle)
+
+    def test_rejects_symlink_aliases_for_output_and_partial(self) -> None:
+        root = self.source.parent
+        output_alias = root / "source-alias.h5"
+        output_alias.symlink_to(self.source)
+        writer = PoseHDF5Writer(
+            output_alias, body_points=3, provenance=self.provenance, overwrite=True
+        )
+        with self.assertRaisesRegex(ValueError, "aliases.*source"):
+            writer.open()
+        self.assertFalse(writer.partial_path.exists())
+
+        partial_alias_output = root / "new-pose.h5"
+        partial_alias = root / "new-pose.h5.partial"
+        partial_alias.symlink_to(self.source)
+        writer = PoseHDF5Writer(
+            partial_alias_output, body_points=3, provenance=self.provenance
+        )
+        with self.assertRaisesRegex(ValueError, "aliases.*source"):
+            writer.open()
+        self.assertFalse(partial_alias_output.exists())
+        self.assertTrue(partial_alias.is_symlink())
+
+    def test_rejects_source_as_configured_partial_path(self) -> None:
+        output = self.source.parent / "collision.h5"
+        source = self.source.parent / "collision.h5.partial"
+        with h5py.File(source, "w") as handle:
+            handle.create_dataset("frames", data=np.zeros((1, 2, 2), dtype=np.uint8))
+        provenance = OutputProvenance(
+            source=SourceIdentity.from_path(source, "/frames"),
+            checkpoint_sha256="a" * 64, config_sha256="b" * 64,
+            git_commit="deadbeef", package_versions={},
+            geometry_convention="test", image_height=2, image_width=2,
+        )
+        writer = PoseHDF5Writer(output, body_points=3, provenance=provenance)
+        with self.assertRaisesRegex(ValueError, "partial output.*aliases.*source"):
+            writer.open()
+        with h5py.File(source, "r") as handle:
+            self.assertIn("frames", handle)
+
     def test_validation_rejects_bad_mapping_values_and_bounds(self) -> None:
         writer = PoseHDF5Writer(self.output, body_points=3, provenance=self.provenance)
         writer.open()

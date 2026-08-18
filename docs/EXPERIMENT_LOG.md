@@ -14,5 +14,6 @@ A bounded 32-frame-per-recording audit found 4/12 readable recordings and
 79,704 usable NIR frames at approximately 20 Hz. The exact findings and figures
 are in `docs/DATA_AUDIT.md`. Geometry/metric tests and the output HDF5 contract
 were established before model development. `configs/split_manifest.json`
-freezes whole-session train/validation/final-test groups; the 2025 final-test
-session remains unopened for all model-selection work.
+freezes three whole-session development folds. The 2025 recording is an audited
+holdout: its 32 pre-split audit frames are disclosed and excluded, and every
+other frame remains unread until selection is frozen.

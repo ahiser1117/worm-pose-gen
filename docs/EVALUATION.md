@@ -1,7 +1,7 @@
 # Evaluation protocol
 
-This protocol was frozen after the bounded data audit, before model development
-and before opening the final test split. It keeps engineering agreement on real images (Tier B) separate
+This protocol was frozen after the bounded data audit and before model
+development. It keeps engineering agreement on real images (Tier B) separate
 from controlled synthetic truth (Tier C). There is currently no Tier A manual
 ground-truth set; consequently, no result from this project should be described
 as manual-ground-truth accuracy. Manual annotation added later will be a new,
@@ -36,22 +36,29 @@ and length-normalized point error, flip rate, and random/worst-case examples.
 
 ## Leakage-safe splits
 
-The frozen manifest is `configs/split_manifest.json`. The complete 2023-09-19
-and 2023-09-27 sessions are training groups; 2023-10-11 is the validation group;
-the 2025-03-06 Hamamatsu-condition session is the untouched final-test group.
-Whole recordings make temporal guard intervals unnecessary. The eight unreadable
-recordings are quarantined, never reassigned as empty/negative data. All readable
-recordings share the starvation project family, so this allocation cannot support
-cross-project or independent-background generalization claims.
+The executable frozen manifest is `configs/split_manifest.json`. It records each
+configured/resolved path, size/mtime identity, explicit half-open frame range,
+and grouping key. The three complete readable 2023 sessions form a leave-one-
+session-out development cross-validation scheme. Fold 2 (2023-09-19 and
+2023-09-27 train; 2023-10-11 validate) is the primary cheap-elimination fold,
+but an accepted model-selection result must pass all three frozen folds.
+
+The 2025-03-06 Hamamatsu-condition recording is an **audited holdout**, not a
+pristine final test: Phase 1 necessarily inspected 32 declared frames before
+the split existed, and its appearance/intensity/rough scale informed the audit.
+Those exact indices are listed in the manifest and excluded from post-freeze
+evaluation. No other frame from that recording may be read until architecture,
+checkpoint, calibration, and thresholds are frozen. The one-time result tests a
+known session/camera-condition shift but cannot establish independent-background
+generalization. The eight unreadable recordings remain quarantined.
 
 The split manifest records source identity, all grouping keys, allocation,
 random seed (base seed 20260818), temporal ranges, guard intervals, and rationale.
-No neighboring temporal frames cross splits. Validation and development folds
-may be inspected during model selection. Final-test frames, labels, aggregate
-metrics, and examples remain untouched until architecture, checkpoint,
-calibration mapping, and thresholds are frozen. The final test is evaluated
-once; subsequent changes create a new study rather than another attempt on the
-same test.
+No neighboring temporal frames cross folds. Development validation may be
+inspected during model selection. The unaudited holdout frames, proxy labels,
+aggregate metrics, and examples remain untouched until architecture, checkpoint,
+calibration mapping, and thresholds are frozen. The audited holdout is evaluated
+once; subsequent changes create a new study rather than another attempt on it.
 
 ## Evidence tiers and numeric gates
 
@@ -150,21 +157,21 @@ at a threshold frozen on validation data.
 
 ## Variability and pass/fail rule
 
-Metrics are computed per frame, while resampling respects the highest independent
-unit (animal/session/recording group). Report a two-sided 95% group bootstrap
-interval with at least 2,000 deterministic resamples. A gate passes only when
-the entire 95% interval is on the passing side: the upper bound for maximum-error
-or calibration gates, and the lower bound for improvement/minimum-performance
-gates. Exact bounds agreement must have zero failures, not merely a favorable
-interval. If fewer than five independent groups exist, report grouped fold
-results and require every fold to pass; label all resulting evidence limited.
+Metrics are computed per frame, but decisions respect the whole-session unit.
+Report every one of the three frozen development folds separately and require
+every fold to pass an acceptance gate. A deterministic 2,000-resample within-
+recording frame bootstrap may describe sampling uncertainty but is explicitly
+diagnostic; it is not a substitute for a group interval with only one held-out
+session per fold. Exact bounds agreement must have zero failures. All evidence
+is labeled limited because there are only three development groups in one
+project family.
 
-Use at least three training seeds whenever a one-seed estimate or interval lies
-within 10% of a gate or practical-effect threshold. In that case, each seed must
-pass and the across-seed mean is reported with its range. Otherwise, one seed
-plus the group bootstrap is sufficient for early elimination. Missing values,
-excluded frames, and failed inference count are always reported and may not be
-silently dropped.
+Use at least three training seeds whenever a one-seed estimate lies within 10%
+of a gate or practical-effect threshold. In that case, each seed and fold must
+pass and the across-seed mean is reported with its range. One seed on the primary
+fold is sufficient only for early elimination; acceptance requires all folds.
+Missing values, excluded frames, and failed inference count are always reported
+and may not be silently dropped.
 
 ## Performance and stopping evidence
 

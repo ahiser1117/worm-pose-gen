@@ -33,11 +33,36 @@ trap cleanup EXIT
 printf 'worm-pose environment write test\n' >"$write_probe"
 test -s "$write_probe"
 
-if ! "$RUN_IN_ENV" uv python find --no-python-downloads 3.13; then
-  "$RUN_IN_ENV" uv python install 3.13
+# UV_PYTHON_INSTALL_DIR is set by project_env.sh, so this installs into the
+# checkout rather than uv's user-wide interpreter directory. Do not accept an
+# otherwise compatible interpreter found through an existing .venv symlink.
+"$RUN_IN_ENV" uv python install 3.13
+"$RUN_IN_ENV" uv python pin 3.13
+managed_python="$(
+  "$RUN_IN_ENV" uv python find \
+    --no-project --managed-python --no-python-downloads 3.13
+)"
+managed_python="$(realpath -- "$managed_python")"
+case "$managed_python" in
+  "$PROJECT_ROOT/.uv-python"/*) ;;
+  *)
+    printf 'uv selected interpreter outside %s: %s\n' \
+      "$PROJECT_ROOT/.uv-python" "$managed_python" >&2
+    exit 1
+    ;;
+esac
+
+venv_python="$PROJECT_ROOT/.venv/bin/python"
+if [[ ! -x "$venv_python" ]] || \
+   [[ "$(realpath -- "$venv_python")" != "$PROJECT_ROOT/.uv-python/"* ]]; then
+  if [[ -L "$PROJECT_ROOT/.venv" ]]; then
+    printf 'refusing to clear symbolic-link environment path: %s\n' \
+      "$PROJECT_ROOT/.venv" >&2
+    exit 1
+  fi
+  "$RUN_IN_ENV" uv venv --clear --python "$managed_python" "$PROJECT_ROOT/.venv"
 fi
-"$RUN_IN_ENV" uv python find --no-python-downloads 3.13
-"$RUN_IN_ENV" uv sync --frozen --python 3.13
+"$RUN_IN_ENV" uv sync --frozen --python "$managed_python"
 
 preflight_args=()
 if (( REQUIRE_CUDA == 1 )); then

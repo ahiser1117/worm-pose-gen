@@ -1,38 +1,87 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "seed": 20260818,
-  "grouping_priority": [
-    "project_family",
-    "acquisition_date",
-    "recording"
-  ],
   "source_dataset_path": "/img_nir",
-  "train": [
+  "frame_ranges_are_half_open": true,
+  "grouping_priority": ["project_family", "acquisition_date", "recording"],
+  "records": {
+    "2023-09-19-01": {
+      "configured_path": "nir_videos/2023-09-19-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+      "size_bytes": 14408997680,
+      "mtime_ns": 1695165610386214943,
+      "frame_count": 20099,
+      "frame_range": [0, 20099],
+      "project_family": "starvation",
+      "acquisition_date": "2023-09-19",
+      "recording": "2023-09-19-01"
+    },
+    "2023-09-27-01": {
+      "configured_path": "nir_videos/2023-09-27-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-27/2023-09-27-01.h5",
+      "size_bytes": 14424298312,
+      "mtime_ns": 1695855062179875330,
+      "frame_count": 20120,
+      "frame_range": [0, 20120],
+      "project_family": "starvation",
+      "acquisition_date": "2023-09-27",
+      "recording": "2023-09-27-01"
+    },
+    "2023-10-11-01": {
+      "configured_path": "nir_videos/2023-10-11-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-10-11/2023-10-11-01.h5",
+      "size_bytes": 14516409088,
+      "mtime_ns": 1697067137210486374,
+      "frame_count": 20249,
+      "frame_range": [0, 20249],
+      "project_family": "starvation",
+      "acquisition_date": "2023-10-11",
+      "recording": "2023-10-11-01"
+    },
+    "2025-03-06-01": {
+      "configured_path": "nir_videos/2025-03-06-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2025-03-06/2025-03-06-01.h5",
+      "size_bytes": 13790835418,
+      "mtime_ns": 1741304870317869576,
+      "frame_count": 19236,
+      "frame_range": [0, 19236],
+      "project_family": "starvation",
+      "acquisition_date": "2025-03-06",
+      "recording": "2025-03-06-01",
+      "condition": "hamamatsu camera"
+    }
+  },
+  "development_records": ["2023-09-19-01", "2023-09-27-01", "2023-10-11-01"],
+  "development_folds": [
     {
-      "path": "nir_videos/2023-09-19-01.h5",
-      "group": "starvation:2023-09-19",
-      "frame_count": 20099
+      "fold": 0,
+      "train": ["2023-09-27-01", "2023-10-11-01"],
+      "validation": ["2023-09-19-01"]
     },
     {
-      "path": "nir_videos/2023-09-27-01.h5",
-      "group": "starvation:2023-09-27",
-      "frame_count": 20120
-    }
-  ],
-  "validation": [
+      "fold": 1,
+      "train": ["2023-09-19-01", "2023-10-11-01"],
+      "validation": ["2023-09-27-01"]
+    },
     {
-      "path": "nir_videos/2023-10-11-01.h5",
-      "group": "starvation:2023-10-11",
-      "frame_count": 20249
+      "fold": 2,
+      "train": ["2023-09-19-01", "2023-09-27-01"],
+      "validation": ["2023-10-11-01"],
+      "primary_quick_iteration_fold": true
     }
   ],
-  "final_test": [
-    {
-      "path": "nir_videos/2025-03-06-01.h5",
-      "group": "starvation:2025-03-06:hamamatsu-condition",
-      "frame_count": 19236
-    }
-  ],
+  "audited_holdout": {
+    "record": "2025-03-06-01",
+    "role": "one-time post-freeze session/camera-shift evaluation; not a pristine independent-background test",
+    "pre_split_audit_frame_indices": [
+      0, 836, 1672, 2508, 3345, 4181, 5017, 5854,
+      6690, 7526, 8363, 9199, 9614, 9615, 9616, 9617,
+      9618, 9619, 9620, 9621, 10035, 10871, 11708, 12544,
+      13380, 14217, 15053, 15889, 16726, 17562, 18398, 19235
+    ],
+    "evaluation_policy": "Exclude the 32 pre-split audit frames from quantitative and qualitative holdout evaluation. Do not read any other frame until architecture, checkpoint selection, calibration, and thresholds are frozen.",
+    "exposure_limit": "The audit exposed session appearance, intensity, rough body scale, and camera condition, so the holdout cannot support a pristine or independent-background claim."
+  },
   "quarantined": [
     "nir_videos/2023-01-13-01.h5",
     "nir_videos/2023-01-18-01.h5",
@@ -44,7 +93,6 @@
     "nir_videos/2026-03-03-16.h5"
   ],
   "temporal_guard_interval_frames": null,
-  "temporal_guard_rationale": "Every recording and acquisition date is assigned wholly to one split.",
-  "final_test_policy": "No frames, proxy labels, aggregate metrics, or examples from final_test may be inspected until architecture, checkpoint selection, calibration, and thresholds are frozen.",
-  "scope_limit": "All readable recordings are from the starvation project family. This split supports session/camera-shift evidence only and cannot establish cross-project or cross-background generalization."
+  "temporal_guard_rationale": "Every development recording/acquisition date is held out as a whole fold.",
+  "scope_limit": "All readable recordings are from the starvation project family. Evidence is limited to within-project session variation and one audited camera-condition shift."
 }

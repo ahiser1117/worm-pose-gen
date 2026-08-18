@@ -33,7 +33,8 @@ scripts/project_env.sh uv run python scripts/preflight.py
 ```
 
 The wrapper also sends Matplotlib, PyTorch, and XDG caches to writable local
-paths and forces Matplotlib's non-interactive `Agg` backend.
+paths and forces Matplotlib's non-interactive `Agg` backend. It exports the
+resolved checkout path as `PROJECT_ROOT` for child commands.
 
 ## Bootstrap
 
@@ -41,15 +42,21 @@ After changing `pyproject.toml` or on a new checkout:
 
 ```bash
 scripts/project_env.sh uv lock
-scripts/bootstrap_environment.sh
+scripts/bootstrap_environment.sh --require-cuda
 ```
 
-The bootstrap creates the external output directories, performs a write/read
-test, synchronizes from `uv.lock`, and validates the Python environment. CUDA
-access can require a sandbox approval; request it early with:
+This exact invocation is the Phase 0 bootstrap. It creates the external output
+directories, performs a write/read test, installs/selects Python 3.13 beneath
+the repository-local `.uv-python`, pins 3.13, recreates `.venv` only when its
+resolved interpreter is absent or outside `.uv-python`, synchronizes from
+`uv.lock`, and validates the environment. It does not modify a system Python or
+uv's user-wide interpreter store. CUDA and dependency downloads can require
+narrow sandbox approvals.
+
+For an explicitly CPU-only setup or test, omit `--require-cuda`:
 
 ```bash
-scripts/bootstrap_environment.sh --require-cuda
+scripts/bootstrap_environment.sh
 ```
 
 After dependencies have been cached, reproducibility can be checked without
@@ -64,6 +71,14 @@ UV_OFFLINE=1 scripts/project_env.sh uv sync --frozen --python 3.13
 - Python is `>=3.13,<3.14` and `.python-version` pins minor version `3.13`.
 - `CUDA_VISIBLE_DEVICES=0`; physical device 0 appears as logical `cuda:0`.
 - PyTorch must see exactly one CUDA device for GPU-dependent work.
+- With `--require-cuda`, read-only `nvidia-smi` inspection must map physical
+  device 0 to visible logical `cuda:0`. The expected Phase 0 identity is UUID
+  `GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6` at PCI
+  `00000000:01:00.0`. These are explicit constants in `scripts/preflight.py`
+  (and mirrored in `configs/resource_budget.yaml`), not identities inferred
+  from the currently visible GPU.
+- `sys.prefix` must resolve to repository-local `.venv`, while the resolved
+  base interpreter (`sys._base_executable`) must be beneath `.uv-python`.
 - Source HDF5 files are read-only inputs and are never overwritten.
 - Lightning logs, checkpoints, and profiler outputs must use explicit paths
   beneath the external root rather than framework defaults.
@@ -73,7 +88,8 @@ UV_OFFLINE=1 scripts/project_env.sh uv sync --frozen --python 3.13
 Recorded on 2026-08-18 after running
 `scripts/bootstrap_environment.sh --require-cuda`:
 
-- Python: 3.13.14 at `.venv/bin/python3`
+- Python: 3.13.15 at `.venv/bin/python3`; resolved base interpreter beneath
+  `.uv-python/cpython-3.13.15-linux-x86_64-gnu`
 - PyTorch: 2.13.0+cu130; CUDA runtime: 13.0
 - Lightning: 2.6.5
 - h5py: 3.16.0; HDF5: 2.0.0
@@ -91,6 +107,10 @@ Recorded on 2026-08-18 after running
 - initial Git status: an uncommitted repository with no prior commits
 - reproducibility baseline commit:
   `0422168c14672a66c41fcfebdbaafae10ef2b5be`
+
+The initial preflight used Python 3.13.14 from uv's user-wide interpreter store.
+The corrected bootstrap installed 3.13.15 beneath repository-local `.uv-python`
+and migrated `.venv`; all post-bootstrap experiments use that local base.
 
 The active sandbox required a narrow approved host execution for CUDA identity
 and bootstrap validation. Dependency resolution is performed only by the

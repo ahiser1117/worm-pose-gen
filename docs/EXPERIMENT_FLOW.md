@@ -18,7 +18,7 @@ Classical proxy-label baseline + synthetic crop benchmark
 Representation -> temporal context -> optional refinement/uncertainty
                     |
                     v
-Frozen selection -> untouched test -> packaged final system
+Frozen selection -> audited holdout -> packaged final system
 ```
 
 The final version will reference the canonical project-level decision-path
@@ -27,5 +27,6 @@ inconclusive major hypothesis.
 
 The audit forced one important revision: cross-project/background validation
 is unavailable because all readable inputs are in the starvation family.
-Development therefore uses whole-session separation and reserves the distinct
-2025 Hamamatsu-condition session as a one-time, explicitly limited final test.
+Development therefore uses whole-session cross-validation. The distinct 2025
+Hamamatsu-condition session is an audited holdout with its 32 pre-split audit
+indices excluded, not a pristine final test.
