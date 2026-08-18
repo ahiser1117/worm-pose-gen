@@ -77,3 +77,10 @@ and the preserved-pixel successes/rejections are visible in
 [`real_texture_crop_evidence.png`](../experiments/exp_0003_real_texture_crop/figures/real_texture_crop_evidence.png).
 The exact support logic is retained; only the camera-window scale hypothesis is
 revised.
+
+The scale revision itself was also **not supported** at the complete-frame gate:
+EXP-0005 produced 720/900 valid crops but only 14/90 complete source frames.
+Its [`scaled crop evidence`](../experiments/exp_0005_scaled_real_crop/figures/scaled_real_crop_evidence.png)
+shows that curved bodies can re-enter an axis-aligned window. The next branch is
+declared as a balanced 300-condition benchmark (10 cases per recording, end,
+and fraction), with this change of experimental unit explicit in EXP-0006.

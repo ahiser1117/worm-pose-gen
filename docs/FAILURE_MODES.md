@@ -14,6 +14,7 @@ or an experiment measured it.
 | Proxy endpoint under-reach | Visual endpoint audit and body-length range | Keep proxy labels as limited training candidates; require Tier C/end-position curves | Mild roughly 10--20 px under-reach seen qualitatively in some accepted overlays; no Tier A prevalence |
 | Synthetic-to-real appearance gap | Real overlay inspection versus analytic montage | Mix real proxy texture with synthetic geometry; never infer real accuracy from Tier C | Generator is geometrically plausible but substantially simpler/thinner than real NIR worms |
 | Training-size physical crop excludes visible anatomy | Exact requested-versus-geometric support contract | Use a larger 4:3 source camera window with recorded isotropic resize | EXP-0003: 0/90 complete frames and 65/900 valid conditions; original design rejected |
+| Curved body re-enters an axis-aligned artificial FOV | Exact contiguous-support mismatch | Report rejected complete-series hypothesis; balance only prevalidated conditions across sessions | EXP-0005: 720/900 valid but 14/90 complete; scale revision rejected |
 | High-frequency temporal jitter | Angle velocity/jerk metric | Short temporal context if experiment supports it | Planned |
 | Motion blur/low contrast | Support probability and image residual | Robust normalization and calibrated uncertainty | Planned |
 | Recording-background leakage | Grouped recording/session split | Hold out entire acquisition groups | Required |

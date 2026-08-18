@@ -47,3 +47,11 @@ the predeclared 60-frame gate. Exact transforms, pixel provenance, and support
 all passed for the 65 emitted cases, so the failure is informative: the physical
 window was too small to retain the long visible complement. EXP-0005 revises
 the camera geometry while retaining the original gate.
+
+**EXP-0005 (REJECT)** corrected physical scale and raised valid yield to
+720/900, but only 14/90 frames supported a complete ten-condition series versus
+the unchanged >=60 gate. The remaining failure is geometric re-entry: an
+axis-aligned camera rectangle cannot always exclude exactly one contiguous
+anatomical end of a curved candidate centerline. EXP-0006 changes the benchmark
+unit explicitly and prospectively to a balanced crop condition, rather than
+pretending the rejected same-frame hypothesis passed.

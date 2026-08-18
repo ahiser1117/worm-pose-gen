@@ -1,0 +1,21 @@
+{
+  "experiment": "EXP-0006",
+  "seed": 20260818,
+  "exp_0005_metrics_path": "experiments/exp_0005_scaled_real_crop/metrics.json",
+  "exp_0005_metrics_sha256": "b1d87dc020932fe6059ff52ffc5ca2e435baa63e502c77ad6b147ee9cdd0178c",
+  "exp_0005_case_manifest_sha256": "db097249b25182864fa6e6dbd38b494a97c42846f96ccf4f4145948ceba06bcc",
+  "proxy_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+  "proxy_sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+  "source_recordings_may_be_opened": false,
+  "cases_per_recording_condition": 10,
+  "expected_recordings": ["2023-09-19-01", "2023-09-27-01", "2023-10-11-01"],
+  "hidden_fractions": [0.05, 0.10, 0.20, 0.30, 0.40],
+  "hidden_ends": ["head", "tail"],
+  "expected_cases": 300,
+  "selection": "ascending SHA256(seed|recording|source_frame_index|hidden_end|hidden_fraction)",
+  "output_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/real_crop_balanced_v1/benchmark.h5",
+  "maximum_output_bytes": 262144000,
+  "maximum_roundtrip_error_px": 0.0001,
+  "maximum_wall_time_minutes": 10,
+  "evidence_label": "candidate proxy-referenced static real texture; not anatomical accuracy evidence"
+}
