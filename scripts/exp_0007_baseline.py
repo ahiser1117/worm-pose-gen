@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import platform
+import subprocess
 from typing import Any
 
 import numpy as np
@@ -27,6 +29,16 @@ from worm_pose_gen.training_data import (
 SCHEMA_VERSION = 1
 TENSOR_FILENAME = "mean_centerline.npy"
 METADATA_FILENAME = "baseline.json"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PROVENANCE_SOURCES = (
+    "scripts/exp_0007_baseline.py",
+    "scripts/evaluate.py",
+    "src/worm_pose_gen/geometry.py",
+    "src/worm_pose_gen/model.py",
+    "src/worm_pose_gen/renderer.py",
+    "src/worm_pose_gen/synthetic.py",
+    "src/worm_pose_gen/training_data.py",
+)
 
 
 def tensor_sha256(tensor: torch.Tensor) -> str:
@@ -34,6 +46,48 @@ def tensor_sha256(tensor: torch.Tensor) -> str:
 
     value = tensor.detach().cpu().to(torch.float32).contiguous().numpy().astype("<f4", copy=False)
     return hashlib.sha256(value.tobytes(order="C")).hexdigest()
+
+
+def repository_provenance(*, require_clean: bool) -> dict[str, Any]:
+    """Bind generated identities to the exact clean implementation tree."""
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if require_clean and status:
+        raise RuntimeError("EXP-0007 provenance requires a clean committed repository")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return {
+        "git_commit": commit,
+        "git_tree": tree,
+        "repository_clean": not bool(status),
+        "source_sha256": {
+            name: sha256_file(REPOSITORY_ROOT / name) for name in PROVENANCE_SOURCES
+        },
+        "environment": {
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "torch": torch.__version__,
+            "yaml": yaml.__version__,
+        },
+    }
 
 
 def validate_exp_0007_config(config: dict[str, Any]) -> None:
@@ -161,6 +215,8 @@ def construct_baseline(config: dict[str, Any], *, fold: int) -> tuple[torch.Tens
             "orientation_alignment": "symmetric_forward_reverse_per_case",
             "metric": "median_per_point_euclidean_error_original_image_pixels_968x732",
             "median_point_error_px": float(point_error.median()),
+            "fully_visible_target_tensor_shape": list(targets.shape),
+            "fully_visible_target_tensor_sha256": tensor_sha256(targets),
         },
         "audited_holdout_opened": False,
         "source_recordings_opened": False,
@@ -170,6 +226,7 @@ def construct_baseline(config: dict[str, Any], *, fold: int) -> tuple[torch.Tens
 
 def write_baseline(config_path: Path, *, fold: int, output_dir: Path) -> Path:
     config = yaml.safe_load(config_path.read_text())
+    provenance = repository_provenance(require_clean=True)
     tensor, metadata = construct_baseline(config, fold=fold)
     output_dir.mkdir(parents=True, exist_ok=True)
     tensor_path = output_dir / TENSOR_FILENAME
@@ -186,6 +243,7 @@ def write_baseline(config_path: Path, *, fold: int, output_dir: Path) -> Path:
             "tensor_file": TENSOR_FILENAME,
             "tensor_sha256": tensor_sha256(tensor),
             "tensor_file_sha256": sha256_file(tensor_path),
+            "code_provenance": provenance,
         }
     )
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
@@ -212,6 +270,18 @@ def verify_baseline(metadata_path: Path, config_path: Path, *, fold: int, data_s
         raise RuntimeError("baseline tensor contract mismatch")
     if tensor_sha256(tensor) != metadata["tensor_sha256"]:
         raise RuntimeError("baseline raw tensor hash mismatch")
+    if metadata.get("code_provenance") != repository_provenance(require_clean=True):
+        raise RuntimeError("baseline implementation/environment provenance mismatch")
+    _, reconstructed = construct_baseline(yaml.safe_load(config_path.read_text()), fold=fold)
+    expected_validation = reconstructed["validation"]
+    for name in (
+        "fully_visible_case_ids",
+        "fully_visible_target_tensor_shape",
+        "fully_visible_target_tensor_sha256",
+        "median_point_error_px",
+    ):
+        if metadata["validation"].get(name) != expected_validation.get(name):
+            raise RuntimeError(f"baseline reconstructed validation field changed: {name}")
     return metadata
 
 
@@ -271,7 +341,10 @@ def compare_checkpoint(
         "checkpoint_sha256": sha256_file(checkpoint_path),
         "checkpoint_global_step": expected_step,
         "baseline_metadata_path": str(metadata_path.resolve(strict=True)),
+        "baseline_metadata_sha256": sha256_file(metadata_path),
         "baseline_tensor_sha256": metadata["tensor_sha256"],
+        "config_sha256": sha256_file(config_path),
+        "code_provenance": metadata["code_provenance"],
         "fully_visible_case_ids": case_ids,
         "baseline_median_point_error_px": baseline_median,
         "model_median_point_error_px": model_median,

@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 import json
 
 import lightning as L
+from lightning.pytorch.callbacks import Timer
 import torch
 from torch.utils.data import DataLoader, Dataset
 import yaml
@@ -11,6 +13,7 @@ import yaml
 from scripts.evaluate import (
     aggregate_results,
     aligned_geometry_metrics,
+    evaluate,
     expected_calibration_error,
     summarize_cases,
 )
@@ -18,6 +21,7 @@ from scripts.exp_0007_baseline import tensor_sha256, validate_exp_0007_config
 from scripts.train import (
     FullyVisibleCountContract,
     ImmutableStepCheckpoint,
+    checkpoint_training_elapsed_seconds,
     resolve_protocol,
     resolve_resume_checkpoint,
 )
@@ -30,7 +34,8 @@ class _TinyDataset(Dataset):
         x = torch.linspace(20, 220, 100)
         y = 96 + 20 * torch.sin(torch.linspace(0, 4, 100))
         return {"image": torch.zeros(1, 192, 256), "centerline_xy": torch.stack((x, y), -1),
-                "image_support_target": torch.ones(100, dtype=torch.bool)}
+                "image_support_target": torch.ones(100, dtype=torch.bool),
+                "sample_seed": index, "record": "synthetic", "frame_index": -1}
 
 
 class ModelTests(unittest.TestCase):
@@ -54,6 +59,52 @@ class ModelTests(unittest.TestCase):
         FullyVisibleCountContract(43).on_validation_epoch_end(_Trainer(), None)
         with self.assertRaises(RuntimeError):
             FullyVisibleCountContract(42).on_validation_epoch_end(_Trainer(), None)
+
+    def test_immutable_step_checkpoint_is_exact_in_real_trainer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "step1.ckpt"
+            trainer = L.Trainer(
+                max_steps=1,
+                limit_train_batches=1,
+                accelerator="cpu",
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                callbacks=[
+                    ImmutableStepCheckpoint(path, 1),
+                    Timer(duration=timedelta(minutes=1)),
+                ],
+            )
+            trainer.fit(
+                WormProposalModule("intrinsic"),
+                DataLoader(_TinyDataset(), batch_size=2),
+            )
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint["global_step"], 1)
+            self.assertGreaterEqual(checkpoint_training_elapsed_seconds(checkpoint), 0.0)
+
+    def test_evaluate_preserves_failed_inference_identity_and_count(self) -> None:
+        class _PartlyFinite(torch.nn.Module):
+            def forward(self, image):
+                x = torch.linspace(20, 220, 100)
+                y = 96 + 20 * torch.sin(torch.linspace(0, 4, 100))
+                centerline = torch.stack((x, y), -1).expand(len(image), -1, -1).clone()
+                centerline[1] = torch.nan
+                support = torch.ones(len(image), 100)
+                return {
+                    "centerline_xy": centerline,
+                    "image_support_probability": support,
+                    "in_fov_mask": support.bool(),
+                }
+
+        cases, summary = evaluate(
+            _PartlyFinite(), _TinyDataset(), batch_size=2, device=torch.device("cpu")
+        )
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(summary["requested_samples"], 2)
+        self.assertEqual(summary["evaluated_samples"], 1)
+        self.assertEqual(summary["failed_inference_count"], 1)
+        self.assertEqual(summary["failed_inference_cases"][0]["case_id"], "seed:1")
 
     def test_fully_visible_checkpoint_metric_ignores_cropped_case(self) -> None:
         from unittest.mock import patch

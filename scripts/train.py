@@ -91,6 +91,60 @@ def resolve_resume_checkpoint(
     return None
 
 
+def current_git_commit() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def verify_decision_authorization(
+    path: Path, config_path: Path, *, purpose: str
+) -> dict:
+    document = json.loads(path.read_text())
+    if (
+        document.get("schema_version") != 1
+        or document.get("experiment") != "EXP-0007"
+        or document.get("config_sha256") != sha256_file(config_path)
+        or document.get("code_git_commit") != current_git_commit()
+    ):
+        raise RuntimeError(f"{purpose} authorization identity mismatch")
+    repository_root = Path(__file__).resolve().parents[1]
+    sources = document.get("source_sha256")
+    if not isinstance(sources, dict) or not sources or any(
+        sha256_file(repository_root / name) != digest for name, digest in sources.items()
+    ):
+        raise RuntimeError(f"{purpose} authorization source hash mismatch")
+    inputs = document.get("inputs")
+    if not isinstance(inputs, dict):
+        raise RuntimeError(f"{purpose} authorization has no input provenance")
+    for records in inputs.values():
+        if not isinstance(records, list):
+            raise RuntimeError(f"{purpose} authorization input provenance is malformed")
+        for record in records:
+            input_path = Path(record["path"])
+            if sha256_file(input_path) != record.get("sha256"):
+                raise RuntimeError(f"{purpose} authorization input hash mismatch")
+    return document
+
+
+def checkpoint_training_elapsed_seconds(checkpoint: dict) -> float:
+    timer_states = [
+        value
+        for key, value in checkpoint.get("callbacks", {}).items()
+        if key == "Timer" or str(key).startswith("Timer{")
+    ]
+    if len(timer_states) != 1:
+        raise RuntimeError("resume checkpoint must contain exactly one Timer state")
+    elapsed = float(timer_states[0].get("time_elapsed", {}).get("train", -1))
+    if elapsed < 0:
+        raise RuntimeError("resume checkpoint has no accumulated training time")
+    return elapsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -101,6 +155,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int)
     parser.add_argument("--baseline-metadata", type=Path)
     parser.add_argument("--baseline-comparison", type=Path)
+    parser.add_argument("--expansion-authorization", type=Path)
+    parser.add_argument("--repeat-authorization", type=Path)
     parser.add_argument("--resume-last", action="store_true")
     parser.add_argument("--resume-from", type=Path)
     args = parser.parse_args()
@@ -111,10 +167,40 @@ def main() -> int:
     configured_model_seed = int(config.get("model_seed", config.get("seed", 20260818)))
     seed = args.seed if args.seed is not None else configured_model_seed
     data_seed = int(config.get("data_seed", config.get("seed", 20260818)))
+    verified_baseline = None
     if config["experiment"] == "EXP-0007":
+        repeat_seeds = tuple(int(value) for value in config["decision"]["repeat_model_seeds"])
+        if seed not in (configured_model_seed, *repeat_seeds):
+            raise ValueError("EXP-0007 model seed is outside the frozen primary/repeat set")
+        if seed != configured_model_seed:
+            if args.repeat_authorization is None:
+                raise RuntimeError("repeat model seeds require a primary near-gate authorization")
+            repeat = verify_decision_authorization(
+                args.repeat_authorization, args.config, purpose="repeat"
+            )
+            if (
+                not repeat.get("authorize_repeat_seeds", False)
+                or seed not in repeat.get("authorized_repeat_model_seeds", [])
+            ):
+                raise RuntimeError("decision artifact does not authorize this repeat seed")
+        elif args.repeat_authorization is not None:
+            raise ValueError("primary model seed must not use --repeat-authorization")
+        if args.fold != 2:
+            if args.expansion_authorization is None:
+                raise RuntimeError("folds 0/1 require a passing fold-2 authorization")
+            expansion = verify_decision_authorization(
+                args.expansion_authorization, args.config, purpose="fold expansion"
+            )
+            if (
+                not expansion.get("authorize_additional_folds", False)
+                or int(expansion.get("additional_folds_model_seed", -1)) != seed
+            ):
+                raise RuntimeError("decision artifact does not authorize this fold/model seed")
+        elif args.expansion_authorization is not None:
+            raise ValueError("fold 2 must not use --expansion-authorization")
         if args.baseline_metadata is None:
             raise ValueError("EXP-0007 requires --baseline-metadata built before training")
-        verify_baseline(
+        verified_baseline = verify_baseline(
             args.baseline_metadata,
             args.config,
             fold=args.fold,
@@ -122,6 +208,8 @@ def main() -> int:
         )
     elif args.baseline_metadata is not None:
         raise ValueError("--baseline-metadata applies only to EXP-0007")
+    elif args.expansion_authorization is not None or args.repeat_authorization is not None:
+        raise ValueError("EXP-0007 decision authorizations do not apply to EXP-0004")
     subprocess.run(
         [sys.executable, str(Path(__file__).with_name("preflight.py")), "--require-cuda"],
         check=True,
@@ -195,6 +283,8 @@ def main() -> int:
     resume_checkpoint = resolve_resume_checkpoint(
         args.output_dir, resume_last=args.resume_last, resume_from=args.resume_from
     )
+    resumed = None
+    resumed_elapsed_seconds = 0.0
     if resume_checkpoint is not None:
         resumed = torch.load(resume_checkpoint, map_location="cpu", weights_only=False)
         resumed_hparams = resumed.get("hyper_parameters", {})
@@ -212,6 +302,10 @@ def main() -> int:
             and not (args.output_dir / "step300.ckpt").is_file()
         ):
             raise RuntimeError("resume past step 300 requires the immutable step300.ckpt")
+        resumed_elapsed_seconds = checkpoint_training_elapsed_seconds(resumed)
+        maximum_duration_seconds = 60 * float(config["resources"]["maximum_minutes_per_run"])
+        if resumed_elapsed_seconds >= maximum_duration_seconds:
+            raise RuntimeError("resume checkpoint has exhausted the cumulative wall-time budget")
     if config["experiment"] == "EXP-0007":
         checkpoint_step = int(config["early_elimination"]["checkpoint_step"])
         if resume_checkpoint is None and maximum_steps > checkpoint_step:
@@ -226,14 +320,35 @@ def main() -> int:
                 or int(comparison.get("fold", -1)) != args.fold
                 or int(comparison.get("model_seed", -1)) != seed
                 or int(comparison.get("data_seed", -1)) != data_seed
+                or comparison.get("config_sha256") != sha256_file(args.config)
+                or comparison.get("baseline_metadata_sha256")
+                != sha256_file(args.baseline_metadata)
+                or comparison.get("baseline_tensor_sha256")
+                != verified_baseline["tensor_sha256"]
                 or comparison.get("checkpoint_sha256") != sha256_file(immutable_path)
+                or Path(comparison.get("checkpoint_path", "")).resolve()
+                != immutable_path.resolve()
+                or resume_checkpoint.resolve() != immutable_path.resolve()
+                or int(resumed.get("global_step", -1)) != checkpoint_step
             ):
                 raise RuntimeError("baseline comparison does not authorize this resume")
+            if args.resume_last:
+                raise RuntimeError("EXP-0007 continuation must use --resume-from step300.ckpt")
         elif args.baseline_comparison is not None:
             raise ValueError("--baseline-comparison applies only when resuming beyond step 300")
     elif args.baseline_comparison is not None:
         raise ValueError("--baseline-comparison applies only to EXP-0007")
     timer = Timer(duration=timedelta(minutes=float(config["resources"]["maximum_minutes_per_run"])))
+    if resumed_elapsed_seconds:
+        print(
+            json.dumps(
+                {
+                    "cumulative_train_seconds_before_resume": resumed_elapsed_seconds,
+                    "maximum_cumulative_seconds": 60
+                    * float(config["resources"]["maximum_minutes_per_run"]),
+                }
+            )
+        )
     callbacks: list[Callback] = [latest_checkpoint, best_checkpoint, timer]
     if config["experiment"] == "EXP-0007":
         callbacks.append(

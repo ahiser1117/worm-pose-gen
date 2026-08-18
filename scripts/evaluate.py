@@ -118,6 +118,10 @@ def summarize_cases(cases: list[dict], *, failed_inference_count: int = 0) -> di
         "mean_tail_endpoint_error_px": float(
             torch.stack([case["endpoint"][1] for case in cases]).mean()
         ),
+        "mean_endpoint_error_px_each": [
+            float(torch.stack([case["endpoint"][0] for case in cases]).mean()),
+            float(torch.stack([case["endpoint"][1] for case in cases]).mean()),
+        ],
         "mean_body_length_error_px": float(torch.stack([case["body_length_error"] for case in cases]).mean()),
         "median_body_length_error_fraction": float(
             torch.stack([case["body_length_error_fraction"] for case in cases]).median()
@@ -141,22 +145,50 @@ def summarize_cases(cases: list[dict], *, failed_inference_count: int = 0) -> di
     }
 
 
+def batch_case_id(batch: dict, index: int) -> str:
+    return (
+        f"seed:{int(batch['sample_seed'][index])}"
+        if int(batch["sample_seed"][index]) >= 0
+        else f"{batch['record'][index]}:frame:{int(batch['frame_index'][index])}"
+    )
+
+
 @torch.inference_mode()
 def evaluate(module: WormProposalModule, dataset: torch.utils.data.Dataset, batch_size: int, device: torch.device):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     cases = []
-    failed_inference_count = 0
+    failed_inference_cases: list[dict[str, object]] = []
     for batch in loader:
         image = batch["image"].to(device)
         target = batch["centerline_xy"].to(device)
         try:
             output = module(image)
         except Exception:
-            failed_inference_count += len(image)
+            failed_inference_cases.extend(
+                {
+                    "case_id": batch_case_id(batch, index),
+                    "fully_visible": bool(
+                        batch["image_support_target"][index].bool().all()
+                    ),
+                    "reason": "inference_exception",
+                }
+                for index in range(len(image))
+            )
             continue
         prediction = output["centerline_xy"]
-        finite = torch.isfinite(prediction).all((-2, -1))
-        failed_inference_count += int((~finite).sum())
+        finite = torch.isfinite(prediction).all((-2, -1)) & torch.isfinite(
+            output["image_support_probability"]
+        ).all(-1)
+        failed_inference_cases.extend(
+            {
+                "case_id": batch_case_id(batch, index),
+                "fully_visible": bool(
+                    batch["image_support_target"][index].bool().all()
+                ),
+                "reason": "non_finite_output",
+            }
+            for index in torch.nonzero(~finite, as_tuple=False).flatten().tolist()
+        )
         if not bool(finite.any()):
             continue
         target_support = batch["image_support_target"].to(device)[finite]
@@ -169,11 +201,7 @@ def evaluate(module: WormProposalModule, dataset: torch.utils.data.Dataset, batc
         )
         valid_indices = torch.nonzero(finite, as_tuple=False).flatten().tolist()
         for metric_index, index in enumerate(valid_indices):
-            case_id = (
-                f"seed:{int(batch['sample_seed'][index])}"
-                if int(batch["sample_seed"][index]) >= 0
-                else f"{batch['record'][index]}:frame:{int(batch['frame_index'][index])}"
-            )
+            case_id = batch_case_id(batch, index)
             cases.append({
                 "case_id": case_id,
                 "image": image[index, 0].cpu(), "prediction": prediction[index].cpu(),
@@ -182,7 +210,17 @@ def evaluate(module: WormProposalModule, dataset: torch.utils.data.Dataset, batc
             })
     if not cases:
         raise RuntimeError("evaluation produced no finite inference cases")
-    return cases, summarize_cases(cases, failed_inference_count=failed_inference_count)
+    if len(cases) + len(failed_inference_cases) != len(dataset):
+        raise RuntimeError("evaluation accounting does not match requested dataset size")
+    summary = summarize_cases(cases, failed_inference_count=len(failed_inference_cases))
+    summary.update(
+        {
+            "requested_samples": len(dataset),
+            "evaluated_samples": len(cases),
+            "failed_inference_cases": failed_inference_cases,
+        }
+    )
+    return cases, summary
 
 
 def overlays(cases, indices, path: Path, title: str) -> None:
@@ -408,6 +446,7 @@ def main() -> int:
     if args.checkpoint is None or args.fold is None:
         parser.error("evaluation requires --checkpoint and --fold unless --aggregate is used")
     baseline_identity = None
+    baseline = None
     if config["experiment"] == "EXP-0007":
         if args.baseline_metadata is None:
             parser.error("EXP-0007 evaluation requires --baseline-metadata")
@@ -422,12 +461,47 @@ def main() -> int:
         tensor_path = args.baseline_metadata.parent / baseline["tensor_file"]
         if sha256_file(tensor_path) != baseline["tensor_file_sha256"]:
             raise RuntimeError("baseline tensor-file hash mismatch")
+        repository_root = Path(__file__).resolve().parents[1]
+        git_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        git_tree = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        git_status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        provenance = baseline.get("code_provenance", {})
+        if (
+            git_status
+            or not provenance.get("source_sha256")
+            or provenance.get("git_commit") != git_commit
+            or provenance.get("git_tree") != git_tree
+            or any(
+                sha256_file(repository_root / name) != digest
+                for name, digest in provenance.get("source_sha256", {}).items()
+            )
+        ):
+            raise RuntimeError("baseline implementation provenance mismatch")
         baseline_identity = {
             "metadata_path": str(args.baseline_metadata.resolve(strict=True)),
             "metadata_sha256": sha256_file(args.baseline_metadata),
             "tensor_sha256": baseline["tensor_sha256"],
             "tensor_file_sha256": baseline["tensor_file_sha256"],
             "median_point_error_px": baseline["validation"]["median_point_error_px"],
+            "code_provenance": provenance,
         }
     elif args.baseline_metadata is not None:
         parser.error("--baseline-metadata applies only to EXP-0007")
@@ -454,18 +528,50 @@ def main() -> int:
         "C": SyntheticTierCDataset(int(config["training"]["synthetic_validation_samples"]), seed=data_seed + 5_000_000 + args.fold * 100_000, profile=config["input"]["synthetic_validation_profile"]),
     }
     results = {tier: evaluate(module, dataset, int(config["training"]["evaluation_batch_size"]), device) for tier, dataset in datasets.items()}
-    tier_c_cases, _ = results["C"]
+    tier_c_cases, tier_c_all_summary = results["C"]
     tier_c_fully_visible = [
         case for case in tier_c_cases if bool(case["aligned_support"].all())
     ]
     tier_c_cropped = [
         case for case in tier_c_cases if not bool(case["aligned_support"].all())
     ]
+    tier_c_failures = tier_c_all_summary["failed_inference_cases"]
+    fully_visible_failures = [
+        case for case in tier_c_failures if bool(case["fully_visible"])
+    ]
+    cropped_failures = [
+        case for case in tier_c_failures if not bool(case["fully_visible"])
+    ]
     if not tier_c_fully_visible or not tier_c_cropped:
         raise RuntimeError("Tier C evaluation must contain fully-visible and cropped strata")
-    if len(tier_c_fully_visible) + len(tier_c_cropped) != len(tier_c_cases):
+    if (
+        len(tier_c_fully_visible)
+        + len(tier_c_cropped)
+        + len(tier_c_failures)
+        != len(datasets["C"])
+    ):
         raise RuntimeError("Tier C visibility strata do not partition the cases")
-    results["C"] = (tier_c_fully_visible, summarize_cases(tier_c_fully_visible))
+    full_summary = summarize_cases(
+        tier_c_fully_visible, failed_inference_count=len(fully_visible_failures)
+    )
+    full_summary.update(
+        {
+            "requested_samples": len(tier_c_fully_visible)
+            + len(fully_visible_failures),
+            "evaluated_samples": len(tier_c_fully_visible),
+            "failed_inference_cases": fully_visible_failures,
+        }
+    )
+    if config["experiment"] == "EXP-0007":
+        expected_ids = baseline["validation"]["fully_visible_case_ids"]
+        observed_ids = sorted(
+            [case["case_id"] for case in tier_c_fully_visible]
+            + [case["case_id"] for case in fully_visible_failures],
+            key=lambda value: int(value.split(":", 1)[1]),
+        )
+        if observed_ids != expected_ids:
+            raise RuntimeError("Tier C fully-visible identities differ from frozen baseline")
+    results["C"] = (tier_c_fully_visible, full_summary)
     rng = np.random.default_rng(data_seed + args.fold)
     for tier, (cases, _) in results.items():
         count = min(12, len(cases))
@@ -534,7 +640,12 @@ def main() -> int:
             ],
         }
     metrics["tier_C_cropped"] = {
-        **summarize_cases(tier_c_cropped),
+        **summarize_cases(
+            tier_c_cropped, failed_inference_count=len(cropped_failures)
+        ),
+        "requested_samples": len(tier_c_cropped) + len(cropped_failures),
+        "evaluated_samples": len(tier_c_cropped),
+        "failed_inference_cases": cropped_failures,
         "point_error_units": "original_image_pixels_968x732",
         "ordinary_reliability_gate_applicable": False,
         "case_partition_note": (

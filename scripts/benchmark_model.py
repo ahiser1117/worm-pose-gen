@@ -65,12 +65,16 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--fold", type=int, choices=(0, 1, 2))
     args = parser.parse_args()
+    if args.output.exists():
+        raise FileExistsError(f"refusing to overwrite benchmark output: {args.output}")
     subprocess.run(
         [sys.executable, str(Path(__file__).with_name("preflight.py")), "--require-cuda"],
         check=True,
     )
     if not torch.cuda.is_available(): raise RuntimeError("benchmark requires CUDA")
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model = WormProposalModule.load_from_checkpoint(args.checkpoint, map_location="cuda").cuda().eval()
     properties = torch.cuda.get_device_properties(0)
     physical_gpu = query_physical_gpu_zero()
@@ -92,6 +96,11 @@ def main() -> int:
         },
         "checkpoint": {"path": str(args.checkpoint.resolve(strict=True)), "sha256": sha256_file(args.checkpoint)},
         "variant": model.variant,
+        "encoder_pool_output": list(model.encoder.pool_output),
+        "model_seed": model.hparams.get("model_seed"),
+        "data_seed": model.hparams.get("data_seed"),
+        "fold": args.fold,
+        "checkpoint_global_step": int(checkpoint.get("global_step", -1)),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
         "protocol": {
             "warmup_iterations": WARMUP_ITERATIONS,
