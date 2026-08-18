@@ -55,3 +55,13 @@ axis-aligned camera rectangle cannot always exclude exactly one contiguous
 anatomical end of a curved candidate centerline. EXP-0006 changes the benchmark
 unit explicitly and prospectively to a balanced crop condition, rather than
 pretending the rejected same-frame hypothesis passed.
+
+**EXP-0006 (ACCEPT)** materialized the preregistered condition-level revision:
+300 immutable real-texture crops, exactly 10 in every recording/end/fraction
+cell. All 300 source-window hashes, interpolation hashes, support mappings, and
+transforms passed, with `5.68e-14 px` maximum round-trip error. The 26,206,788
+byte atomic artifact has SHA-256
+`57f104cc3a77ad0833257fdedadf153a03b73ac731656dca84de593319e0f849`.
+Its rows reuse 87 source frames, and its centerlines remain candidate proxies;
+acceptance establishes a balanced static engineering benchmark, not anatomical
+accuracy, temporal truth, or success of EXP-0005's rejected same-frame claim.

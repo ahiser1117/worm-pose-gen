@@ -84,3 +84,26 @@ Its [`scaled crop evidence`](../experiments/exp_0005_scaled_real_crop/figures/sc
 shows that curved bodies can re-enter an axis-aligned window. The next branch is
 declared as a balanced 300-condition benchmark (10 cases per recording, end,
 and fraction), with this change of experimental unit explicit in EXP-0006.
+
+## H0c — Can valid conditions form a balanced static real-texture benchmark?
+
+```text
+Frozen 720-condition valid pool
+             |
+             v
+SHA-ranked 10/cell across 3 recordings x 2 ends x 5 fractions
+             |
+             v
+300/300 exact cases; 87 unique source frames; all contracts pass
+             |
+             v
+ACCEPT: static candidate-proxy engineering benchmark only
+```
+
+This revised hypothesis is **supported**. The decisive
+[`balance figure`](../experiments/exp_0006_balanced_real_crop/figures/balance.png)
+shows exact cell coverage, while
+[`all 40%-hidden cases`](../experiments/exp_0006_balanced_real_crop/figures/all_40_percent_cases.png)
+exposes the hardest selected condition rather than hiding failures. The change
+of experimental unit and 87-frame reuse are explicit limitations; quantitative
+hidden-anatomy claims continue to rely on Tier C truth.

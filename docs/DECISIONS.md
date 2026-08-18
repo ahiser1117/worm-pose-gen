@@ -35,3 +35,12 @@
 - **Decision:** train proposals from candidate proxies and synthetic data, but never treat proxy agreement as independent real accuracy or synthetic success as appearance validation. Reserve Tier B language for the 24 independently reviewed qualitative cases.
 - **Consequence:** every model result must identify its evidence tier; head/tail supervision stays symmetric/ambiguous until true orientation labels exist.
 - **Revisit if:** manually annotated Tier A labels become available.
+
+## D-0005 — Condition-level real-texture crop benchmark
+
+- **Question:** How can real texture be retained after complete same-frame crop series failed their frozen geometry gate?
+- **Options:** relax the support contract; discard difficult cells; balance only prevalidated crop conditions.
+- **Evidence:** EXP-0005 rejected the same-frame hypothesis with 14/90 complete frames, while EXP-0006 produced exactly 10 valid cases in every one of 30 recording/end/fraction cells and passed all 300 provenance checks.
+- **Decision:** freeze the EXP-0006 condition-level artifact as a static candidate-proxy engineering stratum without relaxing geometry or reinterpreting EXP-0005.
+- **Consequence:** the benchmark has 300 rows but only 87 unique source frames; it cannot establish anatomical accuracy, biological independence, or temporal performance.
+- **Revisit if:** independently annotated real sequences support a complete temporal benchmark.
