@@ -15,7 +15,7 @@ import lightning as L
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint, Timer
 from lightning.pytorch.loggers import CSVLogger
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 import yaml
 
 from worm_pose_gen.model import WormProposalModule
@@ -56,6 +56,68 @@ class FullyVisibleCountContract(Callback):
             raise RuntimeError(
                 f"{name}={observed}; expected frozen count {self.expected_count}"
             )
+
+
+class StatefulFixedBatchSampler(Sampler[list[int]]):
+    """Checkpointable fixed permutation with an exact next-batch cursor."""
+
+    def __init__(self, length: int, batch_size: int, model_seed: int) -> None:
+        self.order, self.order_sha256 = fixed_training_order(length, model_seed)
+        self.batch_size = batch_size
+        self.batches = [
+            self.order[start : start + batch_size]
+            for start in range(0, length, batch_size)
+        ]
+        self.cursor = 0
+
+    def __iter__(self):
+        if self.cursor == len(self.batches):
+            self.cursor = 0
+        while self.cursor < len(self.batches):
+            batch = self.batches[self.cursor]
+            self.cursor += 1
+            yield batch
+        self.cursor = 0
+
+    def __len__(self) -> int:
+        return len(self.batches)
+
+    def state_dict(self) -> dict:
+        return {
+            "order_sha256": self.order_sha256,
+            "batch_size": self.batch_size,
+            "batch_count": len(self.batches),
+            "cursor": self.cursor,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if (
+            state.get("order_sha256") != self.order_sha256
+            or int(state.get("batch_size", -1)) != self.batch_size
+            or int(state.get("batch_count", -1)) != len(self.batches)
+        ):
+            raise RuntimeError("training batch-sampler checkpoint identity mismatch")
+        cursor = int(state.get("cursor", -1))
+        if cursor < 0 or cursor > len(self.batches):
+            raise RuntimeError("training batch-sampler checkpoint cursor is invalid")
+        self.cursor = cursor
+
+
+class TrainingBatchSamplerState(Callback):
+    """Include the exact training sampler cursor in every Lightning checkpoint."""
+
+    def __init__(self, sampler: StatefulFixedBatchSampler) -> None:
+        self.sampler = sampler
+
+    @property
+    def state_key(self) -> str:
+        return "EXP0007TrainingBatchSampler"
+
+    def state_dict(self) -> dict:
+        return self.sampler.state_dict()
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        self.sampler.load_state_dict(state_dict)
 
 
 def resolve_protocol(config: dict, requested_variant: str | None) -> tuple[str, tuple[int, int]]:
@@ -242,13 +304,25 @@ def main() -> int:
         synthetic_validation_count=int(config["training"]["synthetic_validation_samples"]),
     )
     workers = int(config["training"]["num_workers"])
-    training_order, training_order_sha256 = fixed_training_order(len(train), seed)
-    train_loader = DataLoader(
-        train,
-        batch_size=int(config["training"]["train_batch_size"]),
-        sampler=training_order,
-        num_workers=workers,
-    )
+    training_batch_sampler = None
+    training_order_sha256 = None
+    if config["experiment"] == "EXP-0007":
+        training_batch_sampler = StatefulFixedBatchSampler(
+            len(train), int(config["training"]["train_batch_size"]), seed
+        )
+        training_order_sha256 = training_batch_sampler.order_sha256
+        train_loader = DataLoader(
+            train,
+            batch_sampler=training_batch_sampler,
+            num_workers=workers,
+        )
+    else:
+        train_loader = DataLoader(
+            train,
+            batch_size=int(config["training"]["train_batch_size"]),
+            shuffle=True,
+            num_workers=workers,
+        )
     proxy_validation_loader = DataLoader(
         proxy_validation,
         batch_size=int(config["training"]["evaluation_batch_size"]),
@@ -369,6 +443,7 @@ def main() -> int:
         )
     callbacks: list[Callback] = [latest_checkpoint, best_checkpoint, timer]
     if config["experiment"] == "EXP-0007":
+        callbacks.insert(0, TrainingBatchSamplerState(training_batch_sampler))
         callbacks.append(
             ImmutableStepCheckpoint(
                 args.output_dir / "step300.ckpt",

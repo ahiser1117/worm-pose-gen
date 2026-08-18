@@ -21,6 +21,8 @@ from scripts.exp_0007_baseline import tensor_sha256, validate_exp_0007_config
 from scripts.train import (
     FullyVisibleCountContract,
     ImmutableStepCheckpoint,
+    StatefulFixedBatchSampler,
+    TrainingBatchSamplerState,
     checkpoint_training_elapsed_seconds,
     fixed_training_order,
     resolve_protocol,
@@ -186,9 +188,114 @@ class ModelTests(unittest.TestCase):
         self.assertNotEqual(first, other)
         self.assertNotEqual(first_hash, other_hash)
         self.assertEqual(sorted(first), list(range(571)))
-        # A mid-epoch restart enumerates the identical suffix after Lightning
-        # skips already-consumed batches.
         self.assertEqual(first[12 * 16 :], repeated[12 * 16 :])
+
+    def test_stateful_batch_sampler_restores_exact_suffix(self) -> None:
+        sampler = StatefulFixedBatchSampler(571, 16, 20260818)
+        iterator = iter(sampler)
+        consumed = [next(iterator) for _ in range(12)]
+        state = sampler.state_dict()
+        restored = StatefulFixedBatchSampler(571, 16, 20260818)
+        restored.load_state_dict(state)
+        remaining = list(restored)
+        expected = StatefulFixedBatchSampler(571, 16, 20260818)
+        self.assertEqual(consumed + remaining, list(expected))
+        self.assertEqual(state["cursor"], 12)
+        with self.assertRaises(RuntimeError):
+            StatefulFixedBatchSampler(571, 16, 20260819).load_state_dict(state)
+
+    def test_lightning_mid_epoch_resume_preserves_sample_sequence(self) -> None:
+        class _IndexDataset(Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, index):
+                return torch.tensor(index)
+
+        class _Recorder(L.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.ones(()))
+                self.seen: list[int] = []
+
+            def training_step(self, batch, batch_idx):
+                self.seen.extend(int(value) for value in batch)
+                return (self.weight - batch.float().mean() / 10).square()
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint_path = Path(directory) / "step2.ckpt"
+            first_sampler = StatefulFixedBatchSampler(10, 2, 20260818)
+            first_module = _Recorder()
+            first_trainer = L.Trainer(
+                max_steps=2,
+                max_epochs=1,
+                accelerator="cpu",
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                callbacks=[
+                    TrainingBatchSamplerState(first_sampler),
+                    ImmutableStepCheckpoint(checkpoint_path, 2),
+                ],
+            )
+            first_trainer.fit(
+                first_module,
+                DataLoader(_IndexDataset(), batch_sampler=first_sampler),
+            )
+            checkpoint = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=False
+            )
+            self.assertEqual(
+                checkpoint["callbacks"]["EXP0007TrainingBatchSampler"]["cursor"],
+                2,
+            )
+
+            resumed_sampler = StatefulFixedBatchSampler(10, 2, 20260818)
+            resumed_module = _Recorder()
+            resumed_trainer = L.Trainer(
+                max_steps=5,
+                max_epochs=1,
+                accelerator="cpu",
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                callbacks=[TrainingBatchSamplerState(resumed_sampler)],
+            )
+            resumed_trainer.fit(
+                resumed_module,
+                DataLoader(_IndexDataset(), batch_sampler=resumed_sampler),
+                ckpt_path=checkpoint_path,
+            )
+            expected = [
+                value
+                for batch in StatefulFixedBatchSampler(10, 2, 20260818)
+                for value in batch
+            ]
+            self.assertEqual(first_module.seen + resumed_module.seen, expected)
+            self.assertEqual(resumed_trainer.global_step, 5)
+
+            uninterrupted_sampler = StatefulFixedBatchSampler(10, 2, 20260818)
+            uninterrupted_module = _Recorder()
+            uninterrupted_trainer = L.Trainer(
+                max_steps=5,
+                max_epochs=1,
+                accelerator="cpu",
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                callbacks=[TrainingBatchSamplerState(uninterrupted_sampler)],
+            )
+            uninterrupted_trainer.fit(
+                uninterrupted_module,
+                DataLoader(_IndexDataset(), batch_sampler=uninterrupted_sampler),
+            )
+            self.assertEqual(uninterrupted_module.seen, expected)
+            self.assertTrue(
+                torch.equal(resumed_module.weight, uninterrupted_module.weight)
+            )
 
     def test_calibration_includes_probability_one(self) -> None:
         probability = torch.tensor([0.0, 1.0])
