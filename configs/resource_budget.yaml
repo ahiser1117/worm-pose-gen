@@ -32,7 +32,7 @@ cuda:
   expected_uuid: GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6
 artifacts:
   root: /temp_data4/alex/external_artifacts
-  checkpoints: /temp_data4/alex/external_artifacts/artifacts/checkpoints
-  profiler: /temp_data4/alex/external_artifacts/artifacts/profiler
-  datasets: /temp_data4/alex/external_artifacts/datasets
-  experiments: /temp_data4/alex/external_artifacts/experiments
+  checkpoints: /temp_data4/alex/external_artifacts/artifacts/worm_pose_gen/checkpoints
+  profiler: /temp_data4/alex/external_artifacts/artifacts/worm_pose_gen/profiler
+  datasets: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen
+  experiments: /temp_data4/alex/external_artifacts/experiments/worm_pose_gen

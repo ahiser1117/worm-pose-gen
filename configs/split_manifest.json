@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "seed": 20260818,
+  "grouping_priority": [
+    "project_family",
+    "acquisition_date",
+    "recording"
+  ],
+  "source_dataset_path": "/img_nir",
+  "train": [
+    {
+      "path": "nir_videos/2023-09-19-01.h5",
+      "group": "starvation:2023-09-19",
+      "frame_count": 20099
+    },
+    {
+      "path": "nir_videos/2023-09-27-01.h5",
+      "group": "starvation:2023-09-27",
+      "frame_count": 20120
+    }
+  ],
+  "validation": [
+    {
+      "path": "nir_videos/2023-10-11-01.h5",
+      "group": "starvation:2023-10-11",
+      "frame_count": 20249
+    }
+  ],
+  "final_test": [
+    {
+      "path": "nir_videos/2025-03-06-01.h5",
+      "group": "starvation:2025-03-06:hamamatsu-condition",
+      "frame_count": 19236
+    }
+  ],
+  "quarantined": [
+    "nir_videos/2023-01-13-01.h5",
+    "nir_videos/2023-01-18-01.h5",
+    "nir_videos/2023-01-19-01.h5",
+    "nir_videos/2023-03-07-01.h5",
+    "nir_videos/2025-11-19-02.h5",
+    "nir_videos/2025-11-19-09.h5",
+    "nir_videos/2026-03-03-10.h5",
+    "nir_videos/2026-03-03-16.h5"
+  ],
+  "temporal_guard_interval_frames": null,
+  "temporal_guard_rationale": "Every recording and acquisition date is assigned wholly to one split.",
+  "final_test_policy": "No frames, proxy labels, aggregate metrics, or examples from final_test may be inspected until architecture, checkpoint selection, calibration, and thresholds are frozen.",
+  "scope_limit": "All readable recordings are from the starvation project family. This split supports session/camera-shift evidence only and cannot establish cross-project or cross-background generalization."
+}

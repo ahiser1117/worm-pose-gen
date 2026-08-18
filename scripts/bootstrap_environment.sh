@@ -20,10 +20,10 @@ if (( $# == 1 )); then
 fi
 
 mkdir -p \
-  "$EXTERNAL_ROOT/artifacts/checkpoints" \
-  "$EXTERNAL_ROOT/artifacts/profiler" \
-  "$EXTERNAL_ROOT/datasets" \
-  "$EXTERNAL_ROOT/experiments"
+  "$EXTERNAL_ROOT/artifacts/worm_pose_gen/checkpoints" \
+  "$EXTERNAL_ROOT/artifacts/worm_pose_gen/profiler" \
+  "$EXTERNAL_ROOT/datasets/worm_pose_gen" \
+  "$EXTERNAL_ROOT/experiments/worm_pose_gen"
 
 write_probe="$(mktemp "$EXTERNAL_ROOT/.worm-pose-write-test.XXXXXX")"
 cleanup() {

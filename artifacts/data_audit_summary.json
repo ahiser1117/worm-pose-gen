@@ -1,0 +1,4064 @@
+{
+  "audit_schema_version": 1,
+  "inventory": {
+    "recording_count": 12,
+    "status_counts": {
+      "hdf5_open_or_schema_error": 6,
+      "image_read_error": 2,
+      "usable": 4
+    },
+    "total_size_bytes": 167133843404
+  },
+  "method": {
+    "max_sampled_frames_per_recording": 32,
+    "read_mode": "h5py read-only; serial one-file-at-a-time",
+    "sampling": "uniform coverage plus up to 8 consecutive central frames",
+    "source_mutation": "none"
+  },
+  "recordings": [
+    {
+      "error": "KeyError: 'Unable to synchronously open object (message not aligned)'",
+      "file_attrs": {},
+      "input_path": "nir_videos/2023-01-13-01.h5",
+      "mtime_ns": 1673635349050772428,
+      "name": "2023-01-13-01.h5",
+      "resolved_path": "/storage/fs/data4/prj_neuropal/data_raw/2023-01-13/2023-01-13-01.h5",
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            4955568
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            4955584
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38739
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38739
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38739
+          ]
+        },
+        "img_metadata/q_recording": {
+          "error": "KeyError: 'Unable to synchronously open object (message size exceeds buffer end)'",
+          "kind": "unreadable"
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            19369,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "error": "KeyError: 'Unable to synchronously open object (message not aligned)'",
+          "kind": "unreadable"
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19369,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19369,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 13885789925,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 68,
+      "symlink_target": "/store1/shared/all_data_raw/prj_neuropal/2023-01-13/2023-01-13-01.h5",
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "error": "OSError: Can't synchronously read data (bad coordinate offset)",
+      "file_attrs": {},
+      "frame_count": 19304,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          19304,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2023-01-18-01.h5",
+      "metadata": {
+        "metadata/estimated_stim_time": 801,
+        "metadata/food": "mounted on OP50",
+        "metadata/laser_intensity": "13/15 then 15/17, step-up at t=751",
+        "metadata/strain": "swf702 (new line thawed before xmas)",
+        "recording_start": "2023-01-18T17:15:31.690"
+      },
+      "mtime_ns": 1674083039776868104,
+      "name": "2023-01-18-01.h5",
+      "resolved_path": "/storage/fs/data4/prj_neuropal/data_raw/2023-01-18/2023-01-18-01.h5",
+      "sample_indices_attempted": [
+        0,
+        839,
+        1678,
+        2517,
+        3357,
+        4196,
+        5035,
+        5874,
+        6714,
+        7553,
+        8392,
+        9231,
+        9648,
+        9649,
+        9650,
+        9651,
+        9652,
+        9653,
+        9654,
+        9655,
+        10071,
+        10910,
+        11749,
+        12588,
+        13428,
+        14267,
+        15106,
+        15945,
+        16785,
+        17624,
+        18463,
+        19303
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            4951359
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            4951374
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38608
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38608
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38608
+          ]
+        },
+        "img_metadata/q_recording": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38608
+          ]
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            19304,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/estimated_stim_time": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/food": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S15",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/laser_intensity": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S34",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S36",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19304,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19304,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 13839588915,
+      "status": "image_read_error",
+      "symlink_size_bytes": 68,
+      "symlink_target": "/store1/shared/all_data_raw/prj_neuropal/2023-01-18/2023-01-18-01.h5",
+      "timestamp": {
+        "available": true,
+        "count": 38608,
+        "duplicate_or_nonmonotonic_count": 6006,
+        "large_gap_count_gt_1_5x_median": 6618,
+        "mapping": "all timestamps",
+        "median_interval_raw": 25000952.0,
+        "median_interval_seconds": 0.025000952,
+        "observed_fps": 39.99847685800125,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "error": "OSError: Unable to synchronously open file (message not aligned)",
+      "input_path": "nir_videos/2023-01-19-01.h5",
+      "mtime_ns": 1674148134587501287,
+      "name": "2023-01-19-01.h5",
+      "resolved_path": "/storage/fs/data4/prj_neuropal/data_raw/2023-01-19/2023-01-19-01.h5",
+      "size_bytes": 13787082409,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 68,
+      "symlink_target": "/store1/shared/all_data_raw/prj_neuropal/2023-01-19/2023-01-19-01.h5"
+    },
+    {
+      "error": "OSError: Unable to synchronously open file (message not aligned)",
+      "input_path": "nir_videos/2023-03-07-01.h5",
+      "mtime_ns": 1678230629306212663,
+      "name": "2023-03-07-01.h5",
+      "resolved_path": "/storage/fs/data4/prj_neuropal/data_raw/2023-03-07/2023-03-07-01.h5",
+      "size_bytes": 13906343979,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 68,
+      "symlink_target": "/store1/shared/all_data_raw/prj_neuropal/2023-03-07/2023-03-07-01.h5"
+    },
+    {
+      "adjacent_frame_change": [
+        {
+          "from_index": 10045,
+          "identical": false,
+          "mean_absolute_difference": 6.445191383361816,
+          "to_index": 10046
+        },
+        {
+          "from_index": 10046,
+          "identical": false,
+          "mean_absolute_difference": 6.4217939376831055,
+          "to_index": 10047
+        },
+        {
+          "from_index": 10047,
+          "identical": false,
+          "mean_absolute_difference": 6.416079521179199,
+          "to_index": 10048
+        },
+        {
+          "from_index": 10048,
+          "identical": false,
+          "mean_absolute_difference": 6.526880741119385,
+          "to_index": 10049
+        },
+        {
+          "from_index": 10049,
+          "identical": false,
+          "mean_absolute_difference": 6.499536991119385,
+          "to_index": 10050
+        },
+        {
+          "from_index": 10050,
+          "identical": false,
+          "mean_absolute_difference": 6.530242443084717,
+          "to_index": 10051
+        },
+        {
+          "from_index": 10051,
+          "identical": false,
+          "mean_absolute_difference": 6.471590995788574,
+          "to_index": 10052
+        }
+      ],
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "file_attrs": {},
+      "foreground_heuristic": [
+        {
+          "component": {
+            "area_downsampled_px": 1221.0,
+            "bbox_x0": 85.0,
+            "bbox_x1": 137.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 85.0,
+            "major_sigma_span_downsampled_px": 84.2322837617065,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 7.247814884458164
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1232.0,
+            "bbox_x0": 117.0,
+            "bbox_x1": 156.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 104.13727228235476,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 5.915269206685149
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1262.0,
+            "bbox_x0": 100.0,
+            "bbox_x1": 215.0,
+            "bbox_y0": 77.0,
+            "bbox_y1": 142.0,
+            "major_sigma_span_downsampled_px": 114.79283045258136,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.496858972047506
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1479.0,
+            "bbox_x0": 104.0,
+            "bbox_x1": 207.0,
+            "bbox_y0": 49.0,
+            "bbox_y1": 93.0,
+            "major_sigma_span_downsampled_px": 115.75587336511035,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.388444737205798
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1209.0,
+            "bbox_x0": 35.0,
+            "bbox_x1": 130.0,
+            "bbox_y0": 50.0,
+            "bbox_y1": 87.0,
+            "major_sigma_span_downsampled_px": 105.1328068289054,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.7498702663172665
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1422.0,
+            "bbox_x0": 73.0,
+            "bbox_x1": 132.0,
+            "bbox_y0": 29.0,
+            "bbox_y1": 107.0,
+            "major_sigma_span_downsampled_px": 81.95481387862576,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 8.675512350659275
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1263.0,
+            "bbox_x0": 34.0,
+            "bbox_x1": 129.0,
+            "bbox_y0": 64.0,
+            "bbox_y1": 131.0,
+            "major_sigma_span_downsampled_px": 109.6524381246574,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.759105869420659
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1438.0,
+            "bbox_x0": 107.0,
+            "bbox_x1": 217.0,
+            "bbox_y0": 65.0,
+            "bbox_y1": 137.0,
+            "major_sigma_span_downsampled_px": 109.31520681749724,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.577309972988271
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1323.0,
+            "bbox_x0": 31.0,
+            "bbox_x1": 139.0,
+            "bbox_y0": 46.0,
+            "bbox_y1": 110.0,
+            "major_sigma_span_downsampled_px": 114.00778669824875,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.8022352609197805
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1381.0,
+            "bbox_x0": 107.0,
+            "bbox_x1": 191.0,
+            "bbox_y0": 21.0,
+            "bbox_y1": 105.0,
+            "major_sigma_span_downsampled_px": 113.94354311980169,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.060018682006399
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1356.0,
+            "bbox_x0": 120.0,
+            "bbox_x1": 208.0,
+            "bbox_y0": 71.0,
+            "bbox_y1": 154.0,
+            "major_sigma_span_downsampled_px": 115.00075805773528,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.895613311171524
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1192.0,
+            "bbox_x0": 19.0,
+            "bbox_x1": 121.0,
+            "bbox_y0": 88.0,
+            "bbox_y1": 133.0,
+            "major_sigma_span_downsampled_px": 110.08012122691886,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.4142382235518
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1194.0,
+            "bbox_x0": 37.0,
+            "bbox_x1": 132.0,
+            "bbox_y0": 42.0,
+            "bbox_y1": 87.0,
+            "major_sigma_span_downsampled_px": 104.87084938557565,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.692716360149112
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1179.0,
+            "bbox_x0": 35.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 42.0,
+            "bbox_y1": 87.0,
+            "major_sigma_span_downsampled_px": 104.42156580549484,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.645385562385232
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1132.0,
+            "bbox_x0": 37.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 43.0,
+            "bbox_y1": 85.0,
+            "major_sigma_span_downsampled_px": 104.71029166177595,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.405390349099905
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1165.0,
+            "bbox_x0": 39.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 43.0,
+            "bbox_y1": 83.0,
+            "major_sigma_span_downsampled_px": 103.96930978968953,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.60261485988787
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1166.0,
+            "bbox_x0": 35.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 44.0,
+            "bbox_y1": 87.0,
+            "major_sigma_span_downsampled_px": 105.7434646339331,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.513343089506783
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1190.0,
+            "bbox_x0": 34.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 45.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 107.11682532753754,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.5546829191458285
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1152.0,
+            "bbox_x0": 37.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 45.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 104.74144113511903,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.499256013261703
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1162.0,
+            "bbox_x0": 39.0,
+            "bbox_x1": 131.0,
+            "bbox_y0": 46.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 105.49643546102061,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.507295080265257
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1457.0,
+            "bbox_x0": 66.0,
+            "bbox_x1": 135.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 103.0,
+            "major_sigma_span_downsampled_px": 110.24622702475821,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 6.607935887333354
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1376.0,
+            "bbox_x0": 89.0,
+            "bbox_x1": 163.0,
+            "bbox_y0": 41.0,
+            "bbox_y1": 97.0,
+            "major_sigma_span_downsampled_px": 84.13807002921206,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 8.177035671975029
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1258.0,
+            "bbox_x0": 105.0,
+            "bbox_x1": 219.0,
+            "bbox_y0": 38.0,
+            "bbox_y1": 95.0,
+            "major_sigma_span_downsampled_px": 117.37347454364095,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.358962086157974
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1286.0,
+            "bbox_x0": 39.0,
+            "bbox_x1": 127.0,
+            "bbox_y0": 96.0,
+            "bbox_y1": 152.0,
+            "major_sigma_span_downsampled_px": 93.36584069804051,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.886887058400308
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1474.0,
+            "bbox_x0": 110.0,
+            "bbox_x1": 180.0,
+            "bbox_y0": 73.0,
+            "bbox_y1": 155.0,
+            "major_sigma_span_downsampled_px": 91.49275673920138,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 8.055282475538545
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1160.0,
+            "bbox_x0": 116.0,
+            "bbox_x1": 233.0,
+            "bbox_y0": 69.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 119.62141859903741,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.848630009514594
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1267.0,
+            "bbox_x0": 113.0,
+            "bbox_x1": 213.0,
+            "bbox_y0": 77.0,
+            "bbox_y1": 120.0,
+            "major_sigma_span_downsampled_px": 112.68002668422203,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.62211439455317
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1231.0,
+            "bbox_x0": 30.0,
+            "bbox_x1": 118.0,
+            "bbox_y0": 89.0,
+            "bbox_y1": 160.0,
+            "major_sigma_span_downsampled_px": 106.51995103456062,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.7782602603741315
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1600.0,
+            "bbox_x0": 103.0,
+            "bbox_x1": 177.0,
+            "bbox_y0": 81.0,
+            "bbox_y1": 182.0,
+            "major_sigma_span_downsampled_px": 101.02661390932434,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 7.918705468224777
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1215.0,
+            "bbox_x0": 117.0,
+            "bbox_x1": 227.0,
+            "bbox_y0": 62.0,
+            "bbox_y1": 106.0,
+            "major_sigma_span_downsampled_px": 119.32370918091705,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.0911927241460155
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1451.0,
+            "bbox_x0": 76.0,
+            "bbox_x1": 151.0,
+            "bbox_y0": 88.0,
+            "bbox_y1": 178.0,
+            "major_sigma_span_downsampled_px": 94.27988934980056,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.695172374547709
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1317.0,
+            "bbox_x0": 21.0,
+            "bbox_x1": 126.0,
+            "bbox_y0": 72.0,
+            "bbox_y1": 127.0,
+            "major_sigma_span_downsampled_px": 113.84140058922051,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.784363127928281
+          },
+          "threshold_intensity": 19.0
+        }
+      ],
+      "foreground_summary": {
+        "boundary_touch_fraction": 0.125,
+        "detected_fraction": 1.0,
+        "median_major_sigma_span_px": 424.52683133698747,
+        "median_width_proxy_px": 23.07473225958958,
+        "note": "moving-foreground proxy at 4x downsampling; not a worm segmentation"
+      },
+      "frame_count": 20099,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          20099,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2023-09-19-01.h5",
+      "intensity": {
+        "mean": 168.32996830968025,
+        "percentile_levels": [
+          0,
+          1,
+          5,
+          25,
+          50,
+          75,
+          95,
+          99,
+          100
+        ],
+        "percentile_values": [
+          75.0,
+          105.0,
+          124.0,
+          152.0,
+          173.0,
+          186.0,
+          201.0,
+          209.0,
+          235.0
+        ],
+        "std": 23.91281892480033
+      },
+      "metadata": {
+        "metadata/orientation": "atypical",
+        "metadata/starvation": "70+5 minutes",
+        "metadata/strain": "SWF702",
+        "recording_start": "2023-09-19T18:20:04.834"
+      },
+      "mtime_ns": 1695165610386214943,
+      "name": "2023-09-19-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+      "sample_count": 32,
+      "sample_indices": [
+        0,
+        873,
+        1747,
+        2621,
+        3495,
+        4369,
+        5242,
+        6116,
+        6990,
+        7864,
+        8738,
+        9612,
+        10045,
+        10046,
+        10047,
+        10048,
+        10049,
+        10050,
+        10051,
+        10052,
+        10485,
+        11359,
+        12233,
+        13107,
+        13981,
+        14855,
+        15728,
+        16602,
+        17476,
+        18350,
+        19224,
+        20098
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            5138042
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            5138058
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40198
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40198
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40198
+          ]
+        },
+        "img_metadata/q_recording": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40198
+          ]
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            20099,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/orientation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/starvation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S12",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S6",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20099,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20099,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 14408997680,
+      "status": "usable",
+      "symlink_size_bytes": 70,
+      "symlink_target": "/store1/shared/all_data_raw/prj_starvation/2023-09-19/2023-09-19-01.h5",
+      "timestamp": {
+        "available": true,
+        "count": 20099,
+        "duplicate_or_nonmonotonic_count": 0,
+        "large_gap_count_gt_1_5x_median": 370,
+        "mapping": "q_iter_save == 1 (count matches img_nir)",
+        "median_interval_raw": 50001592.0,
+        "median_interval_seconds": 0.050001592,
+        "observed_fps": 19.999363220275068,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "adjacent_frame_change": [
+        {
+          "from_index": 10056,
+          "identical": false,
+          "mean_absolute_difference": 6.403097152709961,
+          "to_index": 10057
+        },
+        {
+          "from_index": 10057,
+          "identical": false,
+          "mean_absolute_difference": 6.352934837341309,
+          "to_index": 10058
+        },
+        {
+          "from_index": 10058,
+          "identical": false,
+          "mean_absolute_difference": 6.355201244354248,
+          "to_index": 10059
+        },
+        {
+          "from_index": 10059,
+          "identical": false,
+          "mean_absolute_difference": 6.361563205718994,
+          "to_index": 10060
+        },
+        {
+          "from_index": 10060,
+          "identical": false,
+          "mean_absolute_difference": 6.363640785217285,
+          "to_index": 10061
+        },
+        {
+          "from_index": 10061,
+          "identical": false,
+          "mean_absolute_difference": 6.353808403015137,
+          "to_index": 10062
+        },
+        {
+          "from_index": 10062,
+          "identical": false,
+          "mean_absolute_difference": 6.357625484466553,
+          "to_index": 10063
+        }
+      ],
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "file_attrs": {},
+      "foreground_heuristic": [
+        {
+          "component": {
+            "area_downsampled_px": 3.0,
+            "bbox_x0": 120.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 101.0,
+            "bbox_y1": 103.0,
+            "major_sigma_span_downsampled_px": 3.265986323710904,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 0.4592793267718459
+          },
+          "threshold_intensity": 42.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 3.0,
+            "bbox_x0": 122.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 72.0,
+            "bbox_y1": 73.0,
+            "major_sigma_span_downsampled_px": 3.677088528342677,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 0.4079314350030278
+          },
+          "threshold_intensity": 42.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 2.0,
+            "bbox_x0": 124.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 89.0,
+            "bbox_y1": 90.0,
+            "major_sigma_span_downsampled_px": 2.0,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 0.5
+          },
+          "threshold_intensity": 42.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 504.0,
+            "bbox_x0": 61.0,
+            "bbox_x1": 118.0,
+            "bbox_y0": 40.0,
+            "bbox_y1": 88.0,
+            "major_sigma_span_downsampled_px": 75.73635575790935,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.3273319989875927
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 524.0,
+            "bbox_x0": 79.0,
+            "bbox_x1": 123.0,
+            "bbox_y0": 97.0,
+            "bbox_y1": 158.0,
+            "major_sigma_span_downsampled_px": 74.75371510573608,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.5048425302931325
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 631.0,
+            "bbox_x0": 96.0,
+            "bbox_x1": 150.0,
+            "bbox_y0": 88.0,
+            "bbox_y1": 155.0,
+            "major_sigma_span_downsampled_px": 68.36057684716714,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.615233143882903
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 529.0,
+            "bbox_x0": 109.0,
+            "bbox_x1": 130.0,
+            "bbox_y0": 14.0,
+            "bbox_y1": 89.0,
+            "major_sigma_span_downsampled_px": 82.8382678987525,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.192968741491313
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 716.0,
+            "bbox_x0": 95.0,
+            "bbox_x1": 127.0,
+            "bbox_y0": 42.0,
+            "bbox_y1": 115.0,
+            "major_sigma_span_downsampled_px": 81.82929673549697,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.374961221494919
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 575.0,
+            "bbox_x0": 106.0,
+            "bbox_x1": 145.0,
+            "bbox_y0": 8.0,
+            "bbox_y1": 88.0,
+            "major_sigma_span_downsampled_px": 81.98887334483545,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.5065733711306066
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 698.0,
+            "bbox_x0": 121.0,
+            "bbox_x1": 176.0,
+            "bbox_y0": 25.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 79.86813609981468,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.369702575302866
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 637.0,
+            "bbox_x0": 118.0,
+            "bbox_x1": 155.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 178.0,
+            "major_sigma_span_downsampled_px": 95.80613055802442,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.324421914807449
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 537.0,
+            "bbox_x0": 79.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 162.0,
+            "major_sigma_span_downsampled_px": 84.70755070167378,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.1697292363654017
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 564.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 126.0,
+            "bbox_y0": 87.0,
+            "bbox_y1": 126.0,
+            "major_sigma_span_downsampled_px": 80.19419354136105,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.5164640673711043
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 549.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 126.0,
+            "bbox_y0": 94.0,
+            "bbox_y1": 122.0,
+            "major_sigma_span_downsampled_px": 79.03992256745227,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.4729285035134376
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 586.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 91.0,
+            "bbox_y1": 135.0,
+            "major_sigma_span_downsampled_px": 80.49809116779888,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.6398378613629396
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 602.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 126.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 135.0,
+            "major_sigma_span_downsampled_px": 80.826990295708,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.7240035648832444
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 489.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 86.0,
+            "bbox_y1": 120.0,
+            "major_sigma_span_downsampled_px": 77.14206196230856,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.1694771150849217
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 552.0,
+            "bbox_x0": 60.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 89.0,
+            "bbox_y1": 137.0,
+            "major_sigma_span_downsampled_px": 83.05404734270269,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.323137268207435
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 570.0,
+            "bbox_x0": 59.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 91.0,
+            "bbox_y1": 129.0,
+            "major_sigma_span_downsampled_px": 76.80504560658001,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.7106937148356254
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 671.0,
+            "bbox_x0": 56.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 88.0,
+            "bbox_y1": 149.0,
+            "major_sigma_span_downsampled_px": 86.73259889439022,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.868211079533324
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 627.0,
+            "bbox_x0": 119.0,
+            "bbox_x1": 197.0,
+            "bbox_y0": 57.0,
+            "bbox_y1": 96.0,
+            "major_sigma_span_downsampled_px": 76.44666215674013,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.10089847163274
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 671.0,
+            "bbox_x0": 29.0,
+            "bbox_x1": 127.0,
+            "bbox_y0": 55.0,
+            "bbox_y1": 100.0,
+            "major_sigma_span_downsampled_px": 97.80808102819616,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.4301869178200306
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 691.0,
+            "bbox_x0": 53.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 90.0,
+            "bbox_y1": 149.0,
+            "major_sigma_span_downsampled_px": 87.27981914264338,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.958532492320379
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 528.0,
+            "bbox_x0": 118.0,
+            "bbox_x1": 163.0,
+            "bbox_y0": 28.0,
+            "bbox_y1": 88.0,
+            "major_sigma_span_downsampled_px": 79.4311418269521,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.323633450657776
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 698.0,
+            "bbox_x0": 120.0,
+            "bbox_x1": 206.0,
+            "bbox_y0": 86.0,
+            "bbox_y1": 148.0,
+            "major_sigma_span_downsampled_px": 104.34494765252057,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.344675596198543
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 628.0,
+            "bbox_x0": 72.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 91.0,
+            "bbox_y1": 162.0,
+            "major_sigma_span_downsampled_px": 88.13578180835744,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.5626846844424893
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 671.0,
+            "bbox_x0": 127.0,
+            "bbox_x1": 195.0,
+            "bbox_y0": 59.0,
+            "bbox_y1": 105.0,
+            "major_sigma_span_downsampled_px": 76.65519274944612,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.376741978806442
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 703.0,
+            "bbox_x0": 106.0,
+            "bbox_x1": 143.0,
+            "bbox_y0": 16.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 85.23316001491726,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.123981792279924
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 757.0,
+            "bbox_x0": 76.0,
+            "bbox_x1": 121.0,
+            "bbox_y0": 85.0,
+            "bbox_y1": 146.0,
+            "major_sigma_span_downsampled_px": 72.15061295719974,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.245970678371491
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 678.0,
+            "bbox_x0": 81.0,
+            "bbox_x1": 139.0,
+            "bbox_y0": 49.0,
+            "bbox_y1": 97.0,
+            "major_sigma_span_downsampled_px": 76.8346254562276,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.412073306625631
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 569.0,
+            "bbox_x0": 115.0,
+            "bbox_x1": 188.0,
+            "bbox_y0": 42.0,
+            "bbox_y1": 90.0,
+            "major_sigma_span_downsampled_px": 86.65885208150343,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 3.2829883291371686
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 658.0,
+            "bbox_x0": 98.0,
+            "bbox_x1": 123.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 89.0,
+            "major_sigma_span_downsampled_px": 93.25862564149402,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 3.527823809721858
+          },
+          "threshold_intensity": 19.0
+        }
+      ],
+      "foreground_summary": {
+        "boundary_touch_fraction": 0.03125,
+        "detected_fraction": 1.0,
+        "median_major_sigma_span_px": 321.38456941831987,
+        "median_width_proxy_px": 14.046074877003422,
+        "note": "moving-foreground proxy at 4x downsampling; not a worm segmentation"
+      },
+      "frame_count": 20120,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          20120,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2023-09-27-01.h5",
+      "intensity": {
+        "mean": 158.8062542867667,
+        "percentile_levels": [
+          0,
+          1,
+          5,
+          25,
+          50,
+          75,
+          95,
+          99,
+          100
+        ],
+        "percentile_values": [
+          68.0,
+          98.0,
+          116.0,
+          144.0,
+          163.0,
+          175.0,
+          191.0,
+          202.0,
+          240.0
+        ],
+        "std": 22.860004057160523
+      },
+      "metadata": {
+        "metadata/orientation": "atypical",
+        "metadata/starvation": "32+5 minutes",
+        "metadata/strain": "SWF702",
+        "recording_start": "2023-09-27T14:09:21.768"
+      },
+      "mtime_ns": 1695855062179875330,
+      "name": "2023-09-27-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-27/2023-09-27-01.h5",
+      "sample_count": 32,
+      "sample_indices": [
+        0,
+        874,
+        1749,
+        2624,
+        3498,
+        4373,
+        5248,
+        6123,
+        6997,
+        7872,
+        8747,
+        9622,
+        10056,
+        10057,
+        10058,
+        10059,
+        10060,
+        10061,
+        10062,
+        10063,
+        10496,
+        11371,
+        12246,
+        13121,
+        13995,
+        14870,
+        15745,
+        16620,
+        17494,
+        18369,
+        19244,
+        20119
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            5151126
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            5151142
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40240
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40240
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40240
+          ]
+        },
+        "img_metadata/q_recording": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40240
+          ]
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            20120,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/orientation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/starvation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S12",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S6",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20120,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20120,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 14424298312,
+      "status": "usable",
+      "symlink_size_bytes": 70,
+      "symlink_target": "/store1/shared/all_data_raw/prj_starvation/2023-09-27/2023-09-27-01.h5",
+      "timestamp": {
+        "available": true,
+        "count": 20120,
+        "duplicate_or_nonmonotonic_count": 0,
+        "large_gap_count_gt_1_5x_median": 374,
+        "mapping": "q_iter_save == 1 (count matches img_nir)",
+        "median_interval_raw": 50001600.0,
+        "median_interval_seconds": 0.0500016,
+        "observed_fps": 19.999360020479344,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "adjacent_frame_change": [
+        {
+          "from_index": 10120,
+          "identical": false,
+          "mean_absolute_difference": 6.558744430541992,
+          "to_index": 10121
+        },
+        {
+          "from_index": 10121,
+          "identical": false,
+          "mean_absolute_difference": 6.781391143798828,
+          "to_index": 10122
+        },
+        {
+          "from_index": 10122,
+          "identical": false,
+          "mean_absolute_difference": 6.724833965301514,
+          "to_index": 10123
+        },
+        {
+          "from_index": 10123,
+          "identical": false,
+          "mean_absolute_difference": 6.666618824005127,
+          "to_index": 10124
+        },
+        {
+          "from_index": 10124,
+          "identical": false,
+          "mean_absolute_difference": 6.668826103210449,
+          "to_index": 10125
+        },
+        {
+          "from_index": 10125,
+          "identical": false,
+          "mean_absolute_difference": 6.55914831161499,
+          "to_index": 10126
+        },
+        {
+          "from_index": 10126,
+          "identical": false,
+          "mean_absolute_difference": 6.708848476409912,
+          "to_index": 10127
+        }
+      ],
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "file_attrs": {},
+      "foreground_heuristic": [
+        {
+          "component": {
+            "area_downsampled_px": 833.0,
+            "bbox_x0": 59.0,
+            "bbox_x1": 118.0,
+            "bbox_y0": 89.0,
+            "bbox_y1": 170.0,
+            "major_sigma_span_downsampled_px": 96.62958663545726,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.310274052721338
+          },
+          "threshold_intensity": 23.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 894.0,
+            "bbox_x0": 33.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 87.0,
+            "bbox_y1": 131.0,
+            "major_sigma_span_downsampled_px": 89.80716582527837,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.977331105957039
+          },
+          "threshold_intensity": 22.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1167.0,
+            "bbox_x0": 24.0,
+            "bbox_x1": 132.0,
+            "bbox_y0": 52.0,
+            "bbox_y1": 108.0,
+            "major_sigma_span_downsampled_px": 103.53155893296528,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.635962657316936
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1002.0,
+            "bbox_x0": 124.0,
+            "bbox_x1": 183.0,
+            "bbox_y0": 25.0,
+            "bbox_y1": 102.0,
+            "major_sigma_span_downsampled_px": 97.89116315326793,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.1179287676415255
+          },
+          "threshold_intensity": 19.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1146.0,
+            "bbox_x0": 70.0,
+            "bbox_x1": 136.0,
+            "bbox_y0": 10.0,
+            "bbox_y1": 99.0,
+            "major_sigma_span_downsampled_px": 92.46846612326941,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.196707094028526
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1048.0,
+            "bbox_x0": 114.0,
+            "bbox_x1": 165.0,
+            "bbox_y0": 3.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 86.90631221940775,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.029481479746662
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1225.0,
+            "bbox_x0": 106.0,
+            "bbox_x1": 170.0,
+            "bbox_y0": 64.0,
+            "bbox_y1": 150.0,
+            "major_sigma_span_downsampled_px": 110.50797551699529,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.542586380164047
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1400.0,
+            "bbox_x0": 93.0,
+            "bbox_x1": 144.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 98.0,
+            "major_sigma_span_downsampled_px": 108.59781260820384,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 6.445802021127631
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1176.0,
+            "bbox_x0": 103.0,
+            "bbox_x1": 185.0,
+            "bbox_y0": 3.0,
+            "bbox_y1": 102.0,
+            "major_sigma_span_downsampled_px": 111.51177286685356,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.272985846096082
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1146.0,
+            "bbox_x0": 58.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 167.0,
+            "major_sigma_span_downsampled_px": 93.1748007719495,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.149731421507939
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1256.0,
+            "bbox_x0": 105.0,
+            "bbox_x1": 177.0,
+            "bbox_y0": 75.0,
+            "bbox_y1": 148.0,
+            "major_sigma_span_downsampled_px": 84.91994936924787,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.395199887241314
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1096.0,
+            "bbox_x0": 42.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 19.0,
+            "bbox_y1": 93.0,
+            "major_sigma_span_downsampled_px": 93.25666406433868,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.876255659562618
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1139.0,
+            "bbox_x0": 42.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 66.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 76.6884132272961,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.426154434986992
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1139.0,
+            "bbox_x0": 43.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 67.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 77.97525750041733,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.303598837066386
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1100.0,
+            "bbox_x0": 42.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 67.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 76.18089917995397,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.219657498407757
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1118.0,
+            "bbox_x0": 41.0,
+            "bbox_x1": 123.0,
+            "bbox_y0": 67.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 76.32030078994205,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.324394613414159
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1140.0,
+            "bbox_x0": 40.0,
+            "bbox_x1": 133.0,
+            "bbox_y0": 68.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 80.37086970591346,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.092121835755885
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1047.0,
+            "bbox_x0": 55.0,
+            "bbox_x1": 122.0,
+            "bbox_y0": 70.0,
+            "bbox_y1": 122.0,
+            "major_sigma_span_downsampled_px": 74.27454891386729,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.048174747006251
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1122.0,
+            "bbox_x0": 41.0,
+            "bbox_x1": 122.0,
+            "bbox_y0": 69.0,
+            "bbox_y1": 122.0,
+            "major_sigma_span_downsampled_px": 75.74156068680989,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.406765782391596
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1116.0,
+            "bbox_x0": 40.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 68.0,
+            "bbox_y1": 122.0,
+            "major_sigma_span_downsampled_px": 75.70554821684995,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.37066190184202
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1228.0,
+            "bbox_x0": 94.0,
+            "bbox_x1": 147.0,
+            "bbox_y0": 64.0,
+            "bbox_y1": 121.0,
+            "major_sigma_span_downsampled_px": 62.75369162455024,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 9.784284941729124
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1175.0,
+            "bbox_x0": 119.0,
+            "bbox_x1": 166.0,
+            "bbox_y0": 84.0,
+            "bbox_y1": 155.0,
+            "major_sigma_span_downsampled_px": 85.83303951349083,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.844683624511043
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1091.0,
+            "bbox_x0": 110.0,
+            "bbox_x1": 190.0,
+            "bbox_y0": 30.0,
+            "bbox_y1": 104.0,
+            "major_sigma_span_downsampled_px": 100.83580720853017,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.409784630095703
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1207.0,
+            "bbox_x0": 99.0,
+            "bbox_x1": 163.0,
+            "bbox_y0": 23.0,
+            "bbox_y1": 98.0,
+            "major_sigma_span_downsampled_px": 82.66640883890288,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.300425994990028
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1042.0,
+            "bbox_x0": 84.0,
+            "bbox_x1": 148.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 169.0,
+            "major_sigma_span_downsampled_px": 91.76592711114787,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.677488545056153
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1020.0,
+            "bbox_x0": 48.0,
+            "bbox_x1": 130.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 160.0,
+            "major_sigma_span_downsampled_px": 105.69832228295395,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.825052933524642
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1077.0,
+            "bbox_x0": 66.0,
+            "bbox_x1": 123.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 182.0,
+            "major_sigma_span_downsampled_px": 93.49068145837978,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 5.7599323440564465
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1222.0,
+            "bbox_x0": 69.0,
+            "bbox_x1": 135.0,
+            "bbox_y0": 47.0,
+            "bbox_y1": 109.0,
+            "major_sigma_span_downsampled_px": 78.00574943795924,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.832755975070147
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1257.0,
+            "bbox_x0": 83.0,
+            "bbox_x1": 149.0,
+            "bbox_y0": 77.0,
+            "bbox_y1": 145.0,
+            "major_sigma_span_downsampled_px": 86.2362440800216,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 7.288118896003785
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1114.0,
+            "bbox_x0": 13.0,
+            "bbox_x1": 122.0,
+            "bbox_y0": 85.0,
+            "bbox_y1": 136.0,
+            "major_sigma_span_downsampled_px": 105.04272797047373,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.302604099891295
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1262.0,
+            "bbox_x0": 95.0,
+            "bbox_x1": 156.0,
+            "bbox_y0": 80.0,
+            "bbox_y1": 180.0,
+            "major_sigma_span_downsampled_px": 98.84850588431063,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 6.383505692422946
+          },
+          "threshold_intensity": 19.0
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1079.0,
+            "bbox_x0": 28.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 48.0,
+            "bbox_y1": 106.0,
+            "major_sigma_span_downsampled_px": 98.59853714872916,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.47168361317776
+          },
+          "threshold_intensity": 19.0
+        }
+      ],
+      "foreground_summary": {
+        "boundary_touch_fraction": 0.0625,
+        "detected_fraction": 1.0,
+        "median_major_sigma_span_px": 363.14618587285247,
+        "median_width_proxy_px": 25.160425572902945,
+        "note": "moving-foreground proxy at 4x downsampling; not a worm segmentation"
+      },
+      "frame_count": 20249,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          20249,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2023-10-11-01.h5",
+      "intensity": {
+        "mean": 177.0723923315918,
+        "percentile_levels": [
+          0,
+          1,
+          5,
+          25,
+          50,
+          75,
+          95,
+          99,
+          100
+        ],
+        "percentile_values": [
+          78.0,
+          109.0,
+          130.0,
+          161.0,
+          182.0,
+          196.0,
+          211.0,
+          220.0,
+          255.0
+        ],
+        "std": 24.96302847074701
+      },
+      "metadata": {
+        "metadata/orientation": "atypical",
+        "metadata/starvation": "67+5 minutes",
+        "metadata/strain": "SWF702",
+        "recording_start": "2023-10-11T14:37:23.619"
+      },
+      "mtime_ns": 1697067137210486374,
+      "name": "2023-10-11-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-10-11/2023-10-11-01.h5",
+      "sample_count": 32,
+      "sample_indices": [
+        0,
+        880,
+        1760,
+        2641,
+        3521,
+        4401,
+        5282,
+        6162,
+        7042,
+        7923,
+        8803,
+        9683,
+        10120,
+        10121,
+        10122,
+        10123,
+        10124,
+        10125,
+        10126,
+        10127,
+        10564,
+        11444,
+        12324,
+        13205,
+        14085,
+        14965,
+        15846,
+        16726,
+        17606,
+        18487,
+        19367,
+        20248
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            5172492
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            5172508
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40498
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40498
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40498
+          ]
+        },
+        "img_metadata/q_recording": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            40498
+          ]
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            20249,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/orientation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/starvation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S12",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S6",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20249,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            20249,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 14516409088,
+      "status": "usable",
+      "symlink_size_bytes": 70,
+      "symlink_target": "/store1/shared/all_data_raw/prj_starvation/2023-10-11/2023-10-11-01.h5",
+      "timestamp": {
+        "available": true,
+        "count": 20249,
+        "duplicate_or_nonmonotonic_count": 0,
+        "large_gap_count_gt_1_5x_median": 370,
+        "mapping": "q_iter_save == 1 (count matches img_nir)",
+        "median_interval_raw": 50001592.0,
+        "median_interval_seconds": 0.050001592,
+        "observed_fps": 19.999363220275068,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "adjacent_frame_change": [
+        {
+          "from_index": 9614,
+          "identical": false,
+          "mean_absolute_difference": 6.010241508483887,
+          "to_index": 9615
+        },
+        {
+          "from_index": 9615,
+          "identical": false,
+          "mean_absolute_difference": 6.018861770629883,
+          "to_index": 9616
+        },
+        {
+          "from_index": 9616,
+          "identical": false,
+          "mean_absolute_difference": 5.980332374572754,
+          "to_index": 9617
+        },
+        {
+          "from_index": 9617,
+          "identical": false,
+          "mean_absolute_difference": 5.922025203704834,
+          "to_index": 9618
+        },
+        {
+          "from_index": 9618,
+          "identical": false,
+          "mean_absolute_difference": 5.957279205322266,
+          "to_index": 9619
+        },
+        {
+          "from_index": 9619,
+          "identical": false,
+          "mean_absolute_difference": 5.999387741088867,
+          "to_index": 9620
+        },
+        {
+          "from_index": 9620,
+          "identical": false,
+          "mean_absolute_difference": 6.017303943634033,
+          "to_index": 9621
+        }
+      ],
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "file_attrs": {},
+      "foreground_heuristic": [
+        {
+          "component": {
+            "area_downsampled_px": 875.0,
+            "bbox_x0": 115.0,
+            "bbox_x1": 164.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 95.0,
+            "major_sigma_span_downsampled_px": 105.47551764365434,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.147881989809993
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1033.0,
+            "bbox_x0": 75.0,
+            "bbox_x1": 124.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 93.0,
+            "major_sigma_span_downsampled_px": 99.29737188513313,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 5.2015475353918275
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 856.0,
+            "bbox_x0": 102.0,
+            "bbox_x1": 133.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 87.0,
+            "major_sigma_span_downsampled_px": 95.70927923989,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.471875698982559
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 967.0,
+            "bbox_x0": 113.0,
+            "bbox_x1": 194.0,
+            "bbox_y0": 90.0,
+            "bbox_y1": 165.0,
+            "major_sigma_span_downsampled_px": 109.66524838528663,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.408871608089745
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1097.0,
+            "bbox_x0": 97.0,
+            "bbox_x1": 186.0,
+            "bbox_y0": 90.0,
+            "bbox_y1": 140.0,
+            "major_sigma_span_downsampled_px": 103.72757238268267,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.2878900701196025
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 908.0,
+            "bbox_x0": 37.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 27.0,
+            "bbox_y1": 89.0,
+            "major_sigma_span_downsampled_px": 103.13909419802066,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.40182264087319
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1007.0,
+            "bbox_x0": 116.0,
+            "bbox_x1": 174.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 89.0,
+            "major_sigma_span_downsampled_px": 96.95137236936826,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 5.193325145329047
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 907.0,
+            "bbox_x0": 26.0,
+            "bbox_x1": 113.0,
+            "bbox_y0": 83.0,
+            "bbox_y1": 150.0,
+            "major_sigma_span_downsampled_px": 107.79665626672623,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.206995056301969
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1014.0,
+            "bbox_x0": 48.0,
+            "bbox_x1": 125.0,
+            "bbox_y0": 73.0,
+            "bbox_y1": 142.0,
+            "major_sigma_span_downsampled_px": 102.77173986904599,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.933262788447783
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 869.0,
+            "bbox_x0": 103.0,
+            "bbox_x1": 135.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 94.49696372001671,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.5980313323862125
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 924.0,
+            "bbox_x0": 115.0,
+            "bbox_x1": 147.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 100.20324185400489,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.610629271587134
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 880.0,
+            "bbox_x0": 28.0,
+            "bbox_x1": 122.0,
+            "bbox_y0": 61.0,
+            "bbox_y1": 93.0,
+            "major_sigma_span_downsampled_px": 94.3725793853323,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.662371240309516
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 877.0,
+            "bbox_x0": 21.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 73.0,
+            "bbox_y1": 110.0,
+            "major_sigma_span_downsampled_px": 102.59982223135307,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.27388654739794
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 856.0,
+            "bbox_x0": 22.0,
+            "bbox_x1": 115.0,
+            "bbox_y0": 73.0,
+            "bbox_y1": 109.0,
+            "major_sigma_span_downsampled_px": 97.70957275068427,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.3803282314219585
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 890.0,
+            "bbox_x0": 21.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 71.0,
+            "bbox_y1": 107.0,
+            "major_sigma_span_downsampled_px": 103.37544653634234,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.304697245912812
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 834.0,
+            "bbox_x0": 30.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 70.0,
+            "bbox_y1": 107.0,
+            "major_sigma_span_downsampled_px": 97.67514937000414,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.269253773243371
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 866.0,
+            "bbox_x0": 23.0,
+            "bbox_x1": 121.0,
+            "bbox_y0": 70.0,
+            "bbox_y1": 106.0,
+            "major_sigma_span_downsampled_px": 102.70351602949276,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.216019243933752
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 826.0,
+            "bbox_x0": 21.0,
+            "bbox_x1": 116.0,
+            "bbox_y0": 70.0,
+            "bbox_y1": 106.0,
+            "major_sigma_span_downsampled_px": 98.76877832412747,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.181483329121136
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 852.0,
+            "bbox_x0": 23.0,
+            "bbox_x1": 114.0,
+            "bbox_y0": 69.0,
+            "bbox_y1": 106.0,
+            "major_sigma_span_downsampled_px": 99.015530721416,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.30235536684207
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 867.0,
+            "bbox_x0": 29.0,
+            "bbox_x1": 120.0,
+            "bbox_y0": 68.0,
+            "bbox_y1": 105.0,
+            "major_sigma_span_downsampled_px": 96.34384581630424,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.499508986038825
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 997.0,
+            "bbox_x0": 52.0,
+            "bbox_x1": 118.0,
+            "bbox_y0": 20.0,
+            "bbox_y1": 102.0,
+            "major_sigma_span_downsampled_px": 95.84893493846047,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.200892428487186
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 968.0,
+            "bbox_x0": 116.0,
+            "bbox_x1": 195.0,
+            "bbox_y0": 26.0,
+            "bbox_y1": 88.0,
+            "major_sigma_span_downsampled_px": 96.69330454016881,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.005517210335223
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 862.0,
+            "bbox_x0": 120.0,
+            "bbox_x1": 159.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 86.0,
+            "major_sigma_span_downsampled_px": 89.08032771895586,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.838329752892067
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 963.0,
+            "bbox_x0": 116.0,
+            "bbox_x1": 190.0,
+            "bbox_y0": 9.0,
+            "bbox_y1": 85.0,
+            "major_sigma_span_downsampled_px": 101.1439860929443,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.760540083495769
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 990.0,
+            "bbox_x0": 124.0,
+            "bbox_x1": 223.0,
+            "bbox_y0": 88.0,
+            "bbox_y1": 134.0,
+            "major_sigma_span_downsampled_px": 96.63198140294737,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.122527685072408
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 928.0,
+            "bbox_x0": 119.0,
+            "bbox_x1": 195.0,
+            "bbox_y0": 23.0,
+            "bbox_y1": 93.0,
+            "major_sigma_span_downsampled_px": 100.29292423954433,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.626448012341934
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 1019.0,
+            "bbox_x0": 118.0,
+            "bbox_x1": 204.0,
+            "bbox_y0": 93.0,
+            "bbox_y1": 151.0,
+            "major_sigma_span_downsampled_px": 92.37357507293264,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 5.515646651087493
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 878.0,
+            "bbox_x0": 30.0,
+            "bbox_x1": 114.0,
+            "bbox_y0": 58.0,
+            "bbox_y1": 104.0,
+            "major_sigma_span_downsampled_px": 99.39540153778296,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.416703320355559
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 845.0,
+            "bbox_x0": 93.0,
+            "bbox_x1": 122.0,
+            "bbox_y0": 0.0,
+            "bbox_y1": 91.0,
+            "major_sigma_span_downsampled_px": 95.56209404261108,
+            "touches_boundary": true,
+            "width_proxy_downsampled_px": 4.421209102132144
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 780.0,
+            "bbox_x0": 24.0,
+            "bbox_x1": 111.0,
+            "bbox_y0": 52.0,
+            "bbox_y1": 95.0,
+            "major_sigma_span_downsampled_px": 94.11126720988608,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.144030906843764
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 979.0,
+            "bbox_x0": 100.0,
+            "bbox_x1": 156.0,
+            "bbox_y0": 82.0,
+            "bbox_y1": 179.0,
+            "major_sigma_span_downsampled_px": 104.22856773310376,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.696409157741225
+          },
+          "threshold_intensity": 18.5
+        },
+        {
+          "component": {
+            "area_downsampled_px": 818.0,
+            "bbox_x0": 122.0,
+            "bbox_x1": 217.0,
+            "bbox_y0": 85.0,
+            "bbox_y1": 115.0,
+            "major_sigma_span_downsampled_px": 98.46040093437547,
+            "touches_boundary": false,
+            "width_proxy_downsampled_px": 4.153954240675917
+          },
+          "threshold_intensity": 18.5
+        }
+      ],
+      "foreground_summary": {
+        "boundary_touch_fraction": 0.25,
+        "detected_fraction": 1.0,
+        "median_major_sigma_span_px": 395.56861809108693,
+        "median_width_proxy_px": 17.942769370042768,
+        "note": "moving-foreground proxy at 4x downsampling; not a worm segmentation"
+      },
+      "frame_count": 19236,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          19236,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2025-03-06-01.h5",
+      "intensity": {
+        "mean": 135.90244871404056,
+        "percentile_levels": [
+          0,
+          1,
+          5,
+          25,
+          50,
+          75,
+          95,
+          99,
+          100
+        ],
+        "percentile_values": [
+          59.0,
+          83.0,
+          100.0,
+          124.0,
+          139.0,
+          150.0,
+          163.0,
+          170.0,
+          198.0
+        ],
+        "std": 19.47765889699626
+      },
+      "metadata": {
+        "metadata/condition": "hamamatsu camera",
+        "metadata/orientation": "atypical",
+        "metadata/strain": "swf702",
+        "recording_start": "2025-03-06T18:06:48.439"
+      },
+      "mtime_ns": 1741304870317869576,
+      "name": "2025-03-06-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2025-03-06/2025-03-06-01.h5",
+      "sample_count": 32,
+      "sample_indices": [
+        0,
+        836,
+        1672,
+        2508,
+        3345,
+        4181,
+        5017,
+        5854,
+        6690,
+        7526,
+        8363,
+        9199,
+        9614,
+        9615,
+        9616,
+        9617,
+        9618,
+        9619,
+        9620,
+        9621,
+        10035,
+        10871,
+        11708,
+        12544,
+        13380,
+        14217,
+        15053,
+        15889,
+        16726,
+        17562,
+        18398,
+        19235
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            4933821
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            4933837
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38473
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38473
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38473
+          ]
+        },
+        "img_metadata/q_recording": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38473
+          ]
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            19236,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/condition": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S16",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/orientation": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S6",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19236,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19236,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 13790835418,
+      "status": "usable",
+      "symlink_size_bytes": 70,
+      "symlink_target": "/store1/shared/all_data_raw/prj_starvation/2025-03-06/2025-03-06-01.h5",
+      "timestamp": {
+        "available": true,
+        "count": 19236,
+        "duplicate_or_nonmonotonic_count": 0,
+        "large_gap_count_gt_1_5x_median": 409,
+        "mapping": "q_iter_save == 1 (count matches img_nir)",
+        "median_interval_raw": 50001600.0,
+        "median_interval_seconds": 0.0500016,
+        "observed_fps": 19.999360020479344,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "error": "OSError: Unable to synchronously open file (truncated file: eof = 13770215267, sblock->base_addr = 0, stored_eof = 7781390680765288763)",
+      "input_path": "nir_videos/2025-11-19-02.h5",
+      "mtime_ns": 1763597452255622625,
+      "name": "2025-11-19-02.h5",
+      "resolved_path": "/storage/fs/store1/prj_sexsharedneurons/data_raw/2025-11-19/2025-11-19-02.h5",
+      "size_bytes": 13770215267,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 76,
+      "symlink_target": "/store1/shared/all_data_raw/prj_sexsharedneurons/2025-11-19/2025-11-19-02.h5"
+    },
+    {
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "error": "OSError: Can't synchronously read data (bad coordinate offset)",
+      "file_attrs": {},
+      "frame_count": 19038,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          19038,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2025-11-19-09.h5",
+      "metadata": {
+        "metadata/strain": "SWF1088;male",
+        "recording_start": "2025-11-19T15:55:02.523"
+      },
+      "mtime_ns": 1763597431959458589,
+      "name": "2025-11-19-09.h5",
+      "resolved_path": "/storage/fs/store1/prj_sexsharedneurons/data_raw/2025-11-19/2025-11-19-09.h5",
+      "sample_indices_attempted": [
+        0,
+        827,
+        1655,
+        2483,
+        3310,
+        4138,
+        4966,
+        5793,
+        6621,
+        7449,
+        8276,
+        9104,
+        9515,
+        9516,
+        9517,
+        9518,
+        9519,
+        9520,
+        9521,
+        9522,
+        9932,
+        10760,
+        11587,
+        12415,
+        13243,
+        14070,
+        14898,
+        15726,
+        16553,
+        17381,
+        18209,
+        19037
+      ],
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            4876902
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            4876919
+          ]
+        },
+        "img_metadata": {
+          "kind": "group"
+        },
+        "img_metadata/img_id": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38076
+          ]
+        },
+        "img_metadata/img_timestamp": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "int64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38076
+          ]
+        },
+        "img_metadata/q_iter_save": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint8",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            38076
+          ]
+        },
+        "img_metadata/q_recording": {
+          "error": "KeyError: 'Unable to synchronously open object (bad object header version number)'",
+          "kind": "unreadable"
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            19038,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S12",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19038,
+            3,
+            3
+          ]
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19038,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 13648684219,
+      "status": "image_read_error",
+      "symlink_size_bytes": 76,
+      "symlink_target": "/store1/shared/all_data_raw/prj_sexsharedneurons/2025-11-19/2025-11-19-09.h5",
+      "timestamp": {
+        "available": true,
+        "count": 38076,
+        "duplicate_or_nonmonotonic_count": 3654,
+        "large_gap_count_gt_1_5x_median": 4246,
+        "mapping": "all timestamps",
+        "median_interval_raw": 25000912.0,
+        "median_interval_seconds": 0.025000912,
+        "observed_fps": 39.99854085322968,
+        "path": "img_metadata/img_timestamp",
+        "unit_interpretation": "nanoseconds inferred from magnitude"
+      },
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    },
+    {
+      "error": "OSError: Unable to synchronously open file (message not aligned)",
+      "input_path": "nir_videos/2026-03-03-10.h5",
+      "mtime_ns": 1772580978844621419,
+      "name": "2026-03-03-10.h5",
+      "resolved_path": "/storage/fs/store1/prj_sexsharedneurons/data_raw/2026-03-03/2026-03-03-10.h5",
+      "size_bytes": 13484554773,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 76,
+      "symlink_target": "/store1/shared/all_data_raw/prj_sexsharedneurons/2026-03-03/2026-03-03-10.h5"
+    },
+    {
+      "axis_interpretation": "[frame, y, x] grayscale",
+      "error": "KeyError: 'Unable to synchronously open object (bad object header version number)'",
+      "file_attrs": {},
+      "frame_count": 19069,
+      "image": {
+        "attrs": {
+          "desc": "850 nm NIR image"
+        },
+        "chunks": [
+          1,
+          732,
+          968
+        ],
+        "compression": "unknown",
+        "dtype": "uint8",
+        "filters": [
+          {
+            "flags": 1,
+            "id": 32001,
+            "name": "blosc",
+            "parameters": [
+              2,
+              2,
+              1,
+              708576,
+              9,
+              1,
+              0
+            ]
+          }
+        ],
+        "kind": "dataset",
+        "shape": [
+          19069,
+          732,
+          968
+        ]
+      },
+      "image_dataset_path": "img_nir",
+      "input_path": "nir_videos/2026-03-03-16.h5",
+      "metadata": {
+        "metadata/strain": "SWF1088;male",
+        "recording_start": "2026-03-03T1y\ufffd\ufffd\ufffdt\ufffd\ufffdJN+\ufffd"
+      },
+      "mtime_ns": 1772580839003396272,
+      "name": "2026-03-03-16.h5",
+      "resolved_path": "/storage/fs/store1/prj_sexsharedneurons/data_raw/2026-03-03/2026-03-03-16.h5",
+      "schema": {
+        "daqmx_ai": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            3,
+            4889011
+          ]
+        },
+        "daqmx_di": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "uint32",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            2,
+            4889027
+          ]
+        },
+        "img_metadata": {
+          "error": "KeyError: 'Unable to synchronously open object (bad object header version number)'",
+          "kind": "unreadable"
+        },
+        "img_nir": {
+          "attrs": {
+            "desc": "850 nm NIR image"
+          },
+          "chunks": [
+            1,
+            732,
+            968
+          ],
+          "compression": "unknown",
+          "dtype": "uint8",
+          "filters": [
+            {
+              "flags": 1,
+              "id": 32001,
+              "name": "blosc",
+              "parameters": [
+                2,
+                2,
+                1,
+                708576,
+                9,
+                1,
+                0
+              ]
+            }
+          ],
+          "kind": "dataset",
+          "shape": [
+            19069,
+            732,
+            968
+          ]
+        },
+        "metadata": {
+          "kind": "group"
+        },
+        "metadata/strain": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S12",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        },
+        "pos_feature": {
+          "error": "KeyError: 'Unable to synchronously open object (bad object header version number)'",
+          "kind": "unreadable"
+        },
+        "pos_stage": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "float64",
+          "filters": [],
+          "kind": "dataset",
+          "shape": [
+            19069,
+            2
+          ]
+        },
+        "recording_start": {
+          "chunks": null,
+          "compression": null,
+          "dtype": "|S23",
+          "filters": [],
+          "kind": "dataset",
+          "shape": []
+        }
+      },
+      "size_bytes": 13671043419,
+      "status": "hdf5_open_or_schema_error",
+      "symlink_size_bytes": 76,
+      "symlink_target": "/store1/shared/all_data_raw/prj_sexsharedneurons/2026-03-03/2026-03-03-16.h5",
+      "top_level_keys": [
+        "daqmx_ai",
+        "daqmx_di",
+        "img_metadata",
+        "img_nir",
+        "metadata",
+        "pos_feature",
+        "pos_stage",
+        "recording_start"
+      ]
+    }
+  ],
+  "split_proposal": {
+    "background_group_key": "project family inferred from read-only symlink target",
+    "background_groups": {
+      "neuropal": [
+        "2023-01-13-01.h5",
+        "2023-01-18-01.h5",
+        "2023-01-19-01.h5",
+        "2023-03-07-01.h5"
+      ],
+      "sexsharedneurons": [
+        "2025-11-19-02.h5",
+        "2025-11-19-09.h5",
+        "2026-03-03-10.h5",
+        "2026-03-03-16.h5"
+      ],
+      "starvation": [
+        "2023-09-19-01.h5",
+        "2023-09-27-01.h5",
+        "2023-10-11-01.h5",
+        "2025-03-06-01.h5"
+      ]
+    },
+    "caveat": "all currently readable recordings belong to starvation; no leakage-safe multi-background evaluation can yet be executed",
+    "folds": [
+      {
+        "development_background_groups": [
+          "sexsharedneurons",
+          "starvation"
+        ],
+        "test_background_group": "neuropal",
+        "test_recordings": [
+          "2023-01-13-01.h5",
+          "2023-01-18-01.h5",
+          "2023-01-19-01.h5",
+          "2023-03-07-01.h5"
+        ]
+      },
+      {
+        "development_background_groups": [
+          "neuropal",
+          "starvation"
+        ],
+        "test_background_group": "sexsharedneurons",
+        "test_recordings": [
+          "2025-11-19-02.h5",
+          "2025-11-19-09.h5",
+          "2026-03-03-10.h5",
+          "2026-03-03-16.h5"
+        ]
+      },
+      {
+        "development_background_groups": [
+          "neuropal",
+          "sexsharedneurons"
+        ],
+        "test_background_group": "starvation",
+        "test_recordings": [
+          "2023-09-19-01.h5",
+          "2023-09-27-01.h5",
+          "2023-10-11-01.h5",
+          "2025-03-06-01.h5"
+        ]
+      }
+    ],
+    "guard_interval_frames": null,
+    "guard_interval_rationale": "whole recordings/sessions are grouped, so temporal guard intervals are unnecessary",
+    "recommended_protocol": "leave-one-background-family-out grouped cross-validation; never split frames within a recording",
+    "session_group_key": "project family + acquisition date",
+    "session_groups": {
+      "neuropal:2023-01-13": [
+        "2023-01-13-01.h5"
+      ],
+      "neuropal:2023-01-18": [
+        "2023-01-18-01.h5"
+      ],
+      "neuropal:2023-01-19": [
+        "2023-01-19-01.h5"
+      ],
+      "neuropal:2023-03-07": [
+        "2023-03-07-01.h5"
+      ],
+      "sexsharedneurons:2025-11-19": [
+        "2025-11-19-02.h5",
+        "2025-11-19-09.h5"
+      ],
+      "sexsharedneurons:2026-03-03": [
+        "2026-03-03-10.h5",
+        "2026-03-03-16.h5"
+      ],
+      "starvation:2023-09-19": [
+        "2023-09-19-01.h5"
+      ],
+      "starvation:2023-09-27": [
+        "2023-09-27-01.h5"
+      ],
+      "starvation:2023-10-11": [
+        "2023-10-11-01.h5"
+      ],
+      "starvation:2025-03-06": [
+        "2025-03-06-01.h5"
+      ]
+    },
+    "status": "provisional; audit readability prevents a final train/validation/test allocation"
+  }
+}

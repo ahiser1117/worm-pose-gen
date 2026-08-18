@@ -13,6 +13,11 @@ can accumulate belong beneath the canonical external root:
 /temp_data4/alex/external_artifacts
 ```
 
+Project-owned accumulating outputs are isolated beneath
+`artifacts/worm_pose_gen`, `datasets/worm_pose_gen`, and
+`experiments/worm_pose_gen`; unrelated content elsewhere in the external root
+is never modified.
+
 On this machine that path resolves to
 `/storage/fs/temp_data4/alex/external_artifacts`. Configuration and user-facing
 commands should continue to use the canonical `/temp_data4` path.
@@ -81,6 +86,11 @@ Recorded on 2026-08-18 after running
 - resolved external root: `/storage/fs/temp_data4/alex/external_artifacts`
 - source data mount: read-only NFSv4 at `/storage/fs/store1`
 - external artifact mount: writable ZFS at `/storage/fs/temp_data4`
+- supplied source inventory: 12 HDF5 symlinks, 167,133,843,404 bytes
+  (155.656 GiB)
+- initial Git status: an uncommitted repository with no prior commits
+- reproducibility baseline commit:
+  `0422168c14672a66c41fcfebdbaafae10ef2b5be`
 
 The active sandbox required a narrow approved host execution for CUDA identity
 and bootstrap validation. Dependency resolution is performed only by the
@@ -105,3 +115,12 @@ Readers open source files with mode `r`, use bounded frame-indexed reads, and
 never copy or modify the recordings. Concurrent HDF5 readers are capped in
 `configs/resource_budget.yaml`. The current NFS configuration is accepted as
 provided and is not a project tuning target.
+
+## Phase 0 validation
+
+Offline `uv sync --frozen --python 3.13` succeeded using the repository-local
+cache. A fixed two-step Lightning smoke run loaded one bounded frame from
+`nir_videos/2023-09-19-01.h5`, downsampled it for infrastructure validation,
+ran on logical `cuda:0`, and completed in 1.400 seconds. This timing is not a
+scientific throughput claim. The command and resource envelope are recorded in
+`configs/resource_budget.yaml`.

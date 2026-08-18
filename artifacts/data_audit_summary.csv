@@ -1,0 +1,13 @@
+name,status,size_bytes,resolved_path,frame_count,image_shape,dtype,observed_fps,sample_count,intensity_p01,intensity_p50,intensity_p99,boundary_touch_fraction,error
+2023-01-13-01.h5,hdf5_open_or_schema_error,13885789925,/storage/fs/data4/prj_neuropal/data_raw/2023-01-13/2023-01-13-01.h5,,,,,,,,,,KeyError: 'Unable to synchronously open object (message not aligned)'
+2023-01-18-01.h5,image_read_error,13839588915,/storage/fs/data4/prj_neuropal/data_raw/2023-01-18/2023-01-18-01.h5,19304,19304x732x968,uint8,39.99847685800125,,,,,,OSError: Can't synchronously read data (bad coordinate offset)
+2023-01-19-01.h5,hdf5_open_or_schema_error,13787082409,/storage/fs/data4/prj_neuropal/data_raw/2023-01-19/2023-01-19-01.h5,,,,,,,,,,OSError: Unable to synchronously open file (message not aligned)
+2023-03-07-01.h5,hdf5_open_or_schema_error,13906343979,/storage/fs/data4/prj_neuropal/data_raw/2023-03-07/2023-03-07-01.h5,,,,,,,,,,OSError: Unable to synchronously open file (message not aligned)
+2023-09-19-01.h5,usable,14408997680,/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5,20099,20099x732x968,uint8,19.999363220275068,32,105.0,173.0,209.0,0.125,
+2023-09-27-01.h5,usable,14424298312,/storage/fs/store1/prj_starvation/data_raw/2023-09-27/2023-09-27-01.h5,20120,20120x732x968,uint8,19.999360020479344,32,98.0,163.0,202.0,0.03125,
+2023-10-11-01.h5,usable,14516409088,/storage/fs/store1/prj_starvation/data_raw/2023-10-11/2023-10-11-01.h5,20249,20249x732x968,uint8,19.999363220275068,32,109.0,182.0,220.0,0.0625,
+2025-03-06-01.h5,usable,13790835418,/storage/fs/store1/prj_starvation/data_raw/2025-03-06/2025-03-06-01.h5,19236,19236x732x968,uint8,19.999360020479344,32,83.0,139.0,170.0,0.25,
+2025-11-19-02.h5,hdf5_open_or_schema_error,13770215267,/storage/fs/store1/prj_sexsharedneurons/data_raw/2025-11-19/2025-11-19-02.h5,,,,,,,,,,"OSError: Unable to synchronously open file (truncated file: eof = 13770215267, sblock->base_addr = 0, stored_eof = 7781390680765288763)"
+2025-11-19-09.h5,image_read_error,13648684219,/storage/fs/store1/prj_sexsharedneurons/data_raw/2025-11-19/2025-11-19-09.h5,19038,19038x732x968,uint8,39.99854085322968,,,,,,OSError: Can't synchronously read data (bad coordinate offset)
+2026-03-03-10.h5,hdf5_open_or_schema_error,13484554773,/storage/fs/store1/prj_sexsharedneurons/data_raw/2026-03-03/2026-03-03-10.h5,,,,,,,,,,OSError: Unable to synchronously open file (message not aligned)
+2026-03-03-16.h5,hdf5_open_or_schema_error,13671043419,/storage/fs/store1/prj_sexsharedneurons/data_raw/2026-03-03/2026-03-03-16.h5,19069,19069x732x968,uint8,,,,,,,KeyError: 'Unable to synchronously open object (bad object header version number)'
