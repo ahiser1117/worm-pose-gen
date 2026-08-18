@@ -1,0 +1,23 @@
+[project]
+name = "worm-pose-gen"
+version = "0.1.0"
+description = "Probabilistic 2D C. elegans centerline and body-angle estimation"
+readme = "README.md"
+authors = [
+    { name = "Alex Hiser", email = "hiserale@mit.edu" }
+]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "h5py>=3.16.0",
+    "lightning>=2.6.5",
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.2",
+    "torch>=2.13.0",
+]
+
+[project.scripts]
+worm-pose-gen = "worm_pose_gen:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

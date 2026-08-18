@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Project-local package and application caches
+.cache/
+.uv-python/
+
+# Local experiment defaults that must never become repository artifacts
+lightning_logs/
+*.ckpt
+*.pt
+*.pth
+
+# Incomplete streamed outputs
+*.partial
+*.tmp
+
+# Project-owned external artifact convenience link
+external_artifacts

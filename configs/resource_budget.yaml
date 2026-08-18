@@ -1,0 +1,38 @@
+# Phase 0 resource envelope. Refine estimates after each accepted pilot.
+seed: 20260818
+phase0_pilot:
+  command: scripts/project_env.sh uv run --no-sync --frozen python scripts/smoke_test.py --steps 2
+  fixed_steps: 2
+  elapsed_seconds: 1.400
+  source_frames_read: 1
+  note: Infrastructure timing only; not a scientific throughput benchmark.
+per_run:
+  wall_time_minutes: 45
+  maximum_epochs: 20
+  maximum_steps: 5000
+  checkpoint_every_steps: 500
+  early_stop_patience_epochs: 4
+aggregate:
+  gpu_hours: 24
+  external_storage_gib: 80
+host:
+  max_cpu_workers: 4
+  max_dataloader_workers: 2
+  max_hdf5_readers: 2
+  max_host_memory_gib: 24
+  max_pinned_memory_gib: 4
+source_io:
+  mount: /storage/fs/store1
+  type: read-only NFSv4
+  max_sequential_read_mib_per_second: 128
+  bounded_sample_frames_per_recording: 64
+cuda:
+  physical_device_index: 0
+  visible_logical_device_index: 0
+  expected_uuid: GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6
+artifacts:
+  root: /temp_data4/alex/external_artifacts
+  checkpoints: /temp_data4/alex/external_artifacts/artifacts/checkpoints
+  profiler: /temp_data4/alex/external_artifacts/artifacts/profiler
+  datasets: /temp_data4/alex/external_artifacts/datasets
+  experiments: /temp_data4/alex/external_artifacts/experiments
