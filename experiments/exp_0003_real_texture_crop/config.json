@@ -1,0 +1,16 @@
+{
+  "experiment": "EXP-0003",
+  "seed": 20260818,
+  "proxy_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+  "proxy_sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+  "source_recordings_may_be_opened": false,
+  "output_height": 192,
+  "output_width": 256,
+  "hidden_fractions": [0.05, 0.10, 0.20, 0.30, 0.40],
+  "hidden_ends": ["head", "tail"],
+  "minimum_complete_frames": 60,
+  "maximum_roundtrip_error_px": 0.00001,
+  "maximum_wall_time_minutes": 10,
+  "maximum_external_storage_gib": 2,
+  "evidence_tier": "Tier B proxy-referenced real texture; not ground truth"
+}

@@ -1,0 +1,41 @@
+experiment: EXP-0004
+seed: 20260818
+input:
+  height: 192
+  width: 256
+  body_points: 100
+  proxy_hdf5: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5
+  proxy_sha256: 1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c
+  synthetic_train_profile: development
+  synthetic_validation_profile: held_out
+  audited_holdout_allowed: false
+model:
+  variants: [coordinate, intrinsic]
+  intrinsic_coefficients: 16
+  body_anchor_index: 50
+  maximum_parameters: 1000000
+training:
+  maximum_steps: 1200
+  maximum_epochs: 20
+  checkpoint_every_steps: 300
+  train_batch_size: 16
+  evaluation_batch_size: 32
+  precision: 32-true
+  folds: [0, 1, 2]
+  accelerator: gpu
+  devices: 1
+  num_workers: 0
+  synthetic_samples_per_epoch: 512
+  orientation_loss: symmetric_minimum_forward_reverse
+decision:
+  minimum_angle_improvement_fraction: 0.05
+  maximum_proxy_point_regression_fraction: 0.05
+  minimum_throughput_ratio: 0.90
+  minimum_fold_wins: 2
+  reliability_tier_c_median_point_px: 8.0
+  reliability_tier_c_p95_point_px: 20.0
+  reliability_tier_c_mean_angle_degrees: 15.0
+resources:
+  maximum_minutes_per_run: 12
+  maximum_primary_gpu_hours: 1.5
+  maximum_external_storage_gib: 3
