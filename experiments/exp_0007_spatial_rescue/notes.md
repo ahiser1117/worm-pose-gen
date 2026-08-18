@@ -11,8 +11,8 @@ EXP-0004 while retaining intrinsic topology, reliability, and high throughput.
 The frozen baseline is EXP-0004 intrinsic. This experiment changes one
 scientific factor: the fixed encoder pool changes from a 12x16-to-2x2 pool to a
 12x16-to-4x4 pool. The intrinsic head, 16-coefficient basis, loss weights,
-training examples/profiles, optimizer, batch size, folds, seed, normalization,
-and evaluation cases remain unchanged. The head grows but must remain below one
+  training examples/profiles, optimizer, batch size, folds, normalization,
+  and evaluation cases remain unchanged. The head grows but must remain below one
 million parameters.
 
 Protocol-only corrections make the run auditable: fully-visible Tier C controls
@@ -26,16 +26,20 @@ Use accepted candidate proxies from the two training recordings in each frozen
 development fold plus the same 512 fold-specific development-profile Tier C
 samples. Validate candidate proxies separately from the same 128 held-out
 Tier C identities, partitioned into fully-visible and artificially cropped
-strata. Start with primary fold 2. Do not read source recordings or the audited
-2025 holdout.
+strata. `data_seed=20260818` fixes all synthetic identities across model-seed
+repeats; only parameter initialization/training order changes for model seeds
+20260819 and 20260820. Start with primary fold 2. Do not read source recordings
+or the audited 2025 holdout.
 
 ## Training/resource budget
 
 - maximum steps/epochs: 1,200 optimizer steps and 34 epochs per fold
 - wall-time limit: 12 GPU minutes per run
-- seed/repeat policy: primary seed 20260818; if any acceptance metric or effect
-  lies within 10% of its gate, run seeds 20260819 and 20260820 on every fold and
-  require every seed/fold to pass
+- seed/repeat policy: fixed data seed 20260818 and primary model seed 20260818;
+  for positive numeric thresholds only, repeat when
+  `abs(value-threshold)/abs(threshold) <= 0.10`, then run model seeds 20260819
+  and 20260820 on every fold and require every seed/fold to pass. Exact-contract
+  or qualitative failures fail directly and do not trigger repeats
 - checkpoint cadence: every 300 steps; retain periodic latest and best
   fully-visible Tier C angle checkpoint
 - expected GPU time: <=45 minutes for primary runs and <=1.5 additional hours
@@ -43,16 +47,21 @@ strata. Start with primary fold 2. Do not read source recordings or the audited
 - expected external-storage use: <=3 GiB
 - early termination: non-finite values, identity/preflight failure, >1M
   parameters, wall-time limit, or step-300 fully-visible median point error not
-  below the frozen fold-specific mean-centerline baseline
+  below the frozen fold-specific mean-centerline baseline. Hitting the wall-time
+  limit before step 1,200 is `INCONCLUSIVE`, never acceptance
 
-The executable baseline is the pointwise float32 arithmetic mean, in generator
-order, of the 512 fold-specific development Tier C centerlines. Its `[100,2]`
-tensor SHA-256, construction metadata, and evaluation case identities are
-written before model training. On the exact fully-visible subset of the 128
-held-out Tier C cases, choose only the better forward/reverse correspondence and
-measure per-point Euclidean error after scaling to 968x732 original pixels. At
-step 300, eliminate when model median error is greater than or equal to the
-frozen baseline median.
+The executable baseline is the pointwise arithmetic mean, in generator order,
+of the exact 512 `centerline_xy` targets returned by `SyntheticTierCDataset`,
+including its deterministic camera crops. The artifact is a `[100,2]`
+little-endian float32 NumPy `.npy` file written with `allow_pickle=False`.
+Record both the file SHA-256 and the tensor SHA-256 over raw C-order bytes, plus
+the ordered sample-seed manifest, construction metadata, and validation case
+identities before model training. On the exact 43 fully-visible cases from the
+128 held-out Tier C identities, choose only the better forward/reverse
+correspondence and measure per-point Euclidean error after scaling to 968x732
+original pixels. Evaluate an immutable checkpoint whose stored `global_step`
+is exactly 300; record its digest and eliminate when its median error is greater
+than or equal to the frozen baseline median before any resume.
 
 ## Success criterion
 
@@ -62,8 +71,12 @@ frozen baseline median.
 - reliability: on every development fold, candidate-proxy median/p95 point
   error <=8/20 px and mean/p95-frame angle MAE <=15/30 degrees; fully-visible
   Tier C median/p95 point error <=4/10 px and mean/p95-frame angle MAE <=8/18
-  degrees; exact FOV contract, zero failed inference, and no systematic
-  topology/shortcut failure in frozen random and worst overlays
+  degrees. Candidate-proxy mean endpoint error must be <=15 px per endpoint,
+  median length error <=8%, and support Brier/ECE <=0.12/0.10. Tier C mean
+  endpoint error must be <=8 px per endpoint, median length error <=5%, and
+  support Brier/ECE <=0.06/0.05. Require exact FOV contract, zero failed
+  inference, and no systematic topology/shortcut failure in frozen random and
+  worst overlays
 - expansion rule: fold 2 must first pass the executable step-300 baseline; run
   to 1,200 steps. Other folds run only if the primary fold passes every
   reliability gate at its best checkpoint
@@ -71,6 +84,19 @@ frozen baseline median.
   applies independently and cannot be replaced by pooled confidence intervals
 - interpretation: Tier C supports controlled geometry claims and candidate
   proxies support engineering consistency only; neither is manual truth
+
+This is a geometry-only rescue. Even if every gate above passes, EXP-0007 alone
+does not authorize temporal modeling. A subsequent preregistered advancement
+experiment must first evaluate the frozen cropped-FOV visible/hidden/boundary
+gates, orientation limitations, EXP-0006 candidate-proxy crop evidence, and the
+full support contract.
+
+Benchmark the best-checkpoint digest with the identical EXP-0004 harness,
+float32 input semantics, physical GPU 0, batch size 32, 100 iterations, and
+synchronization. Require at least 90% of the 2,320.38 samples/s intrinsic
+reference and >20 fps end-to-end. Report batch-1 p50/p95, forward-only and
+end-to-end throughput, preprocessing, peak memory, parameter count, full
+environment identity, and checkpoint digest.
 
 ## Results
 
@@ -95,6 +121,7 @@ PLANNED
 
 ## Next experiment
 
-Only if the unchanged proposal reliability gates pass, compare 1/5/11-frame
-temporal context. Otherwise reject this rescue and diagnose a different
+Only if the unchanged ordinary-frame gates pass, preregister a cropped/support/
+orientation advancement gate. Temporal 1/5/11-frame context remains blocked
+until that gate passes. Otherwise reject this rescue and diagnose a different
 proposal formulation without opening the holdout.

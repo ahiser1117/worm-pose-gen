@@ -1,5 +1,6 @@
 experiment: EXP-0007
-seed: 20260818
+data_seed: 20260818
+model_seed: 20260818
 input:
   height: 192
   width: 256
@@ -30,29 +31,59 @@ training:
   synthetic_validation_samples: 128
   orientation_loss: symmetric_minimum_forward_reverse
   metric_log: csv
+  expected_fully_visible_validation_cases: 43
 early_elimination:
   checkpoint_step: 300
   baseline_definition: pointwise_arithmetic_mean_in_generator_order
-  baseline_training_stratum: 512_fold_specific_development_tier_c_centerlines
+  baseline_training_stratum: exact_512_returned_development_tier_c_centerline_xy_targets_including_deterministic_crops
   validation_stratum: fully_visible_cases_from_exact_128_held_out_tier_c_cases
   orientation_alignment: symmetric_forward_reverse_only_during_error_evaluation
   metric: median_per_point_euclidean_error_original_image_pixels_968x732
   eliminate_if_model_greater_than_or_equal_to_baseline: true
   require_baseline_tensor_sha256: true
+  tensor_dtype: little_endian_float32
+  tensor_shape: [100, 2]
+  tensor_hash_serialization: raw_c_order_bytes
+  artifact_serialization: numpy_npy_allow_pickle_false
+  require_artifact_file_sha256: true
+  require_ordered_sample_seed_manifest: true
+  require_checkpoint_global_step_exact: 300
 decision:
   minimum_primary_fold_median_improvement_fraction_vs_exp_0004_intrinsic: 0.20
   minimum_throughput_ratio_vs_exp_0004_intrinsic: 0.90
-  near_gate_repeat_seeds: [20260819, 20260820]
+  repeat_model_seeds: [20260819, 20260820]
   near_gate_relative_band_fraction: 0.10
-  reliability_tier_b_median_point_px: 8.0
-  reliability_tier_b_p95_point_px: 20.0
-  reliability_tier_b_mean_angle_degrees: 15.0
-  reliability_tier_b_p95_frame_angle_degrees: 30.0
+  repeat_trigger: absolute_relative_distance_for_positive_numeric_thresholds_only
+  exact_or_qualitative_failure_action: fail_without_repeat
+  candidate_proxy_median_point_px: 8.0
+  candidate_proxy_p95_point_px: 20.0
+  candidate_proxy_mean_angle_degrees: 15.0
+  candidate_proxy_p95_frame_angle_degrees: 30.0
+  candidate_proxy_mean_endpoint_px_each: 15.0
+  candidate_proxy_median_body_length_error_fraction: 0.08
+  candidate_proxy_support_brier: 0.12
+  candidate_proxy_support_ece: 0.10
   reliability_tier_c_median_point_px: 4.0
   reliability_tier_c_p95_point_px: 10.0
   reliability_tier_c_mean_angle_degrees: 8.0
   reliability_tier_c_p95_frame_angle_degrees: 18.0
+  reliability_tier_c_mean_endpoint_px_each: 8.0
+  reliability_tier_c_median_body_length_error_fraction: 0.05
+  reliability_tier_c_support_brier: 0.06
+  reliability_tier_c_support_ece: 0.05
   require_all_folds: true
+  advancement_scope: geometry_only_rescue
+benchmark:
+  harness: scripts/benchmark_model.py
+  reference_variant: exp_0004_intrinsic_best
+  reference_batched_samples_per_second: 2320.377940742334
+  batch_size: 32
+  iterations: 100
+  require_same_device_input_precision_and_protocol: true
+  minimum_end_to_end_offline_fps: 20.0
+  require_batch1_p50_p95: true
+  require_preprocessing_and_end_to_end: true
+  require_peak_memory_parameters_environment_and_checkpoint_digest: true
 resources:
   maximum_minutes_per_run: 12
   maximum_primary_gpu_hours: 0.75
