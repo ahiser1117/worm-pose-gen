@@ -1,0 +1,45 @@
+project_status: negative_result_no_accepted_model
+deployment_authorized: false
+scientific_stop_reason: >-
+  EXP-0007 PRIMARY_FOLD_FAIL: the primary-fold spatial rescue remained far
+  outside every frozen ordinary-frame geometry gate and exhibited a systematic
+  short, straight, displaced mean-pose shortcut.
+
+evidence:
+  decision: experiments/exp_0007_spatial_rescue/primary_fold_decision.json
+  evidence_git_commit: a886a314ef3409cc52a760dd2b6e845fdeb0752c
+  audited_holdout_opened: false
+  source_recordings_opened_during_model_experiments: false
+  additional_folds_authorized: false
+  repeat_seeds_authorized: false
+  temporal_modeling_authorized: false
+
+exploratory_inference:
+  enabled_only_with_explicit_opt_in: true
+  required_cli_flag: --allow-exploratory
+  validation_status: exploratory_rejected_checkpoint
+  checkpoint: artifacts/checkpoints/exp_0007_rejected_diagnostic.ckpt
+  checkpoint_sha256: 7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0
+  checkpoint_role: rejected_diagnostic_checkpoint_not_a_final_model
+  model_variant: intrinsic
+  encoder_pool_output: [4, 4]
+  body_points: 100
+  input_height: 192
+  input_width: 256
+  supported_modes: [single_frame, independent_frame_batch, streamed_hdf5]
+  unsupported_modes: [temporal_window, calibrated_pose_uncertainty, validated_head_tail]
+  head_tail_probability_semantics: fixed_0.5_unknown_orientation_sentinel
+  angle_uncertainty_semantics: fixed_pi_radian_uncalibrated_sentinel
+  quality_score_semantics: fixed_0_not_quality_qualified_sentinel
+
+output:
+  schema_version: 1.0.0
+  group: /worm_pose
+  documentation: docs/OUTPUT_SCHEMA.md
+  atomic_partial_write: true
+  resume_supported: false
+
+production_recommendation:
+  action: do_not_deploy
+  next_gate: collect_and_adjudicate_the_recommended_manual_annotations
+  annotation_protocol: docs/ANNOTATION_RECOMMENDATIONS.md

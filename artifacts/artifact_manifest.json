@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "project_status": "negative_result_no_accepted_model",
+  "configured_external_root": "/temp_data4/alex/external_artifacts",
+  "resolved_external_root": "/storage/fs/temp_data4/alex/external_artifacts",
+  "evidence_git_commit": "a886a314ef3409cc52a760dd2b6e845fdeb0752c",
+  "audited_holdout_opened": false,
+  "source_recordings_opened_during_model_experiments": false,
+  "deployment_authorized": false,
+  "canonical_artifacts": [
+    {
+      "role": "rejected_diagnostic_checkpoint",
+      "configured_path": "/temp_data4/alex/external_artifacts/artifacts/checkpoints/worm_pose_gen/exp_0007_rejected_diagnostic.ckpt",
+      "resolved_path": "/storage/fs/temp_data4/alex/external_artifacts/artifacts/checkpoints/worm_pose_gen/exp_0007_rejected_diagnostic.ckpt",
+      "sha256": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+      "status": "exploratory_rejected_checkpoint_not_for_deployment"
+    },
+    {
+      "role": "exp_0007_frozen_baseline",
+      "configured_path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/baselines_final/fold2/baseline.json",
+      "sha256": "2d3e22299e9334dbbf265385a108c94270309bd9a68f68a112b0322cb7d87a6e",
+      "status": "canonical_fold2_early_elimination_control"
+    },
+    {
+      "role": "exp_0007_decision",
+      "configured_path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/primary_fold_decision.json",
+      "sha256": "e69257438124597c1c68416da28a9ed2acbee4db84370b54ec90a5d36cc07760",
+      "status": "PRIMARY_FOLD_FAIL"
+    },
+    {
+      "role": "exp_0007_metrics",
+      "configured_path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/metrics.json",
+      "sha256": "0d545aa87d0920a5e13796afe0c919a1f731122b3b4079f30b685bcd54cc0e3d"
+    },
+    {
+      "role": "exp_0007_proposal_only_benchmark",
+      "configured_path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/benchmark.json",
+      "sha256": "4e48a9b7f68637ebdd227b03f1eb6ccf393722f967b81524cfd23792ff6a762b",
+      "status": "in_memory_preprocess_transfer_forward_not_storage_inclusive"
+    },
+    {
+      "role": "candidate_proxy_dataset",
+      "configured_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+      "sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+      "status": "candidate_proxy_not_ground_truth"
+    },
+    {
+      "role": "balanced_static_real_crop_benchmark",
+      "configured_path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/real_crop_balanced_v1/benchmark.h5",
+      "sha256": "57f104cc3a77ad0833257fdedadf153a03b73ac731656dca84de593319e0f849",
+      "status": "candidate_proxy_engineering_evidence_not_anatomical_truth"
+    }
+  ],
+  "superseded_artifacts": [
+    "EXP-0007 baselines, baselines_bound, and baselines_exact directories",
+    "EXP-0007 intrinsic_fold2_seed20260818_smoke and intrinsic_fold2_seed20260818_bound runs"
+  ]
+}

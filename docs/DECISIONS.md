@@ -53,3 +53,21 @@
 - **Decision:** reject both frozen candidates, retaining intrinsic structure only as the controlled baseline for a 4x4 spatial-bottleneck rescue.
 - **Consequence:** do not run other folds, temporal context, refinement, or uncertainty until a revised ordinary-frame proposal passes unchanged gates.
 - **Revisit if:** EXP-0007 passes its executable early-elimination rule and all reliability gates.
+
+## D-0007 — Stop model expansion after the 4x4 rescue fails
+
+- **Question:** Does the one-factor spatial rescue justify additional folds or later modeling phases?
+- **Options:** accept fold 2 and expand; repeat a near-gate result; reject under the frozen rule.
+- **Evidence:** EXP-0007 improved the primary-fold median by 25.13% and reached 2,461 batch-32 samples/s, but fully-visible Tier C remained at 87.54/233.24 px median/p95 and 27.68/53.29 degrees mean/p95-frame versus 4/10 px and 8/18 degree gates. Endpoints, length, candidate proxies, and the hash-bound qualitative shortcut gate also failed.
+- **Decision:** record `PRIMARY_FOLD_FAIL`. Do not run folds 0/1, repeat seeds, temporal context, refinement, uncertainty, or the audited holdout.
+- **Consequence:** no model is accepted or deployable. Preserve the holdout for a future study with a reliable development-fold proposal.
+- **Revisit if:** a new, preregistered localization-explicit architecture passes every unchanged ordinary-frame development gate; do not reinterpret EXP-0007 as near-gate evidence.
+
+## D-0008 — Package only fail-closed exploratory inference
+
+- **Question:** How can the tested persistence stack remain reusable without presenting the rejected checkpoint as a final model?
+- **Options:** omit inference; expose an apparently normal model CLI; require explicit diagnostic opt-in and semantic sentinels.
+- **Evidence:** the geometry/writer/checkpoint integration is testable, but the model lacks validated orientation, pose uncertainty, and quality heads and failed scientific selection.
+- **Decision:** retain the checkpoint as `exp_0007_rejected_diagnostic.ckpt`; require `--allow-exploratory`; mark outputs `exploratory_rejected_checkpoint`; reject temporal calls; export `0.5`, `pi`, and `0` as documented unknown/rejected sentinels.
+- **Consequence:** researchers can reproduce failures and exercise atomic HDF5 output, but outputs must not be used for biological measurement or described as calibrated.
+- **Revisit if:** a future checkpoint passes the full selection, orientation, uncertainty, and storage-inclusive inference gates; that model requires a new validation status and config rather than removing safeguards from this artifact.

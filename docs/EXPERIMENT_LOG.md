@@ -77,3 +77,23 @@ were fast (intrinsic batch-1 end-to-end p50 1.34 ms; batch-32 2,320 samples/s),
 but neither was reliable enough to advance beyond the cheap-elimination fold.
 The evidence supports intrinsic structure but rejects the shared 2x2-bottleneck
 proposal family.
+
+**EXP-0007 (PRIMARY_FOLD_FAIL)** tested the single preregistered rescue factor:
+retaining a 4x4 rather than 2x2 encoder grid in the intrinsic model. The
+immutable step-300 checkpoint passed the cheap continuation rule (102.15 px
+versus the 243.28 px frozen mean-centerline baseline), and the selected step-720
+checkpoint improved the EXP-0004 primary-fold median by 25.13% while running at
+2,461 batch-32 samples/s. Reliability nevertheless failed decisively:
+fully-visible Tier C median/p95 point error was 87.54/233.24 px and
+mean/p95-frame angle error was 27.68/53.29 degrees, versus 4/10 px and 8/18
+degree gates. Candidate-proxy errors, both endpoints, body length, and the
+frozen qualitative review also failed. Random/worst overlays show a systematic
+short, straight, displaced mean-pose shortcut. See
+`experiments/exp_0007_spatial_rescue/notes.md` and its hash-bound decision.
+
+The exact qualitative failure disables the near-gate repeat rule. The
+deterministic artifact authorizes neither additional folds nor repeat seeds and
+sets both geometry acceptance and temporal authorization false. The audited
+holdout remained unopened. The project therefore stops scientifically with no
+accepted/deployable model; the retained checkpoint exists only for diagnostic
+reproduction and explicit opt-in testing of the output scaffold.

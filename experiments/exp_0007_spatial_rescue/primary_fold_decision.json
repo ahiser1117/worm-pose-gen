@@ -1,0 +1,848 @@
+{
+  "schema_version": 1,
+  "artifact_type": "EXP-0007 deterministic decision",
+  "experiment": "EXP-0007",
+  "config_path": "/home/alex/git/worm-pose-gen/configs/spatial_rescue.yaml",
+  "config_sha256": "b498ef82c65c6114725dae4b3bf6b19056b3601235aa9cc6daf5cf7bbff3b616",
+  "code_git_commit": "a886a314ef3409cc52a760dd2b6e845fdeb0752c",
+  "evaluated_model_seeds": [
+    20260818
+  ],
+  "evaluated_folds_by_seed": {
+    "20260818": [
+      2
+    ]
+  },
+  "source_sha256": {
+    "scripts/exp_0007_decide.py": "13be86add4d03dfed6f99888e00477ef29f5f93a320563e82863a0254046f8f4",
+    "scripts/evaluate.py": "dbcf81c316900f77822596fcbcc81ae1d5bd04e16bce247e5f6bdccaa7079638",
+    "scripts/benchmark_model.py": "e40d3aa4da87e40cb3419566dc0200039d2666da00fb973e3d9ef6ed61a544ad"
+  },
+  "inputs": {
+    "evaluations": [
+      {
+        "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/metrics.json",
+        "sha256": "0d545aa87d0920a5e13796afe0c919a1f731122b3b4079f30b685bcd54cc0e3d"
+      }
+    ],
+    "benchmarks": [
+      {
+        "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/benchmark.json",
+        "sha256": "4e48a9b7f68637ebdd227b03f1eb6ccf393722f967b81524cfd23792ff6a762b"
+      }
+    ],
+    "qualitative_reviews": [
+      {
+        "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/qualitative_review.json",
+        "sha256": "1abf94ad7e78a1feb3955e0d492ccee8eef3aa81d7d5d94a70782ba770fa6e97"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "model_seed": 20260818,
+      "fold": 2,
+      "checkpoint_sha256": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+      "throughput_ratio": 1.060745217470298,
+      "end_to_end_offline_fps": 2461.3298033660094,
+      "gates": [
+        {
+          "name": "evaluation.experiment",
+          "kind": "exact",
+          "value": "EXP-0007",
+          "threshold": "EXP-0007",
+          "pass": true
+        },
+        {
+          "name": "evaluation.variant",
+          "kind": "exact",
+          "value": "intrinsic",
+          "threshold": "intrinsic",
+          "pass": true
+        },
+        {
+          "name": "evaluation.encoder_pool_output",
+          "kind": "exact",
+          "value": [
+            4,
+            4
+          ],
+          "threshold": [
+            4,
+            4
+          ],
+          "pass": true
+        },
+        {
+          "name": "evaluation.data_seed",
+          "kind": "exact",
+          "value": 20260818,
+          "threshold": 20260818,
+          "pass": true
+        },
+        {
+          "name": "evaluation.advancement_scope",
+          "kind": "exact",
+          "value": "geometry_only_rescue_no_temporal_authorization",
+          "threshold": "geometry_only_rescue_no_temporal_authorization",
+          "pass": true
+        },
+        {
+          "name": "benchmark.model_seed",
+          "kind": "exact",
+          "value": 20260818,
+          "threshold": 20260818,
+          "pass": true
+        },
+        {
+          "name": "benchmark.fold",
+          "kind": "exact",
+          "value": 2,
+          "threshold": 2,
+          "pass": true
+        },
+        {
+          "name": "benchmark.checkpoint_binding",
+          "kind": "exact",
+          "value": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+          "threshold": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+          "pass": true
+        },
+        {
+          "name": "qualitative_review.checkpoint_binding",
+          "kind": "exact",
+          "value": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+          "threshold": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.median_point_px",
+          "kind": "maximum",
+          "value": 83.9454116821289,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.p95_point_px",
+          "kind": "maximum",
+          "value": 239.038330078125,
+          "threshold": 20.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.mean_angle_degrees",
+          "kind": "maximum",
+          "value": 60.9970703125,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.p95_frame_angle_degrees",
+          "kind": "maximum",
+          "value": 101.28958129882812,
+          "threshold": 30.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.median_body_length_error_fraction",
+          "kind": "maximum",
+          "value": 0.3165771961212158,
+          "threshold": 0.08,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.support_brier",
+          "kind": "maximum",
+          "value": 9.607811807654798e-05,
+          "threshold": 0.12,
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.support_ece_10_bin",
+          "kind": "maximum",
+          "value": 0.0010034770239144564,
+          "threshold": 0.1,
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.mean_endpoint_error_px_each[0]",
+          "kind": "maximum",
+          "value": 157.92593383789062,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.mean_endpoint_error_px_each[1]",
+          "kind": "maximum",
+          "value": 156.9013671875,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.point_error_units",
+          "kind": "exact",
+          "value": "original_image_pixels_968x732",
+          "threshold": "original_image_pixels_968x732",
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.reported_vs_recomputed_in_fov_exact_agreement",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.failed_inference_count",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.median_point_px",
+          "kind": "maximum",
+          "value": 87.5404281616211,
+          "threshold": 4.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.p95_point_px",
+          "kind": "maximum",
+          "value": 233.236572265625,
+          "threshold": 10.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.mean_angle_degrees",
+          "kind": "maximum",
+          "value": 27.682926177978516,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.p95_frame_angle_degrees",
+          "kind": "maximum",
+          "value": 53.28601837158203,
+          "threshold": 18.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.median_body_length_error_fraction",
+          "kind": "maximum",
+          "value": 0.37747764587402344,
+          "threshold": 0.05,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.support_brier",
+          "kind": "maximum",
+          "value": 0.000668497639708221,
+          "threshold": 0.06,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.support_ece_10_bin",
+          "kind": "maximum",
+          "value": 0.005889952648431063,
+          "threshold": 0.05,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.mean_endpoint_error_px_each[0]",
+          "kind": "maximum",
+          "value": 118.01425170898438,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.mean_endpoint_error_px_each[1]",
+          "kind": "maximum",
+          "value": 125.34195709228516,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.point_error_units",
+          "kind": "exact",
+          "value": "original_image_pixels_968x732",
+          "threshold": "original_image_pixels_968x732",
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.reported_vs_recomputed_in_fov_exact_agreement",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.failed_inference_count",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.samples",
+          "kind": "exact",
+          "value": 43,
+          "threshold": 43,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.hidden_mean_point_px",
+          "kind": "exact",
+          "value": null,
+          "threshold": null,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.hidden_mean_angle_degrees",
+          "kind": "exact",
+          "value": null,
+          "threshold": null,
+          "pass": true
+        },
+        {
+          "name": "qualitative_review.completed",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "qualitative_review.systematic_topology_or_shortcut_failure",
+          "kind": "exact",
+          "value": true,
+          "threshold": false,
+          "pass": false
+        },
+        {
+          "name": "qualitative_review.random_overlays_reviewed",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "qualitative_review.worst_overlays_reviewed",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "qualitative_review.figure_evidence",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.throughput_ratio",
+          "kind": "minimum",
+          "value": 1.060745217470298,
+          "threshold": 0.9,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_offline_fps",
+          "kind": "minimum",
+          "value": 2461.3298033660094,
+          "threshold": 20.0,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batched.batch_size",
+          "kind": "exact",
+          "value": 32,
+          "threshold": 32,
+          "pass": true
+        },
+        {
+          "name": "benchmark.protocol.measured_iterations",
+          "kind": "exact",
+          "value": 100,
+          "threshold": 100,
+          "pass": true
+        },
+        {
+          "name": "benchmark.protocol.precision",
+          "kind": "exact",
+          "value": "float32",
+          "threshold": "float32",
+          "pass": true
+        },
+        {
+          "name": "benchmark.protocol.cuda_synchronization",
+          "kind": "exact",
+          "value": "before and after every measured forward/end-to-end iteration",
+          "threshold": "before and after every measured forward/end-to-end iteration",
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.logical_device",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.physical_index",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.mapping.visible_logical_index",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.mapping.physical_index",
+          "kind": "exact",
+          "value": 0,
+          "threshold": 0,
+          "pass": true
+        },
+        {
+          "name": "benchmark.variant",
+          "kind": "exact",
+          "value": "intrinsic",
+          "threshold": "intrinsic",
+          "pass": true
+        },
+        {
+          "name": "benchmark.encoder_pool_output",
+          "kind": "exact",
+          "value": [
+            4,
+            4
+          ],
+          "threshold": [
+            4,
+            4
+          ],
+          "pass": true
+        },
+        {
+          "name": "benchmark.data_seed",
+          "kind": "exact",
+          "value": 20260818,
+          "threshold": 20260818,
+          "pass": true
+        },
+        {
+          "name": "benchmark.parameters_within_ceiling",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.protocol.warmup_iterations",
+          "kind": "exact",
+          "value": 10,
+          "threshold": 10,
+          "pass": true
+        },
+        {
+          "name": "benchmark.protocol.input",
+          "kind": "exact",
+          "value": "grayscale uint8 732x968 for preprocessing/end-to-end; float32 [B,1,192,256] in [0,1] for forward-only",
+          "threshold": "grayscale uint8 732x968 for preprocessing/end-to-end; float32 [B,1,192,256] in [0,1] for forward-only",
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batch1.batch_size",
+          "kind": "exact",
+          "value": 1,
+          "threshold": 1,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batch1.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batch1.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batched.batch_size",
+          "kind": "exact",
+          "value": 32,
+          "threshold": 32,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batched.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batched.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batch1.batch_size",
+          "kind": "exact",
+          "value": 1,
+          "threshold": 1,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batch1.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batch1.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batch1.batch_size",
+          "kind": "exact",
+          "value": 1,
+          "threshold": 1,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batch1.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batch1.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batched.batch_size",
+          "kind": "exact",
+          "value": 32,
+          "threshold": 32,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batched.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.preprocessing_batched.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batched.batch_size",
+          "kind": "exact",
+          "value": 32,
+          "threshold": 32,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batched.p50_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_batched.p95_milliseconds_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batch1.peak_memory_bytes_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.forward_batched.peak_memory_bytes_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.parameters_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.checkpoint.sha256_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.checkpoint.path_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.environment.python_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.environment.torch_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.environment.lightning_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.name_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.cuda_runtime_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.physical_uuid_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.physical_pci_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "benchmark.gpu.driver_present",
+          "kind": "exact",
+          "value": true,
+          "threshold": true,
+          "pass": true
+        },
+        {
+          "name": "primary_fold.improvement_fraction_vs_exp0004_intrinsic",
+          "kind": "minimum",
+          "value": 0.25127926649314836,
+          "threshold": 0.2,
+          "pass": true
+        }
+      ],
+      "all_gates_pass": false,
+      "exact_or_qualitative_failure": true,
+      "numeric_gates": [
+        {
+          "name": "candidate_proxy.median_point_px",
+          "kind": "maximum",
+          "value": 83.9454116821289,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.p95_point_px",
+          "kind": "maximum",
+          "value": 239.038330078125,
+          "threshold": 20.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.mean_angle_degrees",
+          "kind": "maximum",
+          "value": 60.9970703125,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.p95_frame_angle_degrees",
+          "kind": "maximum",
+          "value": 101.28958129882812,
+          "threshold": 30.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.median_body_length_error_fraction",
+          "kind": "maximum",
+          "value": 0.3165771961212158,
+          "threshold": 0.08,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.support_brier",
+          "kind": "maximum",
+          "value": 9.607811807654798e-05,
+          "threshold": 0.12,
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.support_ece_10_bin",
+          "kind": "maximum",
+          "value": 0.0010034770239144564,
+          "threshold": 0.1,
+          "pass": true
+        },
+        {
+          "name": "candidate_proxy.mean_endpoint_error_px_each[0]",
+          "kind": "maximum",
+          "value": 157.92593383789062,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "candidate_proxy.mean_endpoint_error_px_each[1]",
+          "kind": "maximum",
+          "value": 156.9013671875,
+          "threshold": 15.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.median_point_px",
+          "kind": "maximum",
+          "value": 87.5404281616211,
+          "threshold": 4.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.p95_point_px",
+          "kind": "maximum",
+          "value": 233.236572265625,
+          "threshold": 10.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.mean_angle_degrees",
+          "kind": "maximum",
+          "value": 27.682926177978516,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.p95_frame_angle_degrees",
+          "kind": "maximum",
+          "value": 53.28601837158203,
+          "threshold": 18.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.median_body_length_error_fraction",
+          "kind": "maximum",
+          "value": 0.37747764587402344,
+          "threshold": 0.05,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.support_brier",
+          "kind": "maximum",
+          "value": 0.000668497639708221,
+          "threshold": 0.06,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.support_ece_10_bin",
+          "kind": "maximum",
+          "value": 0.005889952648431063,
+          "threshold": 0.05,
+          "pass": true
+        },
+        {
+          "name": "tier_c_fully_visible.mean_endpoint_error_px_each[0]",
+          "kind": "maximum",
+          "value": 118.01425170898438,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "tier_c_fully_visible.mean_endpoint_error_px_each[1]",
+          "kind": "maximum",
+          "value": 125.34195709228516,
+          "threshold": 8.0,
+          "pass": false
+        },
+        {
+          "name": "benchmark.throughput_ratio",
+          "kind": "minimum",
+          "value": 1.060745217470298,
+          "threshold": 0.9,
+          "pass": true
+        },
+        {
+          "name": "benchmark.end_to_end_offline_fps",
+          "kind": "minimum",
+          "value": 2461.3298033660094,
+          "threshold": 20.0,
+          "pass": true
+        },
+        {
+          "name": "primary_fold.improvement_fraction_vs_exp0004_intrinsic",
+          "kind": "minimum",
+          "value": 0.25127926649314836,
+          "threshold": 0.2,
+          "pass": true
+        }
+      ]
+    }
+  ],
+  "input_identity_set_recognized": true,
+  "near_positive_numeric_gate": false,
+  "exact_or_qualitative_failure": true,
+  "decision": "PRIMARY_FOLD_FAIL",
+  "authorize_additional_folds": false,
+  "additional_folds_model_seed": null,
+  "authorize_repeat_seeds": false,
+  "authorized_repeat_model_seeds": [],
+  "final_accept_geometry_rescue": false,
+  "authorize_temporal_modeling": false
+}

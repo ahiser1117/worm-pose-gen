@@ -8,6 +8,24 @@ the presence of a `.partial` file is treated as an interrupted run and must be
 investigated or explicitly removed by an operator. A completed destination is
 not overwritten by default.
 
+This is an implemented and tested persistence contract, not evidence that a
+scientifically accepted model exists. The only packaged inference adapter uses
+the rejected EXP-0007 diagnostic checkpoint, requires `--allow-exploratory`,
+and adds:
+
+```text
+/worm_pose.attrs["validation_status"] = "exploratory_rejected_checkpoint"
+/worm_pose.attrs["inference_mode"] = "independent_frame_only"
+/worm_pose.attrs["temporal_inference_supported"] = false
+```
+
+The CLI also requires `--config configs/final.yaml`. Before source access it
+verifies the declared checkpoint digest, model variant, encoder pool, body-point
+count, and input raster dimensions. The provenance `config_sha256` is the
+SHA-256 of those exact config-file bytes.
+
+Consumers must reject this status for production or biological measurement.
+
 ## Coordinate and missing-value convention
 
 Pixel `(0, 0)` is the center of the upper-left pixel; x increases right and y
@@ -45,6 +63,19 @@ distribution, and any timestamp derivation must be fixed by and retained in
 the digested inference configuration. Future minor schema versions may add
 `centerline_covariance` or weighted hypothesis datasets; readers must not infer
 their presence.
+
+For the exploratory rejected checkpoint only, unavailable heads use explicit
+sentinels so missing semantics cannot masquerade as estimates:
+
+- `head_tail_probability = 0.5`: exact unknown-orientation tie; model order is
+  retained and is not an anatomical head-to-tail claim;
+- `angle_uncertainty = pi`: uncalibrated sentinel, not a marginal interval or
+  empirical coverage claim;
+- `quality_score = 0`: rejected/not quality-qualified sentinel, not a
+  probability;
+- `image_support_probability` is the learned rejected-checkpoint support output
+  and is distinct from geometric FOV; its calibration does not establish pose
+  accuracy.
 
 ## Attributes and provenance
 

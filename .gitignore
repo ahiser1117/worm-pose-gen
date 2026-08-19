@@ -18,6 +18,7 @@ lightning_logs/
 *.ckpt
 *.pt
 *.pth
+!artifacts/checkpoints/exp_0007_rejected_diagnostic.ckpt
 
 # Incomplete streamed outputs
 *.partial

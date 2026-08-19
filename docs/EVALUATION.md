@@ -58,7 +58,9 @@ No neighboring temporal frames cross folds. Development validation may be
 inspected during model selection. The unaudited holdout frames, proxy labels,
 aggregate metrics, and examples remain untouched until architecture, checkpoint,
 calibration mapping, and thresholds are frozen. The audited holdout is evaluated
-once; subsequent changes create a new study rather than another attempt on it.
+once only if development selection succeeds; subsequent changes create a new
+study rather than another attempt on it. Development selection ultimately
+failed in EXP-0007, so that one-time evaluation was not authorized or run.
 
 ## Evidence tiers and numeric gates
 
@@ -187,3 +189,21 @@ Otherwise prefer the simpler Pareto candidate.
 Every decision includes aggregate distributions plus random, worst-case,
 endpoint, tight-bend, boundary, cropped, and temporal examples. Tier B and Tier
 C tables and claims remain visibly separate in all experiment and final reports.
+
+## Final protocol outcome
+
+EXP-0007 used the permitted one-seed primary-fold early-elimination path. It
+passed its step-300 continuation control but failed the unchanged fully-visible
+and candidate-proxy reliability gates by large margins and failed the exact
+qualitative shortcut gate. The deterministic result is `PRIMARY_FOLD_FAIL`, not
+acceptance or a near-gate repeat. Accordingly:
+
+- folds 0/1 and repeat seeds were not authorized;
+- cropped-body diagnostics were reported but could not authorize advancement;
+- temporal, refinement, and uncertainty phases remained blocked;
+- the unaudited portion of the 2025 holdout remained unopened; and
+- no final-test metric or accepted final-system throughput exists.
+
+This is the expected fail-closed behavior of the frozen protocol. One primary
+fold is sufficient for rejection; every fold would have been required for
+acceptance.

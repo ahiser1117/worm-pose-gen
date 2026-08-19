@@ -1,0 +1,33 @@
+{
+  "experiment": "EXP-0007",
+  "model_seed": 20260818,
+  "fold": 2,
+  "checkpoint_sha256": "7606c7fbb990fee59624f6882155dea250fecab8059988d69441254ff7bc13d0",
+  "completed": true,
+  "systematic_topology_or_shortcut_failure": true,
+  "random_overlays_reviewed": true,
+  "worst_overlays_reviewed": true,
+  "finding": "Predictions systematically regress toward short, nearly straight mean poses and frequently miss worm position, extent, curvature, and orientation on both candidate-proxy and analytic Tier C images.",
+  "figure_evidence": [
+    {
+      "path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/diagnostics.png",
+      "sha256": "2600646d482c15456aa5fa3d6bfe783b729b4842246805293b56241727a23d0c"
+    },
+    {
+      "path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/tier_B_random.png",
+      "sha256": "f51f78b15ebb29b246934bdc02f61eb574394f5802a65032f791e3bfa99736de"
+    },
+    {
+      "path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/tier_B_worst.png",
+      "sha256": "02100a585ba8013ed10fc157f34641d0b9274952d50920d96da82489bf0be560"
+    },
+    {
+      "path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/tier_C_random.png",
+      "sha256": "efea222672296f7ef09db19fca9ee8433053f30116c66c832e0765bc9afabfe1"
+    },
+    {
+      "path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_0007/intrinsic_fold2_seed20260818_final/evaluation/tier_C_worst.png",
+      "sha256": "a15498567c83516d7680ed4d15b939f785c55f7bd6f54b4acb03769797359f13"
+    }
+  ]
+}

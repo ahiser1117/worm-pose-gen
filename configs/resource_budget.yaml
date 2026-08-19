@@ -32,7 +32,20 @@ cuda:
   expected_uuid: GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6
 artifacts:
   root: /temp_data4/alex/external_artifacts
-  checkpoints: /temp_data4/alex/external_artifacts/artifacts/worm_pose_gen/checkpoints
+  checkpoints: /temp_data4/alex/external_artifacts/artifacts/checkpoints/worm_pose_gen
   profiler: /temp_data4/alex/external_artifacts/artifacts/worm_pose_gen/profiler
   datasets: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen
   experiments: /temp_data4/alex/external_artifacts/experiments/worm_pose_gen
+final_state:
+  scientific_status: negative_result_no_accepted_model
+  exp_0007_maximum_minutes_per_run: 12
+  exp_0007_maximum_steps: 1200
+  exp_0007_checkpoint_every_steps: 300
+  exp_0007_num_workers: 0
+  exp_0007_parameters: 722137
+  exp_0007_cumulative_train_seconds: 288.04
+  exp_0007_selected_checkpoint_step: 720
+  additional_folds_authorized: false
+  repeat_seeds_authorized: false
+  temporal_modeling_authorized: false
+  audited_holdout_opened: false
