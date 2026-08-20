@@ -23,7 +23,6 @@ class ClassicalConfig:
     local_radius: int = 31
     smooth_radius: int = 2
     foreground_z: float = 2.6
-    support_z: float = 0.0
     close_radius: int = 2
     min_area: int = 2_500
     max_area: int = 30_000
@@ -33,7 +32,10 @@ class ClassicalConfig:
     # of 13 px conservatively rejects a tube that is truncated at an image edge
     # even when local normalization makes its detected ridge end slightly inboard.
     boundary_margin: float = 13.0
-    min_support: float = 0.95
+    # Geometric check only: the smoothed centerline must remain inside the
+    # segmented body. Darkness is used to find the border, not to score the
+    # centerline itself.
+    min_tube_support: float = 0.95
     n_points: int = 100
     max_branch_pixels: int = 50
     max_raw_endpoints: int = 16
@@ -335,8 +337,6 @@ def extract_centerline(
     sample_x = np.clip(np.rint(centerline[:, 0]).astype(int), 0, w - 1)
     sample_y = np.clip(np.rint(centerline[:, 1]).astype(int), 0, h - 1)
     tube_support = float(np.mean(_dilate(component, 1)[sample_y, sample_x]))
-    ridge_support = float(np.mean(score[sample_y, sample_x] >= cfg.support_z))
-    support = min(tube_support, ridge_support)
     if not cfg.min_length <= length <= cfg.max_length:
         reasons.append("implausible_length")
     if boundary_distance < cfg.boundary_margin or component_boundary_contact:
@@ -345,8 +345,8 @@ def extract_centerline(
     # skeleton spurs are tolerated only within explicit raw-topology bounds.
     if endpoint_count < 2 or endpoint_count > cfg.max_raw_endpoints or branch_pixels > cfg.max_branch_pixels:
         reasons.append("unstable_endpoints")
-    if support < cfg.min_support:
-        reasons.append("low_ridge_support")
+    if tube_support < cfg.min_tube_support:
+        reasons.append("low_tube_support")
 
     # Static appearance is weak evidence.  Use it only to choose export order,
     # and cap confidence far below a claim of anatomical certainty.
@@ -365,7 +365,7 @@ def extract_centerline(
     length_score = max(0.0, 1.0 - abs(length - 450.0) / 300.0)
     topology_score = max(0.0, 1.0 - branch_pixels / max(cfg.max_branch_pixels, 1))
     boundary_score = min(1.0, boundary_distance / 20.0)
-    quality = float(np.clip(0.4 * support + 0.2 * length_score + 0.2 * topology_score + 0.2 * boundary_score, 0, 1))
+    quality = float(np.clip(0.4 * tube_support + 0.2 * length_score + 0.2 * topology_score + 0.2 * boundary_score, 0, 1))
     qc = {
         "area": area,
         "component_count": component_count,
@@ -376,7 +376,6 @@ def extract_centerline(
         "raw_skeleton_endpoint_count": endpoint_count,
         "branch_pixels": branch_pixels,
         "tube_support_fraction": tube_support,
-        "dark_ridge_support_fraction": ridge_support,
         "endpoint_appearance_delta": appearance_delta,
     }
     accepted = not reasons

@@ -38,7 +38,7 @@ class ClassicalTests(unittest.TestCase):
         result = extract_centerline(image.astype(np.uint8), config)
         self.assertTrue(result.accepted, result.rejection_reasons)
         self.assertEqual(result.centerline_xy.shape, (100, 2))
-        self.assertGreaterEqual(result.qc["dark_ridge_support_fraction"], 0.95)
+        self.assertGreaterEqual(result.qc["tube_support_fraction"], 0.95)
         self.assertEqual(result.qc["backbone_endpoint_count"], 2)
         self.assertGreaterEqual(result.qc["boundary_distance_px"], config.boundary_margin)
 
