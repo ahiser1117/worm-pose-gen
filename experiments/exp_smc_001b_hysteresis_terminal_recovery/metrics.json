@@ -1,0 +1,1829 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-001B",
+  "method": "classical_soft_dark_ridge_baseline",
+  "manual_mask_truth_available": false,
+  "inputs": {
+    "config": "/home/alex/git/worm-pose-gen/configs/smc_exp_001b_002b_revision.json",
+    "config_sha256": "cdd876a5012e1193cacaf52cc078e79d06a3ef292813b5c13b182b88e6ed19dd",
+    "annotations": "/storage/fs/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "annotations_sha256": "99af7f0beadf81dab8bb4b6dbab0aa952a7d461116708e97f12b54dda5e9902b",
+    "manifest": "/home/alex/git/worm-pose-gen/experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "manifest_sha256": "ba0a9ccc6f08844ecfcc52167271ba0cc13a47dafc8ba54bb2f25d1aec2619b3",
+    "protected_2025_holdout_opened": false
+  },
+  "summary": {
+    "total_primary_frames": 30,
+    "identifiable_trace_frames": 29,
+    "not_identifiable_frames": 1,
+    "non_identifiable_evidence_used": 0,
+    "cleaned_mask_trace_containment": {
+      "n": 29,
+      "median": 0.98,
+      "mean": 0.9837931034482758,
+      "p10": 0.96,
+      "p95": 1.0
+    },
+    "terminal_containment": {
+      "n": 29,
+      "median": 0.8,
+      "mean": 0.8448275862068966,
+      "p10": 0.6799999999999999,
+      "p95": 1.0
+    },
+    "soft_probability_on_trace": {
+      "n": 29,
+      "median": 0.7379223022037104,
+      "mean": 0.7714047868037346,
+      "p10": 0.6897614336705831,
+      "p95": 0.9217779161216034
+    },
+    "nearest_cleaned_mask_distance_px": {
+      "n": 29,
+      "median": 0.4033423239199657,
+      "mean": 0.39792840354502557,
+      "p10": 0.36837141285437647,
+      "p95": 0.42582131404243817
+    },
+    "terminal_omission_fraction": {
+      "n": 29,
+      "median": 0.19999999999999996,
+      "mean": 0.15517241379310345,
+      "p10": 0.0,
+      "p95": 0.4
+    },
+    "cleaned_mask_area_px": {
+      "n": 30,
+      "median": 23072.0,
+      "mean": 22912.5,
+      "p10": 18769.3,
+      "p95": 29459.0
+    },
+    "component_count": {
+      "n": 30,
+      "median": 1.0,
+      "mean": 1.3666666666666667,
+      "p10": 1.0,
+      "p95": 3.0999999999999943
+    },
+    "hole_count": {
+      "n": 30,
+      "median": 0.0,
+      "mean": 0.13333333333333333,
+      "p10": 0.0,
+      "p95": 1.0
+    },
+    "boundary_contact_pixels": {
+      "n": 30,
+      "median": 7.0,
+      "mean": 17.833333333333332,
+      "p10": 0.0,
+      "p95": 60.09999999999994
+    },
+    "adjacent_area_relative_change": {
+      "n": 60,
+      "median": 0.0034881516014133584,
+      "mean": 0.006646744378371059,
+      "p10": 0.0003792066922158514,
+      "p95": 0.014413996057934477
+    },
+    "adjacent_centroid_displacement_px": {
+      "n": 60,
+      "median": 1.7923868265664389,
+      "mean": 2.548644082102088,
+      "p10": 0.48860553316019883,
+      "p95": 5.537441566799139
+    },
+    "hysteresis_recovered_area_fraction": {
+      "n": 30,
+      "median": 0.009714088655896833,
+      "mean": 0.012250277659388341,
+      "p10": 0.007153180290585875,
+      "p95": 0.021988845995960758
+    }
+  },
+  "gate": {
+    "passed": false,
+    "decision": "NOT_SUPPORTED",
+    "evidence_ceiling": "PARTIALLY_SUPPORTED",
+    "observed": {
+      "median_cleaned_mask_trace_containment": 0.98,
+      "p10_cleaned_mask_trace_containment": 0.96,
+      "median_terminal_containment": 0.8,
+      "median_soft_probability_on_trace": 0.7379223022037104,
+      "non_identifiable_evidence_used": 0,
+      "median_hysteresis_recovered_area_fraction": 0.009714088655896833,
+      "p95_hysteresis_recovered_area_fraction": 0.021988845995960758,
+      "p95_adjacent_area_relative_change": 0.014413996057934477
+    },
+    "checks": {
+      "median_cleaned_mask_trace_containment": true,
+      "p10_cleaned_mask_trace_containment": true,
+      "median_terminal_containment": false,
+      "median_soft_probability_on_trace": true,
+      "non_identifiable_evidence_used": true,
+      "median_hysteresis_recovered_area_fraction": true,
+      "p95_hysteresis_recovered_area_fraction": true,
+      "p95_adjacent_area_relative_change": true
+    }
+  },
+  "runtime": {
+    "serial_cpu_seconds_central_30": 63.775364719331264,
+    "serial_cpu_seconds_all_unique_central_and_adjacent_frames": 189.5065373033285,
+    "unique_central_and_adjacent_frames": 89,
+    "scope": "in_memory_serial_cpu_excludes_HDF5_read_and_plotting"
+  },
+  "per_case": [
+    {
+      "sample_id": "2023-09-19-01-f002565",
+      "recording": "2023-09-19-01",
+      "frame_index": 2565,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.97,
+      "terminal_containment": 0.7,
+      "terminal_omission_fraction": 0.30000000000000004,
+      "soft_probability_on_trace": 0.6831410067196654,
+      "median_nearest_cleaned_mask_distance_px": 0.4033423239199657,
+      "cleaned_mask_area_px": 29036,
+      "component_count": 1,
+      "component_sizes_px": [
+        29036
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        538.9707604353217,
+        177.07222069155532
+      ],
+      "adjacent_area_relative_change": [
+        0.004408320705331313,
+        0.003444000551040088
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.522465899109006,
+        2.0518023814514126
+      ],
+      "segmentation_runtime_seconds": 2.170674945227802,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.64981538333008,
+        "score_max": 30.187489558350688,
+        "probability_min": 8.64724937642247e-22,
+        "probability_max": 1.0,
+        "raw_foreground_area": 27023,
+        "closed_foreground_area": 31861,
+        "largest_high_confidence_component_area": 28834,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 35570,
+        "hysteresis_recovered_area": 202,
+        "hysteresis_disconnected_low_area": 10699,
+        "largest_component_area_before_hole_fill": 29036,
+        "cleaned_foreground_area": 29036,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 308,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f017959",
+      "recording": "2023-09-19-01",
+      "frame_index": 17959,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7193885841397756,
+      "median_nearest_cleaned_mask_distance_px": 0.4369684960793704,
+      "cleaned_mask_area_px": 28324,
+      "component_count": 1,
+      "component_sizes_px": [
+        28324
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 24,
+      "centroid_xy": [
+        618.2132467165654,
+        520.7350656686908
+      ],
+      "adjacent_area_relative_change": [
+        0.00021183448665442733,
+        0.0007767264510662336
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.7123088107173987,
+        3.2466160966989204
+      ],
+      "segmentation_runtime_seconds": 2.1649379590526223,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -20.982786650756143,
+        "score_max": 30.900975513319803,
+        "probability_min": 3.282855593340316e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 26150,
+        "closed_foreground_area": 31170,
+        "largest_high_confidence_component_area": 28036,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 34860,
+        "hysteresis_recovered_area": 288,
+        "hysteresis_disconnected_low_area": 11005,
+        "largest_component_area_before_hole_fill": 28324,
+        "cleaned_foreground_area": 28324,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 314,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f000036",
+      "recording": "2023-09-19-01",
+      "frame_index": 36,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.6914165404083125,
+      "median_nearest_cleaned_mask_distance_px": 0.38468897172484423,
+      "cleaned_mask_area_px": 24757,
+      "component_count": 1,
+      "component_sizes_px": [
+        24757
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 70,
+      "centroid_xy": [
+        495.3263723391364,
+        190.4340186613887
+      ],
+      "adjacent_area_relative_change": [
+        0.032516056064951324,
+        0.001979238195257907
+      ],
+      "adjacent_centroid_displacement_px": [
+        8.316822850530858,
+        1.644162121741282
+      ],
+      "segmentation_runtime_seconds": 2.1542236525565386,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.566666447069277,
+        "score_max": 31.831078258368912,
+        "probability_min": 1.0211751364837412e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 24386,
+        "closed_foreground_area": 27877,
+        "largest_high_confidence_component_area": 24197,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 33923,
+        "hysteresis_recovered_area": 554,
+        "hysteresis_disconnected_low_area": 12500,
+        "largest_component_area_before_hole_fill": 24751,
+        "cleaned_foreground_area": 24757,
+        "filled_hole_count": 1,
+        "filled_hole_area": 6,
+        "closed_component_count": 341,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f013362",
+      "recording": "2023-09-19-01",
+      "frame_index": 13362,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7315563884558768,
+      "median_nearest_cleaned_mask_distance_px": 0.4182514950192662,
+      "cleaned_mask_area_px": 24271,
+      "component_count": 1,
+      "component_sizes_px": [
+        24271
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 30,
+      "centroid_xy": [
+        570.9447076758271,
+        537.4584895554366
+      ],
+      "adjacent_area_relative_change": [
+        0.0014008487495364838,
+        0.0015244530509661736
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.5034489318523911,
+        0.08028916004005772
+      ],
+      "segmentation_runtime_seconds": 2.147276342846453,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.99050477531837,
+        "score_max": 29.86821581738398,
+        "probability_min": 4.374807396713907e-22,
+        "probability_max": 1.0,
+        "raw_foreground_area": 23732,
+        "closed_foreground_area": 27452,
+        "largest_high_confidence_component_area": 23905,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 33171,
+        "hysteresis_recovered_area": 360,
+        "hysteresis_disconnected_low_area": 12265,
+        "largest_component_area_before_hole_fill": 24265,
+        "cleaned_foreground_area": 24271,
+        "filled_hole_count": 1,
+        "filled_hole_area": 6,
+        "closed_component_count": 326,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f011973",
+      "recording": "2023-09-19-01",
+      "frame_index": 11973,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7591205937231722,
+      "median_nearest_cleaned_mask_distance_px": 0.34062398514175607,
+      "cleaned_mask_area_px": 22012,
+      "component_count": 1,
+      "component_sizes_px": [
+        22012
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 48,
+      "centroid_xy": [
+        510.2918408141014,
+        539.7461838996911
+      ],
+      "adjacent_area_relative_change": [
+        0.005996729056878067,
+        0.0026803561693621663
+      ],
+      "adjacent_centroid_displacement_px": [
+        0.4942126987306793,
+        0.6559802393193102
+      ],
+      "segmentation_runtime_seconds": 2.153064915910363,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.745338568741193,
+        "score_max": 31.77093906790417,
+        "probability_min": 7.143443252715298e-22,
+        "probability_max": 1.0,
+        "raw_foreground_area": 21932,
+        "closed_foreground_area": 25566,
+        "largest_high_confidence_component_area": 21349,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 31541,
+        "hysteresis_recovered_area": 397,
+        "hysteresis_disconnected_low_area": 12828,
+        "largest_component_area_before_hole_fill": 21746,
+        "cleaned_foreground_area": 22012,
+        "filled_hole_count": 2,
+        "filled_hole_area": 266,
+        "closed_component_count": 365,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f003420",
+      "recording": "2023-09-19-01",
+      "frame_index": 3420,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.99,
+      "terminal_containment": 0.9,
+      "terminal_omission_fraction": 0.09999999999999998,
+      "soft_probability_on_trace": 0.7141657512672832,
+      "median_nearest_cleaned_mask_distance_px": 0.42741469057992026,
+      "cleaned_mask_area_px": 29864,
+      "component_count": 1,
+      "component_sizes_px": [
+        29864
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        333.9643718189124,
+        361.57781944816503
+      ],
+      "adjacent_area_relative_change": [
+        0.0028797214036967588,
+        0.004219126707741763
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.5848703371133877,
+        2.9767831161317204
+      ],
+      "segmentation_runtime_seconds": 2.1657472886145115,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -20.899849079027916,
+        "score_max": 29.51210187124756,
+        "probability_min": 3.875167140158048e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 27848,
+        "closed_foreground_area": 33454,
+        "largest_high_confidence_component_area": 29372,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 37368,
+        "hysteresis_recovered_area": 221,
+        "hysteresis_disconnected_low_area": 12337,
+        "largest_component_area_before_hole_fill": 29593,
+        "cleaned_foreground_area": 29864,
+        "filled_hole_count": 2,
+        "filled_hole_area": 271,
+        "closed_component_count": 273,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f000044",
+      "recording": "2023-09-19-01",
+      "frame_index": 44,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.99,
+      "terminal_containment": 0.9,
+      "terminal_omission_fraction": 0.09999999999999998,
+      "soft_probability_on_trace": 0.6682666418175844,
+      "median_nearest_cleaned_mask_distance_px": 0.38510328005436323,
+      "cleaned_mask_area_px": 25025,
+      "component_count": 1,
+      "component_sizes_px": [
+        25025
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 73,
+      "centroid_xy": [
+        507.847992007992,
+        195.9218781218781
+      ],
+      "adjacent_area_relative_change": [
+        0.0005594405594405594,
+        0.005834165834165834
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.743653030729828,
+        1.4541277814886846
+      ],
+      "segmentation_runtime_seconds": 2.1488029630854726,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -20.59087007806206,
+        "score_max": 31.004366269940032,
+        "probability_min": 7.188962018809619e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 24384,
+        "closed_foreground_area": 27421,
+        "largest_high_confidence_component_area": 24393,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 33718,
+        "hysteresis_recovered_area": 630,
+        "hysteresis_disconnected_low_area": 12168,
+        "largest_component_area_before_hole_fill": 25023,
+        "cleaned_foreground_area": 25025,
+        "filled_hole_count": 1,
+        "filled_hole_area": 2,
+        "closed_component_count": 360,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f006628",
+      "recording": "2023-09-19-01",
+      "frame_index": 6628,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.95,
+      "terminal_containment": 0.6,
+      "terminal_omission_fraction": 0.4,
+      "soft_probability_on_trace": 0.702758810390377,
+      "median_nearest_cleaned_mask_distance_px": 0.3752683453945218,
+      "cleaned_mask_area_px": 29272,
+      "component_count": 4,
+      "component_sizes_px": [
+        29269,
+        1,
+        1,
+        1
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        641.6883711396556,
+        411.60904618748293
+      ],
+      "adjacent_area_relative_change": [
+        0.0030404482098934137,
+        0.002049740366220279
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.880377304964334,
+        3.2961746950975095
+      ],
+      "segmentation_runtime_seconds": 2.164822354912758,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.79304026771043,
+        "score_max": 29.548297055365996,
+        "probability_min": 6.493433986636188e-22,
+        "probability_max": 1.0,
+        "raw_foreground_area": 27693,
+        "closed_foreground_area": 32650,
+        "largest_high_confidence_component_area": 28872,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 36058,
+        "hysteresis_recovered_area": 207,
+        "hysteresis_disconnected_low_area": 11144,
+        "largest_component_area_before_hole_fill": 29079,
+        "cleaned_foreground_area": 29272,
+        "filled_hole_count": 1,
+        "filled_hole_area": 193,
+        "closed_component_count": 269,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f019242",
+      "recording": "2023-09-19-01",
+      "frame_index": 19242,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7379223022037104,
+      "median_nearest_cleaned_mask_distance_px": 0.39608138560873524,
+      "cleaned_mask_area_px": 29107,
+      "component_count": 5,
+      "component_sizes_px": [
+        29089,
+        14,
+        2,
+        1,
+        1
+      ],
+      "hole_count": 1,
+      "boundary_contact_pixels": 12,
+      "centroid_xy": [
+        451.8322053114371,
+        536.4913251107981
+      ],
+      "adjacent_area_relative_change": [
+        0.0021644278008726425,
+        0.004878551551173257
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.8513305205895296,
+        2.5932064244195487
+      ],
+      "segmentation_runtime_seconds": 2.1573888482525945,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.48986407571428,
+        "score_max": 30.338189636434866,
+        "probability_min": 1.1907207564292632e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 26815,
+        "closed_foreground_area": 31763,
+        "largest_high_confidence_component_area": 28818,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 35762,
+        "hysteresis_recovered_area": 289,
+        "hysteresis_disconnected_low_area": 11071,
+        "largest_component_area_before_hole_fill": 29107,
+        "cleaned_foreground_area": 29107,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 300,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-19-01-f007697",
+      "recording": "2023-09-19-01",
+      "frame_index": 7697,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.96,
+      "terminal_containment": 0.6,
+      "terminal_omission_fraction": 0.4,
+      "soft_probability_on_trace": 0.7458681660490997,
+      "median_nearest_cleaned_mask_distance_px": 0.376539945974777,
+      "cleaned_mask_area_px": 29612,
+      "component_count": 1,
+      "component_sizes_px": [
+        29612
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        520.0253613399973,
+        226.938031878968
+      ],
+      "adjacent_area_relative_change": [
+        0.0005403214912873159,
+        0.00013508037282182898
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.1137263043054322,
+        1.754434681055918
+      ],
+      "segmentation_runtime_seconds": 2.1631971169263124,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -19.63549469938204,
+        "score_max": 29.12771950226461,
+        "probability_min": 4.858416010959386e-20,
+        "probability_max": 1.0,
+        "raw_foreground_area": 27703,
+        "closed_foreground_area": 33889,
+        "largest_high_confidence_component_area": 29436,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 36492,
+        "hysteresis_recovered_area": 176,
+        "hysteresis_disconnected_low_area": 11238,
+        "largest_component_area_before_hole_fill": 29612,
+        "cleaned_foreground_area": 29612,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 299,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f012413",
+      "recording": "2023-09-27-01",
+      "frame_index": 12413,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7016387689909834,
+      "median_nearest_cleaned_mask_distance_px": 0.38481974401982266,
+      "cleaned_mask_area_px": 19152,
+      "component_count": 1,
+      "component_sizes_px": [
+        19152
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 7,
+      "centroid_xy": [
+        541.6069862155389,
+        534.0809837092731
+      ],
+      "adjacent_area_relative_change": [
+        0.0002610693400167084,
+        0.0003132832080200501
+      ],
+      "adjacent_centroid_displacement_px": [
+        0.5200310467447267,
+        0.5011995195864002
+      ],
+      "segmentation_runtime_seconds": 2.1441060015931726,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -20.806882533969166,
+        "score_max": 28.496672122175767,
+        "probability_min": 4.667025285729573e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 21128,
+        "closed_foreground_area": 25081,
+        "largest_high_confidence_component_area": 18970,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 30762,
+        "hysteresis_recovered_area": 181,
+        "hysteresis_disconnected_low_area": 14265,
+        "largest_component_area_before_hole_fill": 19151,
+        "cleaned_foreground_area": 19152,
+        "filled_hole_count": 1,
+        "filled_hole_area": 1,
+        "closed_component_count": 389,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f011985",
+      "recording": "2023-09-27-01",
+      "frame_index": 11985,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.8453173131225049,
+      "median_nearest_cleaned_mask_distance_px": 0.374113468566991,
+      "cleaned_mask_area_px": 19113,
+      "component_count": 2,
+      "component_sizes_px": [
+        19111,
+        2
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        405.77905090775914,
+        253.09794380787946
+      ],
+      "adjacent_area_relative_change": [
+        0.0025113796892167633,
+        0.00434259404593732
+      ],
+      "adjacent_centroid_displacement_px": [
+        3.117879535097201,
+        4.574431334313313
+      ],
+      "segmentation_runtime_seconds": 2.1630257489159703,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -24.969815336445045,
+        "score_max": 27.240348893452335,
+        "probability_min": 1.1302191579038605e-24,
+        "probability_max": 1.0,
+        "raw_foreground_area": 25830,
+        "closed_foreground_area": 30099,
+        "largest_high_confidence_component_area": 18969,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 35566,
+        "hysteresis_recovered_area": 144,
+        "hysteresis_disconnected_low_area": 18832,
+        "largest_component_area_before_hole_fill": 19113,
+        "cleaned_foreground_area": 19113,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 312,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f000060",
+      "recording": "2023-09-27-01",
+      "frame_index": 60,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.97,
+      "terminal_containment": 0.7,
+      "terminal_omission_fraction": 0.30000000000000004,
+      "soft_probability_on_trace": 0.7111894509602753,
+      "median_nearest_cleaned_mask_distance_px": 0.4234312492362151,
+      "cleaned_mask_area_px": 19381,
+      "component_count": 1,
+      "component_sizes_px": [
+        19381
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        423.8508332903359,
+        195.50786853103554
+      ],
+      "adjacent_area_relative_change": [
+        0.00577885558020742,
+        0.00010319384964656106
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.760972324251172,
+        2.053076429465317
+      ],
+      "segmentation_runtime_seconds": 2.1481266794726253,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -18.334632661401212,
+        "score_max": 27.58804794222384,
+        "probability_min": 6.552531372586836e-19,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22411,
+        "closed_foreground_area": 27286,
+        "largest_high_confidence_component_area": 19200,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32539,
+        "hysteresis_recovered_area": 181,
+        "hysteresis_disconnected_low_area": 16062,
+        "largest_component_area_before_hole_fill": 19381,
+        "cleaned_foreground_area": 19381,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 346,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f006769",
+      "recording": "2023-09-27-01",
+      "frame_index": 6769,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7690406691383396,
+      "median_nearest_cleaned_mask_distance_px": 0.3948006472108139,
+      "cleaned_mask_area_px": 17029,
+      "component_count": 2,
+      "component_sizes_px": [
+        17026,
+        3
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 38,
+      "centroid_xy": [
+        517.2061189735158,
+        202.54730166187093
+      ],
+      "adjacent_area_relative_change": [
+        0.0012331904398379236,
+        0.0005285101885019672
+      ],
+      "adjacent_centroid_displacement_px": [
+        0.6339131576849213,
+        1.1535589608528916
+      ],
+      "segmentation_runtime_seconds": 2.1242202976718545,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -18.771155717167247,
+        "score_max": 29.513071347062816,
+        "probability_min": 2.7368437285870083e-19,
+        "probability_max": 1.0,
+        "raw_foreground_area": 21299,
+        "closed_foreground_area": 24365,
+        "largest_high_confidence_component_area": 16666,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 31178,
+        "hysteresis_recovered_area": 348,
+        "hysteresis_disconnected_low_area": 16263,
+        "largest_component_area_before_hole_fill": 17014,
+        "cleaned_foreground_area": 17029,
+        "filled_hole_count": 1,
+        "filled_hole_area": 15,
+        "closed_component_count": 375,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f003424",
+      "recording": "2023-09-27-01",
+      "frame_index": 3424,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.7300951765882655,
+      "median_nearest_cleaned_mask_distance_px": 0.4036063349438258,
+      "cleaned_mask_area_px": 17341,
+      "component_count": 1,
+      "component_sizes_px": [
+        17341
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 26,
+      "centroid_xy": [
+        453.39005824346924,
+        514.3772562135978
+      ],
+      "adjacent_area_relative_change": [
+        0.00755435096015224,
+        0.006055014128366299
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.259184135869271,
+        1.3203705911284964
+      ],
+      "segmentation_runtime_seconds": 2.1144292932003736,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -21.333468318534198,
+        "score_max": 28.092303774875134,
+        "probability_min": 1.627996822515374e-21,
+        "probability_max": 1.0,
+        "raw_foreground_area": 20103,
+        "closed_foreground_area": 24452,
+        "largest_high_confidence_component_area": 17094,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 30778,
+        "hysteresis_recovered_area": 247,
+        "hysteresis_disconnected_low_area": 16081,
+        "largest_component_area_before_hole_fill": 17341,
+        "cleaned_foreground_area": 17341,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 430,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f015410",
+      "recording": "2023-09-27-01",
+      "frame_index": 15410,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.7129550499882317,
+      "median_nearest_cleaned_mask_distance_px": 0.3630872573870115,
+      "cleaned_mask_area_px": 19128,
+      "component_count": 1,
+      "component_sizes_px": [
+        19128
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        344.24586992890005,
+        438.81691760769553
+      ],
+      "adjacent_area_relative_change": [
+        0.0014115432873274781,
+        0.003345880384776244
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.947713671294888,
+        1.8684520011813472
+      ],
+      "segmentation_runtime_seconds": 2.134157160297036,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -18.492064134028848,
+        "score_max": 27.4449703269703,
+        "probability_min": 4.782619929850124e-19,
+        "probability_max": 1.0,
+        "raw_foreground_area": 21745,
+        "closed_foreground_area": 26260,
+        "largest_high_confidence_component_area": 18963,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32002,
+        "hysteresis_recovered_area": 165,
+        "hysteresis_disconnected_low_area": 15646,
+        "largest_component_area_before_hole_fill": 19128,
+        "cleaned_foreground_area": 19128,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 375,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f000052",
+      "recording": "2023-09-27-01",
+      "frame_index": 52,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.99,
+      "terminal_containment": 0.9,
+      "terminal_omission_fraction": 0.09999999999999998,
+      "soft_probability_on_trace": 0.718925753962778,
+      "median_nearest_cleaned_mask_distance_px": 0.3670031375478019,
+      "cleaned_mask_area_px": 19411,
+      "component_count": 1,
+      "component_sizes_px": [
+        19411
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 5,
+      "centroid_xy": [
+        430.56066148060376,
+        198.23038483334193
+      ],
+      "adjacent_area_relative_change": [
+        0.00046365462881871105,
+        0.000721240533717995
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.0163219552325957,
+        1.2801147877969656
+      ],
+      "segmentation_runtime_seconds": 2.0847334573045373,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -18.355186272558544,
+        "score_max": 30.079606729994357,
+        "probability_min": 6.288636168029322e-19,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22676,
+        "closed_foreground_area": 26318,
+        "largest_high_confidence_component_area": 19244,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32172,
+        "hysteresis_recovered_area": 167,
+        "hysteresis_disconnected_low_area": 15190,
+        "largest_component_area_before_hole_fill": 19411,
+        "cleaned_foreground_area": 19411,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 328,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f006771",
+      "recording": "2023-09-27-01",
+      "frame_index": 6771,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.8019645933170335,
+      "median_nearest_cleaned_mask_distance_px": 0.36871348168102014,
+      "cleaned_mask_area_px": 16957,
+      "component_count": 1,
+      "component_sizes_px": [
+        16957
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 39,
+      "centroid_xy": [
+        516.5413693459928,
+        203.29934540307838
+      ],
+      "adjacent_area_relative_change": [
+        0.003715279825440821,
+        0.002299935130034794
+      ],
+      "adjacent_centroid_displacement_px": [
+        0.21715661642481762,
+        0.864237442132109
+      ],
+      "segmentation_runtime_seconds": 2.088430328294635,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -17.975073581255536,
+        "score_max": 29.38651686497577,
+        "probability_min": 1.3449872203118e-18,
+        "probability_max": 1.0,
+        "raw_foreground_area": 20735,
+        "closed_foreground_area": 23385,
+        "largest_high_confidence_component_area": 16612,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 30953,
+        "hysteresis_recovered_area": 333,
+        "hysteresis_disconnected_low_area": 16176,
+        "largest_component_area_before_hole_fill": 16945,
+        "cleaned_foreground_area": 16957,
+        "filled_hole_count": 2,
+        "filled_hole_area": 12,
+        "closed_component_count": 396,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f003852",
+      "recording": "2023-09-27-01",
+      "frame_index": 3852,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.95,
+      "terminal_containment": 0.5,
+      "terminal_omission_fraction": 0.5,
+      "soft_probability_on_trace": 0.6091184752715083,
+      "median_nearest_cleaned_mask_distance_px": 0.4080758529681852,
+      "cleaned_mask_area_px": 19534,
+      "component_count": 1,
+      "component_sizes_px": [
+        19534
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        644.163253813863,
+        278.1961195863622
+      ],
+      "adjacent_area_relative_change": [
+        0.0035323026517866283,
+        0.004760929661103717
+      ],
+      "adjacent_centroid_displacement_px": [
+        3.4068464331171255,
+        5.391158341339583
+      ],
+      "segmentation_runtime_seconds": 2.10904354788363,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -19.726703754521843,
+        "score_max": 29.12101673904355,
+        "probability_min": 4.048289113837108e-20,
+        "probability_max": 1.0,
+        "raw_foreground_area": 21139,
+        "closed_foreground_area": 24635,
+        "largest_high_confidence_component_area": 19364,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 30813,
+        "hysteresis_recovered_area": 170,
+        "hysteresis_disconnected_low_area": 14137,
+        "largest_component_area_before_hole_fill": 19534,
+        "cleaned_foreground_area": 19534,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 376,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-09-27-01-f013698",
+      "recording": "2023-09-27-01",
+      "frame_index": 13698,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.96,
+      "terminal_containment": 0.7,
+      "terminal_omission_fraction": 0.30000000000000004,
+      "soft_probability_on_trace": 0.6924293217688864,
+      "median_nearest_cleaned_mask_distance_px": 0.41913330228468865,
+      "cleaned_mask_area_px": 20429,
+      "component_count": 2,
+      "component_sizes_px": [
+        20427,
+        2
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        494.3023153360419,
+        237.04958637231385
+      ],
+      "adjacent_area_relative_change": [
+        0.013461256057565226,
+        0.004062851828283323
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.4467516189903047,
+        1.7850718108289925
+      ],
+      "segmentation_runtime_seconds": 2.108667280524969,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -18.292983334870083,
+        "score_max": 26.45532100112309,
+        "probability_min": 7.121725895812159e-19,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22561,
+        "closed_foreground_area": 26620,
+        "largest_high_confidence_component_area": 20229,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32432,
+        "hysteresis_recovered_area": 200,
+        "hysteresis_disconnected_low_area": 14741,
+        "largest_component_area_before_hole_fill": 20429,
+        "cleaned_foreground_area": 20429,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 371,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f011201",
+      "recording": "2023-10-11-01",
+      "frame_index": 11201,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.99,
+      "terminal_containment": 0.9,
+      "terminal_omission_fraction": 0.09999999999999998,
+      "soft_probability_on_trace": 0.8964628886580204,
+      "median_nearest_cleaned_mask_distance_px": 0.3873659776507907,
+      "cleaned_mask_area_px": 23628,
+      "component_count": 1,
+      "component_sizes_px": [
+        23628
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 9,
+      "centroid_xy": [
+        558.2461486372101,
+        524.5587438632132
+      ],
+      "adjacent_area_relative_change": [
+        0.002793296089385475,
+        0.005036397494498053
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.3911358444713198,
+        3.201554874473023
+      ],
+      "segmentation_runtime_seconds": 2.114162581972778,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -28.501584605519433,
+        "score_max": 29.95895435130285,
+        "probability_min": 8.75651076269652e-27,
+        "probability_max": 1.0,
+        "raw_foreground_area": 23677,
+        "closed_foreground_area": 26414,
+        "largest_high_confidence_component_area": 23413,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32627,
+        "hysteresis_recovered_area": 215,
+        "hysteresis_disconnected_low_area": 11344,
+        "largest_component_area_before_hole_fill": 23628,
+        "cleaned_foreground_area": 23628,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 357,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f013785",
+      "recording": "2023-10-11-01",
+      "frame_index": 13785,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.865223310937373,
+      "median_nearest_cleaned_mask_distance_px": 0.3949067340290264,
+      "cleaned_mask_area_px": 23284,
+      "component_count": 1,
+      "component_sizes_px": [
+        23284
+      ],
+      "hole_count": 2,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        473.577005669129,
+        326.4952757258203
+      ],
+      "adjacent_area_relative_change": [
+        0.00038653152379316267,
+        0.0037794193437553684
+      ],
+      "adjacent_centroid_displacement_px": [
+        0.29424305626437314,
+        0.43814104302587425
+      ],
+      "segmentation_runtime_seconds": 2.1245117466896772,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -30.001932702592715,
+        "score_max": 28.709904573532953,
+        "probability_min": 8.75651076269652e-27,
+        "probability_max": 1.0,
+        "raw_foreground_area": 23731,
+        "closed_foreground_area": 26490,
+        "largest_high_confidence_component_area": 22901,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32964,
+        "hysteresis_recovered_area": 136,
+        "hysteresis_disconnected_low_area": 12461,
+        "largest_component_area_before_hole_fill": 23037,
+        "cleaned_foreground_area": 23284,
+        "filled_hole_count": 1,
+        "filled_hole_area": 247,
+        "closed_component_count": 340,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f000008",
+      "recording": "2023-10-11-01",
+      "frame_index": 8,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.9235031401365995,
+      "median_nearest_cleaned_mask_distance_px": 0.4161022100420929,
+      "cleaned_mask_area_px": 22313,
+      "component_count": 2,
+      "component_sizes_px": [
+        22311,
+        2
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 31,
+      "centroid_xy": [
+        358.67539102765204,
+        523.9828799354636
+      ],
+      "adjacent_area_relative_change": [
+        0.004347241518397347,
+        0.008067046116613633
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.5910464865641045,
+        1.61702407632895
+      ],
+      "segmentation_runtime_seconds": 2.070848255418241,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -23.855637732574568,
+        "score_max": 27.521500217412306,
+        "probability_min": 1.0493612793691157e-23,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22987,
+        "closed_foreground_area": 26841,
+        "largest_high_confidence_component_area": 21990,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 33122,
+        "hysteresis_recovered_area": 322,
+        "hysteresis_disconnected_low_area": 13655,
+        "largest_component_area_before_hole_fill": 22312,
+        "cleaned_foreground_area": 22313,
+        "filled_hole_count": 1,
+        "filled_hole_area": 1,
+        "closed_component_count": 343,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f013426",
+      "recording": "2023-10-11-01",
+      "frame_index": 13426,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.9368832590710372,
+      "median_nearest_cleaned_mask_distance_px": 0.4231329339288076,
+      "cleaned_mask_area_px": 23725,
+      "component_count": 1,
+      "component_sizes_px": [
+        23725
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        658.1725184404636,
+        315.1687249736565
+      ],
+      "adjacent_area_relative_change": [
+        0.008429926238145416,
+        0.008851422550052687
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.1590020287309546,
+        2.146324042810392
+      ],
+      "segmentation_runtime_seconds": 2.097465842962265,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -26.057003352576995,
+        "score_max": 28.982132120276876,
+        "probability_min": 1.2848225554874121e-25,
+        "probability_max": 1.0,
+        "raw_foreground_area": 23867,
+        "closed_foreground_area": 26201,
+        "largest_high_confidence_component_area": 23532,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32961,
+        "hysteresis_recovered_area": 193,
+        "hysteresis_disconnected_low_area": 11580,
+        "largest_component_area_before_hole_fill": 23725,
+        "cleaned_foreground_area": 23725,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 345,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f000430",
+      "recording": "2023-10-11-01",
+      "frame_index": 430,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.8619504965514625,
+      "median_nearest_cleaned_mask_distance_px": 0.4210048433504763,
+      "cleaned_mask_area_px": 22386,
+      "component_count": 1,
+      "component_sizes_px": [
+        22386
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 38,
+      "centroid_xy": [
+        261.44420620030377,
+        382.9795854551952
+      ],
+      "adjacent_area_relative_change": [
+        8.93415527561869e-05,
+        0.003931028321272224
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.1243947568478794,
+        0.3657498643874903
+      ],
+      "segmentation_runtime_seconds": 2.1089216135442257,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -24.323341764167377,
+        "score_max": 26.094485639722155,
+        "probability_min": 4.117963329030418e-24,
+        "probability_max": 1.0,
+        "raw_foreground_area": 23125,
+        "closed_foreground_area": 26405,
+        "largest_high_confidence_component_area": 22004,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 33172,
+        "hysteresis_recovered_area": 381,
+        "hysteresis_disconnected_low_area": 13411,
+        "largest_component_area_before_hole_fill": 22385,
+        "cleaned_foreground_area": 22386,
+        "filled_hole_count": 1,
+        "filled_hole_area": 1,
+        "closed_component_count": 365,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f010770",
+      "recording": "2023-10-11-01",
+      "frame_index": 10770,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.9191900800991093,
+      "median_nearest_cleaned_mask_distance_px": 0.4093369366300389,
+      "cleaned_mask_area_px": 23590,
+      "component_count": 1,
+      "component_sizes_px": [
+        23590
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        432.78393387028405,
+        524.987749046206
+      ],
+      "adjacent_area_relative_change": [
+        0.004705383637134379,
+        0.00423908435777872
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.7997018423038855,
+        1.0519365329609158
+      ],
+      "segmentation_runtime_seconds": 2.0595214376226068,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -28.28475098582976,
+        "score_max": 32.49595930251184,
+        "probability_min": 8.75651076269652e-27,
+        "probability_max": 1.0,
+        "raw_foreground_area": 24724,
+        "closed_foreground_area": 27835,
+        "largest_high_confidence_component_area": 23381,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 34021,
+        "hysteresis_recovered_area": 209,
+        "hysteresis_disconnected_low_area": 12471,
+        "largest_component_area_before_hole_fill": 23590,
+        "cleaned_foreground_area": 23590,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 364,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f000052",
+      "recording": "2023-10-11-01",
+      "frame_index": 52,
+      "selection_stratum": "uniform_coverage",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 1.0,
+      "terminal_containment": 1.0,
+      "terminal_omission_fraction": 0.0,
+      "soft_probability_on_trace": 0.8676460643825703,
+      "median_nearest_cleaned_mask_distance_px": 0.4140868075343247,
+      "cleaned_mask_area_px": 22860,
+      "component_count": 1,
+      "component_sizes_px": [
+        22860
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 32,
+      "centroid_xy": [
+        341.43534558180227,
+        526.5398075240595
+      ],
+      "adjacent_area_relative_change": [
+        0.048206474190726156,
+        0.009755030621172353
+      ],
+      "adjacent_centroid_displacement_px": [
+        15.123300979116328,
+        1.9525401901334536
+      ],
+      "segmentation_runtime_seconds": 2.072695277631283,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -28.04859074678057,
+        "score_max": 28.176101598896402,
+        "probability_min": 8.75651076269652e-27,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22638,
+        "closed_foreground_area": 26268,
+        "largest_high_confidence_component_area": 22526,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32027,
+        "hysteresis_recovered_area": 334,
+        "hysteresis_disconnected_low_area": 12505,
+        "largest_component_area_before_hole_fill": 22860,
+        "cleaned_foreground_area": 22860,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 367,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f006904",
+      "recording": "2023-10-11-01",
+      "frame_index": 6904,
+      "selection_stratum": "double_annotation_temporal_window",
+      "trace_state": "truncated",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.98,
+      "terminal_containment": 0.8,
+      "terminal_omission_fraction": 0.19999999999999996,
+      "soft_probability_on_trace": 0.8157397880369627,
+      "median_nearest_cleaned_mask_distance_px": 0.4097963807505438,
+      "cleaned_mask_area_px": 23845,
+      "component_count": 1,
+      "component_sizes_px": [
+        23845
+      ],
+      "hole_count": 1,
+      "boundary_contact_pixels": 7,
+      "centroid_xy": [
+        690.0272174460055,
+        314.12228978821554
+      ],
+      "adjacent_area_relative_change": [
+        0.0009226252883204027,
+        0.0039421262319144475
+      ],
+      "adjacent_centroid_displacement_px": [
+        1.293141282410399,
+        0.19725492302172293
+      ],
+      "segmentation_runtime_seconds": 2.113456478342414,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -27.096484069722532,
+        "score_max": 29.979078434262608,
+        "probability_min": 1.6067994454888057e-26,
+        "probability_max": 1.0,
+        "raw_foreground_area": 25251,
+        "closed_foreground_area": 28128,
+        "largest_high_confidence_component_area": 23592,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 34883,
+        "hysteresis_recovered_area": 253,
+        "hysteresis_disconnected_low_area": 12853,
+        "largest_component_area_before_hole_fill": 23845,
+        "cleaned_foreground_area": 23845,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 367,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f012493",
+      "recording": "2023-10-11-01",
+      "frame_index": 12493,
+      "selection_stratum": "proxy_difficult",
+      "trace_state": "not_identifiable",
+      "used_as_evidence": false,
+      "cleaned_mask_trace_containment": null,
+      "terminal_containment": null,
+      "terminal_omission_fraction": null,
+      "soft_probability_on_trace": null,
+      "median_nearest_cleaned_mask_distance_px": null,
+      "cleaned_mask_area_px": 18928,
+      "component_count": 1,
+      "component_sizes_px": [
+        18928
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 46,
+      "centroid_xy": [
+        541.8173076923077,
+        197.13799661876584
+      ],
+      "adjacent_area_relative_change": [
+        0.11739222316145394,
+        0.0008981403212172443
+      ],
+      "adjacent_centroid_displacement_px": [
+        26.05387956327878,
+        0.5838118086872022
+      ],
+      "segmentation_runtime_seconds": 2.1068869791924953,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -26.485344809405667,
+        "score_max": 29.54524419217562,
+        "probability_min": 5.454946430792823e-26,
+        "probability_max": 1.0,
+        "raw_foreground_area": 22514,
+        "closed_foreground_area": 24270,
+        "largest_high_confidence_component_area": 18532,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 32099,
+        "hysteresis_recovered_area": 384,
+        "hysteresis_disconnected_low_area": 14952,
+        "largest_component_area_before_hole_fill": 18916,
+        "cleaned_foreground_area": 18928,
+        "filled_hole_count": 2,
+        "filled_hole_area": 12,
+        "closed_component_count": 382,
+        "cleaned_touches_boundary": true
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    },
+    {
+      "sample_id": "2023-10-11-01-f007754",
+      "recording": "2023-10-11-01",
+      "frame_index": 7754,
+      "selection_stratum": "proxy_easy",
+      "trace_state": "complete",
+      "used_as_evidence": true,
+      "cleaned_mask_trace_containment": 0.97,
+      "terminal_containment": 0.7,
+      "terminal_omission_fraction": 0.30000000000000004,
+      "soft_probability_on_trace": 0.8378604311515073,
+      "median_nearest_cleaned_mask_distance_px": 0.41312348354574413,
+      "cleaned_mask_area_px": 24061,
+      "component_count": 1,
+      "component_sizes_px": [
+        24061
+      ],
+      "hole_count": 0,
+      "boundary_contact_pixels": 0,
+      "centroid_xy": [
+        273.62719753958686,
+        394.6488092764224
+      ],
+      "adjacent_area_relative_change": [
+        0.01093055151489963,
+        0.004405469431860687
+      ],
+      "adjacent_centroid_displacement_px": [
+        2.668801661981402,
+        2.2704249689071974
+      ],
+      "segmentation_runtime_seconds": 2.0978183234110475,
+      "segmentation_qc": {
+        "method": "classical_robust_dark_ridge_logistic_baseline",
+        "is_pretrained": false,
+        "score_min": -24.916163619803644,
+        "score_max": 28.142684968659278,
+        "probability_min": 1.2582413502850702e-24,
+        "probability_max": 1.0,
+        "raw_foreground_area": 24772,
+        "closed_foreground_area": 27564,
+        "largest_high_confidence_component_area": 23854,
+        "hysteresis_enabled": true,
+        "hysteresis_low_probability_threshold": 0.25,
+        "low_threshold_foreground_area": 34208,
+        "hysteresis_recovered_area": 207,
+        "hysteresis_disconnected_low_area": 12724,
+        "largest_component_area_before_hole_fill": 24061,
+        "cleaned_foreground_area": 24061,
+        "filled_hole_count": 0,
+        "filled_hole_area": 0,
+        "closed_component_count": 315,
+        "cleaned_touches_boundary": false
+      },
+      "proxy_metric_label": "manual-visible-trace-derived, including terminal samples; not manual-mask Dice/IoU or anatomical hidden-end evidence"
+    }
+  ]
+}
