@@ -1,5 +1,24 @@
 # Annotation Recommendations
 
+> **Active single-person protocol (2026-08-19):** Only one person will annotate
+> this project. The operational minimum is therefore 30 unique development
+> frames plus 10 delayed, prior-trace-blind repeats by that person. This
+> measures intra-annotator repeatability and supports directional model triage;
+> it does not estimate inter-annotator agreement. The tool and exact workflow
+> are documented in `docs/SINGLE_ANNOTATOR_WORKFLOW.md`. The stronger
+> multi-person designs below remain reference protocols, not current blockers.
+
+> **Follow-on status (2026-08-19):** The newer scientific plan replaces the
+> earlier 256-frame allocation below with a development-only primary tranche,
+> preserving every unaudited 2025 holdout frame for frozen final validation.
+> The deterministic selection is now materialized at
+> `experiments/scientific_exp_001_annotation/selection_manifest.json`: 256
+> development frames across all three 2023 sessions, including six complete
+> 11-frame windows (66 frames) assigned to two independent annotators. The
+> human traces themselves have not been collected. See
+> `docs/SCIENTIFIC_EXPERIMENT_STATUS.md` for the active protocol; the older
+> allocation below remains as historical documentation of the first study.
+
 No true manual centerline labels were supplied. The current centerlines are
 conservative classical candidate proxies and cannot measure real-image
 anatomical accuracy. The smallest useful initial tranche is **256 annotated frames**, not

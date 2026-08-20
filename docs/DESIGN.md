@@ -1,5 +1,12 @@
 # Design and final engineering state
 
+> **Historical scope:** This document describes the completed first study and
+> its rejected checkpoint. The follow-on scientific plan explicitly replaces
+> the old hard rule that blocked temporal/refinement work after single-frame
+> failure. EXP-008 has now measured an independent Tier-C refinement basin, but
+> no accepted proposal or deployable integrated system exists. Current status:
+> `docs/SCIENTIFIC_EXPERIMENT_STATUS.md`.
+
 ## Status
 
 No proposal was accepted. The frozen EXP-0007 decision is

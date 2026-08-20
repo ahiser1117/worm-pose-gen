@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worm-pose-gen.local/schemas/tier-a-annotation-1.0.0.json",
+  "title": "Worm Pose Gen Tier-A Human Annotation",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "sample_id",
+    "annotation_id",
+    "annotator_id",
+    "tool_name",
+    "tool_version",
+    "started_at_utc",
+    "completed_at_utc",
+    "configured_source_path",
+    "resolved_source_path",
+    "source_size_bytes",
+    "source_mtime_ns",
+    "source_dataset_path",
+    "frame_index",
+    "split_role",
+    "selection_stratum",
+    "annotation_view",
+    "temporal_window_indices",
+    "annotation_overlays",
+    "parent_annotation_id",
+    "timestamp_raw",
+    "timestamp_mapping",
+    "head_tail_state",
+    "trace_state",
+    "worm_width_px",
+    "difficulty",
+    "vertices"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "sample_id": {"type": "string", "minLength": 1},
+    "annotation_id": {"type": "string", "minLength": 1},
+    "annotator_id": {"type": "string", "minLength": 1},
+    "tool_name": {"type": "string", "minLength": 1},
+    "tool_version": {"type": "string", "minLength": 1},
+    "started_at_utc": {"type": "string", "minLength": 1},
+    "completed_at_utc": {"type": "string", "minLength": 1},
+    "configured_source_path": {"type": "string", "minLength": 1},
+    "resolved_source_path": {"type": "string", "minLength": 1},
+    "source_size_bytes": {"type": "integer", "minimum": 0},
+    "source_mtime_ns": {"type": "integer", "minimum": 0},
+    "source_dataset_path": {"type": "string", "pattern": "^/"},
+    "frame_index": {"type": "integer", "minimum": 0},
+    "timestamp_raw": {"type": ["number", "null"]},
+    "timestamp_mapping": {"type": "string", "minLength": 1},
+    "split_role": {"type": "string", "minLength": 1},
+    "selection_stratum": {"type": "string", "minLength": 1},
+    "annotation_view": {"enum": ["single_frame", "temporal_window"]},
+    "temporal_window_indices": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "annotation_overlays": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "parent_annotation_id": {"type": ["string", "null"]},
+    "head_tail_state": {
+      "enum": ["start_is_head", "start_is_tail", "ambiguous"]
+    },
+    "trace_state": {
+      "enum": ["complete", "truncated", "not_identifiable"]
+    },
+    "worm_width_px": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "difficulty": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "vertices": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["xy", "support_state"],
+        "properties": {
+          "xy": {
+            "oneOf": [
+              {
+                "type": "array",
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              },
+              {"type": "null"},
+              {"const": [null, null]}
+            ]
+          },
+          "support_state": {
+            "enum": [
+              "supported",
+              "occluded_in_fov",
+              "outside_fov",
+              "not_identifiable"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"trace_state": {"const": "not_identifiable"}},
+        "required": ["trace_state"]
+      },
+      "then": {"properties": {"vertices": {"maxItems": 0}}},
+      "else": {"properties": {"vertices": {"minItems": 2}}}
+    }
+  ]
+}
