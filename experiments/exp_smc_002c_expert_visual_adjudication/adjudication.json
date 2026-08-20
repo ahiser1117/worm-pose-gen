@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-002C",
+  "artifact_type": "expert_visual_adjudication",
+  "review_authority": "explicit_user_expert_visual_review",
+  "recorded_at_utc": "2026-08-19T00:00:00Z",
+  "status": "COMPLETE_DEVELOPMENT_CONTINUATION_AUTHORIZED",
+  "source": {
+    "metrics": "../exp_smc_002b_width_relative_fov/metrics.json",
+    "metrics_sha256": "3ec552071952fb4cd69ee24f2347a6ea5b5125dc070cb126de1e07b458fd557b",
+    "config": "../../configs/smc_exp_001b_002b_revision.json",
+    "config_sha256": "cdd876a5012e1193cacaf52cc078e79d06a3ef292813b5c13b182b88e6ed19dd",
+    "annotation_sha256": "99af7f0beadf81dab8bb4b6dbab0aa952a7d461116708e97f12b54dda5e9902b",
+    "ordinal_definition": "one-based order of per_case rows in the bound EXP-SMC-002B metrics artifact"
+  },
+  "review_codes": {
+    "DEVELOPMENT_ADEQUATE": "Expert judges the visual result adequate for development continuation.",
+    "ANNOTATION_MISTAKE": "Expert judges the existing annotation genuinely mistaken; the source annotation remains unchanged.",
+    "EXPECTED_HARD_FOR_SMC": "Expert judges this an expected hard failure for downstream SMC rather than a required easy anchor."
+  },
+  "rows": [
+    {"ordinal": 1, "sample_id": "2023-09-19-01-f002565", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 2, "sample_id": "2023-09-19-01-f017959", "review_code": "ANNOTATION_MISTAKE", "review_statement": "The annotation is genuinely mistaken."},
+    {"ordinal": 3, "sample_id": "2023-09-19-01-f000036", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 4, "sample_id": "2023-09-19-01-f013362", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 5, "sample_id": "2023-09-19-01-f011973", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 6, "sample_id": "2023-09-19-01-f003420", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 7, "sample_id": "2023-09-19-01-f000044", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 8, "sample_id": "2023-09-19-01-f006628", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 9, "sample_id": "2023-09-19-01-f019242", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 10, "sample_id": "2023-09-19-01-f007697", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 11, "sample_id": "2023-09-27-01-f012413", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 12, "sample_id": "2023-09-27-01-f011985", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 13, "sample_id": "2023-09-27-01-f000060", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 14, "sample_id": "2023-09-27-01-f006769", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 15, "sample_id": "2023-09-27-01-f003424", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 16, "sample_id": "2023-09-27-01-f015410", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 17, "sample_id": "2023-09-27-01-f000052", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 18, "sample_id": "2023-09-27-01-f006771", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 19, "sample_id": "2023-09-27-01-f003852", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 20, "sample_id": "2023-09-27-01-f013698", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 21, "sample_id": "2023-10-11-01-f011201", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 22, "sample_id": "2023-10-11-01-f013785", "review_code": "EXPECTED_HARD_FOR_SMC", "review_statement": "This is an expected hard failure that SMC should solve, not a required easy-frame anchor."},
+    {"ordinal": 23, "sample_id": "2023-10-11-01-f000008", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 24, "sample_id": "2023-10-11-01-f013426", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 25, "sample_id": "2023-10-11-01-f000430", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 26, "sample_id": "2023-10-11-01-f010770", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 27, "sample_id": "2023-10-11-01-f000052", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 28, "sample_id": "2023-10-11-01-f006904", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 29, "sample_id": "2023-10-11-01-f012493", "review_code": "DEVELOPMENT_ADEQUATE"},
+    {"ordinal": 30, "sample_id": "2023-10-11-01-f007754", "review_code": "DEVELOPMENT_ADEQUATE"}
+  ],
+  "overall_review_statement": "Apart from the mistaken annotation at row 2 and the expected SMC-hard case at row 22, the expert judges the reviewed rows good enough to move forward with development.",
+  "decision_scope": {
+    "development_continuation_authorized": true,
+    "authorized_next_scope": "development-only anchor dataset, latent representation, width, renderer, dynamics, and controlled SMC experiments",
+    "frozen_metrics_recomputed": false,
+    "source_annotation_modified": false,
+    "protected_holdout_opened": false
+  },
+  "evidence_limits": [
+    "Expert visual adjudication, not a quantitative annotation noise floor.",
+    "Does not convert EXP-SMC-001B or EXP-SMC-002B into numeric gate passes.",
+    "Does not estimate accuracy, prevalence, calibration, or inter/intra-annotator agreement.",
+    "Does not validate the protected 2025 holdout or authorize opening it.",
+    "Does not establish deployment readiness or final scientific performance.",
+    "Expected hard-case routing is a development judgment; downstream SMC success remains untested."
+  ]
+}
