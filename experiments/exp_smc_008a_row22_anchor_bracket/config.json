@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-008A",
+  "purpose": "Development-only natural hard-case strict-anchor bracket scan around expert-adjudicated row 22",
+  "recording": "2023-10-11-01",
+  "hard_frame": 13785,
+  "start_frame": 13685,
+  "stop_frame_inclusive": 13885,
+  "frame_count": 201,
+  "source_dataset_path": "/img_nir",
+  "final_revision_config": "configs/smc_exp_001b_002b_revision.json",
+  "two_anchor_bout_definition": "nearest strict accepted frame before and after hard_frame, with after-before-1 <= 20",
+  "protected_2025_holdout_opened": false,
+  "external_output": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/smc/exp_smc_008a_row22_anchor_bracket/per_frame.h5"
+}
