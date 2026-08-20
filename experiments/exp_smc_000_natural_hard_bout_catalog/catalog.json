@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "experiment_id": "EXP-SMC-000",
+  "purpose": "Development-only catalog of natural hard-bout candidates for later SMC protocol design",
+  "evidence_semantics": "Candidate selection only. Candidate types are screening hypotheses, not verified event labels, ground truth, prevalence estimates, or model outcomes.",
+  "source_dataset_path": "/img_nir",
+  "timestamp_mapping": "img_metadata/img_timestamp selected where img_metadata/q_iter_save == 1; raw timestamp units remain inferred",
+  "selection_method": {
+    "seed_source": "Existing development-only Tier-A selection preview and frozen proxy accept/reject strata",
+    "raw_screen": "245 raw frames at stride 4 in twelve bounded seed neighborhoods; no pose or classical overlay",
+    "catalog_rule": "Retain visually plausible short partial-FOV, tight-coil, or self-contact/intersection windows and report existing conservative proxy anchors on either side when available",
+    "exhaustive": false,
+    "random_sample": false
+  },
+  "development_recordings": {
+    "2023-09-19-01": {
+      "configured_path": "nir_videos/2023-09-19-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+      "size_bytes": 14408997680,
+      "mtime_ns": 1695165610386214943,
+      "frame_count": 20099
+    },
+    "2023-09-27-01": {
+      "configured_path": "nir_videos/2023-09-27-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-27/2023-09-27-01.h5",
+      "size_bytes": 14424298312,
+      "mtime_ns": 1695855062179875330,
+      "frame_count": 20120
+    },
+    "2023-10-11-01": {
+      "configured_path": "nir_videos/2023-10-11-01.h5",
+      "resolved_path": "/storage/fs/store1/prj_starvation/data_raw/2023-10-11/2023-10-11-01.h5",
+      "size_bytes": 14516409088,
+      "mtime_ns": 1697067137210486374,
+      "frame_count": 20249
+    }
+  },
+  "anchor_source": {
+    "path": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+    "sha256": "1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c",
+    "criterion": "Nearest temporally preceding/following frame in the frozen accepted_frame_index dataset. Acceptance uses the conservative ClassicalConfig recorded in the proxy HDF5. Sparse sampling means these are known anchors, not necessarily the nearest possible anchors."
+  },
+  "candidates": [
+    {
+      "candidate_id": "nhb_20230919_partial_10222",
+      "recording": "2023-09-19-01",
+      "frame_window_inclusive": [10222, 10302],
+      "timestamp_raw_inclusive": [112546455026896, 112550480152896],
+      "candidate_type_hypotheses": ["partial_fov"],
+      "selection_rationale": "Across the bounded raw sequence, one anatomical end remains beyond the upper image boundary while the visible body changes curvature.",
+      "evidence_montage": "coarse_raw/2023-09-19-01_f010262.png",
+      "known_conservative_anchors": {
+        "bracketed": true,
+        "before": {"frame_index": 9835, "timestamp_raw": 112526729407272, "quality_score": 0.7074518203735352, "distance_to_window_frames": 387},
+        "after": {"frame_index": 11118, "timestamp_raw": 112591856451840, "quality_score": 0.692084014415741, "distance_to_window_frames": 816}
+      }
+    },
+    {
+      "candidate_id": "nhb_20230919_tight_bend_14514",
+      "recording": "2023-09-19-01",
+      "frame_window_inclusive": [14514, 14562],
+      "timestamp_raw_inclusive": [112765711910864, 112768136986864],
+      "candidate_type_hypotheses": ["tight_bend", "near_coil"],
+      "selection_rationale": "The raw body forms a persistent compact question-mark-like turn with close opposing body segments; this is a curvature stress case without a claimed crossing label.",
+      "evidence_montage": "coarse_raw/2023-09-19-01_f014538.png",
+      "known_conservative_anchors": {
+        "bracketed": true,
+        "before": {"frame_index": 14111, "timestamp_raw": 112744811255136, "quality_score": 0.6857799291610718, "distance_to_window_frames": 403},
+        "after": {"frame_index": 15394, "timestamp_raw": 112811113336240, "quality_score": 0.7182832956314087, "distance_to_window_frames": 832}
+      }
+    },
+    {
+      "candidate_id": "nhb_20230927_partial_08137",
+      "recording": "2023-09-27-01",
+      "frame_window_inclusive": [8137, 8173],
+      "timestamp_raw_inclusive": [527545999571896, 527547824629920],
+      "candidate_type_hypotheses": ["partial_fov", "boundary_transition"],
+      "selection_rationale": "The raw sequence transitions from a nearly complete body to sustained loss of one end through the lower boundary.",
+      "evidence_montage": "coarse_raw/2023-09-27-01_f008133.png",
+      "known_conservative_anchors": {
+        "bracketed": true,
+        "before": {"frame_index": 8133, "timestamp_raw": 527545799565680, "quality_score": 0.797417938709259, "distance_to_window_frames": 4},
+        "after": {"frame_index": 8989, "timestamp_raw": 527589775946896, "quality_score": 0.7591314911842346, "distance_to_window_frames": 816}
+      }
+    },
+    {
+      "candidate_id": "nhb_20230927_overlap_14514",
+      "recording": "2023-09-27-01",
+      "frame_window_inclusive": [14514, 14570],
+      "timestamp_raw_inclusive": [527872459822784, 527875309911864],
+      "candidate_type_hypotheses": ["self_contact_or_intersection", "coil"],
+      "selection_rationale": "The raw body forms a loop with visually merged/overlapping segments and then begins to open; topology is plausibly non-simple but is not adjudicated here.",
+      "evidence_montage": "coarse_raw/2023-09-27-01_f014554.png",
+      "known_conservative_anchors": {
+        "bracketed": true,
+        "before": {"frame_index": 14126, "timestamp_raw": 527852384192896, "quality_score": 0.8039084076881409, "distance_to_window_frames": 388},
+        "after": {"frame_index": 15410, "timestamp_raw": 527919011284808, "quality_score": 0.8100093603134155, "distance_to_window_frames": 840}
+      }
+    },
+    {
+      "candidate_id": "nhb_20231011_partial_start_00000",
+      "recording": "2023-10-11-01",
+      "frame_window_inclusive": [0, 52],
+      "timestamp_raw_inclusive": [1738412324192728, 1738415249284592],
+      "candidate_type_hypotheses": ["partial_fov", "recording_boundary"],
+      "selection_rationale": "The recording begins with one end outside the lower boundary throughout the bounded raw sequence, making a deliberate one-sided-anchor control.",
+      "evidence_montage": "coarse_raw/2023-10-11-01_f000012.png",
+      "known_conservative_anchors": {
+        "bracketed": false,
+        "before": null,
+        "after": {"frame_index": 861, "timestamp_raw": 1738456475578704, "quality_score": 0.6916925311088562, "distance_to_window_frames": 809},
+        "reason": "No preceding frame exists at the recording boundary."
+      }
+    },
+    {
+      "candidate_id": "nhb_20231011_coil_13745",
+      "recording": "2023-10-11-01",
+      "frame_window_inclusive": [13745, 13825],
+      "timestamp_raw_inclusive": [1739110396111000, 1739114571242648],
+      "candidate_type_hypotheses": ["coil", "self_contact_or_intersection"],
+      "selection_rationale": "The raw body sustains a compact closed-loop-like configuration and then opens into a shape with close crossing/contact geometry.",
+      "evidence_montage": "coarse_raw/2023-10-11-01_f013785.png",
+      "known_conservative_anchors": {
+        "bracketed": true,
+        "before": {"frame_index": 13355, "timestamp_raw": 1739090145475192, "quality_score": 0.7810138463973999, "distance_to_window_frames": 390},
+        "after": {"frame_index": 14216, "timestamp_raw": 1739134671873728, "quality_score": 0.7199906706809998, "distance_to_window_frames": 391}
+      }
+    }
+  ],
+  "protected_holdout": {
+    "recording": "2025-03-06-01",
+    "opened_during_this_experiment": false,
+    "statement": "Neither the source HDF5 nor any holdout-derived image was opened or used for candidate selection."
+  }
+}

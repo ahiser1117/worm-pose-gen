@@ -1,12 +1,22 @@
 # Worm Pose Gen
 
 Research code for 2D *C. elegans* centerline and body-angle estimation from NIR
-behavior video. The completed study is a **negative result**: no learned model
+behavior video. The original completed study is a **negative result**: no learned model
 met the frozen reliability gates, so there is no deployment-authorized final
 model. The repository nevertheless contains a reproducible data audit,
 leakage-safe evaluation protocol, classical candidate proxies, controlled crop
 benchmarks, tested geometry/HDF5 infrastructure, and an explicitly opt-in
 exploratory inference path for the rejected diagnostic checkpoint.
+
+A literature-grounded follow-on program is now active under
+[`worm_pose_scientific_experiment_plan.md`](worm_pose_scientific_experiment_plan.md).
+Its current evidence/status is tracked in
+[`docs/SCIENTIFIC_EXPERIMENT_STATUS.md`](docs/SCIENTIFIC_EXPERIMENT_STATUS.md).
+EXP-001 has a frozen 256-frame development candidate pool and a browser-based
+single-annotator workflow for a 30-frame primary tranche plus 10 delayed blind
+repeats; the independent Tier-C EXP-008 branch has
+measured a provisional differentiable-refinement capture basin. These additions
+do not turn the rejected checkpoint into a deployable model.
 
 The canonical research specification is
 [`worm_pose_agent_orchestrator.md`](worm_pose_agent_orchestrator.md). The final
@@ -94,5 +104,10 @@ systematically collapsed toward short, straight, mislocalized poses.
   production quality are not validated. Exploratory outputs use documented
   conservative sentinels for unavailable semantics.
 
-The smallest evidence upgrade is the 256-frame, double-label annotation plan
-in [`docs/ANNOTATION_RECOMMENDATIONS.md`](docs/ANNOTATION_RECOMMENDATIONS.md).
+The smallest evidence upgrade under the one-annotator constraint is the
+30-primary + 10-repeat workflow in
+[`docs/SINGLE_ANNOTATOR_WORKFLOW.md`](docs/SINGLE_ANNOTATOR_WORKFLOW.md). It
+measures intra-annotator repeatability, not inter-annotator agreement. The older
+multi-person recommendation remains in
+[`docs/ANNOTATION_RECOMMENDATIONS.md`](docs/ANNOTATION_RECOMMENDATIONS.md) as a
+stronger protocol if more annotators ever become available.

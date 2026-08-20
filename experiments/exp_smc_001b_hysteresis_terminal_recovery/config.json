@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-001B",
+  "status": "COMPLETED_NOT_SUPPORTED",
+  "parent_experiment": "EXP-SMC-001",
+  "changed_factor": {
+    "name": "connected_low_threshold_hysteresis",
+    "high_probability_threshold": 0.5,
+    "low_probability_threshold": 0.25,
+    "connectivity": 8
+  },
+  "structural_gate": {
+    "median_cleaned_mask_trace_containment_min": 0.95,
+    "p10_cleaned_mask_trace_containment_min": 0.90,
+    "median_terminal_containment_min": 0.90,
+    "median_hysteresis_recovered_area_fraction_max": 0.15,
+    "p95_hysteresis_recovered_area_fraction_max": 0.30,
+    "p95_adjacent_area_relative_change_max": 0.05,
+    "non_identifiable_evidence_used_max": 0
+  },
+  "evidence_boundary": {
+    "role": "prospective_development_revision_on_same_primary_30",
+    "soft_probability": "reported_but_not_gated_because_unchanged_uncalibrated_classical_score",
+    "maximum_decision": "PARTIALLY_SUPPORTED",
+    "protected_2025_holdout_opened": false
+  }
+}

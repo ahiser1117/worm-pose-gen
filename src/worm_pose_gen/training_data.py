@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Collection, Mapping, Sequence
 
 import h5py
 import numpy as np
@@ -39,6 +40,40 @@ def sha256_file(path: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
+def load_proxy_frame_exclusions(
+    path: str | os.PathLike[str], *, expected_sha256: str
+) -> dict[str, frozenset[int]]:
+    """Load a hash-bound EXP-003 recording/frame exclusion manifest."""
+
+    manifest_path = Path(path)
+    actual_hash = sha256_file(manifest_path)
+    if actual_hash != expected_sha256:
+        raise RuntimeError(
+            f"proxy exclusion sha256 mismatch: expected {expected_sha256}, got {actual_hash}"
+        )
+    payload = json.loads(manifest_path.read_text())
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("experiment") != "EXP-003"
+        or payload.get("protected_holdout_opened") is not False
+    ):
+        raise RuntimeError("invalid EXP-003 proxy exclusion manifest identity")
+    recordings = payload.get("recordings")
+    if not isinstance(recordings, dict) or set(recordings) != set(EXPECTED_RECORDS):
+        raise RuntimeError("proxy exclusion recordings do not match development records")
+    result: dict[str, frozenset[int]] = {}
+    for record in EXPECTED_RECORDS:
+        raw = recordings[record].get("excluded_frame_indices")
+        if (
+            not isinstance(raw, list)
+            or any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in raw)
+            or raw != sorted(set(raw))
+        ):
+            raise RuntimeError(f"invalid proxy exclusion indices for {record}")
+        result[record] = frozenset(raw)
+    return result
+
+
 def normalize_image(image: np.ndarray | Tensor, height: int = 192, width: int = 256) -> Tensor:
     """Deterministically convert one grayscale raster to float ``[1,H,W]``."""
 
@@ -66,6 +101,7 @@ class ProxyDataset(Dataset[dict[str, Tensor | str | int]]):
         expected_sha256: str,
         fold: int,
         split: str,
+        excluded_frame_indices: Mapping[str, Collection[int]] | None = None,
     ) -> None:
         if fold not in range(len(EXPECTED_RECORDS)):
             raise ValueError("fold must be 0, 1, or 2")
@@ -75,6 +111,17 @@ class ProxyDataset(Dataset[dict[str, Tensor | str | int]]):
         self._file: h5py.File | None = None
         self._owner_pid: int | None = None
         self._registered_shared_user = False
+        raw_exclusions = excluded_frame_indices or {}
+        unknown_records = set(raw_exclusions) - set(EXPECTED_RECORDS)
+        if unknown_records:
+            raise ValueError(f"unknown proxy exclusion records: {sorted(unknown_records)}")
+        self.excluded_frame_indices = {
+            record: frozenset(int(value) for value in raw_exclusions.get(record, ()))
+            for record in EXPECTED_RECORDS
+        }
+        if any(value < 0 for values in self.excluded_frame_indices.values() for value in values):
+            raise ValueError("excluded proxy frame indices must be nonnegative")
+        self.excluded_row_count = 0
         actual_hash = sha256_file(self.path)
         if actual_hash != expected_sha256:
             raise RuntimeError(f"proxy sha256 mismatch: expected {expected_sha256}, got {actual_hash}")
@@ -115,10 +162,11 @@ class ProxyDataset(Dataset[dict[str, Tensor | str | int]]):
                 accepted = np.asarray(group["accepted"], dtype=bool)
                 if np.any(positions < 0) or np.any(positions >= len(accepted)) or not np.all(accepted[positions]):
                     raise RuntimeError(f"proxy group {record} accepted mapping is invalid")
-                self._rows.extend(
-                    (record, int(position), int(frame))
-                    for position, frame in zip(positions, frames, strict=True)
-                )
+                for position, frame in zip(positions, frames, strict=True):
+                    if int(frame) in self.excluded_frame_indices[record]:
+                        self.excluded_row_count += 1
+                    else:
+                        self._rows.append((record, int(position), int(frame)))
         except BaseException:
             self.close()
             raise
@@ -243,6 +291,63 @@ class SyntheticTierCDataset(Dataset[dict[str, Tensor | str | int]]):
         }
 
 
+class MaterializedPoseDataset(Dataset[dict[str, Tensor | str | int]]):
+    """Immutable in-memory snapshot that prevents render/I/O stalls during training."""
+
+    def __init__(self, source: Dataset) -> None:
+        if len(source) < 1:
+            raise ValueError("cannot materialize an empty pose dataset")
+        samples: list[dict[str, Tensor | str | int]] = []
+        for index in range(len(source)):
+            raw = source[index]
+            sample: dict[str, Tensor | str | int] = {}
+            for name, value in raw.items():
+                sample[name] = value.detach().cpu().clone() if isinstance(value, Tensor) else value
+            samples.append(sample)
+        self.samples = tuple(samples)
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
+        return self.samples[index]
+
+
+def materialized_dataset_sha256(dataset: Dataset) -> str:
+    """Hash ordered sample identity and tensor bytes for paired-run verification."""
+
+    digest = hashlib.sha256()
+    digest.update(b"worm-pose-materialized-dataset-v1\0")
+    for index in range(len(dataset)):
+        digest.update(index.to_bytes(8, "little", signed=False))
+        sample = dataset[index]
+        for name in sorted(sample):
+            encoded_name = name.encode("utf-8")
+            digest.update(len(encoded_name).to_bytes(4, "little", signed=False))
+            digest.update(encoded_name)
+            value = sample[name]
+            if isinstance(value, Tensor):
+                tensor = value.detach().cpu().contiguous()
+                metadata = json.dumps(
+                    {"kind": "tensor", "dtype": str(tensor.dtype), "shape": list(tensor.shape)},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+                payload = tensor.numpy().tobytes(order="C")
+            else:
+                metadata = json.dumps(
+                    {"kind": "scalar", "python_type": type(value).__name__},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+                payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            digest.update(len(metadata).to_bytes(4, "little", signed=False))
+            digest.update(metadata)
+            digest.update(len(payload).to_bytes(8, "little", signed=False))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
 def generate_tier_c_geometry(
     index: int, *, seed: int, profile: str
 ) -> dict[str, Tensor | int | dict]:
@@ -280,15 +385,26 @@ def make_datasets(
     seed: int,
     synthetic_train_count: int,
     synthetic_validation_count: int = 128,
+    excluded_frame_indices: Mapping[str, Collection[int]] | None = None,
 ) -> tuple[Dataset, Dataset, Dataset]:
     train = ConcatDataset(
         [
-            ProxyDataset(proxy_path, expected_sha256=expected_sha256, fold=fold, split="train"),
+            ProxyDataset(
+                proxy_path,
+                expected_sha256=expected_sha256,
+                fold=fold,
+                split="train",
+                excluded_frame_indices=excluded_frame_indices,
+            ),
             SyntheticTierCDataset(synthetic_train_count, seed=seed + fold * 100_000, profile="development"),
         ]
     )
     proxy_validation = ProxyDataset(
-        proxy_path, expected_sha256=expected_sha256, fold=fold, split="validation"
+        proxy_path,
+        expected_sha256=expected_sha256,
+        fold=fold,
+        split="validation",
+        excluded_frame_indices=excluded_frame_indices,
     )
     tier_c_validation = SyntheticTierCDataset(
         synthetic_validation_count,

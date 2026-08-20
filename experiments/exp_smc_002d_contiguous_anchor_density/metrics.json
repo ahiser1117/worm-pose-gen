@@ -1,0 +1,750 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-002D",
+  "status": "COMPLETED",
+  "evidence_role": "development-only feasibility diagnostic; no accuracy or outcome claim",
+  "final_revision_config": "configs/smc_exp_001b_002b_revision.json",
+  "final_revision_config_sha256": "cdd876a5012e1193cacaf52cc078e79d06a3ef292813b5c13b182b88e6ed19dd",
+  "soft_foreground_config": {
+    "local_radius": 31,
+    "smooth_radius": 2,
+    "score_midpoint": 2.6,
+    "logistic_temperature": 0.5,
+    "probability_threshold": 0.5,
+    "low_probability_threshold": 0.25,
+    "close_radius": 6,
+    "max_hole_area": 1024
+  },
+  "anchor_config": {
+    "n_points": 100,
+    "min_area": 2500,
+    "max_area": 40000,
+    "min_length": 250.0,
+    "max_length": 800.0,
+    "boundary_margin": 13.0,
+    "required_endpoints": 2,
+    "max_branch_pixels": 0,
+    "min_width": 1.0,
+    "max_width": 80.0,
+    "max_width_jump": 40.0,
+    "min_render_iou": 0.7,
+    "width_step": 0.5,
+    "max_topology_spur_length": 16,
+    "min_boundary_clearance_widths": 1.0
+  },
+  "protected_2025_holdout_opened": false,
+  "sessions": {
+    "2023-09-19-01": {
+      "recording": "2023-09-19-01",
+      "configured_source_path": "nir_videos/2023-09-19-01.h5",
+      "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+      "source_size_bytes": 14408997680,
+      "source_mtime_ns": 1695165610386214943,
+      "frame_window_inclusive": [
+        2515,
+        2615
+      ],
+      "center_frame": 2565,
+      "frames_scanned": 101,
+      "strict_accepted_count": 22,
+      "strict_accepted_density": 0.21782178217821782,
+      "has_strict_anchor": true,
+      "accepted_frame_indices": [
+        2515,
+        2516,
+        2517,
+        2518,
+        2519,
+        2530,
+        2531,
+        2532,
+        2548,
+        2551,
+        2565,
+        2570,
+        2573,
+        2581,
+        2583,
+        2588,
+        2592,
+        2596,
+        2600,
+        2601,
+        2611,
+        2613
+      ],
+      "accepted_runs": [
+        {
+          "start_position": 0,
+          "stop_position_inclusive": 4,
+          "length": 5,
+          "start_frame": 2515,
+          "stop_frame_inclusive": 2519
+        },
+        {
+          "start_position": 15,
+          "stop_position_inclusive": 17,
+          "length": 3,
+          "start_frame": 2530,
+          "stop_frame_inclusive": 2532
+        },
+        {
+          "start_position": 33,
+          "stop_position_inclusive": 33,
+          "length": 1,
+          "start_frame": 2548,
+          "stop_frame_inclusive": 2548
+        },
+        {
+          "start_position": 36,
+          "stop_position_inclusive": 36,
+          "length": 1,
+          "start_frame": 2551,
+          "stop_frame_inclusive": 2551
+        },
+        {
+          "start_position": 50,
+          "stop_position_inclusive": 50,
+          "length": 1,
+          "start_frame": 2565,
+          "stop_frame_inclusive": 2565
+        },
+        {
+          "start_position": 55,
+          "stop_position_inclusive": 55,
+          "length": 1,
+          "start_frame": 2570,
+          "stop_frame_inclusive": 2570
+        },
+        {
+          "start_position": 58,
+          "stop_position_inclusive": 58,
+          "length": 1,
+          "start_frame": 2573,
+          "stop_frame_inclusive": 2573
+        },
+        {
+          "start_position": 66,
+          "stop_position_inclusive": 66,
+          "length": 1,
+          "start_frame": 2581,
+          "stop_frame_inclusive": 2581
+        },
+        {
+          "start_position": 68,
+          "stop_position_inclusive": 68,
+          "length": 1,
+          "start_frame": 2583,
+          "stop_frame_inclusive": 2583
+        },
+        {
+          "start_position": 73,
+          "stop_position_inclusive": 73,
+          "length": 1,
+          "start_frame": 2588,
+          "stop_frame_inclusive": 2588
+        },
+        {
+          "start_position": 77,
+          "stop_position_inclusive": 77,
+          "length": 1,
+          "start_frame": 2592,
+          "stop_frame_inclusive": 2592
+        },
+        {
+          "start_position": 81,
+          "stop_position_inclusive": 81,
+          "length": 1,
+          "start_frame": 2596,
+          "stop_frame_inclusive": 2596
+        },
+        {
+          "start_position": 85,
+          "stop_position_inclusive": 86,
+          "length": 2,
+          "start_frame": 2600,
+          "stop_frame_inclusive": 2601
+        },
+        {
+          "start_position": 96,
+          "stop_position_inclusive": 96,
+          "length": 1,
+          "start_frame": 2611,
+          "stop_frame_inclusive": 2611
+        },
+        {
+          "start_position": 98,
+          "stop_position_inclusive": 98,
+          "length": 1,
+          "start_frame": 2613,
+          "stop_frame_inclusive": 2613
+        }
+      ],
+      "accepted_run_count": 15,
+      "adjacent_accepted_pairs": 7,
+      "rejected_gaps": [
+        {
+          "start_position": 5,
+          "stop_position_inclusive": 14,
+          "length": 10,
+          "start_frame": 2520,
+          "stop_frame_inclusive": 2529
+        },
+        {
+          "start_position": 18,
+          "stop_position_inclusive": 32,
+          "length": 15,
+          "start_frame": 2533,
+          "stop_frame_inclusive": 2547
+        },
+        {
+          "start_position": 34,
+          "stop_position_inclusive": 35,
+          "length": 2,
+          "start_frame": 2549,
+          "stop_frame_inclusive": 2550
+        },
+        {
+          "start_position": 37,
+          "stop_position_inclusive": 49,
+          "length": 13,
+          "start_frame": 2552,
+          "stop_frame_inclusive": 2564
+        },
+        {
+          "start_position": 51,
+          "stop_position_inclusive": 54,
+          "length": 4,
+          "start_frame": 2566,
+          "stop_frame_inclusive": 2569
+        },
+        {
+          "start_position": 56,
+          "stop_position_inclusive": 57,
+          "length": 2,
+          "start_frame": 2571,
+          "stop_frame_inclusive": 2572
+        },
+        {
+          "start_position": 59,
+          "stop_position_inclusive": 65,
+          "length": 7,
+          "start_frame": 2574,
+          "stop_frame_inclusive": 2580
+        },
+        {
+          "start_position": 67,
+          "stop_position_inclusive": 67,
+          "length": 1,
+          "start_frame": 2582,
+          "stop_frame_inclusive": 2582
+        },
+        {
+          "start_position": 69,
+          "stop_position_inclusive": 72,
+          "length": 4,
+          "start_frame": 2584,
+          "stop_frame_inclusive": 2587
+        },
+        {
+          "start_position": 74,
+          "stop_position_inclusive": 76,
+          "length": 3,
+          "start_frame": 2589,
+          "stop_frame_inclusive": 2591
+        },
+        {
+          "start_position": 78,
+          "stop_position_inclusive": 80,
+          "length": 3,
+          "start_frame": 2593,
+          "stop_frame_inclusive": 2595
+        },
+        {
+          "start_position": 82,
+          "stop_position_inclusive": 84,
+          "length": 3,
+          "start_frame": 2597,
+          "stop_frame_inclusive": 2599
+        },
+        {
+          "start_position": 87,
+          "stop_position_inclusive": 95,
+          "length": 9,
+          "start_frame": 2602,
+          "stop_frame_inclusive": 2610
+        },
+        {
+          "start_position": 97,
+          "stop_position_inclusive": 97,
+          "length": 1,
+          "start_frame": 2612,
+          "stop_frame_inclusive": 2612
+        },
+        {
+          "start_position": 99,
+          "stop_position_inclusive": 100,
+          "length": 2,
+          "start_frame": 2614,
+          "stop_frame_inclusive": 2615
+        }
+      ],
+      "longest_accepted_run": 5,
+      "longest_rejected_gap": 15,
+      "rejection_reason_counts_nonexclusive": {
+        "abrupt_width_jump": 1,
+        "branch_pixels": 79,
+        "cycle": 17,
+        "endpoint_count": 74,
+        "implausible_width": 1
+      },
+      "runtime_seconds": 260.624115283601,
+      "frames_per_second": 0.38753129153108395
+    },
+    "2023-09-27-01": {
+      "recording": "2023-09-27-01",
+      "configured_source_path": "nir_videos/2023-09-27-01.h5",
+      "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-27/2023-09-27-01.h5",
+      "source_size_bytes": 14424298312,
+      "source_mtime_ns": 1695855062179875330,
+      "frame_window_inclusive": [
+        15360,
+        15460
+      ],
+      "center_frame": 15410,
+      "frames_scanned": 101,
+      "strict_accepted_count": 58,
+      "strict_accepted_density": 0.5742574257425742,
+      "has_strict_anchor": true,
+      "accepted_frame_indices": [
+        15389,
+        15390,
+        15391,
+        15392,
+        15393,
+        15394,
+        15395,
+        15396,
+        15397,
+        15399,
+        15400,
+        15401,
+        15402,
+        15403,
+        15405,
+        15407,
+        15408,
+        15409,
+        15410,
+        15412,
+        15413,
+        15414,
+        15416,
+        15417,
+        15418,
+        15419,
+        15420,
+        15421,
+        15422,
+        15423,
+        15425,
+        15426,
+        15428,
+        15429,
+        15430,
+        15431,
+        15433,
+        15434,
+        15435,
+        15436,
+        15437,
+        15439,
+        15441,
+        15442,
+        15443,
+        15444,
+        15445,
+        15446,
+        15447,
+        15448,
+        15449,
+        15450,
+        15451,
+        15452,
+        15453,
+        15454,
+        15456,
+        15459
+      ],
+      "accepted_runs": [
+        {
+          "start_position": 29,
+          "stop_position_inclusive": 37,
+          "length": 9,
+          "start_frame": 15389,
+          "stop_frame_inclusive": 15397
+        },
+        {
+          "start_position": 39,
+          "stop_position_inclusive": 43,
+          "length": 5,
+          "start_frame": 15399,
+          "stop_frame_inclusive": 15403
+        },
+        {
+          "start_position": 45,
+          "stop_position_inclusive": 45,
+          "length": 1,
+          "start_frame": 15405,
+          "stop_frame_inclusive": 15405
+        },
+        {
+          "start_position": 47,
+          "stop_position_inclusive": 50,
+          "length": 4,
+          "start_frame": 15407,
+          "stop_frame_inclusive": 15410
+        },
+        {
+          "start_position": 52,
+          "stop_position_inclusive": 54,
+          "length": 3,
+          "start_frame": 15412,
+          "stop_frame_inclusive": 15414
+        },
+        {
+          "start_position": 56,
+          "stop_position_inclusive": 63,
+          "length": 8,
+          "start_frame": 15416,
+          "stop_frame_inclusive": 15423
+        },
+        {
+          "start_position": 65,
+          "stop_position_inclusive": 66,
+          "length": 2,
+          "start_frame": 15425,
+          "stop_frame_inclusive": 15426
+        },
+        {
+          "start_position": 68,
+          "stop_position_inclusive": 71,
+          "length": 4,
+          "start_frame": 15428,
+          "stop_frame_inclusive": 15431
+        },
+        {
+          "start_position": 73,
+          "stop_position_inclusive": 77,
+          "length": 5,
+          "start_frame": 15433,
+          "stop_frame_inclusive": 15437
+        },
+        {
+          "start_position": 79,
+          "stop_position_inclusive": 79,
+          "length": 1,
+          "start_frame": 15439,
+          "stop_frame_inclusive": 15439
+        },
+        {
+          "start_position": 81,
+          "stop_position_inclusive": 94,
+          "length": 14,
+          "start_frame": 15441,
+          "stop_frame_inclusive": 15454
+        },
+        {
+          "start_position": 96,
+          "stop_position_inclusive": 96,
+          "length": 1,
+          "start_frame": 15456,
+          "stop_frame_inclusive": 15456
+        },
+        {
+          "start_position": 99,
+          "stop_position_inclusive": 99,
+          "length": 1,
+          "start_frame": 15459,
+          "stop_frame_inclusive": 15459
+        }
+      ],
+      "accepted_run_count": 13,
+      "adjacent_accepted_pairs": 45,
+      "rejected_gaps": [
+        {
+          "start_position": 0,
+          "stop_position_inclusive": 28,
+          "length": 29,
+          "start_frame": 15360,
+          "stop_frame_inclusive": 15388
+        },
+        {
+          "start_position": 38,
+          "stop_position_inclusive": 38,
+          "length": 1,
+          "start_frame": 15398,
+          "stop_frame_inclusive": 15398
+        },
+        {
+          "start_position": 44,
+          "stop_position_inclusive": 44,
+          "length": 1,
+          "start_frame": 15404,
+          "stop_frame_inclusive": 15404
+        },
+        {
+          "start_position": 46,
+          "stop_position_inclusive": 46,
+          "length": 1,
+          "start_frame": 15406,
+          "stop_frame_inclusive": 15406
+        },
+        {
+          "start_position": 51,
+          "stop_position_inclusive": 51,
+          "length": 1,
+          "start_frame": 15411,
+          "stop_frame_inclusive": 15411
+        },
+        {
+          "start_position": 55,
+          "stop_position_inclusive": 55,
+          "length": 1,
+          "start_frame": 15415,
+          "stop_frame_inclusive": 15415
+        },
+        {
+          "start_position": 64,
+          "stop_position_inclusive": 64,
+          "length": 1,
+          "start_frame": 15424,
+          "stop_frame_inclusive": 15424
+        },
+        {
+          "start_position": 67,
+          "stop_position_inclusive": 67,
+          "length": 1,
+          "start_frame": 15427,
+          "stop_frame_inclusive": 15427
+        },
+        {
+          "start_position": 72,
+          "stop_position_inclusive": 72,
+          "length": 1,
+          "start_frame": 15432,
+          "stop_frame_inclusive": 15432
+        },
+        {
+          "start_position": 78,
+          "stop_position_inclusive": 78,
+          "length": 1,
+          "start_frame": 15438,
+          "stop_frame_inclusive": 15438
+        },
+        {
+          "start_position": 80,
+          "stop_position_inclusive": 80,
+          "length": 1,
+          "start_frame": 15440,
+          "stop_frame_inclusive": 15440
+        },
+        {
+          "start_position": 95,
+          "stop_position_inclusive": 95,
+          "length": 1,
+          "start_frame": 15455,
+          "stop_frame_inclusive": 15455
+        },
+        {
+          "start_position": 97,
+          "stop_position_inclusive": 98,
+          "length": 2,
+          "start_frame": 15457,
+          "stop_frame_inclusive": 15458
+        },
+        {
+          "start_position": 100,
+          "stop_position_inclusive": 100,
+          "length": 1,
+          "start_frame": 15460,
+          "stop_frame_inclusive": 15460
+        }
+      ],
+      "longest_accepted_run": 14,
+      "longest_rejected_gap": 29,
+      "rejection_reason_counts_nonexclusive": {
+        "branch_pixels": 20,
+        "cycle": 16,
+        "endpoint_count": 9,
+        "no_path": 5,
+        "width_relative_boundary_clearance": 28
+      },
+      "runtime_seconds": 251.11995360348374,
+      "frames_per_second": 0.4021982265872753
+    },
+    "2023-10-11-01": {
+      "recording": "2023-10-11-01",
+      "configured_source_path": "nir_videos/2023-10-11-01.h5",
+      "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-10-11/2023-10-11-01.h5",
+      "source_size_bytes": 14516409088,
+      "source_mtime_ns": 1697067137210486374,
+      "frame_window_inclusive": [
+        7704,
+        7804
+      ],
+      "center_frame": 7754,
+      "frames_scanned": 101,
+      "strict_accepted_count": 7,
+      "strict_accepted_density": 0.06930693069306931,
+      "has_strict_anchor": true,
+      "accepted_frame_indices": [
+        7738,
+        7778,
+        7784,
+        7786,
+        7792,
+        7795,
+        7801
+      ],
+      "accepted_runs": [
+        {
+          "start_position": 34,
+          "stop_position_inclusive": 34,
+          "length": 1,
+          "start_frame": 7738,
+          "stop_frame_inclusive": 7738
+        },
+        {
+          "start_position": 74,
+          "stop_position_inclusive": 74,
+          "length": 1,
+          "start_frame": 7778,
+          "stop_frame_inclusive": 7778
+        },
+        {
+          "start_position": 80,
+          "stop_position_inclusive": 80,
+          "length": 1,
+          "start_frame": 7784,
+          "stop_frame_inclusive": 7784
+        },
+        {
+          "start_position": 82,
+          "stop_position_inclusive": 82,
+          "length": 1,
+          "start_frame": 7786,
+          "stop_frame_inclusive": 7786
+        },
+        {
+          "start_position": 88,
+          "stop_position_inclusive": 88,
+          "length": 1,
+          "start_frame": 7792,
+          "stop_frame_inclusive": 7792
+        },
+        {
+          "start_position": 91,
+          "stop_position_inclusive": 91,
+          "length": 1,
+          "start_frame": 7795,
+          "stop_frame_inclusive": 7795
+        },
+        {
+          "start_position": 97,
+          "stop_position_inclusive": 97,
+          "length": 1,
+          "start_frame": 7801,
+          "stop_frame_inclusive": 7801
+        }
+      ],
+      "accepted_run_count": 7,
+      "adjacent_accepted_pairs": 0,
+      "rejected_gaps": [
+        {
+          "start_position": 0,
+          "stop_position_inclusive": 33,
+          "length": 34,
+          "start_frame": 7704,
+          "stop_frame_inclusive": 7737
+        },
+        {
+          "start_position": 35,
+          "stop_position_inclusive": 73,
+          "length": 39,
+          "start_frame": 7739,
+          "stop_frame_inclusive": 7777
+        },
+        {
+          "start_position": 75,
+          "stop_position_inclusive": 79,
+          "length": 5,
+          "start_frame": 7779,
+          "stop_frame_inclusive": 7783
+        },
+        {
+          "start_position": 81,
+          "stop_position_inclusive": 81,
+          "length": 1,
+          "start_frame": 7785,
+          "stop_frame_inclusive": 7785
+        },
+        {
+          "start_position": 83,
+          "stop_position_inclusive": 87,
+          "length": 5,
+          "start_frame": 7787,
+          "stop_frame_inclusive": 7791
+        },
+        {
+          "start_position": 89,
+          "stop_position_inclusive": 90,
+          "length": 2,
+          "start_frame": 7793,
+          "stop_frame_inclusive": 7794
+        },
+        {
+          "start_position": 92,
+          "stop_position_inclusive": 96,
+          "length": 5,
+          "start_frame": 7796,
+          "stop_frame_inclusive": 7800
+        },
+        {
+          "start_position": 98,
+          "stop_position_inclusive": 100,
+          "length": 3,
+          "start_frame": 7802,
+          "stop_frame_inclusive": 7804
+        }
+      ],
+      "longest_accepted_run": 1,
+      "longest_rejected_gap": 39,
+      "rejection_reason_counts_nonexclusive": {
+        "boundary_contact": 21,
+        "boundary_margin": 22,
+        "branch_pixels": 89,
+        "cycle": 34,
+        "endpoint_count": 82,
+        "no_path": 2,
+        "width_relative_boundary_clearance": 32
+      },
+      "runtime_seconds": 253.20335071254522,
+      "frames_per_second": 0.3988888761375931
+    }
+  },
+  "total_frames": 303,
+  "total_strict_accepted": 87,
+  "overall_strict_accepted_density": 0.2871287128712871,
+  "every_session_has_strict_anchor": true,
+  "total_adjacent_accepted_pairs": 52,
+  "sessions_with_adjacent_accepted_pairs": 2,
+  "every_session_has_adjacent_accepted_pair": false,
+  "posture_sample_extraction_feasible": true,
+  "session_general_empirical_dynamics_fitting_feasible": false,
+  "feasibility_interpretation": "All sessions contain static strict anchors, but one session has no adjacent accepted pair and accepted runs are highly fragmented; these windows do not support session-general contiguous dynamics fitting.",
+  "runtime_seconds": 765.3330014282838,
+  "frames_per_second": 0.3959060950390663,
+  "external_output": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/smc/exp_smc_002d_contiguous_anchor_density/per_frame.h5",
+  "external_output_sha256": "399bcb9859a22d54d648bc29612b757a45db6ce2f83615d3063e2fdb92333e5d"
+}

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,9 +10,12 @@ import torch
 
 from worm_pose_gen.training_data import (
     EXPECTED_RECORDS,
+    MaterializedPoseDataset,
     ProxyDataset,
     SyntheticTierCDataset,
     generate_tier_c_geometry,
+    load_proxy_frame_exclusions,
+    materialized_dataset_sha256,
     normalize_image,
 )
 
@@ -34,6 +38,34 @@ def _proxy(path: Path) -> str:
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_materialized_dataset_freezes_values_and_hash(self) -> None:
+        source = SyntheticTierCDataset(2, seed=123, profile="development")
+        first = MaterializedPoseDataset(source)
+        second = MaterializedPoseDataset(source)
+        self.assertEqual(materialized_dataset_sha256(first), materialized_dataset_sha256(second))
+        torch.testing.assert_close(first[1]["image"], second[1]["image"], rtol=0, atol=0)
+        changed = MaterializedPoseDataset(SyntheticTierCDataset(2, seed=124, profile="development"))
+        self.assertNotEqual(materialized_dataset_sha256(first), materialized_dataset_sha256(changed))
+
+    def test_hash_bound_proxy_exclusion_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "exclude.json"
+            payload = {
+                "schema_version": 1,
+                "experiment": "EXP-003",
+                "protected_holdout_opened": False,
+                "recordings": {
+                    record: {"excluded_frame_indices": [10, 11]}
+                    for record in EXPECTED_RECORDS
+                },
+            }
+            path.write_text(json.dumps(payload))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            result = load_proxy_frame_exclusions(path, expected_sha256=digest)
+            self.assertEqual(result[EXPECTED_RECORDS[0]], frozenset({10, 11}))
+            with self.assertRaisesRegex(RuntimeError, "exclusion sha256 mismatch"):
+                load_proxy_frame_exclusions(path, expected_sha256="0" * 64)
+
     def test_exp7_data_seed_is_invariant_to_model_seed_and_has_43_full_cases(self) -> None:
         data_seed = 20260818 + 5_000_000 + 2 * 100_000
         torch.manual_seed(20260818)
@@ -69,6 +101,35 @@ class TrainingDataTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ProxyDataset(path, expected_sha256="0" * 64, fold=0, split="train")
             train.close(); validation.close()
+
+    def test_proxy_frame_exclusions_are_recording_specific(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proxy.h5"; digest = _proxy(path)
+            dataset = ProxyDataset(
+                path,
+                expected_sha256=digest,
+                fold=1,
+                split="train",
+                excluded_frame_indices={EXPECTED_RECORDS[0]: {10}, EXPECTED_RECORDS[2]: {30}},
+            )
+            self.assertEqual(len(dataset), 2)
+            self.assertEqual(dataset.excluded_row_count, 2)
+            self.assertEqual(
+                {(dataset[index]["record"], dataset[index]["frame_index"]) for index in range(2)},
+                {(EXPECTED_RECORDS[0], 30), (EXPECTED_RECORDS[2], 10)},
+            )
+
+    def test_proxy_frame_exclusions_reject_unknown_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proxy.h5"; digest = _proxy(path)
+            with self.assertRaisesRegex(ValueError, "unknown proxy exclusion"):
+                ProxyDataset(
+                    path,
+                    expected_sha256=digest,
+                    fold=0,
+                    split="train",
+                    excluded_frame_indices={"not-a-recording": {10}},
+                )
 
     def test_tier_c_is_deterministic(self) -> None:
         dataset = SyntheticTierCDataset(2, seed=1234, profile="development")

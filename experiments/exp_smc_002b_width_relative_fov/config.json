@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-002B",
+  "status": "COMPLETED_NOT_SUPPORTED",
+  "preregistered_at_utc": "2026-08-19T00:00:00Z",
+  "parent_experiment": "EXP-SMC-002",
+  "changed_factor": {
+    "name": "min_boundary_clearance_widths",
+    "parent_value": 0.0,
+    "candidate_value": 1.0,
+    "rule": "reject when centerline boundary distance is less than candidate_value times median mask-derived width"
+  },
+  "fixed_anchor_config": {
+    "n_points": 100,
+    "min_area": 2500,
+    "max_area": 40000,
+    "min_length": 250.0,
+    "max_length": 800.0,
+    "boundary_margin": 13.0,
+    "required_endpoints": 2,
+    "max_branch_pixels": 0,
+    "min_width": 1.0,
+    "max_width": 80.0,
+    "max_width_jump": 40.0,
+    "min_render_iou": 0.70,
+    "width_step": 0.5,
+    "max_topology_spur_length": 16,
+    "min_boundary_clearance_widths": 1.0
+  },
+  "frozen_exp_smc_002_support_gate": {
+    "accepted_complete_median_frame_point_error_px_max": 8.0,
+    "accepted_complete_p95_frame_point_error_px_max": 20.0,
+    "accepted_complete_median_frame_tangent_error_deg_max": 15.0,
+    "accepted_complete_median_frame_endpoint_error_px_max": 15.0,
+    "accepted_complete_median_frame_length_error_fraction_max": 0.08,
+    "accepted_complete_fraction_individually_at_most_8px_min": 0.90,
+    "accepted_complete_frames_at_or_above_20px_max": 0,
+    "truncated_rejection_fraction_min": 0.90,
+    "coverage_role": "secondary"
+  },
+  "inputs": {
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "required_dataset_path": "/img_nir",
+    "required_primary_annotations": 30,
+    "required_repeat_annotations": 0,
+    "forbidden_recording_prefixes": ["2025-"]
+  },
+  "evidence_boundary": {
+    "role": "prospective_development_revision_on_the_same_primary_30_set",
+    "protected_2025_holdout_opened": false,
+    "coverage_is_secondary": true,
+    "not_final_validation": true
+  }
+}

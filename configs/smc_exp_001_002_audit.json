@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "preregistered_at_utc": "2026-08-19T00:00:00Z",
+  "seed": 20260819,
+  "inputs": {
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "required_dataset_path": "/img_nir",
+    "required_primary_annotations": 30,
+    "required_repeat_annotations": 0,
+    "forbidden_recording_prefixes": ["2025-"]
+  },
+  "soft_foreground_config": {
+    "local_radius": 31,
+    "smooth_radius": 2,
+    "score_midpoint": 2.6,
+    "logistic_temperature": 0.5,
+    "probability_threshold": 0.5,
+    "close_radius": 6,
+    "max_hole_area": 1024
+  },
+  "anchor_config": {
+    "n_points": 100,
+    "min_area": 2500,
+    "max_area": 40000,
+    "min_length": 250.0,
+    "max_length": 800.0,
+    "boundary_margin": 13.0,
+    "required_endpoints": 2,
+    "max_branch_pixels": 0,
+    "min_width": 1.0,
+    "max_width": 80.0,
+    "max_width_jump": 40.0,
+    "min_render_iou": 0.70,
+    "width_step": 0.5,
+    "max_topology_spur_length": 16
+  },
+  "evaluation": {
+    "trace_resample_points": 100,
+    "terminal_points": 5,
+    "random_review_cases": 8,
+    "worst_review_cases": 8,
+    "threshold_review_cases": 8,
+    "timeline_half_window": 1,
+    "serial_cpu_only": true
+  },
+  "exp_smc_001_gate": {
+    "median_cleaned_mask_trace_containment_min": 0.95,
+    "p10_cleaned_mask_trace_containment_min": 0.90,
+    "median_terminal_containment_min": 0.90,
+    "median_soft_probability_on_trace_min": 0.80,
+    "non_identifiable_evidence_used_max": 0,
+    "maximum_decision_if_passed": "PARTIALLY_SUPPORTED"
+  },
+  "exp_smc_002_gate": {
+    "accepted_complete_median_frame_point_error_px_max": 8.0,
+    "accepted_complete_p95_frame_point_error_px_max": 20.0,
+    "accepted_complete_median_frame_tangent_error_deg_max": 15.0,
+    "accepted_complete_median_frame_endpoint_error_px_max": 15.0,
+    "accepted_complete_median_frame_length_error_fraction_max": 0.08,
+    "accepted_complete_fraction_individually_at_most_8px_min": 0.90,
+    "accepted_complete_frames_at_or_above_20px_max": 0,
+    "truncated_rejection_fraction_min": 0.90,
+    "coverage_role": "secondary"
+  },
+  "outputs": {
+    "exp_smc_001_dir": "experiments/exp_smc_001_segmentation_baseline",
+    "exp_smc_002_dir": "experiments/exp_smc_002_mask_anchors"
+  }
+}

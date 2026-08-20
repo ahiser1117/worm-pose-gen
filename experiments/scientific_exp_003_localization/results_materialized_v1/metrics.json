@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-003",
+  "evaluation": "Tier-A-primary30-three-architecture-three-seed",
+  "inputs": [
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/global_intrinsic_budget_matched_seed20260819_materialized_v1/tier_a_primary30.json",
+      "sha256": "c04825c1bc5454cf36dbcb0351937d0c9652dc6d76ab4ac972eac7152182ae25"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/dense_centerline_field_seed20260819_materialized_v1/tier_a_primary30.json",
+      "sha256": "22eb28902f122b29c57dcddc70746137f3600aafd6b0a72f93e26065d13bd1bf"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/anchored_intrinsic_grid_seed20260819_materialized_v1/tier_a_primary30.json",
+      "sha256": "733e37470c0a17f8d66b15627434a36d55325b717ce1bb358a6d95295fbcfd42"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/global_intrinsic_budget_matched_seed20260820_materialized_v1/tier_a_primary30.json",
+      "sha256": "e0a5a18ffc99a2882d8820a93c9d5651dad1811e2436e247c43ab3f6cfe8c053"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/dense_centerline_field_seed20260820_materialized_v1/tier_a_primary30.json",
+      "sha256": "7a093106a77d272d9e56fa2c5ac7de545947353ff5d5d9aa34c0ea5ce9565159"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/anchored_intrinsic_grid_seed20260820_materialized_v1/tier_a_primary30.json",
+      "sha256": "353355bd9605e3eac1d08b35546621c369cebd8c7c0464aa6a924db207966938"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/global_intrinsic_budget_matched_seed20260821_materialized_v1/tier_a_primary30.json",
+      "sha256": "d56411e1f970914a6071396a708c828ebfae5603535c97e672a0cdba4ac48b63"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/dense_centerline_field_seed20260821_materialized_v1/tier_a_primary30.json",
+      "sha256": "02eddbf141b3382b66f05fd63b3c362de75d3a2e436364f07647508ffcbdd92d"
+    },
+    {
+      "path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003/anchored_intrinsic_grid_seed20260821_materialized_v1/tier_a_primary30.json",
+      "sha256": "3f49bf134dc991a460835048602f8f6e5fb4795bd49c67a433aadf916dc1c717"
+    }
+  ],
+  "config_sha256": "adf0ba5cd9fd9cc28e37e84ccf50132c8db57ee73e862d20976651eb05305851",
+  "annotations_sha256": "99af7f0beadf81dab8bb4b6dbab0aa952a7d461116708e97f12b54dda5e9902b",
+  "paired_training_provenance": {
+    "materialized_dataset_sha256": {
+      "train": "2d40732c5119cc3c3dba7e1d24fb82f16115d903a0e04dc369900fb827cf4c07",
+      "proxy_validation": "9764ff4e28b4b8f2587820e393b8f2f61450ac39c9cc22004cd9f3ba26963b67",
+      "tier_c_validation": "e7b881c4cc7037f94b64371c1e414906f825f10682793fc0580f225d2adc9df3"
+    },
+    "training_source_sha256": {
+      "scripts/train_exp_003.py": "1264c4776927e819be3e2c696c2a23fd3da48b2a6547d33c61f7e290d08cec06",
+      "src/worm_pose_gen/model.py": "7cc957e90e041a4b88e2648d5a35e985da8ca7836d9fdb94fe8d27eaedf28926",
+      "src/worm_pose_gen/spatial_model.py": "12acc7a08844c273e8ff9d12abd83b7984a1633b3b3a85983e224542dd0a04e3",
+      "src/worm_pose_gen/losses.py": "ae33fd0759a8e234ea3f51d6470b0f31fe24a75f64c4c443f1c9dbca980a979c",
+      "src/worm_pose_gen/training_data.py": "f87a3eba2899a9c017675e510aeab461da4bda2a57a5cbe614f0ef41c8b9d1b9"
+    },
+    "training_order_sha256_by_seed": {
+      "20260819": "3f595818c2df2d43e5f3c849621f6dc763301a62936b0e9c3ccea19f679f1eb2",
+      "20260820": "acc33d705dddd691dd62ea3c0a402ac7670b5d134ec03d940226e6bf03de0f80",
+      "20260821": "15c1f469cf3cc3b4ea602f7310cd2429670c75b0bfc8d3dd90068c27c3f34575"
+    },
+    "all_runs_used_physical_gpu_0": true
+  },
+  "runs": {
+    "global_intrinsic_budget_matched": [
+      {
+        "model_seed": 20260819,
+        "complete_trace_median_point_px": 72.35765241968699,
+        "complete_trace_median_mean_tangent_deg": 59.77979100664603,
+        "truncated_trace_median_visible_distance_px": 76.82725244101508,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "32296eccec4f76ba55cefb53ad04d01241f52858f99c64bddb7fd91c3c34807b"
+      },
+      {
+        "model_seed": 20260820,
+        "complete_trace_median_point_px": 69.79399753459683,
+        "complete_trace_median_mean_tangent_deg": 58.502595793466114,
+        "truncated_trace_median_visible_distance_px": 39.62428309710033,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "fc6ffe46146909051127358a366fdba143f8098419a7c945f7829164ceab687b"
+      },
+      {
+        "model_seed": 20260821,
+        "complete_trace_median_point_px": 81.73571723913665,
+        "complete_trace_median_mean_tangent_deg": 60.94962738191576,
+        "truncated_trace_median_visible_distance_px": 64.81169917958164,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "c74dbb5f3dbd02440e71fe9e8e1e2317337a89c1fc56a2e1934613922fb41ab0"
+      }
+    ],
+    "dense_centerline_field": [
+      {
+        "model_seed": 20260819,
+        "complete_trace_median_point_px": 64.63377534991552,
+        "complete_trace_median_mean_tangent_deg": 74.64241049487111,
+        "truncated_trace_median_visible_distance_px": 6.879442125912145,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "3b6f1ac2e9252c08a6c01b0a4871d4a79d3d2a40727ed6f36e0966b79afb8563"
+      },
+      {
+        "model_seed": 20260820,
+        "complete_trace_median_point_px": 83.09683115967351,
+        "complete_trace_median_mean_tangent_deg": 81.96547216908044,
+        "truncated_trace_median_visible_distance_px": 11.210389585187166,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "9d1df1ec6ea2c5e02fb72cfa3ca64db2cd639db7ab82e25eeb56ec5ccf58dd7e"
+      },
+      {
+        "model_seed": 20260821,
+        "complete_trace_median_point_px": 124.83880492578663,
+        "complete_trace_median_mean_tangent_deg": 85.52933186341481,
+        "truncated_trace_median_visible_distance_px": 31.865301793803418,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "179e4c737d093a77cac28494d9aeead098df7681b30f4f34cf24088d7fc73d2a"
+      }
+    ],
+    "anchored_intrinsic_grid": [
+      {
+        "model_seed": 20260819,
+        "complete_trace_median_point_px": 114.29279573129104,
+        "complete_trace_median_mean_tangent_deg": 54.49883737644784,
+        "truncated_trace_median_visible_distance_px": 37.6973433530014,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "156156aa46756045b02dd4e9a9b3d7f9006d5f76d3d8cb6b761312cd5c02a544"
+      },
+      {
+        "model_seed": 20260820,
+        "complete_trace_median_point_px": 104.91392969507302,
+        "complete_trace_median_mean_tangent_deg": 57.108860493595664,
+        "truncated_trace_median_visible_distance_px": 33.720581150937925,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "cc4628c011dc398296551092d88c46b75c941cae7af1b0011388ccbe9780893a"
+      },
+      {
+        "model_seed": 20260821,
+        "complete_trace_median_point_px": 113.21503497733053,
+        "complete_trace_median_mean_tangent_deg": 53.67471700151051,
+        "truncated_trace_median_visible_distance_px": 30.80569854345861,
+        "algorithmic_failure_frames": 0,
+        "checkpoint_sha256": "ac34517eefe14cff3b8cff682e83f43586808ccbc5c8d30ce05782e61904d089"
+      }
+    ]
+  },
+  "paired_spatial_vs_global": [
+    {
+      "model_seed": 20260819,
+      "candidate_variant": "dense_centerline_field",
+      "global_median_point_px": 72.35765241968699,
+      "candidate_median_point_px": 64.63377534991552,
+      "improvement_fraction": 0.10674582178221637,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": -7.723877069771461,
+        "bootstrap_p2_5_px": -26.20266412905704,
+        "bootstrap_p97_5_px": 12.86673542859154
+      }
+    },
+    {
+      "model_seed": 20260819,
+      "candidate_variant": "anchored_intrinsic_grid",
+      "global_median_point_px": 72.35765241968699,
+      "candidate_median_point_px": 114.29279573129104,
+      "improvement_fraction": -0.5795536741348781,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": 41.93514331160405,
+        "bootstrap_p2_5_px": 15.819414662063906,
+        "bootstrap_p97_5_px": 80.19582180855112
+      }
+    },
+    {
+      "model_seed": 20260820,
+      "candidate_variant": "dense_centerline_field",
+      "global_median_point_px": 69.79399753459683,
+      "candidate_median_point_px": 83.09683115967351,
+      "improvement_fraction": -0.19060139976195645,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": 13.302833625076687,
+        "bootstrap_p2_5_px": -1.0229966679169422,
+        "bootstrap_p97_5_px": 40.18778573430771
+      }
+    },
+    {
+      "model_seed": 20260820,
+      "candidate_variant": "anchored_intrinsic_grid",
+      "global_median_point_px": 69.79399753459683,
+      "candidate_median_point_px": 104.91392969507302,
+      "improvement_fraction": -0.5031941628371017,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": 35.119932160476196,
+        "bootstrap_p2_5_px": 4.1899247674265325,
+        "bootstrap_p97_5_px": 70.4734300607424
+      }
+    },
+    {
+      "model_seed": 20260821,
+      "candidate_variant": "dense_centerline_field",
+      "global_median_point_px": 81.73571723913665,
+      "candidate_median_point_px": 124.83880492578663,
+      "improvement_fraction": -0.5273470294576603,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": 43.103087686649985,
+        "bootstrap_p2_5_px": 14.704020767208988,
+        "bootstrap_p97_5_px": 68.5128716333027
+      }
+    },
+    {
+      "model_seed": 20260821,
+      "candidate_variant": "anchored_intrinsic_grid",
+      "global_median_point_px": 81.73571723913665,
+      "candidate_median_point_px": 113.21503497733053,
+      "improvement_fraction": -0.38513539492280824,
+      "passes_frozen_30_percent_gate": false,
+      "paired_frame_bootstrap": {
+        "candidate_minus_global_median_px": 31.479317738193885,
+        "bootstrap_p2_5_px": -6.90306430814303,
+        "bootstrap_p97_5_px": 73.1689984695776
+      }
+    }
+  ],
+  "gate_summary": {
+    "dense_centerline_field": {
+      "seeds_passing": 0,
+      "required_seeds": 3
+    },
+    "anchored_intrinsic_grid": {
+      "seeds_passing": 0,
+      "required_seeds": 3
+    }
+  },
+  "evidence_boundary": {
+    "protected_holdout_opened": false,
+    "primary_Tier_A_used_for_gradients": false,
+    "repeat_annotations_used": false,
+    "quality_scores_calibrated": false
+  }
+}

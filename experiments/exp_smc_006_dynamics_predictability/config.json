@@ -1,0 +1,6 @@
+{
+  "config": "../../configs/smc_exp_006_dynamics_predictability.json",
+  "status": "COMPLETED_NOT_SUPPORTED_SESSION_GENERAL",
+  "metrics": "metrics.json",
+  "decision_addendum": "decision_addendum.json"
+}

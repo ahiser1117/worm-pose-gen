@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worm Pose Annotator</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Tier A · overlay-blind</p>
+      <h1>Worm Pose Annotator</h1>
+    </div>
+    <div class="progress-block" aria-live="polite">
+      <div class="progress-copy"><strong id="progress-count">0 / 40</strong><span id="progress-label">Loading…</span></div>
+      <div class="progress-track"><span id="progress-fill"></span></div>
+    </div>
+  </header>
+
+  <main>
+    <section id="work-area" class="work-area" hidden>
+      <div class="image-column">
+        <div class="image-toolbar">
+          <div>
+            <strong id="task-title">—</strong>
+            <span id="task-detail"></span>
+          </div>
+          <div class="toolbar-actions">
+            <label class="zoom-label">Zoom <input id="zoom" type="range" min="1" max="3" step="0.25" value="1"></label>
+            <button id="target-frame" type="button">Target frame</button>
+          </div>
+        </div>
+        <div id="context-strip" class="context-strip" aria-label="Temporal context"></div>
+        <div id="canvas-shell" class="canvas-shell">
+          <canvas id="frame-canvas" aria-label="Raw worm video frame and editable centerline"></canvas>
+          <div id="loading-frame" class="loading-frame">Loading frame…</div>
+        </div>
+        <p id="canvas-hint" class="canvas-hint">Drag once from one end of the worm to the other. Then drag points to refine; Shift-click a segment to add a point.</p>
+      </div>
+
+      <aside class="controls">
+        <section>
+          <h2>1. Trace</h2>
+          <div class="button-row">
+            <button id="retrace" type="button">Retrace</button>
+            <button id="reverse" type="button">Reverse</button>
+            <button id="undo" type="button">Undo</button>
+          </div>
+          <p id="point-count" class="muted">No trace yet</p>
+        </section>
+
+        <section>
+          <h2>2. Exceptions</h2>
+          <label class="choice"><input type="radio" name="trace-state" value="complete" checked> Traceable</label>
+          <label class="choice"><input type="radio" name="trace-state" value="not_identifiable"> Cannot trace reliably</label>
+          <div id="trace-options">
+            <label class="choice"><input id="outside-start" type="checkbox"> Worm continues beyond image before start</label>
+            <label class="choice"><input id="outside-end" type="checkbox"> Worm continues beyond image after end</label>
+            <label class="field-label" for="point-support">Selected point</label>
+            <select id="point-support" disabled>
+              <option value="supported">Visible</option>
+              <option value="occluded_in_fov">Inferred through overlap</option>
+            </select>
+          </div>
+        </section>
+
+        <details>
+          <summary>Optional details</summary>
+          <div class="details-body">
+            <fieldset>
+              <legend>Start point is…</legend>
+              <label class="choice"><input type="radio" name="head-tail" value="ambiguous" checked> Unknown</label>
+              <label class="choice"><input type="radio" name="head-tail" value="start_is_head"> Head</label>
+              <label class="choice"><input type="radio" name="head-tail" value="start_is_tail"> Tail</label>
+            </fieldset>
+            <label class="field-label" for="worm-width">Approx. worm width (pixels)</label>
+            <input id="worm-width" type="number" min="0.1" step="0.1" placeholder="Optional">
+            <fieldset id="difficulty-fields">
+              <legend>Difficulty</legend>
+              <label class="choice"><input type="checkbox" value="boundary_contact"> Boundary contact</label>
+              <label class="choice"><input type="checkbox" value="tight_bend"> Tight bend</label>
+              <label class="choice"><input type="checkbox" value="self_overlap"> Self-overlap</label>
+              <label class="choice"><input type="checkbox" value="low_contrast_or_blur"> Low contrast / blur</label>
+              <label class="choice"><input type="checkbox" value="uncertain_endpoints"> Uncertain endpoints</label>
+            </fieldset>
+          </div>
+        </details>
+
+        <div class="save-area">
+          <p id="save-message" role="status"></p>
+          <button id="save-next" class="primary-action" type="button">Save &amp; next <span>Ctrl ↵</span></button>
+          <p class="lock-note">Saving locks this pass. Repeat tasks never show your first trace.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="empty-state" class="empty-state" aria-live="polite">
+      <h2 id="empty-title">Loading annotation session…</h2>
+      <p id="empty-copy">Checking the worklist and source recordings.</p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-004",
+  "preregistered_at_utc": "2026-08-19T00:00:00Z",
+  "seed": 20260819,
+  "inputs": {
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "segmentation_config": "configs/smc_exp_001b_002b_revision.json",
+    "required_primary_annotations": 30,
+    "forbidden_recording_prefixes": ["2025-"],
+    "excluded_expert_hard_samples": ["2023-10-11-01-f013785"]
+  },
+  "width": {
+    "n_points": 100,
+    "normal_walk_step_px": 0.5,
+    "orientation_handling": "symmetrize_profile_with_reverse",
+    "minimum_px": 1.0,
+    "maximum_px": 80.0,
+    "scale_bounds": [0.8, 1.2],
+    "pca_components": [1, 2],
+    "translation_stress_px": 10.0,
+    "translation_scale_grid": [0.8, 1.2, 17]
+  },
+  "gate": {
+    "selected_median_mask_iou_min": 0.80,
+    "pca2_median_iou_gain_over_scale_max": 0.01,
+    "translation_stress_median_iou_drop_min": 0.10,
+    "scale_standard_deviation_max": 0.15
+  },
+  "evidence_boundary": {
+    "role": "single_annotator_development_true_trace_width_oracle",
+    "manual_mask_truth_available": false,
+    "protected_2025_holdout_opened": false
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-005",
+  "preregistered_at_utc": "2026-08-19T00:00:00Z",
+  "seed": 20260819,
+  "inputs": {
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "segmentation_config": "configs/smc_exp_001b_002b_revision.json",
+    "representation_metrics": "experiments/exp_smc_003_latent_representation/results/metrics.json",
+    "width_metrics": "experiments/exp_smc_004_width_model/metrics.json",
+    "expert_adjudication": "experiments/exp_smc_002c_expert_visual_adjudication/adjudication.json",
+    "excluded_expert_hard_samples": ["2023-10-11-01-f013785"],
+    "forbidden_recording_prefixes": ["2025-"]
+  },
+  "render": {
+    "downsample_factor": 4,
+    "image_height": 183,
+    "image_width": 242,
+    "coordinate_scaling": "divide_original_xy_and_width_by_downsample_factor",
+    "probability_downsampling": "bilinear_align_corners_false",
+    "cleaned_mask_downsampling": "nearest",
+    "edge_softness_px": 0.8,
+    "signed_distance_clip_px": 5.0,
+    "hybrid_signed_distance_weight": 0.25,
+    "device": "cuda:0",
+    "benchmark_batch_sizes": [1, 8, 32],
+    "benchmark_warmup": 2,
+    "benchmark_repeats": 5
+  },
+  "perturbations": {
+    "evaluation_design": "one_factor_at_a_time_about_selected_cubic_k16_reconstruction",
+    "translation_pivot": "none_add_to_all_x_coordinates",
+    "rotation_pivot": "mean_xy_of_reconstructed_centerline",
+    "length_pivot": "mean_xy_of_reconstructed_centerline",
+    "shape_mode": "signed_amplitude_times_sin_2pi_s_times_unit_normal_with_centered_tangents_and_zero_endpoints",
+    "translation_x_px_original": [-12, -6, -3, 0, 3, 6, 12],
+    "rotation_deg": [-12, -6, -3, 0, 3, 6, 12],
+    "shape_normal_amplitude_px_original": [-12, -6, -3, 0, 3, 6, 12],
+    "length_error_percent": [-10, -5, -2.5, 0, 2.5, 5, 10]
+  },
+  "energies": {
+    "candidates": ["balanced_bce", "soft_dice", "signed_distance", "hybrid"],
+    "preference_order": ["soft_dice", "balanced_bce", "signed_distance", "hybrid"]
+  },
+  "aggregation": {
+    "zero_level_index": 3,
+    "near_zero_minimum_indices": [2, 3, 4],
+    "argmin_tie_break": "numpy_first_index",
+    "outward_monotonic_comparisons_per_curve": 6,
+    "endpoint_statistic": "mean_of_two_severe_endpoints_minus_zero_level",
+    "case_weighting": "equal",
+    "perturbation_weighting": "equal",
+    "gradient_parameters": "cubic_shape_coefficients_16_global_rotation_body_length_translation_xy"
+  },
+  "width_selection": {
+    "model": "leave_one_frame_out_recording_mean_without_frame_scale",
+    "rationale": "fixed_mean_had_slightly_higher_median_mask_iou_than_scaled_model_and_avoids_an_unnecessary_nuisance_state",
+    "exp_smc_004_frozen_metrics_selected_model_preserved": "recording_mean_times_bounded_frame_scale"
+  },
+  "gate": {
+    "overall_near_zero_minimum_fraction_min": 0.70,
+    "per_perturbation_near_zero_minimum_fraction_min": 0.60,
+    "outward_monotonic_step_fraction_min": 0.65,
+    "median_endpoint_minus_zero_energy_min": 0.0,
+    "finite_nonzero_gradient_required": true
+  },
+  "interpretation": {
+    "role": "observation_energy_shape_validation_not_probability_calibration",
+    "smc_temperature_calibration": "required_in_later_controlled_smc_experiment"
+  },
+  "evidence_boundary": {
+    "role": "single_annotator_development_latent_and_width_oracle_against_classical_segmentation",
+    "manual_mask_truth_available": false,
+    "expert_visual_continuation_only": true,
+    "protected_2025_holdout_opened": false
+  }
+}

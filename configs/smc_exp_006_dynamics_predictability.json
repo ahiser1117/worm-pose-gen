@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-006",
+  "preregistered_at_utc": "2026-08-19T00:00:00Z",
+  "seed": 20260819,
+  "inputs": {
+    "anchor_density_metrics": "experiments/exp_smc_002d_contiguous_anchor_density/metrics.json",
+    "anchor_cache": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/smc/exp_smc_002d_contiguous_anchor_density/per_frame.h5",
+    "representation_metrics": "experiments/exp_smc_003_latent_representation/results/metrics.json",
+    "forbidden_recording_prefixes": ["2025-"]
+  },
+  "representation": {
+    "family": "cubic_tangent_spline",
+    "shape_coefficients": 16,
+    "head_tail_handling": "lexicographic_first_run_endpoint_then_minimum_point_distance_within_run",
+    "rotation_handling": "unwrap_within_each_contiguous_run"
+  },
+  "evaluation": {
+    "split": "leave_one_recording_out",
+    "models": ["persistence", "constant_latent_velocity", "hybrid_global_velocity_shape_hold", "shape_ar1", "shape_ar2"],
+    "horizons_frames": [1, 2, 5, 10, 20],
+    "nominal_frame_rate_hz": 20.0,
+    "ridge": 0.001,
+    "equal_case_weighting": true
+  },
+  "gate": {
+    "recordings_with_adjacent_pairs_min": 3,
+    "adjacent_pairs_per_recording_min": 10,
+    "horizon5_predictions_per_recording_min": 5,
+    "selected_model_median_horizon1_improvement_over_persistence_min": 0.10,
+    "selected_model_nonnegative_horizon1_improvement_each_recording": true
+  },
+  "fallback_if_not_supported": {
+    "model": "constant_velocity_translation_rotation_shape_random_walk_length_hold",
+    "status": "declared_conservative_prior_for_controlled_experiments_only",
+    "natural_dynamics_claim_allowed": false
+  },
+  "evidence_boundary": {
+    "role": "strict_classical_anchor_transition_diagnostic",
+    "manual_temporal_truth_available": false,
+    "protected_2025_holdout_opened": false
+  }
+}

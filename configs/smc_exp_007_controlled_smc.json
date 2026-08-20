@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-007",
+  "frozen_before_run": true,
+  "seed": 20260819,
+  "inputs": {
+    "strict_anchor_metrics": "experiments/exp_smc_002b_width_relative_fov/metrics.json",
+    "strict_anchor_metrics_sha256": "3ec552071952fb4cd69ee24f2347a6ea5b5125dc070cb126de1e07b458fd557b",
+    "representation_metrics": "experiments/exp_smc_003_latent_representation/results/metrics.json",
+    "representation_metrics_sha256": "4233e1b6edbdca53255a06138b58ee81e7c930eb524ffb233c040ed1f931b0f2",
+    "width_metrics": "experiments/exp_smc_004_width_model/metrics.json",
+    "width_metrics_sha256": "26bd11c0dd02151d6f70472ce3e69e315693aee4c596cf859470f8df15a2357a",
+    "observation_metrics": "experiments/exp_smc_005_observation_energy/metrics.json",
+    "observation_metrics_sha256": "ce805038cb5bef6e91fcf4290f250d554366f6f862c2861d4c54172c2bf50fff",
+    "dynamics_addendum": "experiments/exp_smc_006_dynamics_predictability/decision_addendum.json",
+    "dynamics_addendum_sha256": "073d2961f763e957e0311e70d21957d54eae3ac559e65fad7da806eedfdeafc9",
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "annotations_sha256": "99af7f0beadf81dab8bb4b6dbab0aa952a7d461116708e97f12b54dda5e9902b",
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "manifest_sha256": "ba0a9ccc6f08844ecfcc52167271ba0cc13a47dafc8ba54bb2f25d1aec2619b3",
+    "protected_2025_holdout_opened": false
+  },
+  "state": {
+    "representation": "cubic_tangent_spline_k16_plus_rotation_length_xy",
+    "dimension": 20,
+    "prior": "zero_drift_block_diagonal_random_walk",
+    "prior_scope": "explicitly_synthetic_control_only",
+    "natural_dynamics_claim_allowed": false,
+    "process_std_per_frame_original_units": {
+      "shape_coefficients_rad": 0.018,
+      "global_rotation_rad": 0.012,
+      "body_length_px": 0.8,
+      "translation_xy_px": 1.2
+    },
+    "frames_per_sequence": 5
+  },
+  "observation": {
+    "energy": "soft_dice",
+    "height": 183,
+    "width": 242,
+    "downsample_factor": 4,
+    "edge_softness_px": 0.8,
+    "render_particle_chunk": 8
+  },
+  "calibration": {
+    "seeds": [7001],
+    "particle_counts": [32, 64, 128, 256, 512],
+    "temperatures": [0.01, 0.03],
+    "scenario": "nominal_renderer_matched",
+    "selection": "lowest median forward trajectory error, then smallest particle count, then highest median ESS fraction"
+  },
+  "evaluation": {
+    "held_out_seeds": [7101, 7102],
+    "scenarios": [
+      "nominal",
+      "process_scale_0.5",
+      "process_scale_2.0",
+      "middle_observation_dropout",
+      "width_mismatch_1.15",
+      "partial_fov"
+    ],
+    "self_contact_bridge": "omitted_as_not_feasible_without_inventing_a_non_random_walk_motion_model"
+  },
+  "methods": [
+    "hold",
+    "two_anchor_latent_interpolation",
+    "forward_bootstrap_smc_map_genealogy",
+    "terminal_right_anchor_reweighted_genealogy"
+  ],
+  "gate": {
+    "nominal_forward_median_trajectory_error_px_max": 8.0,
+    "nominal_terminal_reweighted_median_trajectory_error_px_max": 6.0,
+    "nominal_truth_survival_fraction_min": 0.75,
+    "all_stress_terminal_reweighted_median_trajectory_error_px_max": 12.0,
+    "interpretation": "controlled_synthetic_algorithm_recovery_only"
+  },
+  "storage": {
+    "full_trajectories": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_smc_007/controlled_trajectories.pt",
+    "refuse_overwrite": true
+  }
+}

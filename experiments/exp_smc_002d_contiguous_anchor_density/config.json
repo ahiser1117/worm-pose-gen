@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-002D",
+  "parent_config": "configs/smc_exp_001b_002b_revision.json",
+  "purpose": "Development-only contiguous strict-anchor density scan",
+  "windows": [
+    {"recording": "2023-09-19-01", "center_frame": 2565, "start_frame": 2515, "stop_frame_exclusive": 2616},
+    {"recording": "2023-09-27-01", "center_frame": 15410, "start_frame": 15360, "stop_frame_exclusive": 15461},
+    {"recording": "2023-10-11-01", "center_frame": 7754, "start_frame": 7704, "stop_frame_exclusive": 7805}
+  ],
+  "window_length_frames": 101,
+  "source_dataset_path": "/img_nir",
+  "strict_anchor_definition": "EXP-SMC-001B connected-hysteresis cleaned mask followed by EXP-SMC-002B width-relative conservative mask anchor; accepted iff AnchorResult.accepted",
+  "execution": {"serial_cpu_only": true, "hdf5_readers": 1, "protected_2025_holdout_opened": false},
+  "external_output": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/smc/exp_smc_002d_contiguous_anchor_density/per_frame.h5"
+}

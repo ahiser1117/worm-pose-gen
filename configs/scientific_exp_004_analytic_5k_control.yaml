@@ -1,0 +1,121 @@
+experiment: EXP-004
+phase: analytic_5k_scale_control
+preregistered_utc: 2026-08-19T20:23:18Z
+parent: EXP-003B
+hypothesis: >-
+  Increasing deterministic analytic development diversity from 512 to 5,000
+  samples while holding dataset passes approximately constant gives the
+  unchanged topology-safe model enough coverage to pass the frozen Tier-C
+  localization, tangent, and body-length gate.
+
+changed_factors:
+  synthetic_training_samples: [512, 5000]
+  maximum_steps: [1200, 10800]
+  proxy_fraction_approximate: [0.094, 0.010]
+exposure_control:
+  prior_total_samples: 565
+  prior_batches_per_epoch: 36
+  prior_optimizer_steps: 1200
+  prior_approximate_dataset_passes: 33.33
+  control_total_samples: 5053
+  control_batches_per_epoch: 316
+  control_optimizer_steps: 10800
+  control_approximate_dataset_passes: 34.18
+  interpretation: >-
+    Optimizer steps scale mechanically with dataset size to preserve exposure;
+    the scientific intervention is greater unique analytic diversity, with the
+    unavoidable documented reduction in proxy mixture fraction.
+fixed_factors:
+  - topology_safe_soft_anchored_intrinsic_model
+  - fold_2_and_data_seed_20260819
+  - first_512_analytic_development_samples
+  - candidate_proxy_rows_and_leakage_exclusions
+  - input_geometry_and_preprocessing
+  - optimizer_learning_rate_batch_size_and_precision
+  - frozen_held_out_Tier_C_128
+  - controlled_gate_thresholds
+
+evidence_boundary:
+  audited_holdout_allowed: false
+  primary_Tier_A_allowed_before_all_seed_gate: false
+  delayed_repeat_annotations_allowed: false
+  exp_003b_repeat_seeds_reused: false
+  proxy_exclusion_manifest: experiments/scientific_exp_003_localization/proxy_exclusion_manifest.json
+  proxy_exclusion_manifest_sha256: 3eccdb08121a79f5aa4515d9eb67d57aea656a121ea023c653675edc52427854
+  accepted_proxy_rows_excluded: 9
+
+provenance:
+  parent_config: configs/scientific_exp_003b_topology_rescue.yaml
+  parent_config_sha256: 9f3cbd0fcd7fb24243b4380947687473e3435ce9e630554eadf7a9a513ab9a98
+  parent_primary_run_metrics: /temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003b/soft_anchored_intrinsic_seed20260819_v1/run_metrics.json
+  parent_primary_run_metrics_sha256: a19a2e1fe827b57edbb78cf5282cd428cb9a3c0d0a008d28c07774f74572f826
+  parent_primary_gate: experiments/scientific_exp_003_localization/results_materialized_v1/exp_003b_primary_tier_c_gate.json
+  parent_primary_gate_sha256: 7086bb672e3646ed02c8e3bc12d2f0fb63f04ac7f7dbf3f9294dcb94822c1f77
+  expected_parent_training_prefix_materialized_sha256: 2d40732c5119cc3c3dba7e1d24fb82f16115d903a0e04dc369900fb827cf4c07
+  expected_proxy_validation_materialized_sha256: 9764ff4e28b4b8f2587820e393b8f2f61450ac39c9cc22004cd9f3ba26963b67
+  expected_tier_c_validation_materialized_sha256: e7b881c4cc7037f94b64371c1e414906f825f10682793fc0580f225d2adc9df3
+  current_split_manifest: configs/split_manifest.json
+  current_split_manifest_sha256: c1b1316ca85674c3e7787d76cec9e965d88955028a7cec2f3090472d01d14aad
+  proxy_embedded_split_manifest_sha256: f1099b80858763b321b4787ede29fb3eaadbef91713cbbed2076f9775e0627b9
+  split_manifest_hash_relation: >-
+    The proxy was built against an earlier byte revision. The current loader
+    and this control validate the unchanged semantic development record set and
+    fold-2 train/validation membership explicitly.
+
+architecture:
+  name: soft_anchored_intrinsic
+  spatial_grid: [12, 16]
+  anchor_selection: differentiable_softmax_at_training_and_inference
+  output: one_ordered_16_coefficient_intrinsic_curve
+  explicit_length_loss: true
+  maximum_parameters: 2000000
+
+input:
+  height: 192
+  width: 256
+  body_points: 100
+  proxy_hdf5: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5
+  proxy_sha256: 1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c
+
+training:
+  fold: 2
+  data_seed: 20260819
+  primary_model_seed: 20260819
+  repeat_model_seeds: [20260820, 20260821]
+  maximum_steps: 10800
+  maximum_epochs: 40
+  checkpoint_every_steps: 2700
+  train_batch_size: 16
+  evaluation_batch_size: 32
+  precision: 32-true
+  learning_rate: 0.0003
+  synthetic_training_samples: 5000
+  synthetic_validation_samples: 128
+  materialize_before_training: true
+  cpu_threads: 4
+  dataloader_workers: 0
+  pin_memory: true
+
+controlled_gate:
+  dataset: frozen_held_out_Tier_C_128
+  primary_stratum: fully_visible_43
+  median_full_latent_point_distance_px_at_most: 16
+  median_mean_tangent_error_degrees_at_most: 15
+  median_body_length_error_fraction_at_most: 0.15
+  action_if_primary_seed_passes: authorize_two_repeat_seeds_only
+  action_if_primary_seed_fails: stop_analytic_control_without_Tier_A
+  action_if_all_three_seeds_pass: authorize_primary_Tier_A_evaluation_only
+  Tier_A_tuning_allowed: false
+  delayed_repeat_annotations_allowed: false
+  protected_holdout_allowed: false
+
+resources:
+  accelerator: gpu
+  physical_device_index: 0
+  visible_logical_device_index: 0
+  expected_uuid: GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6
+  expected_pci_bus_id: '00000000:01:00.0'
+  devices: 1
+  maximum_minutes_primary_run: 30
+  maximum_host_memory_gib: 24
+  protected_holdout_opened: false

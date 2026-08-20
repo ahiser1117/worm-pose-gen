@@ -259,7 +259,10 @@ def main() -> int:
         "per_recording": per_recording,
         "total_sampled": len(accepted_cases) + len(rejected_cases),
         "total_accepted": len(accepted_cases),
-        "internal_qc_note": "foreground-tube and dark-ridge support share extractor preprocessing and are correlated internal QC",
+        "internal_qc_note": (
+            "centerline-in-mask support is a geometric smoothing check derived from the "
+            "segmentation; it is not independent accuracy evidence"
+        ),
         "visual_overlay_audit": {"sample_count": 24, "grossly_off_midline": None, "review_status": "pending human review"},
         "worst_quality_cases": [{"record": case["record"], "frame": case["frame"],
                                  "quality_score": case["result"].quality_score} for case in worst_cases],

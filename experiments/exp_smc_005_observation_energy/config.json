@@ -1,0 +1,5 @@
+{
+  "config": "../../configs/smc_exp_005_observation_energy.json",
+  "status": "COMPLETED_SUPPORTED_ENERGY_SHAPE_ONLY",
+  "metrics": "metrics.json"
+}
