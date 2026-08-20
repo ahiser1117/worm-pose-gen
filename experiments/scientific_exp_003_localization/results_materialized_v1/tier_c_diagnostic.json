@@ -1,0 +1,906 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-003",
+  "evaluation": "Tier-C-held-out-128-diagnostic",
+  "role": "controlled_diagnostic_not_model_selection",
+  "config_sha256": "adf0ba5cd9fd9cc28e37e84ccf50132c8db57ee73e862d20976651eb05305851",
+  "materialized_tier_c_validation_sha256": "e7b881c4cc7037f94b64371c1e414906f825f10682793fc0580f225d2adc9df3",
+  "results": {
+    "global_intrinsic_budget_matched": {
+      "20260819": {
+        "checkpoint_sha256": "32296eccec4f76ba55cefb53ad04d01241f52858f99c64bddb7fd91c3c34807b",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 59.63648796081543,
+              "p95": 153.33442077636718
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 114.94686126708984,
+              "p95": 245.61579055786132
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 22.04516887664795,
+              "p95": 47.980909347534165
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 59.288625717163086,
+              "p95": 131.36225051879882
+            },
+            "body_length_error_fraction": {
+              "median": 0.2670797109603882,
+              "p95": 0.5777346432209015
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 67.42974853515625,
+              "p95": 126.498331451416
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 133.8118438720703,
+              "p95": 215.26276092529292
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 26.64897918701172,
+              "p95": 48.31949234008789
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 67.42974853515625,
+              "p95": 126.498331451416
+            },
+            "body_length_error_fraction": {
+              "median": 0.301474392414093,
+              "p95": 0.7264660060405731
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 55.18763732910156,
+              "p95": 156.913818359375
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 103.1287841796875,
+              "p95": 247.9485626220703
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 21.147079467773438,
+              "p95": 30.682166290283202
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 53.78750991821289,
+              "p95": 142.26235656738277
+            },
+            "body_length_error_fraction": {
+              "median": 0.2649085819721222,
+              "p95": 0.5180513024330139
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      },
+      "20260820": {
+        "checkpoint_sha256": "fc6ffe46146909051127358a366fdba143f8098419a7c945f7829164ceab687b",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 69.66928100585938,
+              "p95": 148.81264877319333
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 123.75944519042969,
+              "p95": 260.90785827636716
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 21.64821720123291,
+              "p95": 41.69062824249267
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 65.03708267211914,
+              "p95": 128.09884796142575
+            },
+            "body_length_error_fraction": {
+              "median": 0.2951129823923111,
+              "p95": 0.5854499280452727
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 71.69131469726562,
+              "p95": 114.18137130737304
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 138.64352416992188,
+              "p95": 226.80486907958982
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 27.20395278930664,
+              "p95": 41.18346748352051
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 71.69131469726562,
+              "p95": 114.18137130737304
+            },
+            "body_length_error_fraction": {
+              "median": 0.29352909326553345,
+              "p95": 0.6250018000602722
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 62.118648529052734,
+              "p95": 163.56659240722655
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 116.77562713623047,
+              "p95": 389.00502929687457
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 20.828426361083984,
+              "p95": 127.52469329833951
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 59.33046340942383,
+              "p95": 132.6751800537109
+            },
+            "body_length_error_fraction": {
+              "median": 0.2955859303474426,
+              "p95": 0.5437409639358519
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      },
+      "20260821": {
+        "checkpoint_sha256": "c74dbb5f3dbd02440e71fe9e8e1e2317337a89c1fc56a2e1934613922fb41ab0",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 58.214088439941406,
+              "p95": 142.07283554077145
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 106.82086944580078,
+              "p95": 261.77153396606434
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 21.46709632873535,
+              "p95": 58.33618011474607
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 57.37593460083008,
+              "p95": 127.32627906799311
+            },
+            "body_length_error_fraction": {
+              "median": 0.2703709304332733,
+              "p95": 0.5283593416213989
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 69.49205017089844,
+              "p95": 128.99707260131834
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 122.57013702392578,
+              "p95": 253.72340698242186
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.208812713623047,
+              "p95": 58.996107482910155
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 69.49205017089844,
+              "p95": 128.99707260131834
+            },
+            "body_length_error_fraction": {
+              "median": 0.2993166148662567,
+              "p95": 0.5595102369785309
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 52.542476654052734,
+              "p95": 147.35726318359374
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 98.91889190673828,
+              "p95": 254.13757629394516
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 20.1430606842041,
+              "p95": 34.59340209960937
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 47.9183349609375,
+              "p95": 103.58575134277343
+            },
+            "body_length_error_fraction": {
+              "median": 0.25935325026512146,
+              "p95": 0.48002586960792537
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      }
+    },
+    "dense_centerline_field": {
+      "20260819": {
+        "checkpoint_sha256": "3b6f1ac2e9252c08a6c01b0a4871d4a79d3d2a40727ed6f36e0966b79afb8563",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 26.0892972946167,
+              "p95": 82.91305198669433
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 87.41387176513672,
+              "p95": 244.97278747558587
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 33.42152786254883,
+              "p95": 51.44195976257323
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 21.84446620941162,
+              "p95": 50.81653022766105
+            },
+            "body_length_error_fraction": {
+              "median": 3.128065824508667,
+              "p95": 4.471104764938354
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 25.964651107788086,
+              "p95": 64.12930908203124
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 88.00444793701172,
+              "p95": 293.99805908203115
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 32.554195404052734,
+              "p95": 80.04285964965818
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 25.964651107788086,
+              "p95": 64.12930908203124
+            },
+            "body_length_error_fraction": {
+              "median": 3.6895337104797363,
+              "p95": 4.5578063964843745
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 26.556692123413086,
+              "p95": 83.09783630371093
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 86.82329559326172,
+              "p95": 239.97108459472656
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 33.453941345214844,
+              "p95": 47.53310546875
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 20.168466567993164,
+              "p95": 41.32988739013672
+            },
+            "body_length_error_fraction": {
+              "median": 2.72912859916687,
+              "p95": 4.3156902313232415
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      },
+      "20260820": {
+        "checkpoint_sha256": "9d1df1ec6ea2c5e02fb72cfa3ca64db2cd639db7ab82e25eeb56ec5ccf58dd7e",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 31.333273887634277,
+              "p95": 89.8688976287841
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 111.86847305297852,
+              "p95": 248.28707962036123
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 35.9198112487793,
+              "p95": 56.05517482757566
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 27.5970516204834,
+              "p95": 62.819297790527344
+            },
+            "body_length_error_fraction": {
+              "median": 7.560731887817383,
+              "p95": 10.630012798309325
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 31.861858367919922,
+              "p95": 94.90580368041992
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 121.72432708740234,
+              "p95": 250.7665328979492
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 36.598388671875,
+              "p95": 80.35005264282226
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 31.861858367919922,
+              "p95": 94.90580368041992
+            },
+            "body_length_error_fraction": {
+              "median": 7.705599784851074,
+              "p95": 10.257423210144042
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 28.99778938293457,
+              "p95": 82.78028717041015
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 102.21643829345703,
+              "p95": 239.69786987304687
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 35.7359733581543,
+              "p95": 43.90787200927734
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 20.34573745727539,
+              "p95": 46.01915969848633
+            },
+            "body_length_error_fraction": {
+              "median": 7.513224124908447,
+              "p95": 10.75537109375
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      },
+      "20260821": {
+        "checkpoint_sha256": "179e4c737d093a77cac28494d9aeead098df7681b30f4f34cf24088d7fc73d2a",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 100.01565551757812,
+              "p95": 146.73737564086915
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 232.05079650878906,
+              "p95": 367.826594543457
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 51.11756134033203,
+              "p95": 74.51063461303708
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 77.56542205810547,
+              "p95": 153.36969985961912
+            },
+            "body_length_error_fraction": {
+              "median": 12.93227767944336,
+              "p95": 19.355578422546383
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 116.6348648071289,
+              "p95": 153.7958206176758
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 266.0794982910156,
+              "p95": 387.6225555419922
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 53.72842788696289,
+              "p95": 82.24245986938476
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 116.6348648071289,
+              "p95": 153.7958206176758
+            },
+            "body_length_error_fraction": {
+              "median": 13.966034889221191,
+              "p95": 19.45799217224121
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 65.22967529296875,
+              "p95": 145.04955139160157
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 142.43975830078125,
+              "p95": 356.4300903320312
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 50.371063232421875,
+              "p95": 62.639079284667964
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 57.24955749511719,
+              "p95": 146.13635864257813
+            },
+            "body_length_error_fraction": {
+              "median": 12.584467887878418,
+              "p95": 19.05714225769043
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": null
+      }
+    },
+    "anchored_intrinsic_grid": {
+      "20260819": {
+        "checkpoint_sha256": "156156aa46756045b02dd4e9a9b3d7f9006d5f76d3d8cb6b761312cd5c02a544",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 62.24383354187012,
+              "p95": 146.8907989501953
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 124.25687408447266,
+              "p95": 279.613623046875
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.201343536376953,
+              "p95": 41.284890556335434
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 56.72613525390625,
+              "p95": 138.3069328308105
+            },
+            "body_length_error_fraction": {
+              "median": 0.3564695566892624,
+              "p95": 0.85020292699337
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 67.73008728027344,
+              "p95": 152.55829315185545
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 138.65570068359375,
+              "p95": 279.72900390625
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 28.554899215698242,
+              "p95": 41.534676361083974
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 67.73008728027344,
+              "p95": 152.55829315185545
+            },
+            "body_length_error_fraction": {
+              "median": 0.3266432285308838,
+              "p95": 0.7695914685726164
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 58.0245475769043,
+              "p95": 114.82310333251952
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 118.70680236816406,
+              "p95": 267.47420959472646
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 23.601240158081055,
+              "p95": 39.444594573974605
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 50.45888137817383,
+              "p95": 107.7865982055664
+            },
+            "body_length_error_fraction": {
+              "median": 0.37715691328048706,
+              "p95": 0.8629551649093627
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 59.951839447021484,
+              "p95": 136.2072303771972
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 121.13789367675781,
+              "p95": 271.742268371582
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.033381462097168,
+              "p95": 40.08910827636717
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 54.589406967163086,
+              "p95": 121.85508460998533
+            },
+            "body_length_error_fraction": {
+              "median": 0.3572627305984497,
+              "p95": 0.7914977133274076
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 64.66366577148438,
+              "p95": 146.84394683837888
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 131.88653564453125,
+              "p95": 277.6833084106445
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 28.553850173950195,
+              "p95": 40.34886322021484
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 64.66366577148438,
+              "p95": 146.84394683837888
+            },
+            "body_length_error_fraction": {
+              "median": 0.33976075053215027,
+              "p95": 0.7600880682468413
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 56.06804275512695,
+              "p95": 117.932730102539
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 116.08533477783203,
+              "p95": 261.2770965576171
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 23.15043830871582,
+              "p95": 38.79844665527344
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 53.01078796386719,
+              "p95": 109.86761627197264
+            },
+            "body_length_error_fraction": {
+              "median": 0.36644771695137024,
+              "p95": 0.8471059799194334
+            }
+          }
+        }
+      },
+      "20260820": {
+        "checkpoint_sha256": "cc4628c011dc398296551092d88c46b75c941cae7af1b0011388ccbe9780893a",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 65.78639221191406,
+              "p95": 164.78288574218746
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 136.2685546875,
+              "p95": 298.10311126708973
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 25.3330078125,
+              "p95": 41.835828208923324
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 59.090145111083984,
+              "p95": 157.4710166931152
+            },
+            "body_length_error_fraction": {
+              "median": 0.36110231280326843,
+              "p95": 0.9732570827007293
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 79.75602722167969,
+              "p95": 168.7836990356445
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 169.7395477294922,
+              "p95": 328.0888244628906
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 29.833148956298828,
+              "p95": 45.91916618347167
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 79.75602722167969,
+              "p95": 168.7836990356445
+            },
+            "body_length_error_fraction": {
+              "median": 0.30131328105926514,
+              "p95": 1.121432381868362
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 59.30637741088867,
+              "p95": 160.28058166503902
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 128.60968017578125,
+              "p95": 237.21091308593748
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 23.76853370666504,
+              "p95": 40.58387985229492
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 55.49186325073242,
+              "p95": 148.7421142578125
+            },
+            "body_length_error_fraction": {
+              "median": 0.3991791009902954,
+              "p95": 0.965303385257721
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 59.40906524658203,
+              "p95": 146.282445526123
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 129.96923065185547,
+              "p95": 266.1565933227539
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.992847442626953,
+              "p95": 41.30436763763427
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 57.04368019104004,
+              "p95": 141.93607788085933
+            },
+            "body_length_error_fraction": {
+              "median": 0.39438556134700775,
+              "p95": 0.9086303025484083
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 76.25654602050781,
+              "p95": 146.43367767333982
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 153.18402099609375,
+              "p95": 318.9726104736327
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 27.691781997680664,
+              "p95": 41.22913551330566
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 76.25654602050781,
+              "p95": 146.43367767333982
+            },
+            "body_length_error_fraction": {
+              "median": 0.3264685571193695,
+              "p95": 0.8857674300670624
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 57.30928421020508,
+              "p95": 142.7146270751953
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 113.4817886352539,
+              "p95": 236.985400390625
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 22.69220733642578,
+              "p95": 40.19122619628905
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 53.223175048828125,
+              "p95": 137.68338623046873
+            },
+            "body_length_error_fraction": {
+              "median": 0.4144100844860077,
+              "p95": 0.9091386079788206
+            }
+          }
+        }
+      },
+      "20260821": {
+        "checkpoint_sha256": "ac34517eefe14cff3b8cff682e83f43586808ccbc5c8d30ce05782e61904d089",
+        "hard_or_standard_inference": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 67.45482635498047,
+              "p95": 151.98534622192375
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 146.24681091308594,
+              "p95": 277.32751464843744
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.467326164245605,
+              "p95": 43.81897888183594
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 63.41841125488281,
+              "p95": 139.97167816162107
+            },
+            "body_length_error_fraction": {
+              "median": 0.38306984305381775,
+              "p95": 0.7572908997535704
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 79.5370101928711,
+              "p95": 185.77861175537106
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 172.86570739746094,
+              "p95": 304.6003723144531
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 26.55824089050293,
+              "p95": 43.855977630615236
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 79.5370101928711,
+              "p95": 185.77861175537106
+            },
+            "body_length_error_fraction": {
+              "median": 0.3934400677680969,
+              "p95": 0.8375243186950683
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 60.15283966064453,
+              "p95": 120.22968597412108
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 124.64737701416016,
+              "p95": 248.63952636718744
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 23.45864486694336,
+              "p95": 40.02768249511718
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 57.60137939453125,
+              "p95": 114.6974884033203
+            },
+            "body_length_error_fraction": {
+              "median": 0.3829573690891266,
+              "p95": 0.7404810428619385
+            }
+          }
+        },
+        "soft_candidate_mixture_diagnostic": {
+          "all_128": {
+            "n": 128,
+            "median_full_latent_point_distance_px": {
+              "median": 59.25659370422363,
+              "p95": 142.3011291503906
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 133.2383575439453,
+              "p95": 278.372053527832
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 24.236806869506836,
+              "p95": 47.49264240264892
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 59.684791564941406,
+              "p95": 133.4201828002929
+            },
+            "body_length_error_fraction": {
+              "median": 0.37979649007320404,
+              "p95": 0.820956614613533
+            }
+          },
+          "fully_visible_43": {
+            "n": 43,
+            "median_full_latent_point_distance_px": {
+              "median": 70.92964172363281,
+              "p95": 185.7758865356445
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 163.43333435058594,
+              "p95": 333.92219543457026
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 27.452367782592773,
+              "p95": 47.61019706726074
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 70.92964172363281,
+              "p95": 185.7758865356445
+            },
+            "body_length_error_fraction": {
+              "median": 0.3683658242225647,
+              "p95": 0.8235555708408355
+            }
+          },
+          "truncated_85": {
+            "n": 85,
+            "median_full_latent_point_distance_px": {
+              "median": 55.92660140991211,
+              "p95": 117.44748382568359
+            },
+            "p95_full_latent_point_distance_px": {
+              "median": 118.21749114990234,
+              "p95": 247.99174804687496
+            },
+            "mean_full_latent_tangent_error_deg": {
+              "median": 22.79942512512207,
+              "p95": 37.05648498535156
+            },
+            "median_visible_correspondence_distance_px": {
+              "median": 54.94923400878906,
+              "p95": 110.65494079589844
+            },
+            "body_length_error_fraction": {
+              "median": 0.38219326734542847,
+              "p95": 0.7303418159484864
+            }
+          }
+        }
+      }
+    }
+  },
+  "evidence_boundary": {
+    "protected_holdout_opened": false,
+    "primary_Tier_A_used_for_gradients": false,
+    "repeat_annotations_used": false
+  }
+}
