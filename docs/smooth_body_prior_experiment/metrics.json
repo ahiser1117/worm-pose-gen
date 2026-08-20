@@ -1,0 +1,174 @@
+{
+  "status": "one_frame_auditable_geometry_experiment",
+  "provenance": {
+    "proxy_hdf5": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+    "configured_source_path": "nir_videos/2023-09-19-01.h5",
+    "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+    "source_dataset_path": "/img_nir",
+    "recording": "2023-09-19-01",
+    "frame_index": 3420
+  },
+  "parameters": {
+    "local_radius": 31,
+    "smooth_radius": 2,
+    "foreground_z": 2.6,
+    "close_radius": 2,
+    "n_body_stations": 100,
+    "latent_angle_coefficients": 16,
+    "width_assignment": "nearest smooth-midline station",
+    "containment_margin_px": 0.75,
+    "radius_max_adjacent_change_px": 1.0,
+    "max_full_width_px": 80.0,
+    "modeled_body_max_area_px": 40000,
+    "skeleton_endpoint_peel_iterations": 8
+  },
+  "section_3_input": {
+    "positive_pixel_count": 25709,
+    "connected_component_count_before_keep_largest": 437
+  },
+  "topology_prior_initialization": {
+    "rule": "fill only background cavities disconnected from the image-border exterior",
+    "open_u_center_preserved": true,
+    "enclosed_cavity_count": 17,
+    "enclosed_pixels_filled_for_initialization": 2607,
+    "initialization_area_px": 28316,
+    "width_fit_target_remains_original_section3_component": true
+  },
+  "body_prior_fit": {
+    "latent_dimension": 20,
+    "required_radius_min_px": 8.419006554920438,
+    "required_radius_median_px": 24.218562043420505,
+    "required_radius_max_px": 32.72715658168981,
+    "fitted_full_width_min_px": 21.73474147973721,
+    "fitted_full_width_median_px": 52.544393972412365,
+    "fitted_full_width_max_px": 65.45431316337962,
+    "fitted_radius_max_adjacent_change_px": 1.0,
+    "full_width_feasible": true,
+    "width_feasibility_excess_px": 0.0,
+    "fit_status": "feasible",
+    "detected_positive_pixels_missed": 0,
+    "detected_positive_recall": 1.0,
+    "width_capped_diagnostic_positive_pixels_missed": 0,
+    "width_capped_diagnostic_positive_recall": 1.0,
+    "modeled_area_px": 35481,
+    "newly_filled_pixel_count": 9772,
+    "newly_filled_local_darkness_z0_fraction": 0.2450880065493246,
+    "newly_filled_original_threshold_z2_6_fraction": 0.0,
+    "mask_iou_with_section_3_component": 0.7245849891491221
+  },
+  "rerun_result": {
+    "accepted_by_revised_geometric_gates": true,
+    "rejection_reasons": [],
+    "accepted_by_all_declared_constraints": true,
+    "all_declared_rejection_reasons": [],
+    "area_gate": {
+      "passed": true,
+      "value_px": 35481,
+      "allowed_px": [
+        2500,
+        40000
+      ]
+    },
+    "full_width_feasibility_gate": {
+      "passed": true,
+      "value_max_px": 65.45431316337962,
+      "maximum_px": 80.0
+    },
+    "centerline_length_px": 719.3604850562705,
+    "boundary_distance_px": 86.0,
+    "tube_support_fraction_on_modeled_mask": 1.0,
+    "longest_path_endpoint_count": 2,
+    "longest_path_branch_pixels": 0,
+    "skeleton_topology": {
+      "skeleton_pixels": 751,
+      "skeleton_components": 1,
+      "endpoint_count": 2,
+      "branch_pixels": 0,
+      "edge_count": 750,
+      "has_cycle": false,
+      "has_path": true
+    },
+    "geometric_quality_score": 0.8204263432958196
+  },
+  "topology_before_after": {
+    "original_section3_pruned_skeleton": {
+      "skeleton_pixels": 1928,
+      "skeleton_components": 1,
+      "endpoint_count": 12,
+      "branch_pixels": 44,
+      "edge_count": 1944,
+      "has_cycle": true,
+      "has_path": true
+    },
+    "filled_initialization_pruned_skeleton": {
+      "skeleton_pixels": 993,
+      "skeleton_components": 1,
+      "endpoint_count": 11,
+      "branch_pixels": 9,
+      "edge_count": 992,
+      "has_cycle": false,
+      "has_path": true
+    },
+    "after_completed_body_pruned_skeleton": {
+      "skeleton_pixels": 751,
+      "skeleton_components": 1,
+      "endpoint_count": 2,
+      "branch_pixels": 0,
+      "edge_count": 750,
+      "has_cycle": false,
+      "has_path": true
+    }
+  },
+  "manual_trace_postfit_audit": {
+    "annotation": {
+      "path": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+      "sample_id": "2023-09-19-01-f003420",
+      "annotation_id": "c7bb2210-9664-4fa1-903a-04026d6e861d",
+      "annotator_id": "alex",
+      "trace_state": "complete",
+      "annotation_pass": "primary",
+      "used_during_fit": false
+    },
+    "role": "post_fit_audit_only; never used by initialization, midline fit, width fit, or parameter selection",
+    "original_pipeline_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 16.57921861528736,
+      "mean_point_distance_px": 18.421144734985248,
+      "p95_point_distance_px": 32.58004173793547,
+      "mean_tangent_error_deg": 14.236168653294547,
+      "p95_tangent_error_deg": 39.3637782558399,
+      "mean_endpoint_error_px": 10.595491077807644,
+      "body_length_error_px": 32.48088160431894,
+      "body_length_error_fraction": 0.04316663310659669
+    },
+    "filled_initialization_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 9.290791108766303,
+      "mean_point_distance_px": 9.276425157365747,
+      "p95_point_distance_px": 12.158900301527476,
+      "mean_tangent_error_deg": 5.1411816740502845,
+      "p95_tangent_error_deg": 13.638335669617756,
+      "mean_endpoint_error_px": 10.595491077807644,
+      "body_length_error_px": 19.21340630208249,
+      "body_length_error_fraction": 0.025534345732157907
+    },
+    "completed_body_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 9.721781811176253,
+      "mean_point_distance_px": 9.508354232011621,
+      "p95_point_distance_px": 13.632386213116348,
+      "mean_tangent_error_deg": 4.626396257014936,
+      "p95_tangent_error_deg": 12.821545665792877,
+      "mean_endpoint_error_px": 13.767865700135392,
+      "body_length_error_px": 33.1230154301461,
+      "body_length_error_fraction": 0.044020019895861996
+    }
+  },
+  "limitations": [
+    "The initial path comes from the section-3 evidence after enclosed-cavity filling, so this does not rescue a missing or grossly wrong backbone.",
+    "Containment prevents false negatives relative to section 3 but can add false-positive background pixels.",
+    "The parameters were tried on this single frame and are not validated on other frames or manual traces.",
+    "The one-annotator trace is an after-the-fact diagnostic and was excluded from every fitting and parameter choice.",
+    "The centerline is defined geometrically from the body border; no centerline darkness metric is used."
+  ]
+}
