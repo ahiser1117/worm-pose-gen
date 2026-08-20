@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-006",
+  "metrics_sha256": "70bce36e863bac6958f3d9c35bf93352fb509d7d069ef857af91ef5777e28d2e",
+  "reason": "post-result hypothesis revision required because every velocity or AR diagnostic was worse than persistence and session-general coverage failed",
+  "frozen_config_fallback_rejected": "constant_velocity_translation_rotation_shape_random_walk_length_hold",
+  "selected_controlled_experiment_prior": "zero_drift_block_diagonal_random_walk",
+  "selected_prior_scope": "synthetic_and_controlled_EXP-SMC-007_only",
+  "natural_dynamics_claim_allowed": false,
+  "empirical_process_scale_claim_allowed": false,
+  "paired_horizon1": {
+    "n": 40,
+    "persistence_median_mean_point_error_px": 3.57154277492878,
+    "best_nonpersistence_model": "hybrid_global_velocity_shape_hold",
+    "best_nonpersistence_median_mean_point_error_px": 4.484201313006169,
+    "relative_improvement": -0.25553621938507753
+  }
+}
