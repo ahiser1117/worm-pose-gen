@@ -1,0 +1,9 @@
+{
+  "experiment": "EXP-SMC-001",
+  "master_config": "../../configs/smc_exp_001_002_audit.json",
+  "appearance_method": "classical_soft_dark_ridge_baseline",
+  "evidence_ceiling": "PARTIALLY_SUPPORTED",
+  "manual_mask_truth_available": false,
+  "protected_2025_holdout_opened": false,
+  "status": "PREREGISTERED_NOT_RUN"
+}

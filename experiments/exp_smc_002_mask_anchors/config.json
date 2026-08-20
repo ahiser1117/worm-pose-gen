@@ -1,0 +1,9 @@
+{
+  "experiment": "EXP-SMC-002",
+  "master_config": "../../configs/smc_exp_001_002_audit.json",
+  "input_geometry": "cleaned_mask_only",
+  "complete_metric_orientation": "symmetric",
+  "truncated_metric": "one_way_visible_trace_diagnostic_only",
+  "protected_2025_holdout_opened": false,
+  "status": "PREREGISTERED_NOT_RUN"
+}
