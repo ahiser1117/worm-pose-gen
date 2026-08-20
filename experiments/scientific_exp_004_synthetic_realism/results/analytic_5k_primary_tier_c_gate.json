@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-004",
+  "phase": "analytic_5k_scale_control",
+  "evaluation": "frozen-Tier-C-128-controlled-gate",
+  "model_seed": 20260819,
+  "config_path": "/home/alex/git/worm-pose-gen/configs/scientific_exp_004_analytic_5k_control.yaml",
+  "config_sha256": "01fb976198ea704896aa9de9e83162fa6a7c830c2e627023904d83ed029d3e28",
+  "run_metrics": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_004/analytic_5k_soft_anchored_seed20260819_v1/run_metrics.json",
+  "run_metrics_sha256": "f2ce75bbfd15dd2c01532a023491077a124ec68b93367eecc230bfe8370944ce",
+  "checkpoint_sha256": "140639360e5a509dcd812b91e64b3c2644edca85799e78ad3bb22a730aa78769",
+  "materialization_provenance_sha256": "c1ac072aff02ef673c1d213f366b824596a28e9be71b74a582bc28333e60a1ff",
+  "materialized_tier_c_validation_sha256": "e7b881c4cc7037f94b64371c1e414906f825f10682793fc0580f225d2adc9df3",
+  "summary": {
+    "all_128": {
+      "n": 128,
+      "median_full_latent_point_distance_px": {
+        "median": 33.830020904541016,
+        "p95": 69.74986534118652
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 85.59857177734375,
+        "p95": 165.92819061279295
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 19.41416358947754,
+        "p95": 34.031632423400865
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 29.79219341278076,
+        "p95": 68.61186065673824
+      },
+      "body_length_error_fraction": {
+        "median": 0.22796449810266495,
+        "p95": 0.49855012595653525
+      }
+    },
+    "fully_visible_43": {
+      "n": 43,
+      "median_full_latent_point_distance_px": {
+        "median": 46.63780975341797,
+        "p95": 78.34318542480469
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 111.87190246582031,
+        "p95": 187.67267608642578
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 25.170021057128906,
+        "p95": 45.47093086242675
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 46.63780975341797,
+        "p95": 78.34318542480469
+      },
+      "body_length_error_fraction": {
+        "median": 0.2606716454029083,
+        "p95": 0.4120954781770706
+      }
+    },
+    "truncated_85": {
+      "n": 85,
+      "median_full_latent_point_distance_px": {
+        "median": 32.7902946472168,
+        "p95": 58.81252975463865
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 81.10962677001953,
+        "p95": 135.666943359375
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 18.73486328125,
+        "p95": 28.01703720092773
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 27.325191497802734,
+        "p95": 52.624655914306636
+      },
+      "body_length_error_fraction": {
+        "median": 0.2024129182100296,
+        "p95": 0.5350423693656919
+      }
+    }
+  },
+  "controlled_gate": {
+    "thresholds": {
+      "dataset": "frozen_held_out_Tier_C_128",
+      "primary_stratum": "fully_visible_43",
+      "median_full_latent_point_distance_px_at_most": 16,
+      "median_mean_tangent_error_degrees_at_most": 15,
+      "median_body_length_error_fraction_at_most": 0.15,
+      "action_if_primary_seed_passes": "authorize_two_repeat_seeds_only",
+      "action_if_primary_seed_fails": "stop_analytic_control_without_Tier_A",
+      "action_if_all_three_seeds_pass": "authorize_primary_Tier_A_evaluation_only",
+      "Tier_A_tuning_allowed": false,
+      "delayed_repeat_annotations_allowed": false,
+      "protected_holdout_allowed": false
+    },
+    "observed_fully_visible_43": {
+      "median_full_latent_point_distance_px": 46.63780975341797,
+      "median_mean_tangent_error_degrees": 25.170021057128906,
+      "median_body_length_error_fraction": 0.2606716454029083
+    },
+    "passed": false,
+    "decision": "PRIMARY_CONTROLLED_GATE_FAIL_KEEP_ALL_PROTECTED_EVIDENCE_CLOSED"
+  },
+  "gpu": {
+    "physical_device": {
+      "physical_index": 0,
+      "uuid": "GPU-f72d2ba7-8334-183e-e368-2c527e8a39e6",
+      "pci_bus_id": "00000000:01:00.0",
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "total_memory": "49140 MiB",
+      "driver_version": "610.43.02"
+    },
+    "mapping": {
+      "physical_index": 0,
+      "visible_logical_index": 0
+    },
+    "logical_device": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "total_memory_bytes": 50895519744,
+      "cuda_runtime": "13.0"
+    }
+  },
+  "evidence_boundary": {
+    "protected_holdout_opened": false,
+    "Tier_A_evaluated": false,
+    "repeat_annotations_used": false
+  }
+}
