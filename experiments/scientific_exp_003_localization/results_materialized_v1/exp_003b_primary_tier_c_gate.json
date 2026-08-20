@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-003B",
+  "evaluation": "frozen-Tier-C-128-controlled-gate",
+  "model_seed": 20260819,
+  "run_metrics": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_003b/soft_anchored_intrinsic_seed20260819_v1/run_metrics.json",
+  "run_metrics_sha256": "a19a2e1fe827b57edbb78cf5282cd428cb9a3c0d0a008d28c07774f74572f826",
+  "checkpoint_sha256": "397bfc73526017e1f325e9f06949bf15c6858df1d667650c09a59836c8bcdcf6",
+  "materialized_tier_c_validation_sha256": "e7b881c4cc7037f94b64371c1e414906f825f10682793fc0580f225d2adc9df3",
+  "summary": {
+    "all_128": {
+      "n": 128,
+      "median_full_latent_point_distance_px": {
+        "median": 60.59759712219238,
+        "p95": 134.43610763549805
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 128.5003204345703,
+        "p95": 263.34301452636714
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 23.033376693725586,
+        "p95": 44.86315364837644
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 54.572242736816406,
+        "p95": 125.34506225585936
+      },
+      "body_length_error_fraction": {
+        "median": 0.3644135594367981,
+        "p95": 0.7159774482250214
+      }
+    },
+    "fully_visible_43": {
+      "n": 43,
+      "median_full_latent_point_distance_px": {
+        "median": 61.990997314453125,
+        "p95": 125.61880340576171
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 146.49916076660156,
+        "p95": 277.66632690429685
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 25.76567840576172,
+        "p95": 51.76339836120605
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 61.990997314453125,
+        "p95": 125.61880340576171
+      },
+      "body_length_error_fraction": {
+        "median": 0.34001126885414124,
+        "p95": 0.5928191602230072
+      }
+    },
+    "truncated_85": {
+      "n": 85,
+      "median_full_latent_point_distance_px": {
+        "median": 60.46059799194336,
+        "p95": 134.49038696289062
+      },
+      "p95_full_latent_point_distance_px": {
+        "median": 123.69525146484375,
+        "p95": 233.4859710693359
+      },
+      "mean_full_latent_tangent_error_deg": {
+        "median": 21.91871452331543,
+        "p95": 40.50401535034178
+      },
+      "median_visible_correspondence_distance_px": {
+        "median": 50.36876678466797,
+        "p95": 122.70126190185545
+      },
+      "body_length_error_fraction": {
+        "median": 0.37825748324394226,
+        "p95": 0.7361925601959228
+      }
+    }
+  },
+  "controlled_gate": {
+    "thresholds": {
+      "dataset": "frozen_held_out_Tier_C_128",
+      "primary_stratum": "fully_visible_43",
+      "median_full_latent_point_distance_px_at_most": 16,
+      "median_mean_tangent_error_degrees_at_most": 15,
+      "median_body_length_error_fraction_at_most": 0.15,
+      "action_if_primary_seed_passes": "authorize_two_repeat_seeds_then_require_all_three",
+      "action_if_primary_seed_fails": "reject_without_opening_Tier_A"
+    },
+    "observed_fully_visible_43": {
+      "median_full_latent_point_distance_px": 61.990997314453125,
+      "median_mean_tangent_error_degrees": 25.76567840576172,
+      "median_body_length_error_fraction": 0.34001126885414124
+    },
+    "passed": false,
+    "decision": "REJECT_WITHOUT_TIER_A"
+  },
+  "evidence_boundary": {
+    "protected_holdout_opened": false,
+    "Tier_A_evaluated": false,
+    "repeat_annotations_used": false
+  }
+}

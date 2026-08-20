@@ -1,0 +1,63 @@
+experiment: EXP-003B
+preregistered_utc: 2026-08-19T20:08:25Z
+parent: EXP-003
+hypothesis: >-
+  A soft spatial anchor followed by one compact intrinsic curve removes the
+  dense ordering failure and hard-cell mismatch while preserving localization.
+
+evidence_boundary:
+  audited_holdout_allowed: false
+  primary_Tier_A_allowed_before_controlled_gate: false
+  repeat_annotations_allowed: false
+  proxy_exclusion_manifest: experiments/scientific_exp_003_localization/proxy_exclusion_manifest.json
+  proxy_exclusion_manifest_sha256: 3eccdb08121a79f5aa4515d9eb67d57aea656a121ea023c653675edc52427854
+  accepted_proxy_rows_excluded: 9
+
+architecture:
+  name: soft_anchored_intrinsic
+  spatial_grid: [12, 16]
+  anchor_selection: differentiable_softmax_at_training_and_inference
+  output: one_ordered_16_coefficient_intrinsic_curve
+  explicit_length_loss: true
+  maximum_parameters: 2000000
+
+input:
+  height: 192
+  width: 256
+  body_points: 100
+  proxy_hdf5: /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5
+  proxy_sha256: 1f891a38c4175e5d6e38d776fbb73c96fe2e2a796e4aecfd386e6ab9da34a11c
+
+training:
+  fold: 2
+  data_seed: 20260819
+  primary_model_seed: 20260819
+  repeat_model_seeds: [20260820, 20260821]
+  maximum_steps: 1200
+  maximum_epochs: 40
+  checkpoint_every_steps: 300
+  train_batch_size: 16
+  evaluation_batch_size: 32
+  precision: 32-true
+  learning_rate: 0.0003
+  synthetic_training_samples: 512
+  synthetic_validation_samples: 128
+  materialize_before_training: true
+  cpu_threads: 4
+  dataloader_workers: 0
+  pin_memory: true
+
+controlled_gate:
+  dataset: frozen_held_out_Tier_C_128
+  primary_stratum: fully_visible_43
+  median_full_latent_point_distance_px_at_most: 16
+  median_mean_tangent_error_degrees_at_most: 15
+  median_body_length_error_fraction_at_most: 0.15
+  action_if_primary_seed_passes: authorize_two_repeat_seeds_then_require_all_three
+  action_if_primary_seed_fails: reject_without_opening_Tier_A
+
+resources:
+  accelerator: gpu
+  devices: 1
+  maximum_minutes_primary_run: 20
+  protected_holdout_opened: false
