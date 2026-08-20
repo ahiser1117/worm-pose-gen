@@ -97,3 +97,141 @@ sets both geometry acceptance and temporal authorization false. The audited
 holdout remained unopened. The project therefore stops scientifically with no
 accepted/deployable model; the retained checkpoint exists only for diagnostic
 reproduction and explicit opt-in testing of the output scaffold.
+
+## Follow-on localization and data controls
+
+**EXP-004 analytic 5k control (PRIMARY CONTROLLED GATE FAIL)** increased the
+deterministic analytic development set from 512 to 5,000 samples for the
+unchanged topology-safe soft-anchor model. Optimizer steps rose from 1,200 to
+10,800 to keep exposure near 34 dataset passes. The materialized 565-sample
+parent prefix, 28 proxy-validation tensors, and held-out Tier-C-128 tensors all
+reproduced their frozen hashes; six training and three validation proxy rows
+were excluded under the existing Tier-A ±11-frame leakage manifest.
+
+The primary seed completed on verified physical GPU 0. On the frozen 43 fully
+visible Tier-C cases it reached 46.64 px median full-latent point distance,
+25.17 degrees median mean tangent error, and 0.261 median body-length error
+fraction versus gates of 16 px, 15 degrees, and 0.15. This improves point and
+length error over EXP-003B but fails all three criteria. Repeat seeds and
+real-texture synthesis were stopped; Tier A, delayed repeats, and the protected
+holdout remained closed.
+
+## Segmentation-anchored generative branch
+
+**EXP-SMC-001 (NOT SUPPORTED)** audited a classical robust-dark-ridge soft
+foreground baseline on the 30 primary development annotations plus declared
+adjacent-frame diagnostics. Median/p10 visible-trace containment was
+0.980/0.958, but median terminal containment was 0.800 versus 0.900 and the
+uncalibrated soft trace score was 0.738 versus 0.800. No manual masks exist, so
+these are trace-proxy diagnostics rather than Dice/IoU or network accuracy.
+
+**EXP-SMC-002 (NOT SUPPORTED)** accepted 10/30 frames. Its seven accepted
+complete anchors were conditionally accurate (6.756 px median point error and
+4.634 degrees median tangent error), but only 6/7 were individually within
+8 px and three of twelve truncated frames were falsely accepted. Their
+20–23 px boundary clearances were smaller than their 38–49 px median widths,
+identifying segmentation terminal omission as the false-completeness mechanism.
+
+**EXP-SMC-001B (NOT SUPPORTED)** prospectively grew the high-confidence
+component only through connected pixels above a frozen 0.25 low threshold.
+Growth was small and stable (median/p95 0.97%/2.20% of seed area; adjacent-area
+p95 1.44%), but terminal containment remained 0.800. Seventeen of thirty masks
+now contacted the FOV, showing that the extra low-confidence pixels were not
+selectively the omitted anatomical terminals.
+
+**EXP-SMC-002B (NOT SUPPORTED)** paired the revised masks with a one-median-
+width FOV clearance rule. It rejected all 12 truncated frames but retained only
+3/17 complete anchors, only 2/3 of which were within 8 px; the remaining error
+was 12.603 px. There were no accepted anchors in one development recording.
+The result fixes the observed false-truncation symptom but fails the unchanged
+conditional reliability gate and cannot support session-spanning dynamics.
+
+**EXP-SMC-000 (CATALOG ONLY)** retained six development-only natural hard-bout
+candidates from a bounded raw visual screen. Five are bracketed only by sparse
+legacy proxy anchors, generally hundreds of frames away. Event types are
+unadjudicated hypotheses, not truth or recovery outcomes.
+
+Under the SMC plan's stopping rules, latent/width/dynamics/renderer/SMC
+experiments were not authorized. The core upstream assumption failed for the
+available foreground method: it does not preserve anatomical terminals well
+enough to supply reliable full-body anchors. The protected 2025 holdout stayed
+closed. Reopening requires a learned foreground method trained/evaluated with
+fresh mask/terminal truth, followed by all frozen anchor-reliability gates and
+adequate contiguous anchor density across sessions.
+
+### Expert-authorized continuation and downstream gates
+
+**EXP-SMC-002C (COMPLETE DEVELOPMENT CONTINUATION AUTHORIZED)** preserves the
+frozen EXP-SMC-002B result while recording explicit expert adjudication of all
+30 bound visual rows. Twenty-eight rows were judged development-adequate, row 2
+(`2023-09-19-01-f017959`) was identified as a mistaken annotation, and row 22
+(`2023-10-11-01-f013785`) was designated an expected SMC-hard case rather than
+an easy anchor. This superseded D-0011 only as development governance; it did
+not turn EXP-SMC-001B/002B into quantitative passes or alter their artifacts.
+
+**EXP-SMC-002D (STATIC POSTURE EXTRACTION FEASIBLE; SESSION-GENERAL DYNAMICS
+NOT FEASIBLE)** scanned three contiguous 101-frame development windows. Strict
+acceptance was 22/101 (21.78%), 58/101 (57.43%), and 7/101 (6.93%), for 87/303
+(28.71%) overall. The recordings contributed 7, 45, and 0 adjacent accepted
+pairs; longest accepted runs were 5, 14, and 1 frames and longest rejected gaps
+were 15, 29, and 39 frames. Every session had a static anchor, but one had no
+adjacent pair and 45/52 pairs came from a single session. Static posture
+extraction could continue; session-general empirical dynamics fitting could
+not. Runtime was 765.33 s (0.396 frames/s).
+
+**EXP-SMC-003 (SUPPORTED ORACLE ONLY)** retained the fixed 16-coefficient cubic
+tangent spline plus translation, rotation, and length. On 17 complete traces,
+its median/p95 per-frame point error was 0.697/1.074 px and median/p95 mean
+tangent error was 3.305/4.307 degrees. The K=16 cosine basis also passed, but
+the preregistered tie-break selected cubic; leave-one-recording-out PCA remained
+diagnostic. This is known-trace representation capacity, not image inference or
+natural dynamics evidence.
+
+**EXP-SMC-004 (COMPLETED SUPPORTED PROXY ONLY)** found no need for particle-wise
+width flexibility. The bounded-scale model passed its scripted proxy gate at
+0.8663 median cleaned-mask IoU, while PCA-2 improved it by only 0.00038; fitted
+scale SD was 0.0245 and a 10 px translated centerline still reduced median IoU
+by 0.2041 after scale refitting. The least-complexity decision retained the
+fixed recording-level mean width profile and left scale out of the initial
+particle state.
+
+**EXP-SMC-005 (COMPLETED SUPPORTED ENERGY SHAPE ONLY)** retained soft Dice as
+the simplest passing observation energy. All 64 case/perturbation curves had a
+minimum at zero or an adjacent grid point, overall outward-step monotonicity
+was 0.9714, and all 20-value latent gradient groups were finite and nonzero.
+At 183x242 on the RTX 6000 Ada, render plus energy took 7.914 ms for 32
+particles. These are local proxy-basin and throughput results, not global
+capture, probability calibration, or natural hard-case validation.
+
+**EXP-SMC-006 (COMPLETED NOT SUPPORTED SESSION GENERAL)** confirmed the density
+blocker and rejected H5. Adjacent-pair counts were 7/45/0 by recording;
+five-frame predictions were 0/16/0 and no 20-frame case existed. On 40 paired
+one-frame starts, persistence achieved 3.572 px median error versus 4.484 px for
+the best non-persistence diagnostic, global translation/orientation velocity
+with shape hold, which was 25.6% worse. A zero-drift block-diagonal random walk
+was retained only as a declared synthetic control prior, never as an empirical
+natural-motion estimate.
+
+**EXP-SMC-007 (SUPPORTED CONTROLLED SYNTHETIC ONLY)** demonstrated bounded
+algorithm execution on renderer-matched zero-drift synthetic random walks. At
+128 particles and temperature 0.03, held-out nominal median trajectory error
+was 2.19 px for forward SMC and 1.95 px after terminal reweighting, with 1.00
+truth survival and median ESS fraction 0.89. All declared stress gates passed,
+but exact two-anchor interpolation was best in all six scenarios and terminal
+reweighting improved forward SMC in only 2/6. Thus neither general terminal-
+anchor smoothing benefit, SMC superiority, nor H8 is supported, and no natural
+SMC claim is authorized.
+
+**EXP-SMC-008A (NO BOUNDED STRICT ANCHOR BRACKET)** applied the unchanged final
+segmentation and strict-anchor configs to `2023-10-11-01` frames 13685-13885,
+centered on expert hard row 22 at frame 13785. It accepted 0/201 frames: there
+was no strict anchor before or after the hard frame, no accepted run, and one
+201-frame rejected gap. All 201 frames triggered `branch_pixels` and `cycle`;
+183 also triggered abrupt/implausible width checks and 150 low render IoU.
+Runtime was 564.93 s (0.356 frames/s). No pose was inferred. The selected
+natural case therefore cannot test a <=20-frame two-anchor bout under the
+current pipeline: the branch's nearby-reliable-anchor assumption fails at its
+designated hard case before natural SMC can be evaluated.
+
+All EXP-SMC-002C through EXP-SMC-008A work remained development-only. The
+protected 2025 holdout was not opened.
