@@ -1,0 +1,256 @@
+{
+  "status": "one_frame_iterative_geometry_audit",
+  "provenance": {
+    "proxy_hdf5": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+    "configured_source_path": "nir_videos/2023-09-19-01.h5",
+    "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+    "source_dataset_path": "/img_nir",
+    "recording": "2023-09-19-01",
+    "frame_index": 3420
+  },
+  "manual_trace_isolation": {
+    "loaded_after_fit_stopped": true,
+    "used_during_fit_or_parameter_selection": false,
+    "annotation": {
+      "path": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+      "sample_id": "2023-09-19-01-f003420",
+      "annotation_id": "c7bb2210-9664-4fa1-903a-04026d6e861d",
+      "annotator_id": "alex",
+      "trace_state": "complete",
+      "annotation_pass": "primary",
+      "used_during_fit": false
+    }
+  },
+  "parameters": {
+    "latent_coefficients": 16,
+    "containment_margin_px": 0.75,
+    "radius_max_adjacent_change_px": 1.0,
+    "max_full_width_px": 80.0,
+    "modeled_body_max_area_px": 40000,
+    "modeled_body_area_rationale": "rendered completion includes prior-recovered pixels; the historical 30000 px ceiling remains specific to the raw-component extractor",
+    "max_iterations": 20,
+    "stable_mask_fraction": 0.0001,
+    "stable_midline_max_displacement_px": 0.25,
+    "required_consecutive_stable_updates": 2,
+    "centerline_definition": "the smoothed medial path of the modeled body: the geometric midpoint between its two sides; no image-darkness value is sampled at the midline",
+    "stopping_rule": "accept an update only when it preserves exact Section-3 containment, respects the width ceiling, and strictly decreases rendered area; stop at the first non-decreasing candidate. Also stop after two consecutive updates with changed-frame-pixel fraction <= stable_mask_fraction and maximum latent-midline station displacement <= stable_midline_max_displacement_px; otherwise stop on a repeated mask, width infeasibility, or the fixed iteration cap"
+  },
+  "section3_input": {
+    "positive_pixel_count": 25709,
+    "component_count_before_keep_largest": 437,
+    "enclosed_cavity_count_for_initialization_only": 17,
+    "enclosed_pixels_for_initialization_only": 2607
+  },
+  "frozen_one_pass_completed_body": {
+    "mask_area_px": 35481,
+    "added_area_px": 9772,
+    "section3_positive_recall": 1.0,
+    "mask_iou_with_section3": 0.7245849891491221,
+    "added_local_darkness_z0_fraction": 0.2450880065493246,
+    "added_original_threshold_z2_6_fraction": 0.0,
+    "full_width_min_px": 21.73474147973721,
+    "full_width_median_px": 52.544393972412365,
+    "full_width_max_px": 65.45431316337962,
+    "full_width_max_adjacent_change_px": 2.0,
+    "centerline_length_px": 719.3604850562705,
+    "boundary_distance_px": 86.0,
+    "topology": {
+      "skeleton_pixels": 751,
+      "skeleton_components": 1,
+      "endpoint_count": 2,
+      "branch_pixels": 0,
+      "edge_count": 750,
+      "has_cycle": false,
+      "has_path": true
+    },
+    "accepted_by_revised_modeled_body_gates": true,
+    "modeled_body_area_allowed_px": [
+      2500,
+      40000
+    ],
+    "rejection_reasons": []
+  },
+  "boundary_midpoint_iteration": {
+    "iterations": [
+      {
+        "iteration": 1,
+        "mask_area_px": 34302,
+        "added_area_px": 8593,
+        "section3_positive_recall": 1.0,
+        "mask_iou_with_section3": 0.7494898256661419,
+        "added_local_darkness_z0_fraction": 0.2765041312696381,
+        "added_original_threshold_z2_6_fraction": 0.0,
+        "full_width_min_px": 23.340366543092628,
+        "full_width_median_px": 51.439931732248915,
+        "full_width_max_px": 59.86364371319045,
+        "full_width_max_adjacent_change_px": 2.0,
+        "centerline_length_px": 705.5458798800003,
+        "boundary_distance_px": 87.0,
+        "topology": {
+          "skeleton_pixels": 721,
+          "skeleton_components": 1,
+          "endpoint_count": 2,
+          "branch_pixels": 0,
+          "edge_count": 720,
+          "has_cycle": false,
+          "has_path": true
+        },
+        "accepted_by_revised_modeled_body_gates": true,
+        "modeled_body_area_allowed_px": [
+          2500,
+          40000
+        ],
+        "rejection_reasons": [],
+        "pose_displacement_from_frozen_completed_body": {
+          "mean_px": 2.519432537958457,
+          "median_px": 2.4534257398106973,
+          "max_px": 5.0
+        },
+        "changed_pixels_from_previous": 2391,
+        "changed_frame_fraction_from_previous": 0.003374373391139412,
+        "latent_midline_update_from_previous": {
+          "mean_px": 2.1898093612896963,
+          "median_px": 2.1023623851660673,
+          "max_px": 4.1918251180877615
+        },
+        "stable_update": false,
+        "consecutive_stable_updates": 0,
+        "repeated_prior_mask_iteration": null,
+        "strict_area_decrease_from_previous": true,
+        "accepted_update": true,
+        "manual_trace_postfit_only": {
+          "target_reversed": false,
+          "median_point_distance_px": 12.00462224825571,
+          "mean_point_distance_px": 11.138611894018936,
+          "p95_point_distance_px": 16.28986923703121,
+          "mean_tangent_error_deg": 5.222503986002602,
+          "p95_tangent_error_deg": 13.756340279240025,
+          "mean_endpoint_error_px": 16.90356516765548,
+          "body_length_error_px": 46.93717640186367,
+          "body_length_error_fraction": 0.06237884480726185
+        }
+      },
+      {
+        "iteration": 2,
+        "mask_area_px": 34492,
+        "added_area_px": 8783,
+        "section3_positive_recall": 1.0,
+        "mask_iou_with_section3": 0.745361243186826,
+        "added_local_darkness_z0_fraction": 0.2714334509848571,
+        "added_original_threshold_z2_6_fraction": 0.0,
+        "full_width_min_px": 24.563286801785416,
+        "full_width_median_px": 51.780001405705775,
+        "full_width_max_px": 60.71979975924331,
+        "full_width_max_adjacent_change_px": 2.0,
+        "centerline_length_px": 686.9761476505261,
+        "boundary_distance_px": 95.0,
+        "topology": {
+          "skeleton_pixels": 711,
+          "skeleton_components": 1,
+          "endpoint_count": 2,
+          "branch_pixels": 0,
+          "edge_count": 710,
+          "has_cycle": false,
+          "has_path": true
+        },
+        "accepted_by_revised_modeled_body_gates": true,
+        "modeled_body_area_allowed_px": [
+          2500,
+          40000
+        ],
+        "rejection_reasons": [],
+        "pose_displacement_from_frozen_completed_body": {
+          "mean_px": 5.139562443818076,
+          "median_px": 5.322476367575648,
+          "max_px": 10.816653826391969
+        },
+        "changed_pixels_from_previous": 2086,
+        "changed_frame_fraction_from_previous": 0.0029439326197895498,
+        "latent_midline_update_from_previous": {
+          "mean_px": 2.5050996645563357,
+          "median_px": 2.4493557438036175,
+          "max_px": 5.057079376847773
+        },
+        "stable_update": false,
+        "consecutive_stable_updates": 0,
+        "repeated_prior_mask_iteration": null,
+        "strict_area_decrease_from_previous": false,
+        "accepted_update": false,
+        "manual_trace_postfit_only": {
+          "target_reversed": false,
+          "median_point_distance_px": 12.952975755195457,
+          "mean_point_distance_px": 12.455115739160213,
+          "p95_point_distance_px": 22.845767981064625,
+          "mean_tangent_error_deg": 5.808847042551991,
+          "p95_tangent_error_deg": 13.43296637929051,
+          "mean_endpoint_error_px": 22.258951657528446,
+          "body_length_error_px": 65.51145105446437,
+          "body_length_error_fraction": 0.08706379360013454
+        }
+      }
+    ],
+    "stop": {
+      "reason": "no_strict_area_decrease",
+      "updates_attempted": 2,
+      "updates_accepted": 1,
+      "converged_by_stability_rule": false
+    },
+    "final_vs_frozen": {
+      "area_change_px": -1179,
+      "mask_iou": 0.9337434533211406,
+      "pose_displacement": {
+        "mean_px": 2.519432537958457,
+        "median_px": 2.4534257398106973,
+        "max_px": 5.0
+      },
+      "latent_midline_displacement": {
+        "mean_px": 2.1898093612896963,
+        "median_px": 2.1023623851660673,
+        "max_px": 4.1918251180877615
+      },
+      "max_full_width_change_px": -5.590669450189175
+    }
+  },
+  "manual_trace_postfit_only": {
+    "original_classical_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 16.57921861528736,
+      "mean_point_distance_px": 18.421144734985248,
+      "p95_point_distance_px": 32.58004173793547,
+      "mean_tangent_error_deg": 14.236168653294547,
+      "p95_tangent_error_deg": 39.3637782558399,
+      "mean_endpoint_error_px": 10.595491077807644,
+      "body_length_error_px": 32.48088160431894,
+      "body_length_error_fraction": 0.04316663310659669
+    },
+    "frozen_one_pass_completed_body_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 9.721781811176253,
+      "mean_point_distance_px": 9.508354232011621,
+      "p95_point_distance_px": 13.632386213116348,
+      "mean_tangent_error_deg": 4.626396257014936,
+      "p95_tangent_error_deg": 12.821545665792877,
+      "mean_endpoint_error_px": 13.767865700135392,
+      "body_length_error_px": 33.1230154301461,
+      "body_length_error_fraction": 0.044020019895861996
+    },
+    "boundary_midpoint_iteration_pose": {
+      "target_reversed": false,
+      "median_point_distance_px": 12.00462224825571,
+      "mean_point_distance_px": 11.138611894018936,
+      "p95_point_distance_px": 16.28986923703121,
+      "mean_tangent_error_deg": 5.222503986002602,
+      "p95_tangent_error_deg": 13.756340279240025,
+      "mean_endpoint_error_px": 16.90356516765548,
+      "body_length_error_px": 46.93717640186367,
+      "body_length_error_fraction": 0.06237884480726185
+    }
+  },
+  "limitations": [
+    "This is a deterministic audit on one already accepted, fully visible frame.",
+    "Exact containment preserves Section-3 positives but does not prove that added pixels are worm.",
+    "The stopping thresholds are declared engineering tolerances, not validated biological constants.",
+    "The iteration recomputes the midpoint of its own modeled boundaries; it adds no new border evidence.",
+    "The manual trace was used only after fitting stopped and therefore cannot justify parameter choices."
+  ]
+}
