@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-003",
+  "title": "low-dimensional tangent representation oracle",
+  "frozen_before_run": true,
+  "evidence": {
+    "manifest": "experiments/scientific_exp_001_annotation/selection_manifest.json",
+    "manifest_sha256": "ba0a9ccc6f08844ecfcc52167271ba0cc13a47dafc8ba54bb2f25d1aec2619b3",
+    "annotations": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+    "annotations_sha256": "99af7f0beadf81dab8bb4b6dbab0aa952a7d461116708e97f12b54dda5e9902b",
+    "required_complete_traces": 17,
+    "excluded_truncated_traces": 12,
+    "excluded_not_identifiable_traces": 1,
+    "protected_2025_holdout_opened": false,
+    "single_annotator_repeatability_available": false
+  },
+  "representations": {
+    "body_points": 100,
+    "fixed_families": ["cubic_tangent_spline", "cosine_tangent"],
+    "shape_coefficients": [4, 6, 8, 12, 16, 24, 32],
+    "external_pose_values": ["translation_x", "translation_y", "global_rotation", "body_length"],
+    "pca_protocol": "leave_one_recording_out_only",
+    "pca_requested_coefficients": [4, 6, 8, 12, 16, 24, 32],
+    "pca_unsupported_when_requested_k_exceeds_any_fold_rank": true
+  },
+  "decision_rule": {
+    "eligible_families": ["cubic_tangent_spline", "cosine_tangent"],
+    "maximum_median_frame_point_error_px": 1.0,
+    "maximum_p95_frame_point_error_px": 1.25,
+    "maximum_median_frame_mean_tangent_error_deg": 4.0,
+    "maximum_p95_frame_mean_tangent_error_deg": 4.5,
+    "selection_order": [
+      "smallest_shape_coefficient_count",
+      "lowest_median_frame_mean_tangent_error_deg",
+      "lowest_median_frame_point_error_px",
+      "family_name"
+    ],
+    "pca_role": "recording-held-out diagnostic only; never selected from this 17-trace sample",
+    "pass_interpretation": "oracle representation sufficiency only, not image inference or human-level accuracy",
+    "failure_interpretation": "change representation before width, dynamics, or SMC"
+  },
+  "seed": 20260819
+}
