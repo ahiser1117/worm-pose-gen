@@ -1,0 +1,2468 @@
+{
+  "schema_version": 1,
+  "experiment": "EXP-SMC-007",
+  "config": "/home/alex/git/worm-pose-gen/configs/smc_exp_007_controlled_smc.json",
+  "config_sha256": "a00adacbdb3b5de7ec97e0318050246d576c753f7b6e56d06262d02023e3386b",
+  "input_hashes_verified": true,
+  "device": "cpu",
+  "strict_anchor_starts": [
+    {
+      "sample_id": "2023-09-19-01-f002565",
+      "recording": "2023-09-19-01",
+      "source_role": "complete single-annotator trace associated with strict accepted anchor; strict mask width profile"
+    },
+    {
+      "sample_id": "2023-09-27-01-f011985",
+      "recording": "2023-09-27-01",
+      "source_role": "complete single-annotator trace associated with strict accepted anchor; strict mask width profile"
+    },
+    {
+      "sample_id": "2023-09-27-01-f015410",
+      "recording": "2023-09-27-01",
+      "source_role": "complete single-annotator trace associated with strict accepted anchor; strict mask width profile"
+    }
+  ],
+  "calibration": {
+    "rows": [
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              1.7195168733596802,
+              1.9756299257278442,
+              2.2886295318603516,
+              2.4505233764648438
+            ],
+            "trajectory_mean": 1.6868598461151123,
+            "final": 2.4505233764648438
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              4.453198432922363,
+              7.480184555053711,
+              5.640336990356445,
+              5.162023544311523
+            ],
+            "trajectory_mean": 4.547148704528809,
+            "final": 5.162023544311523
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.26846313476562,
+            121.73696899414062,
+            115.02715301513672,
+            108.95564270019531
+          ],
+          "median": 118.38206100463867,
+          "median_fraction": 0.9248598515987396,
+          "minimum": 108.95564270019531
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.1587532758712769,
+            0.9637632966041565,
+            1.168412446975708,
+            2.450523853302002
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 89,
+          "final_shape_coefficient_std_mean": 0.03500176966190338
+        },
+        "runtime_seconds": 4.181772582232952
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 64,
+        "temperature": 0.01,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.7274532318115234,
+              2.7812671661376953,
+              2.2722201347351074,
+              1.377976417541504
+            ],
+            "trajectory_mean": 1.8317832946777344,
+            "final": 1.377976417541504
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.7274532318115234,
+              2.7812671661376953,
+              2.2722201347351074,
+              1.377976417541504
+            ],
+            "trajectory_mean": 1.8317832946777344,
+            "final": 1.377976417541504
+          }
+        },
+        "ess": {
+          "per_observation": [
+            54.23358917236328,
+            49.84621047973633,
+            41.083927154541016,
+            36.38707733154297
+          ],
+          "median": 45.46506881713867,
+          "median_fraction": 0.7103917002677917,
+          "minimum": 36.38707733154297
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.8967406749725342,
+            1.429531216621399,
+            2.124082326889038,
+            1.377977728843689
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 33,
+          "final_shape_coefficient_std_mean": 0.03274300694465637
+        },
+        "runtime_seconds": 2.208916889503598
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 256,
+        "temperature": 0.01,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.4349730014801025,
+              2.2682764530181885,
+              2.1036667823791504,
+              2.397955894470215
+            ],
+            "trajectory_mean": 1.8409744501113892,
+            "final": 2.397955894470215
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              4.318408966064453,
+              1.7419029474258423,
+              3.5574779510498047,
+              4.537601470947266
+            ],
+            "trajectory_mean": 2.831078290939331,
+            "final": 4.537601470947266
+          }
+        },
+        "ess": {
+          "per_observation": [
+            216.15158081054688,
+            198.6126708984375,
+            168.66000366210938,
+            143.6206512451172
+          ],
+          "median": 183.63633728027344,
+          "median_fraction": 0.7173294425010681,
+          "minimum": 143.6206512451172
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.6590579152107239,
+            0.9916203022003174,
+            1.8518403768539429,
+            2.0945303440093994
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 128,
+          "final_shape_coefficient_std_mean": 0.035757895559072495
+        },
+        "runtime_seconds": 8.413381999358535
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 512,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.5953454971313477,
+              3.293804407119751,
+              2.1297109127044678,
+              1.7220790386199951
+            ],
+            "trajectory_mean": 1.948188066482544,
+            "final": 1.7220790386199951
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              1.2881443500518799,
+              1.8861172199249268,
+              1.4337494373321533,
+              3.230114698410034
+            ],
+            "trajectory_mean": 1.5676250457763672,
+            "final": 3.230114698410034
+          }
+        },
+        "ess": {
+          "per_observation": [
+            498.28021240234375,
+            484.1445617675781,
+            460.75518798828125,
+            438.62835693359375
+          ],
+          "median": 472.4498748779297,
+          "median_fraction": 0.9227536618709564,
+          "minimum": 438.62835693359375
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.7879826426506042,
+            0.9620828032493591,
+            1.257867455482483,
+            1.6177982091903687
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 364,
+          "final_shape_coefficient_std_mean": 0.03566410392522812
+        },
+        "runtime_seconds": 54.21543673053384
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 512,
+        "temperature": 0.01,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              3.784613609313965,
+              2.4874792098999023,
+              2.412057876586914,
+              1.3581010103225708
+            ],
+            "trajectory_mean": 2.0084502696990967,
+            "final": 1.3581010103225708
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              1.6638693809509277,
+              3.0202548503875732,
+              2.207690477371216,
+              2.4069483280181885
+            ],
+            "trajectory_mean": 1.8597526550292969,
+            "final": 2.4069483280181885
+          }
+        },
+        "ess": {
+          "per_observation": [
+            428.5809631347656,
+            405.61578369140625,
+            326.53076171875,
+            305.1799011230469
+          ],
+          "median": 366.0732727050781,
+          "median_fraction": 0.7149868607521057,
+          "minimum": 305.1799011230469
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.7879826426506042,
+            0.9081618785858154,
+            0.7125909328460693,
+            1.3581016063690186
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 244,
+          "final_shape_coefficient_std_mean": 0.03527618572115898
+        },
+        "runtime_seconds": 17.30505894497037
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 256,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.581852912902832,
+              4.22874641418457,
+              2.057116746902466,
+              1.499210238456726
+            ],
+            "trajectory_mean": 2.073385238647461,
+            "final": 1.499210238456726
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.5252039432525635,
+              3.4970309734344482,
+              3.838794469833374,
+              4.553415298461914
+            ],
+            "trajectory_mean": 2.8828890323638916,
+            "final": 4.553415298461914
+          }
+        },
+        "ess": {
+          "per_observation": [
+            249.21412658691406,
+            243.23338317871094,
+            231.846923828125,
+            214.89471435546875
+          ],
+          "median": 237.54015350341797,
+          "median_fraction": 0.9278912246227264,
+          "minimum": 214.89471435546875
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.6590579152107239,
+            1.0486445426940918,
+            1.4915844202041626,
+            1.4992098808288574
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 188,
+          "final_shape_coefficient_std_mean": 0.0351373665034771
+        },
+        "runtime_seconds": 8.605240202508867
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 32,
+        "temperature": 0.01,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              3.306976318359375,
+              3.6483728885650635,
+              1.2674899101257324,
+              2.6986911296844482
+            ],
+            "trajectory_mean": 2.1843059062957764,
+            "final": 2.6986911296844482
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              3.306976318359375,
+              2.0709524154663086,
+              4.893406867980957,
+              3.8071448802948
+            ],
+            "trajectory_mean": 2.8156962394714355,
+            "final": 3.8071448802948
+          }
+        },
+        "ess": {
+          "per_observation": [
+            28.814416885375977,
+            26.906661987304688,
+            18.467641830444336,
+            16.06534194946289
+          ],
+          "median": 22.68715190887451,
+          "median_fraction": 0.7089734971523285,
+          "minimum": 16.06534194946289
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.1005066633224487,
+            1.426074504852295,
+            1.2674909830093384,
+            2.698690891265869
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 17,
+          "final_shape_coefficient_std_mean": 0.03565375506877899
+        },
+        "runtime_seconds": 1.186295384541154
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 64,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              4.017482280731201,
+              3.2076354026794434,
+              2.5987613201141357,
+              1.2533493041992188
+            ],
+            "trajectory_mean": 2.2154457569122314,
+            "final": 1.2533493041992188
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.079918622970581,
+              3.604438066482544,
+              2.5350189208984375,
+              5.274707794189453
+            ],
+            "trajectory_mean": 2.6988167762756348,
+            "final": 5.274707794189453
+          }
+        },
+        "ess": {
+          "per_observation": [
+            62.40354919433594,
+            61.086265563964844,
+            57.405487060546875,
+            54.85383224487305
+          ],
+          "median": 59.24587631225586,
+          "median_fraction": 0.9257168173789978,
+          "minimum": 54.85383224487305
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.8967406749725342,
+            0.9300601482391357,
+            1.7591673135757446,
+            1.2533503770828247
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 47,
+          "final_shape_coefficient_std_mean": 0.03421521931886673
+        },
+        "runtime_seconds": 2.1175134126096964
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 32,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              3.6931352615356445,
+              5.1710286140441895,
+              1.5236151218414307,
+              2.6838502883911133
+            ],
+            "trajectory_mean": 2.614325761795044,
+            "final": 2.6838502883911133
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              3.306976318359375,
+              2.0709524154663086,
+              4.893406867980957,
+              4.123718738555908
+            ],
+            "trajectory_mean": 2.8790109157562256,
+            "final": 4.123718738555908
+          }
+        },
+        "ess": {
+          "per_observation": [
+            31.57356071472168,
+            30.874996185302734,
+            29.347633361816406,
+            25.963531494140625
+          ],
+          "median": 30.11131477355957,
+          "median_fraction": 0.9409785866737366,
+          "minimum": 25.963531494140625
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.1005066633224487,
+            1.426074504852295,
+            1.523612380027771,
+            2.6838696002960205
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 28,
+          "final_shape_coefficient_std_mean": 0.03445938229560852
+        },
+        "runtime_seconds": 1.103172947652638
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7001,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.01,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.986041307449341,
+              2.7213966846466064,
+              3.5686702728271484,
+              4.631868362426758
+            ],
+            "trajectory_mean": 2.781595230102539,
+            "final": 4.631868362426758
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.5653371810913086,
+              2.099043369293213,
+              2.078037738800049,
+              0.0
+            ],
+            "trajectory_mean": 1.348483681678772,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              4.134481430053711,
+              4.094266891479492,
+              4.974027633666992,
+              2.11643648147583
+            ],
+            "trajectory_mean": 3.063842296600342,
+            "final": 2.11643648147583
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.630225896835327,
+              4.306181907653809,
+              4.086945056915283,
+              4.060543060302734
+            ],
+            "trajectory_mean": 3.0167794227600098,
+            "final": 4.060543060302734
+          }
+        },
+        "ess": {
+          "per_observation": [
+            110.99530792236328,
+            99.96348571777344,
+            80.39212036132812,
+            78.2082748413086
+          ],
+          "median": 90.17780303955078,
+          "median_fraction": 0.7045140862464905,
+          "minimum": 78.2082748413086
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.1587532758712769,
+            0.9637632966041565,
+            1.596582293510437,
+            2.1164355278015137
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 60,
+          "final_shape_coefficient_std_mean": 0.034653741866350174
+        },
+        "runtime_seconds": 4.355027430690825
+      }
+    ],
+    "selected_particle_count": 128,
+    "selected_temperature": 0.03,
+    "selection_rule": "lowest median forward trajectory error, then smallest particle count, then highest median ESS fraction"
+  },
+  "evaluation": {
+    "per_case": [
+      {
+        "scenario": "nominal",
+        "seed": 7101,
+        "start_sample_id": "2023-09-27-01-f011985",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              1.1238163709640503,
+              2.0841164588928223,
+              2.3643221855163574,
+              3.334054470062256
+            ],
+            "trajectory_mean": 1.7812618017196655,
+            "final": 3.334054470062256
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.422938346862793,
+              2.0537784099578857,
+              0.8416604399681091,
+              0.0
+            ],
+            "trajectory_mean": 0.8636754155158997,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.5390071868896484,
+              3.75124454498291,
+              2.2960638999938965,
+              1.598649024963379
+            ],
+            "trajectory_mean": 2.0369930267333984,
+            "final": 1.598649024963379
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              1.9306933879852295,
+              1.6277399063110352,
+              1.4446362257003784,
+              2.807558536529541
+            ],
+            "trajectory_mean": 1.562125563621521,
+            "final": 2.807558536529541
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.25663757324219,
+            122.22561645507812,
+            119.38520812988281,
+            115.99744415283203
+          ],
+          "median": 120.80541229248047,
+          "median_fraction": 0.9437922835350037,
+          "minimum": 115.99744415283203
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.9042598009109497,
+            0.9528756737709045,
+            1.4446296691894531,
+            1.5986480712890625
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 94,
+          "final_shape_coefficient_std_mean": 0.03497380390763283
+        },
+        "runtime_seconds": 12.880023142322898
+      },
+      {
+        "scenario": "nominal",
+        "seed": 7102,
+        "start_sample_id": "2023-09-27-01-f015410",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.6866543292999268,
+              4.62155818939209,
+              6.038058280944824,
+              6.467899799346924
+            ],
+            "trajectory_mean": 3.962834119796753,
+            "final": 6.467899799346924
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.3106669187545776,
+              3.262697219848633,
+              2.048929214477539,
+              0.0
+            ],
+            "trajectory_mean": 1.3244587182998657,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              1.822091817855835,
+              4.988522529602051,
+              3.527085065841675,
+              1.3315051794052124
+            ],
+            "trajectory_mean": 2.333840847015381,
+            "final": 1.3315051794052124
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              1.822091817855835,
+              4.988522529602051,
+              3.527085065841675,
+              1.3315051794052124
+            ],
+            "trajectory_mean": 2.333840847015381,
+            "final": 1.3315051794052124
+          }
+        },
+        "ess": {
+          "per_observation": [
+            123.44608306884766,
+            107.4330062866211,
+            104.08147430419922,
+            105.89998626708984
+          ],
+          "median": 106.66649627685547,
+          "median_fraction": 0.8333320021629333,
+          "minimum": 104.08147430419922
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.7509047985076904,
+            2.3214361667633057,
+            2.802333354949951,
+            1.331504464149475
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 85,
+          "final_shape_coefficient_std_mean": 0.03671383485198021
+        },
+        "runtime_seconds": 16.163210253231227
+      },
+      {
+        "scenario": "process_scale_0.5",
+        "seed": 7101,
+        "start_sample_id": "2023-09-27-01-f015410",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              0.6440471410751343,
+              1.0317280292510986,
+              1.248133897781372,
+              1.6599558591842651
+            ],
+            "trajectory_mean": 0.9167730212211609,
+            "final": 1.6599558591842651
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              0.7314163446426392,
+              0.9821404814720154,
+              0.4398128390312195,
+              0.0
+            ],
+            "trajectory_mean": 0.4306739270687103,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              0.7715795636177063,
+              2.1952314376831055,
+              1.4316229820251465,
+              1.2042224407196045
+            ],
+            "trajectory_mean": 1.1205313205718994,
+            "final": 1.2042224407196045
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.001565933227539,
+              2.479865074157715,
+              2.2190754413604736,
+              3.072479248046875
+            ],
+            "trajectory_mean": 1.9545971155166626,
+            "final": 3.072479248046875
+          }
+        },
+        "ess": {
+          "per_observation": [
+            124.76515197753906,
+            118.67595672607422,
+            116.40425872802734,
+            111.67813873291016
+          ],
+          "median": 117.54010772705078,
+          "median_fraction": 0.9182820916175842,
+          "minimum": 111.67813873291016
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.7715800404548645,
+            0.7502501606941223,
+            1.327768087387085,
+            1.204227089881897
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 92,
+          "final_shape_coefficient_std_mean": 0.035587407648563385
+        },
+        "runtime_seconds": 17.81979888677597
+      },
+      {
+        "scenario": "process_scale_0.5",
+        "seed": 7102,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              1.3321654796600342,
+              2.405284881591797,
+              3.018139123916626,
+              3.1912896633148193
+            ],
+            "trajectory_mean": 1.9893758296966553,
+            "final": 3.1912896633148193
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              0.7280731201171875,
+              1.8368825912475586,
+              1.122424840927124,
+              0.0
+            ],
+            "trajectory_mean": 0.737476110458374,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              1.595177412033081,
+              4.822938919067383,
+              2.701683282852173,
+              2.6926891803741455
+            ],
+            "trajectory_mean": 2.3624978065490723,
+            "final": 2.6926891803741455
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.788792610168457,
+              2.555710792541504,
+              3.7296111583709717,
+              3.4108896255493164
+            ],
+            "trajectory_mean": 2.4970009326934814,
+            "final": 3.4108896255493164
+          }
+        },
+        "ess": {
+          "per_observation": [
+            126.07354736328125,
+            121.1717300415039,
+            116.26285552978516,
+            117.67888641357422
+          ],
+          "median": 119.42530822753906,
+          "median_fraction": 0.9330102205276489,
+          "minimum": 116.26285552978516
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.9760461449623108,
+            1.7438992261886597,
+            1.8141506910324097,
+            1.957859992980957
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 97,
+          "final_shape_coefficient_std_mean": 0.03554916009306908
+        },
+        "runtime_seconds": 17.2291651526466
+      },
+      {
+        "scenario": "process_scale_2.0",
+        "seed": 7101,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.628915309906006,
+              4.52780294418335,
+              5.515429496765137,
+              7.718919277191162
+            ],
+            "trajectory_mean": 4.078213691711426,
+            "final": 7.718919277191162
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.753272771835327,
+              4.507232189178467,
+              1.8800567388534546,
+              0.0
+            ],
+            "trajectory_mean": 1.828112244606018,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              4.404831409454346,
+              5.0897908210754395,
+              2.8186447620391846,
+              4.458686351776123
+            ],
+            "trajectory_mean": 3.3543906211853027,
+            "final": 4.458686351776123
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.2420880794525146,
+              3.4628546237945557,
+              3.956073045730591,
+              5.3724446296691895
+            ],
+            "trajectory_mean": 3.0066919326782227,
+            "final": 5.3724446296691895
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.51336669921875,
+            112.47533416748047,
+            107.552490234375,
+            100.76889038085938
+          ],
+          "median": 110.01391220092773,
+          "median_fraction": 0.8594836890697479,
+          "minimum": 100.76889038085938
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            2.0180182456970215,
+            2.0818915367126465,
+            2.339406728744507,
+            3.8541202545166016
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 78,
+          "final_shape_coefficient_std_mean": 0.03537406027317047
+        },
+        "runtime_seconds": 19.343905296176672
+      },
+      {
+        "scenario": "process_scale_2.0",
+        "seed": 7102,
+        "start_sample_id": "2023-09-27-01-f011985",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              4.871002197265625,
+              9.450465202331543,
+              11.989394187927246,
+              11.892287254333496
+            ],
+            "trajectory_mean": 7.64063024520874,
+            "final": 11.892287254333496
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              2.4235637187957764,
+              5.936252593994141,
+              4.37218713760376,
+              0.0
+            ],
+            "trajectory_mean": 2.546400785446167,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              4.0578203201293945,
+              6.867483615875244,
+              6.571057319641113,
+              3.531593084335327
+            ],
+            "trajectory_mean": 4.205590724945068,
+            "final": 3.531593084335327
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              4.157534599304199,
+              6.587291240692139,
+              9.780208587646484,
+              8.198237419128418
+            ],
+            "trajectory_mean": 5.744654655456543,
+            "final": 8.198237419128418
+          }
+        },
+        "ess": {
+          "per_observation": [
+            115.9391098022461,
+            97.81066131591797,
+            67.97286224365234,
+            59.44743728637695
+          ],
+          "median": 82.89176177978516,
+          "median_fraction": 0.6475918889045715,
+          "minimum": 59.44743728637695
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            2.702789068222046,
+            5.800828456878662,
+            6.571057319641113,
+            3.531593084335327
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 58,
+          "final_shape_coefficient_std_mean": 0.035533785820007324
+        },
+        "runtime_seconds": 19.31396838091314
+      },
+      {
+        "scenario": "middle_observation_dropout",
+        "seed": 7101,
+        "start_sample_id": "2023-09-27-01-f011985",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              1.1238163709640503,
+              2.0841164588928223,
+              2.3643221855163574,
+              3.334054470062256
+            ],
+            "trajectory_mean": 1.7812618017196655,
+            "final": 3.334054470062256
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.422938346862793,
+              2.0537784099578857,
+              0.8416604399681091,
+              0.0
+            ],
+            "trajectory_mean": 0.8636754155158997,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.628779888153076,
+              2.3566811084747314,
+              2.8292531967163086,
+              1.3589798212051392
+            ],
+            "trajectory_mean": 1.8347387313842773,
+            "final": 1.3589798212051392
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.441490650177002,
+              2.8352694511413574,
+              2.675145149230957,
+              2.9619269371032715
+            ],
+            "trajectory_mean": 2.1827664375305176,
+            "final": 2.9619269371032715
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.25663757324219,
+            128.0,
+            118.35637664794922,
+            113.58712768554688
+          ],
+          "median": 121.8065071105957,
+          "median_fraction": 0.9516133368015289,
+          "minimum": 113.58712768554688
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.9042598009109497,
+            0.9528756737709045,
+            1.2311855554580688,
+            1.3589814901351929
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 105,
+          "final_shape_coefficient_std_mean": 0.036265403032302856
+        },
+        "runtime_seconds": 14.809992385096848
+      },
+      {
+        "scenario": "middle_observation_dropout",
+        "seed": 7102,
+        "start_sample_id": "2023-09-27-01-f015410",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.6866543292999268,
+              4.62155818939209,
+              6.038058280944824,
+              6.467899799346924
+            ],
+            "trajectory_mean": 3.962834119796753,
+            "final": 6.467899799346924
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.3106669187545776,
+              3.262697219848633,
+              2.048929214477539,
+              0.0
+            ],
+            "trajectory_mean": 1.3244587182998657,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              3.5633678436279297,
+              6.702913761138916,
+              3.841970920562744,
+              2.354670524597168
+            ],
+            "trajectory_mean": 3.2925846576690674,
+            "final": 2.354670524597168
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.820775032043457,
+              2.7003333568573,
+              2.5292534828186035,
+              2.5460948944091797
+            ],
+            "trajectory_mean": 2.119291305541992,
+            "final": 2.5460948944091797
+          }
+        },
+        "ess": {
+          "per_observation": [
+            123.44608306884766,
+            128.0,
+            103.59485626220703,
+            108.45906066894531
+          ],
+          "median": 115.95257186889648,
+          "median_fraction": 0.9058794677257538,
+          "minimum": 103.59485626220703
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.7509047985076904,
+            2.3214361667633057,
+            2.5292513370513916,
+            2.3546695709228516
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 98,
+          "final_shape_coefficient_std_mean": 0.03584589064121246
+        },
+        "runtime_seconds": 14.607878426089883
+      },
+      {
+        "scenario": "width_mismatch_1.15",
+        "seed": 7101,
+        "start_sample_id": "2023-09-27-01-f015410",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              1.2893656492233276,
+              2.0632901191711426,
+              2.4971835613250732,
+              3.321718454360962
+            ],
+            "trajectory_mean": 1.8343114852905273,
+            "final": 3.321718454360962
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.4649972915649414,
+              1.9652210474014282,
+              0.880606472492218,
+              0.0
+            ],
+            "trajectory_mean": 0.8621649742126465,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              1.4089460372924805,
+              1.447438359260559,
+              1.6597627401351929,
+              2.065924644470215
+            ],
+            "trajectory_mean": 1.3164143562316895,
+            "final": 2.065924644470215
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.374920606613159,
+              3.038731575012207,
+              4.47519063949585,
+              4.285411357879639
+            ],
+            "trajectory_mean": 2.834850788116455,
+            "final": 4.285411357879639
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.20390319824219,
+            116.6414566040039,
+            113.40609741210938,
+            105.33879089355469
+          ],
+          "median": 115.02377700805664,
+          "median_fraction": 0.8986232578754425,
+          "minimum": 105.33879089355469
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            0.8872819542884827,
+            0.9842891693115234,
+            1.1973671913146973,
+            1.4275944232940674
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 93,
+          "final_shape_coefficient_std_mean": 0.03516945615410805
+        },
+        "runtime_seconds": 19.736956370063126
+      },
+      {
+        "scenario": "width_mismatch_1.15",
+        "seed": 7102,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.665165662765503,
+              4.810670375823975,
+              6.039455413818359,
+              6.385969161987305
+            ],
+            "trajectory_mean": 3.9802520275115967,
+            "final": 6.385969161987305
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.455068826675415,
+              3.6759421825408936,
+              2.2415518760681152,
+              0.0
+            ],
+            "trajectory_mean": 1.4745125770568848,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.4640517234802246,
+              6.4175238609313965,
+              5.373347282409668,
+              4.1729960441589355
+            ],
+            "trajectory_mean": 3.6855835914611816,
+            "final": 4.1729960441589355
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.288346767425537,
+              4.664491176605225,
+              4.923054218292236,
+              3.489131450653076
+            ],
+            "trajectory_mean": 3.0730044841766357,
+            "final": 3.489131450653076
+          }
+        },
+        "ess": {
+          "per_observation": [
+            125.03553771972656,
+            114.91175079345703,
+            113.18363189697266,
+            112.25218200683594
+          ],
+          "median": 114.04769134521484,
+          "median_fraction": 0.890997588634491,
+          "minimum": 112.25218200683594
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.393857717514038,
+            2.694624662399292,
+            3.6354336738586426,
+            3.234537124633789
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 82,
+          "final_shape_coefficient_std_mean": 0.03617784008383751
+        },
+        "runtime_seconds": 19.516917928121984
+      },
+      {
+        "scenario": "partial_fov",
+        "seed": 7101,
+        "start_sample_id": "2023-09-19-01-f002565",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              1.3130247592926025,
+              2.2533621788024902,
+              2.75445556640625,
+              3.862546443939209
+            ],
+            "trajectory_mean": 2.036677837371826,
+            "final": 3.862546443939209
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.3805761337280273,
+              2.2558717727661133,
+              0.9444146752357483,
+              0.0
+            ],
+            "trajectory_mean": 0.9161725044250488,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              2.28708553314209,
+              4.760611057281494,
+              3.562572717666626,
+              2.1472818851470947
+            ],
+            "trajectory_mean": 2.5515103340148926,
+            "final": 2.1472818851470947
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              2.28708553314209,
+              4.760611057281494,
+              3.562572717666626,
+              2.1472818851470947
+            ],
+            "trajectory_mean": 2.5515103340148926,
+            "final": 2.1472818851470947
+          }
+        },
+        "ess": {
+          "per_observation": [
+            126.5196762084961,
+            121.11852264404297,
+            118.05612182617188,
+            113.1820068359375
+          ],
+          "median": 119.58732223510742,
+          "median_fraction": 0.9342759549617767,
+          "minimum": 113.1820068359375
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.255875587463379,
+            1.1747691631317139,
+            1.393376111984253,
+            1.5589443445205688
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 101,
+          "final_shape_coefficient_std_mean": 0.03565351665019989
+        },
+        "runtime_seconds": 20.253709614276886
+      },
+      {
+        "scenario": "partial_fov",
+        "seed": 7102,
+        "start_sample_id": "2023-09-27-01-f011985",
+        "particle_count": 128,
+        "temperature": 0.03,
+        "method_errors_px": {
+          "hold": {
+            "per_frame": [
+              0.0,
+              2.4391934871673584,
+              4.7336506843566895,
+              5.997796058654785,
+              5.947017669677734
+            ],
+            "trajectory_mean": 3.82353138923645,
+            "final": 5.947017669677734
+          },
+          "two_anchor_latent_interpolation": {
+            "per_frame": [
+              0.0,
+              1.2165920734405518,
+              2.9619150161743164,
+              2.1871609687805176,
+              0.0
+            ],
+            "trajectory_mean": 1.2731335163116455,
+            "final": 0.0
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "per_frame": [
+              0.0,
+              1.8506674766540527,
+              3.5175676345825195,
+              2.891974687576294,
+              1.9054687023162842
+            ],
+            "trajectory_mean": 2.0331356525421143,
+            "final": 1.9054687023162842
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "per_frame": [
+              0.0,
+              3.820935010910034,
+              4.45797872543335,
+              4.181622505187988,
+              3.367938756942749
+            ],
+            "trajectory_mean": 3.1656949520111084,
+            "final": 3.367938756942749
+          }
+        },
+        "ess": {
+          "per_observation": [
+            123.645263671875,
+            118.41604614257812,
+            104.37201690673828,
+            101.89242553710938
+          ],
+          "median": 111.3940315246582,
+          "median_fraction": 0.8702658712863922,
+          "minimum": 101.89242553710938
+        },
+        "resampling_events": 3,
+        "truth_survival": {
+          "threshold_px": 8.0,
+          "per_frame": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "fraction": 1.0,
+          "minimum_particle_error_px": [
+            0.0,
+            1.3254717588424683,
+            2.660794734954834,
+            2.8146162033081055,
+            1.9051016569137573
+          ]
+        },
+        "diversity": {
+          "unique_root_ancestors": 88,
+          "final_shape_coefficient_std_mean": 0.035857345908880234
+        },
+        "runtime_seconds": 18.138708888553083
+      }
+    ],
+    "aggregate_by_scenario": {
+      "nominal": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.8720479607582092,
+              "mean": 2.8720479607582092,
+              "p95": 3.8537555038928986
+            },
+            "final_px": {
+              "n": 2,
+              "median": 4.90097713470459,
+              "mean": 4.90097713470459,
+              "p95": 6.31120753288269
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.0940670669078827,
+              "mean": 1.0940670669078827,
+              "p95": 1.3014195531606674
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.1854169368743896,
+              "mean": 2.1854169368743896,
+              "p95": 2.3189984560012817
+            },
+            "final_px": {
+              "n": 2,
+              "median": 1.4650771021842957,
+              "mean": 1.4650771021842957,
+              "p95": 1.5852918326854706
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.947983205318451,
+              "mean": 1.947983205318451,
+              "p95": 2.2952550828456877
+            },
+            "final_px": {
+              "n": 2,
+              "median": 2.0695318579673767,
+              "mean": 2.0695318579673767,
+              "p95": 2.7337558686733243
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.8885621428489685,
+          "mean": 0.8885621428489685,
+          "p95": 0.9382692694664001
+        },
+        "runtime_seconds": 29.043233395554125
+      },
+      "process_scale_0.5": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.453074425458908,
+              "mean": 1.453074425458908,
+              "p95": 1.9357456892728806
+            },
+            "final_px": {
+              "n": 2,
+              "median": 2.4256227612495422,
+              "mean": 2.4256227612495422,
+              "p95": 3.1147229731082917
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 0.5840750187635422,
+              "mean": 0.5840750187635422,
+              "p95": 0.7221360012888908
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.7415145635604858,
+              "mean": 1.7415145635604858,
+              "p95": 2.3003994822502136
+            },
+            "final_px": {
+              "n": 2,
+              "median": 1.948455810546875,
+              "mean": 1.948455810546875,
+              "p95": 2.6182658433914185
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.225799024105072,
+              "mean": 2.225799024105072,
+              "p95": 2.4698807418346407
+            },
+            "final_px": {
+              "n": 2,
+              "median": 3.2416844367980957,
+              "mean": 3.2416844367980957,
+              "p95": 3.393969106674194
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.9256461560726166,
+          "mean": 0.9256461560726166,
+          "p95": 0.9322738140821457
+        },
+        "runtime_seconds": 35.04896403942257
+      },
+      "process_scale_2.0": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 5.859421968460083,
+              "mean": 5.859421968460083,
+              "p95": 7.462509417533874
+            },
+            "final_px": {
+              "n": 2,
+              "median": 9.805603265762329,
+              "mean": 9.805603265762329,
+              "p95": 11.683618855476379
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.1872565150260925,
+              "mean": 2.1872565150260925,
+              "p95": 2.5104863584041595
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 3.7799906730651855,
+              "mean": 3.7799906730651855,
+              "p95": 4.16303071975708
+            },
+            "final_px": {
+              "n": 2,
+              "median": 3.995139718055725,
+              "mean": 3.995139718055725,
+              "p95": 4.412331688404083
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 4.375673294067383,
+              "mean": 4.375673294067383,
+              "p95": 5.607756519317626
+            },
+            "final_px": {
+              "n": 2,
+              "median": 6.785341024398804,
+              "mean": 6.785341024398804,
+              "p95": 8.056947779655456
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.7535377889871597,
+          "mean": 0.7535377889871597,
+          "p95": 0.8488890990614891
+        },
+        "runtime_seconds": 38.65787367708981
+      },
+      "middle_observation_dropout": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.8720479607582092,
+              "mean": 2.8720479607582092,
+              "p95": 3.8537555038928986
+            },
+            "final_px": {
+              "n": 2,
+              "median": 4.90097713470459,
+              "mean": 4.90097713470459,
+              "p95": 6.31120753288269
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.0940670669078827,
+              "mean": 1.0940670669078827,
+              "p95": 1.3014195531606674
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.5636616945266724,
+              "mean": 2.5636616945266724,
+              "p95": 3.2196923613548276
+            },
+            "final_px": {
+              "n": 2,
+              "median": 1.8568251729011536,
+              "mean": 1.8568251729011536,
+              "p95": 2.3048859894275666
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.151028871536255,
+              "mean": 2.151028871536255,
+              "p95": 2.1795926809310915
+            },
+            "final_px": {
+              "n": 2,
+              "median": 2.7540109157562256,
+              "mean": 2.7540109157562256,
+              "p95": 2.9411353349685667
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.9287464022636414,
+          "mean": 0.9287464022636414,
+          "p95": 0.9493266433477402
+        },
+        "runtime_seconds": 29.41787081118673
+      },
+      "width_mismatch_1.15": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.907281756401062,
+              "mean": 2.907281756401062,
+              "p95": 3.8729550004005433
+            },
+            "final_px": {
+              "n": 2,
+              "median": 4.853843808174133,
+              "mean": 4.853843808174133,
+              "p95": 6.232756626605988
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.1683387756347656,
+              "mean": 1.1683387756347656,
+              "p95": 1.4438951969146727
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.5009989738464355,
+              "mean": 2.5009989738464355,
+              "p95": 3.567125129699707
+            },
+            "final_px": {
+              "n": 2,
+              "median": 3.119460344314575,
+              "mean": 3.119460344314575,
+              "p95": 4.0676424741745
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.9539276361465454,
+              "mean": 2.9539276361465454,
+              "p95": 3.061096799373627
+            },
+            "final_px": {
+              "n": 2,
+              "median": 3.8872714042663574,
+              "mean": 3.8872714042663574,
+              "p95": 4.2455973625183105
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.8948104232549667,
+          "mean": 0.8948104232549667,
+          "p95": 0.8982419744133949
+        },
+        "runtime_seconds": 39.25387429818511
+      },
+      "partial_fov": {
+        "cases": 2,
+        "methods": {
+          "hold": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.930104613304138,
+              "mean": 2.930104613304138,
+              "p95": 3.734188711643219
+            },
+            "final_px": {
+              "n": 2,
+              "median": 4.904782056808472,
+              "mean": 4.904782056808472,
+              "p95": 5.842794108390808
+            }
+          },
+          "two_anchor_latent_interpolation": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 1.0946530103683472,
+              "mean": 1.0946530103683472,
+              "p95": 1.2552854657173156
+            },
+            "final_px": {
+              "n": 2,
+              "median": 0.0,
+              "mean": 0.0,
+              "p95": 0.0
+            }
+          },
+          "forward_bootstrap_smc_map_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.2923229932785034,
+              "mean": 2.2923229932785034,
+              "p95": 2.5255915999412535
+            },
+            "final_px": {
+              "n": 2,
+              "median": 2.0263752937316895,
+              "mean": 2.0263752937316895,
+              "p95": 2.135191226005554
+            }
+          },
+          "terminal_right_anchor_reweighted_genealogy": {
+            "trajectory_mean_px": {
+              "n": 2,
+              "median": 2.8586026430130005,
+              "mean": 2.8586026430130005,
+              "p95": 3.1349857211112977
+            },
+            "final_px": {
+              "n": 2,
+              "median": 2.757610321044922,
+              "mean": 2.757610321044922,
+              "p95": 3.306905913352966
+            }
+          }
+        },
+        "truth_survival_fraction": {
+          "n": 2,
+          "median": 1.0,
+          "mean": 1.0,
+          "p95": 1.0
+        },
+        "ess_median_fraction": {
+          "n": 2,
+          "median": 0.9022709131240845,
+          "mean": 0.9022709131240845,
+          "p95": 0.9310754507780075
+        },
+        "runtime_seconds": 38.39241850282997
+      }
+    }
+  },
+  "decision": {
+    "passed": true,
+    "decision": "SUPPORTED_CONTROLLED_SYNTHETIC_ONLY",
+    "checks": {
+      "nominal_forward": true,
+      "nominal_right_reweighted": true,
+      "nominal_truth_survival": true,
+      "stress_nominal": true,
+      "stress_process_scale_0.5": true,
+      "stress_process_scale_2.0": true,
+      "stress_middle_observation_dropout": true,
+      "stress_width_mismatch_1.15": true,
+      "stress_partial_fov": true
+    },
+    "comparative_outcome": {
+      "two_anchor_interpolation_lowest_median_trajectory_error_all_scenarios": true,
+      "terminal_reweighting_improves_forward_smc_scenarios": [
+        "nominal",
+        "middle_observation_dropout"
+      ],
+      "terminal_reweighting_improvement_count": 2,
+      "scenario_count": 6
+    },
+    "scientific_decisions": {
+      "controlled_algorithm_execution_and_truth_survival": "SUPPORTED_SYNTHETIC_ONLY",
+      "terminal_anchor_smoothing_benefit": "NOT_SUPPORTED",
+      "smc_superiority_over_two_anchor_interpolation": "NOT_SUPPORTED",
+      "H8_supported": false
+    },
+    "natural_motion_claim_allowed": false,
+    "natural_smc_authorized": false
+  },
+  "omissions": {
+    "particle_count_1024": "optional and omitted for bounded CPU runtime",
+    "self_contact_bridge": "omitted_as_not_feasible_without_inventing_a_non_random_walk_motion_model"
+  },
+  "trajectory_artifact": {
+    "configured_path": "/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_smc_007/controlled_trajectories.pt",
+    "resolved_path": "/storage/fs/temp_data4/alex/external_artifacts/experiments/worm_pose_gen/exp_smc_007/controlled_trajectories.pt",
+    "sha256": "78631e60f4a25ef78b94aba655fb7edaa21ad07522729f3010cd393ce5fa154e",
+    "bytes": 86799
+  },
+  "evidence_boundary": {
+    "truth": "synthetic zero-drift latent random walk",
+    "real_strict_anchors_role": "initial shape and width only",
+    "empirical_process_scale_claim_allowed": false,
+    "natural_motion_claim_allowed": false,
+    "protected_2025_holdout_opened": false
+  },
+  "git_commit": "52c8047e5ac68f18284279acd9a5f1f73d005625"
+}
