@@ -170,6 +170,133 @@ def _inside(mask: BoolArray, x: float, y: float) -> bool:
     return 0 <= yi < mask.shape[0] and 0 <= xi < mask.shape[1] and bool(mask[yi, xi])
 
 
+def _terminal_curve(points_xy: FloatArray, context_points: int) -> tuple[float, float]:
+    """Fit terminal tangent angle and constant curvature from an oriented path."""
+
+    local = points_xy[-min(context_points, len(points_xy)) :]
+    difference = np.diff(local, axis=0)
+    segment_length = np.linalg.norm(difference, axis=1)
+    if np.any(segment_length <= 1e-9):
+        raise ValueError("consecutive centerline points must be distinct")
+    arc = np.concatenate(([0.0], np.cumsum(segment_length)))
+    midpoint = 0.5 * (arc[:-1] + arc[1:]) - arc[-1]
+    angle = np.unwrap(np.arctan2(difference[:, 1], difference[:, 0]))
+    design = np.column_stack((np.ones_like(midpoint), midpoint))
+    terminal_angle, fitted_curvature = np.linalg.lstsq(design, angle, rcond=None)[0]
+    return float(terminal_angle), float(fitted_curvature)
+
+
+def _advance_curve(
+    point_xy: FloatArray, tangent_angle: float, curvature: float, distance: float
+) -> tuple[FloatArray, float]:
+    """Advance exactly along a constant-curvature arc in image coordinates."""
+
+    next_angle = tangent_angle + curvature * distance
+    if abs(curvature) < 1e-10:
+        offset = distance * np.asarray(
+            [math.cos(tangent_angle), math.sin(tangent_angle)], dtype=np.float64
+        )
+    else:
+        offset = np.asarray(
+            [
+                (math.sin(next_angle) - math.sin(tangent_angle)) / curvature,
+                (math.cos(tangent_angle) - math.cos(next_angle)) / curvature,
+            ],
+            dtype=np.float64,
+        )
+    return point_xy + offset, next_angle
+
+
+def _extend_oriented_endpoint(
+    points_xy: FloatArray,
+    mask: BoolArray,
+    *,
+    context_points: int,
+    step: float,
+    max_extension: float,
+) -> list[FloatArray]:
+    """Extend the final endpoint of a path already oriented toward that end."""
+
+    tangent_angle, fitted_curvature = _terminal_curve(points_xy, context_points)
+    current = points_xy[-1].copy()
+    travelled = 0.0
+    extension: list[FloatArray] = []
+    while travelled < max_extension:
+        distance = min(step, max_extension - travelled)
+        candidate, candidate_angle = _advance_curve(
+            current, tangent_angle, fitted_curvature, distance
+        )
+        if _inside(mask, *candidate):
+            extension.append(candidate)
+            current, tangent_angle = candidate, candidate_angle
+            travelled += distance
+            continue
+
+        # Locate the first exit along the curved step. ``low`` remains inside,
+        # so the returned endpoint lies on the foreground side of the boundary.
+        low, high = 0.0, distance
+        for _ in range(32):
+            middle = 0.5 * (low + high)
+            trial, _ = _advance_curve(current, tangent_angle, fitted_curvature, middle)
+            if _inside(mask, *trial):
+                low = middle
+            else:
+                high = middle
+        boundary, _ = _advance_curve(current, tangent_angle, fitted_curvature, low)
+        if np.linalg.norm(boundary - current) > 1e-7:
+            extension.append(boundary)
+        return extension
+    raise RuntimeError("curve continuation did not reach the mask boundary within max_extension")
+
+
+def extend_centerline_to_mask_boundary(
+    centerline_xy: NDArray[np.generic],
+    mask: NDArray[np.generic],
+    *,
+    context_points: int = 8,
+    step: float = 0.25,
+    max_extension: float | None = None,
+) -> FloatArray:
+    """Continue both ends of an ordered centerline to a binary-mask boundary.
+
+    Each end uses a least-squares fit of tangent angle against arc length over
+    the local terminal segments.  The fitted angle and signed curvature define
+    a circular-arc continuation, rather than a straight terminal-tangent ray.
+    Subpixel integration stops at the first foreground exit and bisection places
+    the final point on the foreground side of that boundary.
+
+    The input samples are retained exactly and newly integrated samples are
+    prepended/appended.  Both input endpoints must lie in ``mask``.
+    """
+
+    points = np.asarray(centerline_xy, dtype=np.float64)
+    binary = np.asarray(mask, dtype=bool)
+    if points.ndim != 2 or points.shape[1:] != (2,) or len(points) < 3:
+        raise ValueError("centerline_xy must have shape [N>=3,2]")
+    if binary.ndim != 2:
+        raise ValueError("mask must be two-dimensional")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("centerline_xy must be finite")
+    if context_points < 3:
+        raise ValueError("context_points must be at least 3")
+    if not np.isfinite(step) or step <= 0:
+        raise ValueError("step must be finite and positive")
+    if not _inside(binary, *points[0]) or not _inside(binary, *points[-1]):
+        raise ValueError("both centerline endpoints must lie inside mask")
+    limit = float(math.hypot(*binary.shape)) if max_extension is None else float(max_extension)
+    if not np.isfinite(limit) or limit <= 0:
+        raise ValueError("max_extension must be finite and positive")
+
+    tail = _extend_oriented_endpoint(
+        points, binary, context_points=context_points, step=step, max_extension=limit
+    )
+    head_outward = _extend_oriented_endpoint(
+        points[::-1], binary, context_points=context_points, step=step, max_extension=limit
+    )
+    pieces = [np.asarray(head_outward[::-1]), points, np.asarray(tail)]
+    return np.concatenate([piece.reshape(-1, 2) for piece in pieces], axis=0)
+
+
 def estimate_width_along_normals(
     mask: NDArray[np.generic], centerline_xy: NDArray[np.generic], *, step: float = 0.25
 ) -> FloatArray:

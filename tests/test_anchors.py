@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from worm_pose_gen.anchors import AnchorConfig, extract_mask_anchor
+from worm_pose_gen.anchors import (
+    AnchorConfig,
+    extend_centerline_to_mask_boundary,
+    extract_mask_anchor,
+)
 from worm_pose_gen.segmentation import fill_small_enclosed_holes
 
 
@@ -153,6 +157,76 @@ class AnchorTests(unittest.TestCase):
         result = extract_mask_anchor(cleaned, config=self.config())
         self.assertTrue(result.accepted, result.rejection_reasons)
         self.assertGreater(float(result.qc["mask_render_iou"]), 0.75)
+
+    def test_centerline_extension_reaches_both_straight_mask_boundaries(self) -> None:
+        mask = np.zeros((31, 51), dtype=bool)
+        mask[10:21, 5:46] = True
+        centerline = np.column_stack((np.linspace(14, 36, 12), np.full(12, 15.0)))
+
+        extended = extend_centerline_to_mask_boundary(centerline, mask)
+
+        np.testing.assert_array_equal(extended[extended[:, 0] == 14][0], centerline[0])
+        np.testing.assert_array_equal(extended[extended[:, 0] == 36][0], centerline[-1])
+        self.assertAlmostEqual(float(extended[0, 0]), 4.5, places=5)
+        self.assertAlmostEqual(float(extended[-1, 0]), 45.5, places=5)
+        np.testing.assert_allclose(extended[:, 1], 15.0, atol=1e-10)
+
+    def test_centerline_extension_continues_curvature_at_both_ends(self) -> None:
+        height = width = 101
+        yy, xx = np.mgrid[:height, :width]
+        dx, dy = xx - 50.0, yy - 50.0
+        radius = np.hypot(dx, dy)
+        angle = np.arctan2(dy, dx)
+        mask = (np.abs(radius - 25.0) <= 4.0) & (np.abs(angle) <= 1.0)
+        source_angle = np.linspace(-0.45, 0.45, 19)
+        centerline = np.column_stack(
+            (50.0 + 25.0 * np.cos(source_angle), 50.0 + 25.0 * np.sin(source_angle))
+        )
+
+        extended = extend_centerline_to_mask_boundary(
+            centerline, mask, context_points=9, step=0.2
+        )
+
+        terminal_radius = np.hypot(extended[[0, -1], 0] - 50, extended[[0, -1], 1] - 50)
+        terminal_angle = np.arctan2(
+            extended[[0, -1], 1] - 50, extended[[0, -1], 0] - 50
+        )
+        np.testing.assert_allclose(terminal_radius, 25.0, atol=0.08)
+        self.assertLess(float(terminal_angle[0]), -0.97)
+        self.assertGreater(float(terminal_angle[1]), 0.97)
+
+        # A terminal tangent ray would drift radially outward, demonstrating
+        # that the observed result used local curvature rather than a line.
+        tail_added_length = np.linalg.norm(extended[-1] - centerline[-1])
+        tangent = centerline[-1] - centerline[-2]
+        tangent /= np.linalg.norm(tangent)
+        tangent_endpoint = centerline[-1] + tail_added_length * tangent
+        tangent_radius = np.linalg.norm(tangent_endpoint - np.asarray([50.0, 50.0]))
+        self.assertGreater(tangent_radius, 25.5)
+
+    def test_centerline_extension_stops_at_first_exit_and_is_reversal_invariant(self) -> None:
+        mask = np.zeros((25, 55), dtype=bool)
+        mask[7:18, 5:17] = True
+        mask[7:18, 25:50] = True  # A separate foreground island after a gap.
+        centerline = np.column_stack((np.linspace(8, 14, 7), np.full(7, 12.0)))
+
+        extended = extend_centerline_to_mask_boundary(centerline, mask)
+        reversed_extended = extend_centerline_to_mask_boundary(centerline[::-1], mask)
+
+        self.assertAlmostEqual(float(extended[0, 0]), 4.5, places=5)
+        self.assertAlmostEqual(float(extended[-1, 0]), 16.5, places=5)
+        self.assertLess(float(extended[:, 0].max()), 25.0)
+        np.testing.assert_allclose(extended, reversed_extended[::-1], atol=1e-10)
+
+    def test_centerline_extension_validates_support_and_guard(self) -> None:
+        mask = np.ones((20, 20), dtype=bool)
+        line = np.column_stack((np.linspace(5, 10, 6), np.full(6, 10.0)))
+        outside = line.copy()
+        outside[0] = [-1.0, 10.0]
+        with self.assertRaisesRegex(ValueError, "endpoints must lie inside"):
+            extend_centerline_to_mask_boundary(outside, mask)
+        with self.assertRaisesRegex(RuntimeError, "did not reach"):
+            extend_centerline_to_mask_boundary(line, mask, max_extension=1.0)
 
 
 if __name__ == "__main__":

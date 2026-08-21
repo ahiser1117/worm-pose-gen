@@ -1,0 +1,178 @@
+{
+  "status": "isolated_one_frame_curvature_aware_endpoint_extension",
+  "provenance": {
+    "a5_arrays": "/home/alex/git/worm-pose-gen/docs/boundary_notch_repair_experiment/experiment_arrays.npz",
+    "a5_arrays_sha256": "af638791043596e435ce12db59eb71ee2925bac3fe77180a43986bade10ec866",
+    "a5_metrics": "/home/alex/git/worm-pose-gen/docs/boundary_notch_repair_experiment/metrics.json",
+    "a5_metrics_sha256": "1c8141d92e75b0eed2e38ec02f28f0d60528f95873894ba72850f50de7def8fd",
+    "source_experiment_status": "isolated_one_frame_boundary_notch_repair_prototype",
+    "recording": {
+      "proxy_hdf5": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/proxy_v1/proxy_labels.h5",
+      "configured_source_path": "nir_videos/2023-09-19-01.h5",
+      "resolved_source_path": "/storage/fs/store1/prj_starvation/data_raw/2023-09-19/2023-09-19-01.h5",
+      "source_dataset_path": "/img_nir",
+      "recording": "2023-09-19-01",
+      "frame_index": 3420
+    }
+  },
+  "parameters": {
+    "boundary_target": "A5 repair_body_mask: orange model-added pixels union green Section-3 positives",
+    "source_pose": "A5 repair_centerline_xy after thinning, endpoint peeling, longest path, and 100-point resampling",
+    "terminal_model": "least-squares unwrapped tangent angle versus local arc length; constant signed-curvature continuation",
+    "context_points": 7,
+    "integration_step_px": 0.25,
+    "maximum_extension_per_end_px": 80.0,
+    "boundary_rule": "first foreground-to-background exit under nearest-pixel support, refined by curved-step bisection",
+    "output_points": 100,
+    "manual_trace_used_for_extension_or_parameter_selection": false
+  },
+  "frozen_a5": {
+    "body_mask_area_px": 32639,
+    "section3_positive_pixels": 25709,
+    "centerline_length_px": 692.8556625197571,
+    "centerline_endpoints_xy": [
+      [
+        456.0,
+        318.0
+      ],
+      [
+        93.0,
+        334.0
+      ]
+    ],
+    "body_fit": {
+      "accepted": true,
+      "rejection_reasons": [],
+      "detected_positive_recall": 1.0,
+      "detected_positive_pixels_missed": 0,
+      "max_full_width_px": 57.96507165776979,
+      "median_full_width_px": 49.145448103925446,
+      "width_feasibility_passed": true,
+      "modeled_area_px": 32639,
+      "area_gate_passed": true,
+      "area_gate_allowed_px": [
+        2500,
+        40000
+      ],
+      "centerline_length_px": 692.8556625197571,
+      "length_gate_passed": true,
+      "boundary_distance_px": 93.0,
+      "downstream_topology": {
+        "skeleton_pixels": 720,
+        "skeleton_components": 1,
+        "endpoint_count": 2,
+        "branch_pixels": 0,
+        "edge_count": 719,
+        "has_cycle": false,
+        "has_path": true
+      },
+      "newly_modeled_pixels": 6930,
+      "newly_modeled_local_darkness_z0_fraction": 0.3424242424242424,
+      "newly_modeled_original_threshold_z2_6_fraction": 0.0,
+      "mask_iou_with_original_section3": 0.7876773185452985
+    }
+  },
+  "extension_geometry": {
+    "start": {
+      "context_points": 7,
+      "context_arc_length_px": 42.047805932514805,
+      "fitted_outward_tangent_rad": -2.130583038349852,
+      "fitted_outward_tangent_deg": -122.07341599960613,
+      "fitted_signed_curvature_rad_per_px": -0.0049453453002943045,
+      "fitted_radius_px": 202.21034918238948,
+      "extension_arc_length_px": 20.132840156945836,
+      "extension_chord_length_px": 20.12452679398076,
+      "boundary_xy": [
+        444.4784298517098,
+        301.5000000000098
+      ],
+      "first_boundary_hit": true
+    },
+    "end": {
+      "context_points": 7,
+      "context_arc_length_px": 42.05530297019678,
+      "fitted_outward_tangent_rad": 2.62072263409285,
+      "fitted_outward_tangent_deg": 150.15634620792827,
+      "fitted_signed_curvature_rad_per_px": 0.00432207296242546,
+      "fitted_radius_px": 231.3704578089353,
+      "extension_arc_length_px": 20.81948053154965,
+      "extension_chord_length_px": 20.812458281635,
+      "boundary_xy": [
+        74.50000000002493,
+        343.534590695238
+      ],
+      "first_boundary_hit": true
+    },
+    "both_first_boundaries_hit": true,
+    "total_dense_extension_length_px": 40.95232068849532,
+    "dense_curve_length_px": 733.8079832082524,
+    "dense_samples": 265,
+    "original_samples_retained_exactly": true,
+    "body_mask_changed": false
+  },
+  "pose_after_extension": {
+    "centerline_points": 100,
+    "centerline_length_px": 731.4811241640717,
+    "length_gain_px": 38.62546164431467,
+    "length_gate_allowed_px": [
+      250.0,
+      750.0
+    ],
+    "length_gate_passed": true,
+    "centerline_endpoints_xy": [
+      [
+        444.4784298517098,
+        301.5000000000098
+      ],
+      [
+        74.50000000002493,
+        343.534590695238
+      ]
+    ],
+    "body_area_width_and_containment_gates": "unchanged because repair_body_mask is not modified",
+    "modeled_area_px": 32639,
+    "max_full_width_px": 57.96507165776979,
+    "detected_positive_recall": 1.0
+  },
+  "postfit_manual_audit": {
+    "annotation": {
+      "path": "/temp_data4/alex/external_artifacts/annotations/worm_pose_tier_a_alex.json",
+      "sample_id": "2023-09-19-01-f003420",
+      "annotation_id": "c7bb2210-9664-4fa1-903a-04026d6e861d",
+      "annotator_id": "alex",
+      "trace_state": "complete",
+      "annotation_pass": "primary",
+      "used_during_fit": false
+    },
+    "role": "loaded only after extension and geometry gates completed",
+    "a5_unextended": {
+      "target_reversed": false,
+      "median_point_distance_px": 12.190433759510645,
+      "mean_point_distance_px": 11.530920849643426,
+      "p95_point_distance_px": 20.351936462200122,
+      "mean_tangent_error_deg": 5.4161772539136965,
+      "p95_tangent_error_deg": 13.98203695910482,
+      "mean_endpoint_error_px": 20.849122527121217,
+      "body_length_error_px": 59.62550828832195,
+      "body_length_error_fraction": 0.07924145875812974
+    },
+    "a6_curved_extension": {
+      "target_reversed": false,
+      "median_point_distance_px": 4.380731513108837,
+      "mean_point_distance_px": 4.77457085361017,
+      "p95_point_distance_px": 8.990701358363477,
+      "mean_tangent_error_deg": 3.0450997416965726,
+      "p95_tangent_error_deg": 7.178400854270966,
+      "mean_endpoint_error_px": 3.290687730436824,
+      "body_length_error_px": 20.998330108032974,
+      "body_length_error_fraction": 0.027906484271785773
+    }
+  },
+  "failure_cases": [
+    "The completed end caps come from the smooth-body model, so reaching them is geometric self-consistency rather than new image evidence.",
+    "A constant-curvature continuation can miss a rapid curvature change beyond the observed terminal context.",
+    "The first-exit rule prevents jumping across background to another arm, but a wrong completed-body cap still produces a wrong endpoint.",
+    "Endpoint retreat is not the only length bias: fixed-count resampling can shorten a highly curved pixel path by replacing arcs with chords.",
+    "This is one disclosed development frame; the context and step must be frozen before multi-frame evaluation."
+  ]
+}
