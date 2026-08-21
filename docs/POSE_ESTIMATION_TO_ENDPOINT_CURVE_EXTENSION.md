@@ -2,8 +2,8 @@
 
 This document follows the algorithmic path from the conservative real-frame
 baseline in [`POSE_ESTIMATION_EXPLAINER.md`](POSE_ESTIMATION_EXPLAINER.md),
-through the narrow exterior-notch repair in Experiment A of
-[`BORDER_BREACH_AND_ITERATIVE_REFINEMENT_EXPERIMENT.md`](BORDER_BREACH_AND_ITERATIVE_REFINEMENT_EXPERIMENT.md),
+through the narrow exterior-notch repair in
+[`BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md`](BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md),
 to the completed endpoint continuation in
 [`ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md`](ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md).
 

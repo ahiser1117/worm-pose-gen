@@ -138,8 +138,8 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/build_pose_estimation_explainer.py
 ```
 
-The algorithm is implemented in `src/worm_pose_gen/classical.py`. The real-label
-comparison is recorded in
-`experiments/scientific_exp_002_primary30_baselines/notes.md`; the project-level
-limitations are summarized in `docs/SCIENTIFIC_EXPERIMENT_STATUS.md` and
-`docs/FINAL_REPORT.md`.
+The algorithm is implemented in `src/worm_pose_gen/classical.py`. The frozen
+comparison inputs remain in
+`experiments/scientific_exp_002_primary30_baselines/metrics.json`; the current
+interpretation and limitations are consolidated in
+[`POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md`](POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md).
