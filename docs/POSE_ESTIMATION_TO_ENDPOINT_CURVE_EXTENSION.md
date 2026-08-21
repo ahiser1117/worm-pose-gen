@@ -540,6 +540,20 @@ and 95th percentile of `44.49 px`. Median centerline length increased from
   to `544.06 px`, a `46.80 px` gain, and the final length stayed inside the
   allowed 250--750 px interval.
 
+### Per-frame visual audit
+
+Every replacement frame also has an individual diagnostic sheet beginning
+with the raw NIR image and continuing through every stage that actually ran.
+The 14 A1 failures stop at the repair-radius topology sweep, the single A5
+failure includes its rejected modeled body, the four A6 length failures include
+their rejected extended curves, and the 11 successes end with the accepted A6
+pose.
+
+[`FRAME_STEPS.md`](final_algorithm_unannotated30/FRAME_STEPS.md) indexes all 30
+visuals in batch order, including positions 2 and 22. Each sheet shows the
+local-darkness score, threshold mask, Section 3 component, A1 decision, and—if
+reached—the A2 addition, A3 skeleton, A4 latent fit, A5 body, and A6 extension.
+
 This replacement run answers an operational question: whether the frozen
 geometry executes, rejects unsafe cases, and produces bounded endpoint
 extensions on other readable raw recordings. It does **not** answer the

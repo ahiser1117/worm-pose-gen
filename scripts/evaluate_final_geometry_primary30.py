@@ -405,7 +405,11 @@ def read_frame(source: dict[str, Any], proxy_hdf5: Path) -> tuple[np.ndarray, st
 
 
 def _failure(
-    result: dict[str, Any], stage: str, reasons: list[str], started: float
+    result: dict[str, Any],
+    stage: str,
+    reasons: list[str],
+    started: float,
+    arrays: dict[str, np.ndarray] | None = None,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     result.update(
         {
@@ -415,11 +419,13 @@ def _failure(
             "runtime_seconds": time.perf_counter() - started,
         }
     )
-    return result, {}
+    return result, arrays or {}
 
 
 def fit_case(
-    payload: tuple[dict[str, Any], np.ndarray]
+    payload: tuple[dict[str, Any], np.ndarray],
+    *,
+    retain_diagnostics: bool = False,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Fit A1--A6 using image geometry only; annotations are unavailable here."""
 
@@ -440,18 +446,47 @@ def fit_case(
         "frame_index": int(source["frame_index"]),
         "selection_stratum": str(source["selection_stratum"]),
     }
+    diagnostic_arrays: dict[str, np.ndarray] = {}
+    if retain_diagnostics:
+        diagnostic_arrays["frame"] = frame
     cfg = ClassicalConfig()
 
     try:
         score = robust_dark_ridge(frame, cfg)
+        if retain_diagnostics:
+            diagnostic_arrays["local_darkness_score"] = score
         raw = score >= cfg.foreground_z
+        if retain_diagnostics:
+            diagnostic_arrays["raw_threshold_mask"] = raw
         closed = square_erode(square_dilate(raw, cfg.close_radius), cfg.close_radius)
+        if retain_diagnostics:
+            diagnostic_arrays["closed_mask"] = closed
         component, component_area, component_count = largest_component_rle(closed)
         if not component_area:
-            return _failure(result, "section3", ["empty_largest_component"], started)
+            return _failure(
+                result,
+                "section3",
+                ["empty_largest_component"],
+                started,
+                diagnostic_arrays,
+            )
         baseline_mask, enclosed, enclosed_count = smooth.fill_enclosed_cavities(component)
     except Exception as error:  # pragma: no cover - recorded batch failure path
-        return _failure(result, "section3", [f"{type(error).__name__}: {error}"], started)
+        return _failure(
+            result,
+            "section3",
+            [f"{type(error).__name__}: {error}"],
+            started,
+            diagnostic_arrays,
+        )
+
+    if retain_diagnostics:
+        diagnostic_arrays.update(
+            {
+                "section3_component": component,
+                "enclosed_holes_filled_mask": baseline_mask,
+            }
+        )
 
     result["section3"] = {
         "component_area_px": int(component_area),
@@ -472,6 +507,8 @@ def fit_case(
                 radius,
                 before_exterior,
             )
+            if retain_diagnostics:
+                diagnostic_arrays["a1_last_candidate_mask"] = repaired
             sweep.append(metrics)
             if metrics["accepted_by_geometry_only_rule"]:
                 accepted_candidates[int(radius)] = repaired
@@ -500,6 +537,7 @@ def fit_case(
             "A1_geometry_selection",
             ["no_radius_3_through_12_passed_every_geometry_guard"],
             started,
+            diagnostic_arrays,
         )
 
     selected_radius = min(accepted_candidates)
@@ -518,19 +556,60 @@ def fit_case(
         "topology": selected_metrics["topology"],
     }
 
+    selected_mask = accepted_candidates[selected_radius]
+    if retain_diagnostics:
+        selected_closed = square_erode(
+            square_dilate(baseline_mask, selected_radius), selected_radius
+        )
+        selected_sealed = baseline_mask | selected_closed
+        selected_bridge = selected_sealed & ~baseline_mask
+        selected_exterior, _, _ = largest_component_rle(~selected_sealed)
+        selected_pocket = (~selected_sealed) & ~selected_exterior
+        diagnostic_arrays.update(
+            {
+                "a1_selected_repair_mask": selected_mask,
+                "a2_bridge_mask": selected_bridge,
+                "a2_pocket_mask": selected_pocket,
+                "a2_added_mask": selected_mask & ~baseline_mask,
+                "a3_initialization_skeleton": initialization_skeleton(selected_mask),
+            }
+        )
+
     try:
         body_metrics, body_arrays = boundary.evaluate_body_fit(
-            accepted_candidates[selected_radius], component, score, cfg
+            selected_mask, component, score, cfg
         )
     except Exception as error:  # pragma: no cover - recorded batch failure path
-        return _failure(result, "A4_A5_body_fit", [f"{type(error).__name__}: {error}"], started)
+        return _failure(
+            result,
+            "A4_A5_body_fit",
+            [f"{type(error).__name__}: {error}"],
+            started,
+            diagnostic_arrays,
+        )
     result["a5_body"] = body_metrics
+    if retain_diagnostics:
+        diagnostic_arrays.update(
+            {
+                "a4_latent_midline_xy": np.asarray(
+                    body_arrays["latent_midline"], dtype=np.float64
+                ),
+                "a4_fitted_radius_px": np.asarray(
+                    body_arrays["fitted_radius"], dtype=np.float64
+                ),
+                "a5_body_mask": np.asarray(body_arrays["body_mask"], dtype=bool),
+                "a5_centerline_xy": np.asarray(
+                    body_arrays["centerline"], dtype=np.float64
+                ),
+            }
+        )
     if not body_metrics["accepted"]:
         return _failure(
             result,
             "A5_modeled_body_gate",
             list(body_metrics["rejection_reasons"]),
             started,
+            diagnostic_arrays,
         )
 
     a5 = np.asarray(body_arrays["centerline"], dtype=np.float64)
@@ -553,6 +632,15 @@ def fit_case(
             "A6_endpoint_extension",
             [f"{type(error).__name__}: {error}"],
             started,
+            diagnostic_arrays,
+        )
+
+    if retain_diagnostics:
+        diagnostic_arrays.update(
+            {
+                "a6_dense_centerline_xy": dense,
+                "a6_centerline_xy": a6,
+            }
         )
 
     length_pass = bool(cfg.min_length <= a6_length <= cfg.max_length)
@@ -574,6 +662,7 @@ def fit_case(
             "A6_length_gate",
             ["extended_centerline_outside_250_to_750_px"],
             started,
+            diagnostic_arrays,
         )
 
     result.update(
@@ -590,6 +679,8 @@ def fit_case(
         "a5_centerline_xy": a5,
         "a6_centerline_xy": a6,
     }
+    if retain_diagnostics:
+        arrays.update(diagnostic_arrays)
     if int(source["annotation_index"]) in CALLOUT_INDICES:
         arrays["frame"] = frame
     return result, arrays

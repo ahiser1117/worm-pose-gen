@@ -144,11 +144,308 @@ def recording_records(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dic
     return cases, provenance
 
 
+def _show_frame(axis: plt.Axes, frame: np.ndarray) -> None:
+    lower, upper = np.percentile(frame, [1, 99])
+    axis.imshow(frame, cmap="gray", vmin=lower, vmax=upper)
+    axis.set_xlim(0, frame.shape[1] - 1)
+    axis.set_ylim(frame.shape[0] - 1, 0)
+    axis.set_axis_off()
+
+
+def _overlay_mask(
+    axis: plt.Axes, mask: np.ndarray, color: str, *, alpha: float = 0.3
+) -> None:
+    binary = np.asarray(mask, dtype=bool)
+    rgba = np.zeros((*binary.shape, 4), dtype=np.float32)
+    rgba[..., :3] = to_rgb(color)
+    rgba[..., 3] = binary.astype(np.float32) * alpha
+    axis.imshow(rgba, interpolation="nearest")
+
+
+def _failure_text(case: dict[str, Any]) -> str:
+    reasons = case.get("failure_reasons") or []
+    return "; ".join(str(reason) for reason in reasons) or "no recorded reason"
+
+
+def plot_frame_steps(
+    case: dict[str, Any], arrays: dict[str, np.ndarray], path: Path
+) -> None:
+    """Render every reached stage for one raw frame, stopping at its outcome."""
+
+    frame = arrays["frame"]
+    panels: list[tuple[str, str]] = [("raw", "0. Raw NIR frame")]
+    if "local_darkness_score" in arrays:
+        panels.append(("score", "1. Local-darkness score"))
+    if "raw_threshold_mask" in arrays:
+        panels.append(("threshold", "2. Threshold at z >= 2.6"))
+    if "section3_component" in arrays:
+        panels.append(("section3", "3. Close + largest component"))
+        panels.append(("a1", "A1. Geometry-only radius sweep"))
+    if "a1_selected_repair_mask" in arrays:
+        panels.extend(
+            [
+                ("a2", "A2. Bridge + sealed pocket"),
+                ("a3", "A3. Repaired initialization skeleton"),
+            ]
+        )
+    if "a4_latent_midline_xy" in arrays:
+        panels.extend(
+            [
+                ("a4", "A4. Latent midline + width fit"),
+                ("a5", "A5. Modeled body + pose"),
+            ]
+        )
+    if "a6_centerline_xy" in arrays:
+        panels.append(("a6", "A6. Endpoint continuation"))
+    elif case.get("failure_stage") == "A6_endpoint_extension":
+        panels.append(("a6_error", "A6. Endpoint continuation failed"))
+
+    columns = min(5, len(panels))
+    rows = int(np.ceil(len(panels) / columns))
+    fig, grid = plt.subplots(
+        rows,
+        columns,
+        figsize=(4.1 * columns, 3.75 * rows + 0.7),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    axes = list(grid.flat)
+    panel_axes = dict(zip((name for name, _ in panels), axes, strict=False))
+    for axis, (_, title) in zip(axes, panels, strict=False):
+        axis.set_title(title, fontsize=11)
+
+    _show_frame(panel_axes["raw"], frame)
+
+    if "score" in panel_axes:
+        score = arrays["local_darkness_score"]
+        score_limit = max(3.5, float(np.percentile(score, 99.5)))
+        image = panel_axes["score"].imshow(
+            score, cmap="magma", vmin=-1.0, vmax=score_limit
+        )
+        panel_axes["score"].set_axis_off()
+        fig.colorbar(image, ax=panel_axes["score"], fraction=0.046, pad=0.02)
+
+    if "threshold" in panel_axes:
+        axis = panel_axes["threshold"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["raw_threshold_mask"], smooth.CYAN, alpha=0.42)
+        axis.text(
+            0.02,
+            0.03,
+            f"{int(arrays['raw_threshold_mask'].sum()):,} candidate pixels",
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "section3" in panel_axes:
+        axis = panel_axes["section3"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["closed_mask"], smooth.CYAN, alpha=0.18)
+        _overlay_mask(axis, arrays["section3_component"], smooth.GREEN, alpha=0.4)
+        section3 = case["section3"]
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"kept {section3['component_area_px']:,} px; "
+                f"{section3['pre_keep_component_count']} pre-keep components"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a1" in panel_axes:
+        axis = panel_axes["a1"]
+        sweep = case["seal_then_fill_candidate_sweep"]
+        radii = [int(row["radius_px"]) for row in sweep]
+        endpoints = [
+            float((row.get("topology") or {}).get("endpoint_count", np.nan))
+            for row in sweep
+        ]
+        branches = [
+            float((row.get("topology") or {}).get("branch_pixels", np.nan))
+            for row in sweep
+        ]
+        axis.plot(radii, endpoints, marker="o", color=smooth.CYAN, label="endpoints")
+        axis.plot(radii, branches, marker="s", color=smooth.ORANGE, label="branch pixels")
+        axis.axhline(2, color=smooth.GREEN, linestyle="--", linewidth=1, label="required endpoints")
+        axis.axhline(0, color=smooth.GRAY, linestyle=":", linewidth=1)
+        axis.set_xlabel("closing radius (px)")
+        axis.set_ylabel("topology count")
+        axis.set_xticks(radii)
+        axis.grid(alpha=0.18)
+        axis.spines[["top", "right"]].set_visible(False)
+        if "selected_repair" in case:
+            selected = int(case["selected_repair"]["radius_px"])
+            axis.axvline(selected, color=smooth.GREEN, linewidth=2, alpha=0.8)
+            axis.set_title(f"A1. Selected first passing radius: {selected} px", fontsize=11)
+        else:
+            axis.set_title("A1. STOP — no radius passed", color="crimson", fontsize=11)
+        axis.legend(loc="best", fontsize=8)
+
+    if "a2" in panel_axes:
+        axis = panel_axes["a2"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["enclosed_holes_filled_mask"], smooth.GREEN, alpha=0.18)
+        _overlay_mask(axis, arrays["a2_bridge_mask"], smooth.MAGENTA, alpha=0.72)
+        _overlay_mask(axis, arrays["a2_pocket_mask"], smooth.ORANGE, alpha=0.72)
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"bridge {int(arrays['a2_bridge_mask'].sum()):,} px; "
+                f"pocket {int(arrays['a2_pocket_mask'].sum()):,} px"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a3" in panel_axes:
+        axis = panel_axes["a3"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["a1_selected_repair_mask"], smooth.CYAN, alpha=0.24)
+        _overlay_mask(axis, arrays["a3_initialization_skeleton"], smooth.ORANGE, alpha=0.9)
+        topology = case["selected_repair"]["topology"]
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"endpoints {topology['endpoint_count']}; branches "
+                f"{topology['branch_pixels']}; cycle {topology['has_cycle']}"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a4" in panel_axes:
+        axis = panel_axes["a4"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["a1_selected_repair_mask"], smooth.CYAN, alpha=0.2)
+        midline = arrays["a4_latent_midline_xy"]
+        axis.plot(midline[:, 0], midline[:, 1], color=smooth.ORANGE, linewidth=2.1)
+        fitted_radius = arrays["a4_fitted_radius_px"]
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"16 angle coefficients; fitted full width "
+                f"{2 * float(fitted_radius.max()):.2f} px max"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a5" in panel_axes:
+        axis = panel_axes["a5"]
+        _show_frame(axis, frame)
+        body = arrays["a5_body_mask"]
+        section3 = arrays["section3_component"]
+        _overlay_mask(axis, section3, smooth.GREEN, alpha=0.32)
+        _overlay_mask(axis, body & ~section3, smooth.ORANGE, alpha=0.38)
+        a5 = arrays["a5_centerline_xy"]
+        axis.plot(a5[:, 0], a5[:, 1], color="white", linewidth=2.0)
+        body_metrics = case["a5_body"]
+        gate = "PASS" if body_metrics["accepted"] else "STOP"
+        if not body_metrics["accepted"]:
+            axis.set_title("A5. STOP — modeled-body gate", color="crimson", fontsize=11)
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"{gate}; area {body_metrics['modeled_area_px']:,} px; "
+                f"pose {body_metrics['centerline_length_px']:.2f} px"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a6" in panel_axes:
+        axis = panel_axes["a6"]
+        _show_frame(axis, frame)
+        _overlay_mask(axis, arrays["a5_body_mask"], smooth.CYAN, alpha=0.22)
+        a5 = arrays["a5_centerline_xy"]
+        a6 = arrays["a6_centerline_xy"]
+        axis.plot(a5[:, 0], a5[:, 1], color="white", linewidth=2.0, label="A5")
+        axis.plot(a6[:, 0], a6[:, 1], color=smooth.ORANGE, linewidth=2.2, label="A6")
+        extension = case["a6_extension"]
+        if case["accepted"]:
+            gate = "SUCCESS"
+        else:
+            gate = "STOP — final length gate"
+            axis.set_title("A6. STOP — final length gate", color="crimson", fontsize=11)
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"{gate}; {extension['a5_centerline_length_px']:.2f} -> "
+                f"{extension['a6_centerline_length_px']:.2f} px"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+        axis.legend(loc="lower right", framealpha=0.78, fontsize=8)
+
+    if "a6_error" in panel_axes:
+        axis = panel_axes["a6_error"]
+        axis.set_axis_off()
+        axis.text(
+            0.5,
+            0.5,
+            _failure_text(case),
+            ha="center",
+            va="center",
+            wrap=True,
+            color="crimson",
+            fontsize=11,
+        )
+
+    for axis in axes[len(panels) :]:
+        axis.set_axis_off()
+    outcome = "SUCCESS" if case["accepted"] else f"STOP: {case['failure_stage']}"
+    fig.suptitle(
+        (
+            f"Stress-test position {case['sample_index']} — {case['recording']} "
+            f"frame {case['frame_index']} — {outcome}"
+        ),
+        fontsize=15,
+    )
+    fig.savefig(
+        path,
+        dpi=120,
+        bbox_inches="tight",
+        pad_inches=0.06,
+        pil_kwargs={"quality": 88, "optimize": True},
+    )
+    plt.close(fig)
+
+
+def diagnostic_filename(case: dict[str, Any]) -> str:
+    return (
+        f"sample_{int(case['sample_index']):02d}_{case['recording']}_"
+        f"frame_{int(case['frame_index']):05d}.jpg"
+    )
+
+
 def fit_recording(
-    sources: list[dict[str, Any]],
+    payload: tuple[list[dict[str, Any]], Path],
 ) -> list[tuple[int, dict[str, Any], dict[str, np.ndarray]]]:
     """Read and fit one recording serially with a single read-only handle."""
 
+    sources, visual_dir = payload
     first = sources[0]
     path = Path(first["resolved_source_path"])
     stat = path.stat()
@@ -162,13 +459,26 @@ def fit_recording(
         for source in sources:
             index = int(source["sample_index"])
             frame = np.asarray(dataset[int(source["frame_index"])], dtype=np.uint8)
-            result, arrays = fit_case((source, frame))
+            result, arrays = fit_case((source, frame), retain_diagnostics=True)
             result["sample_index"] = index
             result["annotation_index"] = None
             result["frame_read_source"] = "verified_raw_source"
+            visual_name = diagnostic_filename(result)
+            result["visual_artifact"] = f"frame_steps/{visual_name}"
+            plot_frame_steps(result, arrays, visual_dir / visual_name)
+            retained = {
+                key: arrays[key]
+                for key in (
+                    "section3_component",
+                    "a5_body_mask",
+                    "a5_centerline_xy",
+                    "a6_centerline_xy",
+                )
+                if key in arrays
+            }
             if index in CALLOUT_INDICES:
-                arrays["frame"] = frame
-            output.append((index, result, arrays))
+                retained["frame"] = frame
+            output.append((index, result, retained))
             print(
                 json.dumps(
                     {
@@ -326,6 +636,38 @@ def plot_callouts(
     plt.close(fig)
 
 
+def write_visual_index(cases: list[dict[str, Any]], path: Path) -> None:
+    lines = [
+        "# Per-frame A1--A6 diagnostic sheets",
+        "",
+        (
+            "These 30 sheets follow each raw frame through every stage that ran. "
+            "A rejected case stops at the failing gate; a successful case ends with "
+            "the A6 pose. These archive frames have no manual centerline annotations."
+        ),
+        "",
+    ]
+    for case in cases:
+        outcome = "success" if case["accepted"] else f"stopped at `{case['failure_stage']}`"
+        lines.extend(
+            [
+                (
+                    f"## Position {case['sample_index']}: `{case['recording']}` "
+                    f"frame {case['frame_index']}"
+                ),
+                "",
+                f"Outcome: **{outcome}**.",
+                "",
+                (
+                    f"![Diagnostic stages for position {case['sample_index']}]"
+                    f"({case['visual_artifact']})"
+                ),
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> int:
     args = parse_args()
     recordings = list(args.recordings or DEFAULT_RECORDINGS)
@@ -334,6 +676,8 @@ def main() -> int:
     if args.workers < 1:
         raise ValueError("workers must be at least 1")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    visual_dir = args.output_dir / "frame_steps"
+    visual_dir.mkdir(parents=True, exist_ok=True)
 
     sources, provenance = recording_records(recordings)
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -342,11 +686,16 @@ def main() -> int:
 
     fitted: dict[int, tuple[dict[str, Any], dict[str, np.ndarray]]] = {}
     if args.workers == 1:
-        result_groups = [fit_recording(group) for group in grouped.values()]
+        result_groups = [
+            fit_recording((group, visual_dir)) for group in grouped.values()
+        ]
     else:
         result_groups = []
         with ProcessPoolExecutor(max_workers=min(args.workers, len(grouped))) as executor:
-            futures = [executor.submit(fit_recording, group) for group in grouped.values()]
+            futures = [
+                executor.submit(fit_recording, (group, visual_dir))
+                for group in grouped.values()
+            ]
             for future in as_completed(futures):
                 result_groups.append(future.result())
     for group in result_groups:
@@ -383,7 +732,7 @@ def main() -> int:
 
     predictions: dict[str, np.ndarray] = {}
     for index, data in arrays.items():
-        if "a6_centerline_xy" not in data:
+        if not cases[index]["accepted"] or "a6_centerline_xy" not in data:
             continue
         predictions[f"sample_{index:02d}_a5_centerline_xy"] = data[
             "a5_centerline_xy"
@@ -394,6 +743,7 @@ def main() -> int:
     np.savez_compressed(args.output_dir / "predictions.npz", **predictions)
     plot_summary(cases, summary, args.output_dir / "summary.png")
     plot_callouts(cases, arrays, args.output_dir / "positions_2_22.png")
+    write_visual_index(cases, args.output_dir / "FRAME_STEPS.md")
     print(json.dumps({"output_dir": str(args.output_dir), "summary": summary}, indent=2))
     return 0
 

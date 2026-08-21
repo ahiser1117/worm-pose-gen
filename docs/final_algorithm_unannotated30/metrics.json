@@ -202,9 +202,9 @@
     },
     "runtime_seconds": {
       "n": 30,
-      "median": 1.2191884485073388,
-      "mean": 1.3248194454548259,
-      "p95": 1.8811881046276537
+      "median": 1.3003066312521696,
+      "mean": 1.3777618498851856,
+      "p95": 1.9934462711680678
     }
   },
   "per_case": [
@@ -343,9 +343,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.2766553964465857,
+      "runtime_seconds": 1.5164469052106142,
       "sample_index": 0,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_00_2024-01-31-02_frame_00000.jpg"
     },
     {
       "annotation_index": null,
@@ -670,9 +671,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.1559876091778278,
+      "runtime_seconds": 1.087005615234375,
       "sample_index": 1,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_01_2024-01-31-02_frame_02275.jpg"
     },
     {
       "annotation_index": null,
@@ -997,9 +999,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0960348956286907,
+      "runtime_seconds": 1.0714361444115639,
       "sample_index": 2,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_02_2024-01-31-02_frame_04551.jpg"
     },
     {
       "annotation_index": null,
@@ -1196,9 +1199,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.843247888609767,
+      "runtime_seconds": 1.833140212111175,
       "sample_index": 3,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_03_2024-01-31-02_frame_06826.jpg"
     },
     {
       "annotation_index": null,
@@ -1523,9 +1527,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0830256892368197,
+      "runtime_seconds": 1.037878262810409,
       "sample_index": 4,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_04_2024-01-31-02_frame_09102.jpg"
     },
     {
       "annotation_index": null,
@@ -1850,9 +1855,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.961742926388979,
+      "runtime_seconds": 0.9353586910292506,
       "sample_index": 5,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_05_2024-01-31-02_frame_11377.jpg"
     },
     {
       "annotation_index": null,
@@ -2177,9 +2183,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9051833273842931,
+      "runtime_seconds": 0.9676474519073963,
       "sample_index": 6,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_06_2024-01-31-02_frame_13653.jpg"
     },
     {
       "annotation_index": null,
@@ -2504,9 +2511,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0800822535529733,
+      "runtime_seconds": 1.1040692143142223,
       "sample_index": 7,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_07_2024-01-31-02_frame_15928.jpg"
     },
     {
       "annotation_index": null,
@@ -2613,9 +2621,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.2900958620011806,
+      "runtime_seconds": 2.038455890491605,
       "sample_index": 8,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_08_2024-01-31-02_frame_18204.jpg"
     },
     {
       "annotation_index": null,
@@ -2943,9 +2952,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0578206535428762,
+      "runtime_seconds": 1.1006259266287088,
       "sample_index": 9,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_09_2024-01-31-02_frame_20480.jpg"
     },
     {
       "annotation_index": null,
@@ -3202,9 +3212,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.9122300995513797,
+      "runtime_seconds": 2.3909171419218183,
       "sample_index": 10,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_10_2023-08-22-01_frame_00000.jpg"
     },
     {
       "annotation_index": null,
@@ -3529,9 +3540,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.054237282834947,
+      "runtime_seconds": 1.0655159950256348,
       "sample_index": 11,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_11_2023-08-22-01_frame_02260.jpg"
     },
     {
       "annotation_index": null,
@@ -3856,9 +3868,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9360141409561038,
+      "runtime_seconds": 0.9553183149546385,
       "sample_index": 12,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_12_2023-08-22-01_frame_04520.jpg"
     },
     {
       "annotation_index": null,
@@ -4085,9 +4098,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.6982666496187449,
+      "runtime_seconds": 1.9384345142170787,
       "sample_index": 13,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_13_2023-08-22-01_frame_06780.jpg"
     },
     {
       "annotation_index": null,
@@ -4314,9 +4328,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.6429746197536588,
+      "runtime_seconds": 1.906980149447918,
       "sample_index": 14,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_14_2023-08-22-01_frame_09040.jpg"
     },
     {
       "annotation_index": null,
@@ -4472,9 +4487,10 @@
       "failure_reasons": [
         "full_width_exceeds_80_px"
       ],
-      "runtime_seconds": 1.3237570924684405,
+      "runtime_seconds": 1.5142978774383664,
       "sample_index": 15,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_15_2023-08-22-01_frame_11300.jpg"
     },
     {
       "annotation_index": null,
@@ -4799,9 +4815,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9697290724143386,
+      "runtime_seconds": 0.9387272158637643,
       "sample_index": 16,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_16_2023-08-22-01_frame_13560.jpg"
     },
     {
       "annotation_index": null,
@@ -5000,9 +5017,10 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.46361727360636,
+      "runtime_seconds": 1.6034134719520807,
       "sample_index": 17,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_17_2023-08-22-01_frame_15820.jpg"
     },
     {
       "annotation_index": null,
@@ -5201,9 +5219,10 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.382027800194919,
+      "runtime_seconds": 1.6534787472337484,
       "sample_index": 18,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_18_2023-08-22-01_frame_18080.jpg"
     },
     {
       "annotation_index": null,
@@ -5538,9 +5557,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.7498168451711535,
+      "runtime_seconds": 0.754109213128686,
       "sample_index": 19,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_19_2023-08-22-01_frame_20340.jpg"
     },
     {
       "annotation_index": null,
@@ -5739,9 +5759,10 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.6416814709082246,
+      "runtime_seconds": 1.6220234418287873,
       "sample_index": 20,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_20_2023-06-23-01_frame_00000.jpg"
     },
     {
       "annotation_index": null,
@@ -5938,9 +5959,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.8424903769046068,
+      "runtime_seconds": 1.705669816583395,
       "sample_index": 21,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_21_2023-06-23-01_frame_02284.jpg"
     },
     {
       "annotation_index": null,
@@ -6047,9 +6069,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.1617215005680919,
+      "runtime_seconds": 1.16652337834239,
       "sample_index": 22,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_22_2023-06-23-01_frame_04569.jpg"
     },
     {
       "annotation_index": null,
@@ -6248,9 +6271,10 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.8106822492554784,
+      "runtime_seconds": 1.6686344435438514,
       "sample_index": 23,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_23_2023-06-23-01_frame_06853.jpg"
     },
     {
       "annotation_index": null,
@@ -6507,9 +6531,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.8388894191011786,
+      "runtime_seconds": 1.6691080555319786,
       "sample_index": 24,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_24_2023-06-23-01_frame_09138.jpg"
     },
     {
       "annotation_index": null,
@@ -6836,9 +6861,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.110781529918313,
+      "runtime_seconds": 1.0120320180431008,
       "sample_index": 25,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_25_2023-06-23-01_frame_11422.jpg"
     },
     {
       "annotation_index": null,
@@ -6975,9 +7001,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.6048546098172665,
+      "runtime_seconds": 1.4340898841619492,
       "sample_index": 26,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_26_2023-06-23-01_frame_13707.jpg"
     },
     {
       "annotation_index": null,
@@ -7302,9 +7329,10 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.1283357059583068,
+      "runtime_seconds": 1.0948241846635938,
       "sample_index": 27,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_27_2023-06-23-01_frame_15991.jpg"
     },
     {
       "annotation_index": null,
@@ -7501,9 +7529,10 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.975478369742632,
+      "runtime_seconds": 1.842923522926867,
       "sample_index": 28,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_28_2023-06-23-01_frame_18276.jpg"
     },
     {
       "annotation_index": null,
@@ -7841,10 +7870,11 @@
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.7471207529306412,
+      "runtime_seconds": 0.7037697955965996,
       "sample_index": 29,
-      "frame_read_source": "verified_raw_source"
+      "frame_read_source": "verified_raw_source",
+      "visual_artifact": "frame_steps/sample_29_2023-06-23-01_frame_20561.jpg"
     }
   ],
-  "git_commit": "eaee15ec01e85463a83aa696b0933466fb851268"
+  "git_commit": "7c10ed20e2c64a028d8ce313e6cb0f803881c881"
 }
