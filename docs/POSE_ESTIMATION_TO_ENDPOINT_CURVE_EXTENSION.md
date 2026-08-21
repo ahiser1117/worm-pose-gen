@@ -551,8 +551,9 @@ pose.
 
 [`FRAME_STEPS.md`](final_algorithm_unannotated30/FRAME_STEPS.md) indexes all 30
 visuals in batch order, including positions 2 and 22. Each sheet shows the
-local-darkness score, threshold mask, Section 3 component, A1 decision, and—if
-reached—the A2 addition, A3 skeleton, A4 latent fit, A5 body, and A6 extension.
+local-darkness score, threshold mask, Section 3 component, A1 decision, the A2
+repair audit (either the accepted repair or the final rejected candidate), and—if
+reached—the A3 skeleton, A4 latent fit, A5 body, and A6 extension.
 
 This replacement run answers an operational question: whether the frozen
 geometry executes, rejects unsafe cases, and produces bounded endpoint

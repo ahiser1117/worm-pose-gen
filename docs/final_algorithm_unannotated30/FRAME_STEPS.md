@@ -1,6 +1,6 @@
 # Per-frame A1--A6 diagnostic sheets
 
-These 30 sheets follow each raw frame through every stage that ran. A rejected case stops at the failing gate; a successful case ends with the A6 pose. These archive frames have no manual centerline annotations.
+These 30 sheets follow each raw frame through the pipeline and show the computed output at a failing gate when one exists. For an A1 failure, the A2 panel audits the final attempted radius as a rejected, diagnostic-only repair; it was not accepted for downstream fitting. A successful case ends with the A6 pose. These archive frames have no manual centerline annotations.
 
 ## Position 0: `2024-01-31-02` frame 0
 

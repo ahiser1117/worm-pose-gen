@@ -497,6 +497,7 @@ def fit_case(
 
     sweep: list[dict[str, Any]] = []
     accepted_candidates: dict[int, np.ndarray] = {}
+    last_computed_candidate: tuple[int, np.ndarray, dict[str, Any]] | None = None
     before_exterior, _, _ = largest_component_rle(~baseline_mask)
     for radius in boundary.SEARCH_RADII:
         try:
@@ -507,6 +508,7 @@ def fit_case(
                 radius,
                 before_exterior,
             )
+            last_computed_candidate = (int(radius), repaired, metrics)
             if retain_diagnostics:
                 diagnostic_arrays["a1_last_candidate_mask"] = repaired
             sweep.append(metrics)
@@ -532,6 +534,38 @@ def fit_case(
             for reason in candidate.get("rejection_reasons", [])
         )
         result["candidate_rejection_reason_counts"] = dict(sorted(reasons.items()))
+        if retain_diagnostics and last_computed_candidate is not None:
+            diagnostic_radius, diagnostic_mask, diagnostic_metrics = (
+                last_computed_candidate
+            )
+            result["a1_diagnostic_candidate"] = {
+                "radius_px": diagnostic_radius,
+                "status": "rejected_visualization_only",
+                "rejection_reasons": list(
+                    diagnostic_metrics["rejection_reasons"]
+                ),
+                "bridge_pixels": int(diagnostic_metrics["bridge_pixels"]),
+                "sealed_pocket_pixels": int(
+                    diagnostic_metrics["sealed_pocket_pixels"]
+                ),
+                "topology": diagnostic_metrics["topology"],
+            }
+            diagnostic_closed = square_erode(
+                square_dilate(baseline_mask, diagnostic_radius),
+                diagnostic_radius,
+            )
+            diagnostic_sealed = baseline_mask | diagnostic_closed
+            diagnostic_arrays.update(
+                {
+                    "a1_diagnostic_repair_mask": diagnostic_mask,
+                    "a2_diagnostic_bridge_mask": (
+                        diagnostic_sealed & ~baseline_mask
+                    ),
+                    "a2_diagnostic_pocket_mask": (
+                        diagnostic_mask & ~diagnostic_sealed
+                    ),
+                }
+            )
         return _failure(
             result,
             "A1_geometry_selection",

@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import textwrap
 from typing import Any, Iterable
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/worm-pose-gen-matplotlib")
@@ -170,7 +171,7 @@ def _failure_text(case: dict[str, Any]) -> str:
 def plot_frame_steps(
     case: dict[str, Any], arrays: dict[str, np.ndarray], path: Path
 ) -> None:
-    """Render every reached stage for one raw frame, stopping at its outcome."""
+    """Render reached stages and any available rejected-stage diagnostic output."""
 
     frame = arrays["frame"]
     panels: list[tuple[str, str]] = [("raw", "0. Raw NIR frame")]
@@ -188,6 +189,17 @@ def plot_frame_steps(
                 ("a3", "A3. Repaired initialization skeleton"),
             ]
         )
+    elif "a1_diagnostic_repair_mask" in arrays:
+        diagnostic = case["a1_diagnostic_candidate"]
+        panels.append(
+            (
+                "a2_diagnostic",
+                (
+                    "A2. Rejected repair at "
+                    f"r={int(diagnostic['radius_px'])} px (diagnostic only)"
+                ),
+            )
+        )
     if "a4_latent_midline_xy" in arrays:
         panels.extend(
             [
@@ -200,7 +212,8 @@ def plot_frame_steps(
     elif case.get("failure_stage") == "A6_endpoint_extension":
         panels.append(("a6_error", "A6. Endpoint continuation failed"))
 
-    columns = min(5, len(panels))
+    has_a2_diagnostic = "a2_diagnostic" in {name for name, _ in panels}
+    columns = 3 if has_a2_diagnostic else min(5, len(panels))
     rows = int(np.ceil(len(panels) / columns))
     fig, grid = plt.subplots(
         rows,
@@ -304,6 +317,52 @@ def plot_frame_steps(
             color="white",
             fontsize=9,
             bbox={"facecolor": "black", "alpha": 0.6, "edgecolor": "none"},
+        )
+
+    if "a2_diagnostic" in panel_axes:
+        axis = panel_axes["a2_diagnostic"]
+        _show_frame(axis, frame)
+        _overlay_mask(
+            axis,
+            arrays["enclosed_holes_filled_mask"],
+            smooth.GREEN,
+            alpha=0.18,
+        )
+        _overlay_mask(
+            axis, arrays["a2_diagnostic_bridge_mask"], smooth.MAGENTA, alpha=0.72
+        )
+        _overlay_mask(
+            axis, arrays["a2_diagnostic_pocket_mask"], smooth.ORANGE, alpha=0.72
+        )
+        diagnostic = case["a1_diagnostic_candidate"]
+        topology = diagnostic["topology"]
+        rejection_summary = textwrap.fill(
+            "; ".join(diagnostic["rejection_reasons"]).replace("_", " "),
+            width=44,
+        )
+        axis.set_title(
+            (
+                "A2. Rejected repair at "
+                f"r={int(diagnostic['radius_px'])} px (diagnostic only)"
+            ),
+            color="crimson",
+            fontsize=11,
+        )
+        axis.text(
+            0.02,
+            0.03,
+            (
+                f"REJECTED: {rejection_summary}\n"
+                f"endpoints {topology['endpoint_count']}; "
+                f"branches {topology['branch_pixels']}\n"
+                f"bridge {int(arrays['a2_diagnostic_bridge_mask'].sum()):,} px; "
+                "pocket "
+                f"{int(arrays['a2_diagnostic_pocket_mask'].sum()):,} px"
+            ),
+            transform=axis.transAxes,
+            color="white",
+            fontsize=9,
+            bbox={"facecolor": "crimson", "alpha": 0.72, "edgecolor": "none"},
         )
 
     if "a3" in panel_axes:
@@ -641,9 +700,12 @@ def write_visual_index(cases: list[dict[str, Any]], path: Path) -> None:
         "# Per-frame A1--A6 diagnostic sheets",
         "",
         (
-            "These 30 sheets follow each raw frame through every stage that ran. "
-            "A rejected case stops at the failing gate; a successful case ends with "
-            "the A6 pose. These archive frames have no manual centerline annotations."
+            "These 30 sheets follow each raw frame through the pipeline and show the "
+            "computed output at a failing gate when one exists. For an A1 failure, "
+            "the A2 panel audits the final attempted radius as a rejected, "
+            "diagnostic-only repair; it was not accepted for downstream fitting. "
+            "A successful case ends with the A6 pose. These archive frames have no "
+            "manual centerline annotations."
         ),
         "",
     ]

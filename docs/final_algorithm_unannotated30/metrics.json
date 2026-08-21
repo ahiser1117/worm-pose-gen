@@ -202,9 +202,9 @@
     },
     "runtime_seconds": {
       "n": 30,
-      "median": 1.3003066312521696,
-      "mean": 1.3777618498851856,
-      "p95": 1.9934462711680678
+      "median": 1.6968593057245016,
+      "mean": 1.6842169374537965,
+      "p95": 2.5885310884099453
     }
   },
   "per_case": [
@@ -343,7 +343,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.5164469052106142,
+      "runtime_seconds": 1.912185125052929,
       "sample_index": 0,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_00_2024-01-31-02_frame_00000.jpg"
@@ -666,12 +666,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 439,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 727,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 726,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.087005615234375,
+      "runtime_seconds": 1.2689600409939885,
       "sample_index": 1,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_01_2024-01-31-02_frame_02275.jpg"
@@ -994,12 +1013,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 826,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 698,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 697,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0714361444115639,
+      "runtime_seconds": 1.159098875708878,
       "sample_index": 2,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_02_2024-01-31-02_frame_04551.jpg"
@@ -1199,7 +1237,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.833140212111175,
+      "runtime_seconds": 2.5621324768289924,
       "sample_index": 3,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_03_2024-01-31-02_frame_06826.jpg"
@@ -1522,12 +1560,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 980,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 706,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 705,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.037878262810409,
+      "runtime_seconds": 1.1587333651259542,
       "sample_index": 4,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_04_2024-01-31-02_frame_09102.jpg"
@@ -1850,12 +1907,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 607,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 743,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 742,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9353586910292506,
+      "runtime_seconds": 1.0615997901186347,
       "sample_index": 5,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_05_2024-01-31-02_frame_11377.jpg"
@@ -2178,12 +2254,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 345,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 537,
+          "skeleton_components": 1,
+          "endpoint_count": 4,
+          "branch_pixels": 2,
+          "edge_count": 536,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9676474519073963,
+      "runtime_seconds": 0.9608212923631072,
       "sample_index": 6,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_06_2024-01-31-02_frame_13653.jpg"
@@ -2506,12 +2601,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 900,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 742,
+          "skeleton_components": 1,
+          "endpoint_count": 4,
+          "branch_pixels": 2,
+          "edge_count": 741,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.1040692143142223,
+      "runtime_seconds": 1.1334721706807613,
       "sample_index": 7,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_07_2024-01-31-02_frame_15928.jpg"
@@ -2621,7 +2735,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 2.038455890491605,
+      "runtime_seconds": 1.692549335770309,
       "sample_index": 8,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_08_2024-01-31-02_frame_18204.jpg"
@@ -2947,12 +3061,30 @@
         "branches_remain": 7,
         "not_two_endpoints": 7
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "adds_more_than_10_percent_of_original_component"
+        ],
+        "bridge_pixels": 1346,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 770,
+          "skeleton_components": 1,
+          "endpoint_count": 2,
+          "branch_pixels": 0,
+          "edge_count": 769,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.1006259266287088,
+      "runtime_seconds": 1.0642690118402243,
       "sample_index": 9,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_09_2024-01-31-02_frame_20480.jpg"
@@ -3212,7 +3344,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 2.3909171419218183,
+      "runtime_seconds": 2.6310302363708615,
       "sample_index": 10,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_10_2023-08-22-01_frame_00000.jpg"
@@ -3535,12 +3667,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 568,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 732,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 731,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0655159950256348,
+      "runtime_seconds": 1.1719449842348695,
       "sample_index": 11,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_11_2023-08-22-01_frame_02260.jpg"
@@ -3863,12 +4014,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 850,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 582,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 581,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9553183149546385,
+      "runtime_seconds": 1.0332797057926655,
       "sample_index": 12,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_12_2023-08-22-01_frame_04520.jpg"
@@ -4098,7 +4268,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.9384345142170787,
+      "runtime_seconds": 2.361261334270239,
       "sample_index": 13,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_13_2023-08-22-01_frame_06780.jpg"
@@ -4328,7 +4498,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.906980149447918,
+      "runtime_seconds": 2.4662021743133664,
       "sample_index": 14,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_14_2023-08-22-01_frame_09040.jpg"
@@ -4487,7 +4657,7 @@
       "failure_reasons": [
         "full_width_exceeds_80_px"
       ],
-      "runtime_seconds": 1.5142978774383664,
+      "runtime_seconds": 1.9835277367383242,
       "sample_index": 15,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_15_2023-08-22-01_frame_11300.jpg"
@@ -4810,12 +4980,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 853,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 677,
+          "skeleton_components": 1,
+          "endpoint_count": 4,
+          "branch_pixels": 2,
+          "edge_count": 676,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.9387272158637643,
+      "runtime_seconds": 1.0477097509428859,
       "sample_index": 16,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_16_2023-08-22-01_frame_13560.jpg"
@@ -5017,7 +5206,7 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.6034134719520807,
+      "runtime_seconds": 2.0137645388022065,
       "sample_index": 17,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_17_2023-08-22-01_frame_15820.jpg"
@@ -5219,7 +5408,7 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.6534787472337484,
+      "runtime_seconds": 1.968029192648828,
       "sample_index": 18,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_18_2023-08-22-01_frame_18080.jpg"
@@ -5552,12 +5741,32 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "adds_more_than_10_percent_of_original_component",
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 671,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 255,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 254,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.754109213128686,
+      "runtime_seconds": 0.8408459080383182,
       "sample_index": 19,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_19_2023-08-22-01_frame_20340.jpg"
@@ -5759,7 +5968,7 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.6220234418287873,
+      "runtime_seconds": 2.2585578057914972,
       "sample_index": 20,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_20_2023-06-23-01_frame_00000.jpg"
@@ -5959,7 +6168,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.705669816583395,
+      "runtime_seconds": 2.3801674731075764,
       "sample_index": 21,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_21_2023-06-23-01_frame_02284.jpg"
@@ -6069,7 +6278,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.16652337834239,
+      "runtime_seconds": 1.7011692756786942,
       "sample_index": 22,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_22_2023-06-23-01_frame_04569.jpg"
@@ -6271,7 +6480,7 @@
       "failure_reasons": [
         "extended_centerline_outside_250_to_750_px"
       ],
-      "runtime_seconds": 1.6686344435438514,
+      "runtime_seconds": 2.36711404286325,
       "sample_index": 23,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_23_2023-06-23-01_frame_06853.jpg"
@@ -6531,7 +6740,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.6691080555319786,
+      "runtime_seconds": 2.533340231515467,
       "sample_index": 24,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_24_2023-06-23-01_frame_09138.jpg"
@@ -6856,12 +7065,31 @@
         "cycle_remains": 1,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 1324,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 726,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 725,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0120320180431008,
+      "runtime_seconds": 1.1736235525459051,
       "sample_index": 25,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_25_2023-06-23-01_frame_11422.jpg"
@@ -7001,7 +7229,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.4340898841619492,
+      "runtime_seconds": 1.997169521637261,
       "sample_index": 26,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_26_2023-06-23-01_frame_13707.jpg"
@@ -7324,12 +7552,31 @@
         "branches_remain": 10,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 2196,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 870,
+          "skeleton_components": 1,
+          "endpoint_count": 8,
+          "branch_pixels": 6,
+          "edge_count": 869,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 1.0948241846635938,
+      "runtime_seconds": 1.2046245271340013,
       "sample_index": 27,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_27_2023-06-23-01_frame_15991.jpg"
@@ -7529,7 +7776,7 @@
       "accepted": true,
       "failure_stage": null,
       "failure_reasons": [],
-      "runtime_seconds": 1.842923522926867,
+      "runtime_seconds": 2.610129952430725,
       "sample_index": 28,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_28_2023-06-23-01_frame_18276.jpg"
@@ -7865,16 +8112,36 @@
         "cycle_remains": 2,
         "not_two_endpoints": 10
       },
+      "a1_diagnostic_candidate": {
+        "radius_px": 12,
+        "status": "rejected_visualization_only",
+        "rejection_reasons": [
+          "adds_more_than_10_percent_of_original_component",
+          "not_two_endpoints",
+          "branches_remain"
+        ],
+        "bridge_pixels": 297,
+        "sealed_pocket_pixels": 0,
+        "topology": {
+          "skeleton_pixels": 65,
+          "skeleton_components": 1,
+          "endpoint_count": 3,
+          "branch_pixels": 1,
+          "edge_count": 64,
+          "has_cycle": false,
+          "has_path": true
+        }
+      },
       "accepted": false,
       "failure_stage": "A1_geometry_selection",
       "failure_reasons": [
         "no_radius_3_through_12_passed_every_geometry_guard"
       ],
-      "runtime_seconds": 0.7037697955965996,
+      "runtime_seconds": 0.8091946942731738,
       "sample_index": 29,
       "frame_read_source": "verified_raw_source",
       "visual_artifact": "frame_steps/sample_29_2023-06-23-01_frame_20561.jpg"
     }
   ],
-  "git_commit": "7c10ed20e2c64a028d8ce313e6cb0f803881c881"
+  "git_commit": "b0a72b2d750b59493690bad0b089380e50c72118"
 }
