@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local darkness tuner</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">C. elegans · segmentation lab</p>
+      <h1>Local darkness tuner</h1>
+    </div>
+    <div class="header-actions">
+      <span id="run-status" role="status">Loading frame catalog…</span>
+      <button id="download-config" type="button" disabled>Download config</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="viewer" aria-label="Segmentation preview">
+      <div class="viewer-toolbar">
+        <label class="sample-field">
+          <span>Frame</span>
+          <select id="sample-select" aria-label="Frame"></select>
+        </label>
+        <div class="stage-tabs" role="group" aria-label="Preview stage">
+          <button type="button" data-stage="score">1 · score</button>
+          <button type="button" data-stage="candidate" class="active">2 · candidates</button>
+          <button type="button" data-stage="kept">3 · retained</button>
+        </div>
+      </div>
+
+      <div class="image-shell">
+        <img id="base-image" alt="Selected grayscale NIR frame">
+        <img id="analysis-image" alt="Local-darkness analysis layer">
+        <div id="loading-overlay" class="loading-overlay">Computing local darkness…</div>
+      </div>
+
+      <div class="viewer-footer">
+        <div id="legend" class="legend" aria-label="Preview legend"></div>
+        <label class="opacity-field">
+          Overlay <input id="overlay-opacity" type="range" min="0" max="1" value="0.82" step="0.02">
+        </label>
+      </div>
+    </section>
+
+    <aside class="controls" aria-label="Heuristic parameters">
+      <div class="control-heading">
+        <div>
+          <p class="eyebrow">Executable parameters</p>
+          <h2>Step 2 heuristic</h2>
+        </div>
+        <button id="reset-config" type="button">Reset</button>
+      </div>
+
+      <section class="control-group">
+        <h3>Local score</h3>
+        <p class="group-note">Compare each pixel with its neighborhood, then suppress sensor-scale noise.</p>
+
+        <label class="range-field" for="local-radius">
+          <span><strong>Background radius</strong><output id="local-radius-value">31 px</output></span>
+          <input id="local-radius" name="local_radius" type="range" min="3" max="81" step="2">
+        </label>
+
+        <label class="range-field" for="smooth-radius">
+          <span><strong>Denoise radius</strong><output id="smooth-radius-value">2 px</output></span>
+          <input id="smooth-radius" name="smooth_radius" type="range" min="0" max="8" step="1">
+        </label>
+      </section>
+
+      <section class="control-group">
+        <h3>Thresholds</h3>
+        <p class="group-note">Magenta pixels seed the worm. The optional amber cutoff can bridge faint sections only when connected to that seed.</p>
+
+        <label class="range-field" for="foreground-z">
+          <span><strong>Primary cutoff</strong><output id="foreground-z-value">2.6 z</output></span>
+          <input id="foreground-z" name="foreground_z" type="range" min="0.5" max="6" step="0.05">
+        </label>
+
+        <label class="switch-field">
+          <span><strong>Recover faint continuations</strong><small>Connected hysteresis</small></span>
+          <input id="connected-enabled" name="connected_enabled" type="checkbox">
+        </label>
+
+        <label class="range-field" id="connected-cutoff-field" for="connected-foreground-z">
+          <span><strong>Faint continuation cutoff</strong><output id="connected-foreground-z-value">1.30 z</output></span>
+          <input id="connected-foreground-z" name="connected_foreground_z" type="range" min="0.25" max="5.95" step="0.05">
+        </label>
+      </section>
+
+      <section class="control-group">
+        <h3>Connectivity cleanup</h3>
+        <p class="group-note">Close small cross-sectional gaps before retaining the seeded 8-connected body.</p>
+
+        <label class="range-field" for="close-radius">
+          <span><strong>Gap closing radius</strong><output id="close-radius-value">2 px</output></span>
+          <input id="close-radius" name="close_radius" type="range" min="0" max="8" step="1">
+        </label>
+      </section>
+
+      <section class="metrics" aria-label="Current segmentation metrics">
+        <div><span>Retained body</span><strong id="metric-retained">—</strong></div>
+        <div><span>Faint section recovered</span><strong id="metric-recovered">—</strong></div>
+        <div><span>High-threshold objects</span><strong id="metric-components">—</strong></div>
+        <div><span>Disconnected faint pixels rejected</span><strong id="metric-disconnected">—</strong></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -23,7 +23,7 @@ from worm_pose_gen.classical import (
     _erode,
     _largest_component,
     resample_centerline,
-    robust_dark_ridge,
+    segment_dark_ridge,
 )
 from worm_pose_gen.latent import decode_centerline, encode_centerline
 
@@ -210,10 +210,10 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     frame, provenance = smooth.load_real_frame(args.proxy_hdf5)
     cfg = ClassicalConfig()
-    score = robust_dark_ridge(frame, cfg)
-    raw = score >= cfg.foreground_z
-    closed = _erode(_dilate(raw, cfg.close_radius), cfg.close_radius)
-    component, _, component_count = _largest_component(closed)
+    segmentation = segment_dark_ridge(frame, cfg)
+    score = segmentation.score
+    component = segmentation.component
+    component_count = segmentation.component_count
     baseline_mask, enclosed, enclosed_count = smooth.fill_enclosed_cavities(component)
     bounds = smooth.crop_bounds(component)
 

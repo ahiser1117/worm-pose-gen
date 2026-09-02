@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,7 @@ import numpy as np
 
 import build_smooth_body_prior_experiment as smooth
 from evaluate_final_geometry_primary30 import CALLOUT_INDICES, fit_case
+from worm_pose_gen.classical import ClassicalConfig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -178,7 +180,14 @@ def plot_frame_steps(
     if "local_darkness_score" in arrays:
         panels.append(("score", "1. Local-darkness score"))
     if "raw_threshold_mask" in arrays:
-        panels.append(("threshold", "2. Threshold at z >= 2.6"))
+        cfg = ClassicalConfig()
+        label = f"2. Threshold at z >= {cfg.foreground_z:g}"
+        if cfg.connected_foreground_z is not None:
+            label = (
+                f"2. Seed z >= {cfg.foreground_z:g}; connected z >= "
+                f"{cfg.connected_foreground_z:g}"
+            )
+        panels.append(("threshold", label))
     if "section3_component" in arrays:
         panels.append(("section3", "3. Close + largest component"))
         panels.append(("a1", "A1. Geometry-only radius sweep"))
@@ -775,7 +784,14 @@ def main() -> int:
             "substitute_for_primary30_annotation_audit": False,
             "protected_2025_holdout_opened": False,
             "parameters_frozen_from_annotation_index_5_frame_3420": True,
+            "parameter_source": (
+                "frozen ClassicalConfig defaults; the interactively tuned "
+                "setting was evaluated and reverted"
+            ),
             "selection": "10 uniformly spaced frames from each of 3 readable recordings",
+        },
+        "pipeline_parameters": {
+            "classical_local_darkness": asdict(ClassicalConfig()),
         },
         "inputs": provenance,
         "summary": summary,

@@ -32,6 +32,7 @@ from worm_pose_gen.anchors import extend_centerline_to_mask_boundary, skeleton_t
 from worm_pose_gen.annotation import resample_polyline, validate_annotation
 from worm_pose_gen.classical import (
     ClassicalConfig,
+    _connected_extension,
     _prune_skeleton_endpoints,
     _thin,
     resample_centerline,
@@ -461,7 +462,18 @@ def fit_case(
         closed = square_erode(square_dilate(raw, cfg.close_radius), cfg.close_radius)
         if retain_diagnostics:
             diagnostic_arrays["closed_mask"] = closed
-        component, component_area, component_count = largest_component_rle(closed)
+        high_component, component_area, component_count = largest_component_rle(closed)
+        component = high_component
+        if cfg.connected_foreground_z is not None:
+            connected = score >= cfg.connected_foreground_z
+            connected_closed = square_erode(
+                square_dilate(connected, cfg.close_radius), cfg.close_radius
+            )
+            component = _connected_extension(high_component, connected_closed)
+            component_area = int(component.sum())
+            if retain_diagnostics:
+                diagnostic_arrays["connected_threshold_mask"] = connected
+                diagnostic_arrays["connected_closed_mask"] = connected_closed
         if not component_area:
             return _failure(
                 result,
@@ -1187,7 +1199,10 @@ def main() -> int:
             "annotations_sha256": sha256_file(args.annotations),
         },
         "frozen_parameters": {
+            "local_background_radius_px": ClassicalConfig().local_radius,
+            "score_smoothing_radius_px": ClassicalConfig().smooth_radius,
             "foreground_z": ClassicalConfig().foreground_z,
+            "connected_foreground_z": ClassicalConfig().connected_foreground_z,
             "raw_closing_radius_px": ClassicalConfig().close_radius,
             "candidate_close_radii_px": list(boundary.SEARCH_RADII),
             "max_added_fraction_of_original_component": boundary.MAX_ADDED_FRACTION,
