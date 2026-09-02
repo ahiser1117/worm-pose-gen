@@ -343,8 +343,8 @@ class LabelState:
         source = self.sources[recording]
         raw, image = source.corrected(frame_index)
         mask = decode_mask_data_url(mask_url, image.shape)
-        if not (mask == 1).any():
-            raise ValueError("refusing to save a label with no worm pixels; use ignore for empty frames")
+        # An all-background label is legitimate for an empty frame; the
+        # browser asks for confirmation before sending one.
         record = self.store.save(
             recording, frame_index, image, mask, image_raw=raw, source_path=str(source.path),
             label_source=label_source, flat_fielded=True,

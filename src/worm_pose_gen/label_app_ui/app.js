@@ -288,6 +288,10 @@ async function nextFrame() {
 
 async function saveLabel() {
   if (!state.label) return false;
+  if (!state.label.some((v) => v === WORM) && !window.confirm("No worm pixels are labeled. Save this frame as all background?")) {
+    setStatus("save cancelled", "error");
+    return false;
+  }
   setLoading(true);
   try {
     const payload = await post("/api/save", {

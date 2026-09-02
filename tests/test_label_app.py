@@ -115,11 +115,19 @@ class LabelAppTests(unittest.TestCase):
                 )
                 chosen = json.loads(urlopen(request).read())
                 self.assertNotEqual(chosen["frame_index"], 2)
-                # A label with no worm pixels is refused.
+                # An all-background label is accepted (empty frames are valid negatives).
                 empty = np.zeros((96, 128), dtype=np.uint8)
                 request = Request(
                     f"http://127.0.0.1:{port}/api/save",
                     data=json.dumps({"recording": "rec-a", "frame_index": 3, "mask": data_url(empty)}).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                saved_empty = json.loads(urlopen(request).read())
+                self.assertEqual(saved_empty["record"]["foreground_fraction"], 0.0)
+                # A malformed mask is refused with a JSON error.
+                request = Request(
+                    f"http://127.0.0.1:{port}/api/save",
+                    data=json.dumps({"recording": "rec-a", "frame_index": 3, "mask": "not-a-png"}).encode(),
                     headers={"Content-Type": "application/json"},
                 )
                 with self.assertRaises(Exception):

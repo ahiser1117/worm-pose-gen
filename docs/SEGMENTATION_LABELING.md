@@ -151,8 +151,10 @@ The next-frame mode decides what you label. **Network-uncertain** draws a
 handful of random unlabeled frames, runs the network on each, and picks the
 one with the most pixels between `0.2` and `0.8` probability. That is the
 frame the current model needs most. Random and sequential (with a stride)
-are also available. A label with no worm pixels is refused; use the ignore
-brush for a frame that has no worm.
+are also available. A frame with no worm can be saved as all background
+(the browser asks for confirmation), which teaches the network that debris
+is not worm; the bootstrap skips such frames, so they only enter through
+the app.
 
 Saving records `label_source` as `network+manual` or `classical+manual`, so
 evaluation can separate hand-refined labels from bootstrapped ones.
