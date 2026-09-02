@@ -701,6 +701,8 @@ not on the tuner view.
   27 eligible frames regardless of flat-fielding or boundary treatment. That is
   a skeleton-topology failure of the mask-then-thin approach, not a threshold
   problem, and it is the main motivation for replacing skeleton extraction with
-  a fitted body model scored against the mask.
+  a fitted body model scored against the mask. That replacement is the mask
+  fit in [`MASK_FIT_EXPERIMENT.md`](MASK_FIT_EXPERIMENT.md), which produces a
+  pose on all 27 worm frames of this set.
 - Boundary contact should be modeled as censoring, as in 8.2, rather than as a
   rejection or as an inferred off-camera curve.

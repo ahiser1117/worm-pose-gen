@@ -1,9 +1,14 @@
 # Worm Pose Geometry
 
 Research code for a conservative 2D *C. elegans* pose pipeline on NIR video.
-The repository is now organized around one geometric algorithm:
+The repository is organized around one geometric algorithm:
 
 `local-darkness mask -> skeleton pose -> smooth containing body -> narrow-notch repair -> curvature-aware endpoint extension`
+
+and, as of September 2026, its intended replacement: a generative body model
+fit directly to the segmentation mask
+(`local-darkness mask -> render tube model -> optimize pose against the mask`),
+documented in [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md).
 
 The canonical description, evidence boundary, current results, and limitations
 are in
@@ -37,6 +42,10 @@ and their adjacent generated assets retain the evidence for each stage:
    edge-censored repair (`docs/final_algorithm_edge_censored_unannotated30/`),
    and the rejected interactively tuned segmentation setting
    (`docs/final_algorithm_tuned_local_darkness_unannotated30/`).
+7. [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md) — the first
+   generative-model step: the 20-value body model plus a width scale is
+   rendered as a soft tube and fit directly to the segmentation mask by
+   gradient descent, producing a pose on all 27 worm frames of the stress set.
 
 ## Setup
 
@@ -108,10 +117,12 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   --workers 3
 ```
 
-The two follow-on comparisons use the same three recordings and frame
-positions:
+The mask fit and the two follow-on comparisons use the same three recordings
+and frame positions:
 
 ```bash
+scripts/project_env.sh uv run --no-sync --frozen python \
+  scripts/evaluate_mask_fit_unannotated30.py
 scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/evaluate_edge_aware_geometry_unannotated30.py --workers 3
 scripts/project_env.sh uv run --no-sync --frozen python \
