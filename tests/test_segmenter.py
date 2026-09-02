@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+
+import lightning as L
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+from worm_pose_gen.segmenter import (
+    IGNORE_LABEL,
+    ResNet18UNet,
+    SegmentationModule,
+    load_segmenter,
+    masked_binary_metrics,
+    normalize_frame,
+)
+
+
+class SegmenterTests(unittest.TestCase):
+    def test_normalize_frame_shape_and_scale(self) -> None:
+        frame = np.full((10, 12), 255, dtype=np.uint8)
+        tensor = normalize_frame(frame)
+        self.assertEqual(tuple(tensor.shape), (1, 10, 12))
+        self.assertAlmostEqual(float(tensor.max()), (1.0 - 0.449) / 0.226, places=5)
+
+    def test_network_returns_full_resolution_logits_for_odd_sizes(self) -> None:
+        network = ResNet18UNet(pretrained=False).eval()
+        with torch.no_grad():
+            logits = network(torch.randn(1, 1, 45, 70))
+        self.assertEqual(tuple(logits.shape), (1, 1, 45, 70))
+
+    def test_masked_metrics_ignore_invalid_pixels(self) -> None:
+        probability = torch.zeros(1, 4, 4)
+        probability[0, :2] = 1.0
+        target = torch.zeros(1, 4, 4)
+        target[0, :2] = 1.0
+        valid = torch.ones(1, 4, 4)
+        valid[0, 0] = 0.0  # a wrong row would be hidden by ignore
+        probability[0, 0] = 0.0
+        metrics = masked_binary_metrics(probability, target, valid)
+        self.assertAlmostEqual(float(metrics["iou"][0]), 1.0, places=4)
+
+    def test_loss_ignores_masked_pixels(self) -> None:
+        module = SegmentationModule(pretrained=False)
+        logits = torch.full((1, 1, 6, 6), 8.0)
+        target = torch.zeros(1, 6, 6)
+        target[0, :3] = 1.0
+        valid = torch.zeros(1, 6, 6)
+        valid[0, :3] = 1.0  # only the correctly predicted half is scored
+        total, parts = module.loss(logits, target, valid)
+        self.assertLess(float(parts["bce"]), 1e-2)
+        self.assertLess(float(total), 0.05)
+
+    def test_fit_one_step_and_reload_checkpoint(self) -> None:
+        module = SegmentationModule(pretrained=False, learning_rate=1e-3)
+        image = torch.randn(2, 1, 64, 64)
+        mask = (torch.rand(2, 64, 64) > 0.8).float()
+        batch = {"image": image, "mask": mask, "valid": torch.ones(2, 64, 64)}
+        loader = DataLoader([batch], batch_size=None)
+        with tempfile.TemporaryDirectory() as directory:
+            trainer = L.Trainer(
+                max_epochs=1, accelerator="cpu", devices=1, logger=False,
+                enable_checkpointing=False, enable_progress_bar=False, enable_model_summary=False,
+            )
+            trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+            path = f"{directory}/model.ckpt"
+            trainer.save_checkpoint(path)
+            reloaded = load_segmenter(path, device="cpu")
+            probability = reloaded.predict_probability(np.zeros((40, 52), dtype=np.uint8))
+            self.assertEqual(probability.shape, (40, 52))
+            self.assertTrue(np.all((probability >= 0) & (probability <= 1)))
+            self.assertFalse(reloaded.training)
+            self.assertEqual(IGNORE_LABEL, 255)
+
+
+if __name__ == "__main__":
+    unittest.main()

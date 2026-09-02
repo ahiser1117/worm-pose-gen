@@ -15,6 +15,7 @@ wheels/
 
 # Local experiment defaults that must never become repository artifacts
 lightning_logs/
+checkpoints/
 *.ckpt
 *.pt
 *.pth
