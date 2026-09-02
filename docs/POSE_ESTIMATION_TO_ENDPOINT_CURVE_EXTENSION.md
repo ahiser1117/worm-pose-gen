@@ -11,6 +11,13 @@ The complete path is:
 
 `raw NIR frame -> local-darkness mask -> classical skeleton pose -> smooth containing body -> narrow-notch repair -> repaired-body skeleton pose -> curvature-aware endpoint extension`
 
+> **Parameter note (2026-08-26):** an interactively tuned local-darkness
+> setting (`61 / 3 / 4.25 / 2.05 / 8`) was briefly promoted, evaluated on the
+> 30-frame stress set in Section 8.3, and reverted. The executable defaults
+> remain the frozen `31 / 2 / 2.6 / disabled / 2` setting that produced every
+> figure and metric below. Connected hysteresis stays available as an opt-in
+> `ClassicalConfig` field.
+
 Most of the detailed mechanism audit uses frame `3420` from dataset `/img_nir`
 in `nir_videos/2023-09-19-01.h5`. It is one disclosed development frame, not an
 independent validation set. The one-annotator centerline is used only after
@@ -558,10 +565,11 @@ reached—the A3 skeleton, A4 latent fit, A5 body, and A6 extension.
 This replacement run answers an operational question: whether the frozen
 geometry executes, rejects unsafe cases, and produces bounded endpoint
 extensions on other readable raw recordings. It does **not** answer the
-anatomical-accuracy question posed by the 30 primary annotations. That audit
-still requires readable copies of the exact 21 uncached source frames; when
-they are restored, `scripts/evaluate_final_geometry_primary30.py` can produce
-the intended annotation-matched report without changing the frozen algorithm.
+anatomical-accuracy question posed by the 30 primary annotations. The 21
+uncached source frames are permanently lost with their corrupted recordings,
+so that annotation-matched audit is retired rather than pending.
+`scripts/evaluate_final_geometry_primary30.py` remains only because the
+unannotated evaluators import its per-frame fitting code.
 
 Rebuild this annotation-free stress test from the repository root with:
 
@@ -573,3 +581,126 @@ scripts/project_env.sh uv run --no-sync --frozen python \
 The complete per-frame outcomes and input provenance are in
 `docs/final_algorithm_unannotated30/metrics.json`; accepted A5 and A6 curves
 are in `docs/final_algorithm_unannotated30/predictions.npz`.
+
+## 8. Follow-on runs on the same 30 frames (2026-08-26)
+
+Three further runs reused the Section 7 recordings, frame positions, and
+A1--A6 gates. All three are annotation-free operational comparisons. Samples
+9, 19, and 29 are known empty frames and are hard-rejected in the two
+boundary-handling runs, so the eligible worm-bearing set is 27 frames and the
+frozen baseline is **11 of 27** accepted on that basis.
+
+Two of the runs address a structural gap in Sections 1--7: the classical
+stage treated the camera border like any other mask boundary, and the
+extractor rejected a frame whenever the component touched the border. Because
+the animal often leaves the field of view, that gate alone removes a large
+fraction of frames. Both runs also estimate one flat field per recording from a
+high temporal quantile of many frames, spatially smoothed, and divide it out
+before scoring local darkness, which removes vignetting that the local
+background blur handles poorly near the corners.
+
+### 8.1 Edge-aware run: flat field plus field-of-view completion
+
+`scripts/evaluate_edge_aware_geometry_unannotated30.py` classifies boundary
+contact from the pre-morphology threshold mask (zero-padded closing would
+otherwise pull a genuine contact inward), and, when a boundary contact is
+found, continues the fitted curve outside the camera by a fixed-length
+constant-curvature extrapolation. The target length is the longest frozen
+accepted A6 pose in the same recording below 750 px, which is a lower-bound
+proxy, not measured anatomy. The reusable code is
+`src/worm_pose_gen/flat_field.py` and `src/worm_pose_gen/fov_completion.py`.
+
+![Frozen versus edge-aware coverage](final_algorithm_edge_aware_unannotated30/summary.png)
+
+| Outcome | Frozen baseline | Edge-aware |
+|---|---:|---:|
+| Accepted, eligible frames | 11 of 27 | 13 of 27 |
+| Fully in-view success | 11 | 7 |
+| Success with uncertain FOV completion | 0 | 6 |
+| Boundary-uncertain frames | 0 | 18 |
+| Rejected at A1 geometry selection | 11 | 11 |
+| Rejected at A5 modeled-body gate | 1 | 2 |
+| Rejected at A6 length gate | 4 | 1 |
+
+Coverage rose by two frames, but 6 of the 13 accepted poses now contain
+extrapolated off-camera anatomy that no pixel supports. The completed lengths
+cluster at the per-recording prior (median `733 px`) by construction. A1
+rejections are unchanged, so flat-fielding did not reduce the dominant branch
+failure. The per-frame comparison sheets are indexed in
+[`final_algorithm_edge_aware_unannotated30/FRAME_STEPS.md`](final_algorithm_edge_aware_unannotated30/FRAME_STEPS.md).
+
+### 8.2 Edge-censored run: flat field plus visible-only repair
+
+`scripts/evaluate_edge_censored_geometry_unannotated30.py` keeps the flat field
+and boundary classification but never generates points outside the camera.
+Skeleton stations within roughly one worm radius of a boundary contact are
+dropped as unreliable, a smooth curve is fit through the remaining interior
+core, and the fit is continued only to the pixel-center camera rectangle at a
+crossing measured from the raw mask. The reusable code is
+`src/worm_pose_gen/edge_censored.py`.
+
+![Edge-censored coverage](final_algorithm_edge_censored_unannotated30/summary.png)
+
+| Outcome | Frames |
+|---|---:|
+| Eligible worm frames | 27 |
+| Pipeline accepted through A6 | 13 |
+| Final visible pose available | **14** |
+| Fully visible, no censoring needed | 6 |
+| Visible edge-censored pose | 6 |
+| Edge-censored repair attempted / succeeded | 8 / 6 |
+| Boundary-uncertain frames | 18 |
+| Rejected at A1 geometry selection | 11 |
+
+This is the more defensible boundary treatment: it matches the edge-aware
+coverage without asserting hidden anatomy, and a censored endpoint is reported
+exactly on the camera rectangle so downstream consumers can see that the body
+continues off-frame. A repaired visible curve is still an initialization
+result. Operational success near the border does not establish anatomical
+correctness there, and the 18 boundary-uncertain frames show that the raw
+threshold mask frequently touches the border even when the closed component
+does not. Sheets are indexed in
+[`final_algorithm_edge_censored_unannotated30/FRAME_STEPS.md`](final_algorithm_edge_censored_unannotated30/FRAME_STEPS.md).
+
+### 8.3 Interactively tuned local-darkness setting: evaluated and reverted
+
+A browser tuner (`python -m worm_pose_gen.heuristic_tuner`) was added so the
+local background radius, denoise radius, seed cutoff, optional connected
+hysteresis cutoff, and closing radius can be adjusted against the cached proxy
+frames while watching the resulting component. The segmentation stage was
+refactored into `segment_dark_ridge`, which exposes each intermediate mask and
+supports the optional hysteresis threshold. A setting that looked clean in the
+tuner (`61 px / 3 px / z >= 4.25 / connected z >= 2.05 / 8 px`) was promoted
+to the code defaults and rerun through the unchanged A1--A6 gates.
+
+| Stage or outcome | Frozen setting | Tuned setting |
+|---|---:|---:|
+| Section 3 component available | 30 | 30 |
+| A1 geometry-only repair selected | 16 | 4 |
+| A5 modeled-body gate passed | 15 | 3 |
+| A6 extension and length gate passed | **11** | **3** |
+| Rejected at A1 geometry selection | 14 | 26 |
+
+Acceptance fell from 11 to 3 of 30, with 26 A1 rejections. The wider
+background radius and higher seed cutoff, chosen for their appearance on the
+proxy frames, produce components on the archive recordings that the radius
+sweep cannot reduce to a single two-endpoint path. The setting was therefore
+reverted; `ClassicalConfig` defaults remain `31 / 2 / 2.6 / disabled / 2`, and
+connected hysteresis stays an opt-in field. The rejected run is retained under
+[`final_algorithm_tuned_local_darkness_unannotated30/`](final_algorithm_tuned_local_darkness_unannotated30/FRAME_STEPS.md)
+as evidence that tuner appearance on proxy frames does not predict stress-run
+coverage. Any future segmentation change must be judged on the 30-frame run,
+not on the tuner view.
+
+### 8.4 What Section 8 changes about the evidence boundary
+
+- The annotation-matched primary-30 audit is retired permanently, so no
+  further anatomical-accuracy number can come from the existing manual traces
+  beyond the single Section 5 frame.
+- The dominant failure across all four runs is A1 geometry selection, at 11 of
+  27 eligible frames regardless of flat-fielding or boundary treatment. That is
+  a skeleton-topology failure of the mask-then-thin approach, not a threshold
+  problem, and it is the main motivation for replacing skeleton extraction with
+  a fitted body model scored against the mask.
+- Boundary contact should be modeled as censoring, as in 8.2, rather than as a
+  rejection or as an inferred off-camera curve.

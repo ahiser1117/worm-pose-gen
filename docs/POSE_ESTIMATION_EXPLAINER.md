@@ -9,6 +9,13 @@ centerline-darkness gate has now been retired, acceptance coverage must be
 remeasured before those historical coverage numbers are used for the revised
 extractor. No method in this repository is deployment-authorized.
 
+> **Parameter note (2026-08-26):** an interactively tuned setting (radii `61`
+> and `3`, `z >= 4.25` seed, connected `z >= 2.05` recovery, radius-`8`
+> closing) was evaluated on the 30-frame stress set and rejected because it cut
+> acceptance from 11 to 3 frames. The executable defaults remain the
+> `31 / 2 / 2.6 / disabled / 2` setting used for every image below. See
+> Section 8.3 of `POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md`.
+
 The whole idea is:
 
 `raw frame → local darkness → mask → skeleton → longest path → 100-point pose → quality check`

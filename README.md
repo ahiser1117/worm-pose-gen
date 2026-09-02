@@ -11,7 +11,10 @@ are in
 
 This remains research code. The algorithm has been exercised on one annotated
 development frame and an annotation-free 30-frame stress set; it is not
-deployment-authorized, and the protected holdout remains unopened.
+deployment-authorized, and the protected holdout remains unopened. The
+annotation-matched 30-frame audit is permanently retired: the exact source
+frames behind 21 of the 30 manual traces were lost with their corrupted
+recordings, and substituting other frames under those traces would be invalid.
 
 ## Algorithm stages
 
@@ -28,6 +31,12 @@ and their adjacent generated assets retain the evidence for each stage:
    local constant-curvature continuation to the completed-body boundary.
 5. [`docs/final_algorithm_unannotated30/FRAME_STEPS.md`](docs/final_algorithm_unannotated30/FRAME_STEPS.md) —
    per-frame diagnostics for the 30-frame operational stress run.
+6. Section 8 of the integrated document — three follow-on runs on the same 30
+   frames: recording-level flat-fielding with field-of-view completion
+   (`docs/final_algorithm_edge_aware_unannotated30/`), visible-only
+   edge-censored repair (`docs/final_algorithm_edge_censored_unannotated30/`),
+   and the rejected interactively tuned segmentation setting
+   (`docs/final_algorithm_tuned_local_darkness_unannotated30/`).
 
 ## Setup
 
@@ -60,6 +69,31 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/build_endpoint_curve_extension_experiment.py
 ```
 
+## Tune the local-darkness segmentation
+
+Launch the local browser app against the cached proxy frames:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m \
+  worm_pose_gen.heuristic_tuner
+```
+
+Then open `http://127.0.0.1:8766`. The controls recompute the same local
+background, denoising, threshold, closing, and largest-component stages used by
+the classical extractor, starting from the frozen `ClassicalConfig` defaults
+(`31 px` background radius, `2 px` denoise radius, `2.6 z` cutoff, hysteresis
+disabled, `2 px` closing). Optional connected hysteresis admits a lower cutoff
+only where it remains connected to the high-confidence worm component; the
+downloaded JSON maps directly to `ClassicalConfig`.
+
+Settings that look clean in the tuner must be evaluated on the 30-frame stress
+run before promotion. The one setting promoted so far (`61 / 3 / 4.25 / 2.05 /
+8`) cut acceptance from 11 to 3 of 30 frames and was reverted; its run is kept
+under `docs/final_algorithm_tuned_local_darkness_unannotated30/`.
+
+Use `--proxy-hdf5 /path/to/proxy_labels.h5` or `--port PORT` to override the
+defaults. The app binds to localhost and does not modify the source HDF5.
+
 ## Evaluate the frozen pipeline
 
 The annotation-free stress run accepts exactly three `--recording` arguments
@@ -74,10 +108,20 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   --workers 3
 ```
 
+The two follow-on comparisons use the same three recordings and frame
+positions:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python \
+  scripts/evaluate_edge_aware_geometry_unannotated30.py --workers 3
+scripts/project_env.sh uv run --no-sync --frozen python \
+  scripts/evaluate_edge_censored_geometry_unannotated30.py --workers 3
+```
+
 `scripts/evaluate_final_geometry_primary30.py` is the annotation-matched audit.
-It requires the frozen selection manifest, baseline case list, annotation JSON,
-and readable copies of the exact source frames. The integrated document records
-why that audit is currently incomplete and why proxy substitution is invalid.
+It requires readable copies of the exact source frames, which no longer exist,
+so it cannot run to completion. It is kept because the unannotated evaluators
+import its per-frame fitting code.
 
 ## Repository layout
 
