@@ -41,6 +41,7 @@ from evaluate_final_geometry_unannotated30 import (
     recording_records,
 )
 from worm_pose_gen.classical import ClassicalConfig, segment_dark_ridge
+from worm_pose_gen.flat_field import FlatField, apply_flat_field, estimate_flat_field
 from worm_pose_gen.mask_fit import (
     MaskFitConfig,
     MaskFitResult,
@@ -60,6 +61,9 @@ IOU_THRESHOLDS = (0.8, 0.9)
 # Enclosed background narrower than a 17 px square is segmentation texture;
 # a coil interior is far wider and is never filled.
 HOLE_FILL_RADIUS_PX = 8
+# One illumination field per recording from uniformly spaced frames; the
+# temporal upper quantile suppresses the dark, moving worm.
+FLAT_FIELD_SAMPLE_COUNT = 64
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +72,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--frozen-dir", type=Path, default=DEFAULT_FROZEN_DIR)
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--flat-field",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="divide out a per-recording illumination field before scoring darkness",
+    )
+    parser.add_argument("--flat-field-frames", type=int, default=FLAT_FIELD_SAMPLE_COUNT)
+    parser.add_argument(
+        "--compare-to",
+        type=Path,
+        default=None,
+        help="metrics.json of an earlier run to report per-frame IoU changes against",
+    )
     return parser.parse_args()
 
 
@@ -104,19 +121,58 @@ def frozen_group(case: dict[str, Any] | None, sample_index: int) -> str:
     return "frozen_rejected_A5_A6"
 
 
-def read_frames(cases: list[dict[str, Any]]) -> dict[int, np.ndarray]:
+def read_frames(
+    cases: list[dict[str, Any]], *, flat_field_frames: int | None
+) -> tuple[dict[int, np.ndarray], dict[str, FlatField | None]]:
+    """Read the selected frames and, optionally, fit one flat field per recording."""
+
     frames: dict[int, np.ndarray] = {}
+    fields: dict[str, FlatField | None] = {}
     by_path: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for case in cases:
         by_path[case["resolved_source_path"]].append(case)
     for path, group in by_path.items():
+        recording = str(group[0]["recording"])
         with h5py.File(path, "r") as handle:
             dataset = handle[group[0]["source_dataset_path"]]
             for case in group:
                 frames[int(case["sample_index"])] = np.asarray(
                     dataset[int(case["frame_index"])], dtype=np.uint8
                 )
-    return frames
+            if flat_field_frames is None:
+                fields[recording] = None
+                continue
+            indices = np.linspace(
+                0, int(dataset.shape[0]) - 1, min(flat_field_frames, int(dataset.shape[0])),
+                dtype=np.int64,
+            )
+            calibration = np.stack(
+                [np.asarray(dataset[int(index)], dtype=np.uint8) for index in indices]
+            )
+        fields[recording] = estimate_flat_field(
+            calibration, temporal_quantile=0.8, spatial_radius=31,
+            smoothing_passes=2, min_gain=0.5, max_gain=2.5,
+        )
+        del calibration
+    return frames, fields
+
+
+def flat_field_summary(field: FlatField | None) -> dict[str, Any] | None:
+    if field is None:
+        return None
+    return {
+        "reference_level": float(field.reference_level),
+        "dark_level": float(field.dark_level),
+        "gain": {
+            "min": float(field.gain.min()),
+            "median": float(np.median(field.gain)),
+            "max": float(field.gain.max()),
+        },
+        "illumination": {
+            "min": float(field.illumination.min()),
+            "max": float(field.illumination.max()),
+        },
+    }
 
 
 def crop_slices(result: MaskFitResult) -> tuple[slice, slice]:
@@ -126,6 +182,7 @@ def crop_slices(result: MaskFitResult) -> tuple[slice, slice]:
 
 def plot_case(
     frame: np.ndarray,
+    corrected: np.ndarray,
     component: np.ndarray,
     raw: np.ndarray,
     result: MaskFitResult,
@@ -139,14 +196,22 @@ def plot_case(
     fig, axes = plt.subplots(2, 3, figsize=(16, 9.5), constrained_layout=True)
     extent = (crop.x0 - 0.5, crop.x1 - 0.5, crop.y1 - 0.5, crop.y0 - 0.5)
 
-    def show(ax: plt.Axes, title: str) -> None:
-        lower, upper = np.percentile(frame, [1, 99])
-        ax.imshow(frame[rows, cols], cmap="gray", vmin=lower, vmax=upper, extent=extent)
+    def show(ax: plt.Axes, title: str, image: np.ndarray = corrected) -> None:
+        lower, upper = np.percentile(image, [1, 99])
+        ax.imshow(image[rows, cols], cmap="gray", vmin=lower, vmax=upper, extent=extent)
         ax.set_title(title, fontsize=10)
         ax.set_axis_off()
 
-    show(axes[0, 0], f"Sample {record['sample_index']:02d}: {record['recording']} frame {record['frame_index']}")
-    show(axes[0, 1], "Observed: raw threshold (amber) and hole-filled Section 3 component (magenta)")
+    show(
+        axes[0, 0],
+        f"Sample {record['sample_index']:02d}: {record['recording']} frame {record['frame_index']} (raw)",
+        frame,
+    )
+    corrected_label = "flat-fielded" if record["flat_field_applied"] else "uncorrected"
+    show(
+        axes[0, 1],
+        f"Observed on {corrected_label} frame: raw threshold (amber), hole-filled component (magenta)",
+    )
     axes[0, 1].imshow(
         np.where(raw[rows, cols], 1.0, np.nan), cmap="autumn", alpha=0.35, extent=extent, interpolation="nearest"
     )
@@ -290,7 +355,22 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             }
         by_group[group] = entry
     worm = [r for r in records if r["frozen_group"] != "expected_no_worm"]
+    compared = [r for r in worm if r.get("previous_final_iou_target") is not None]
+    comparison: dict[str, Any] | None = None
+    if compared:
+        deltas = [r["final_iou_target"] - r["previous_final_iou_target"] for r in compared]
+        comparison = {
+            "frames": len(compared),
+            "iou_delta": numeric_summary(deltas),
+            "frames_improved": int(sum(d > 0.005 for d in deltas)),
+            "frames_worsened": int(sum(d < -0.005 for d in deltas)),
+            "previous_median_iou": float(np.median([r["previous_final_iou_target"] for r in compared])),
+            "component_area_delta_px": numeric_summary(
+                r["component_area_px"] - r["previous_component_area_px"] for r in compared
+            ),
+        }
     return {
+        "comparison_to_previous_run": comparison,
         "requested_frames": len(records),
         "eligible_worm_frames": len(worm),
         "by_frozen_group": by_group,
@@ -319,14 +399,29 @@ def main() -> int:
 
     cases, provenance = recording_records(recordings)
     frozen_cases, frozen_curves = load_frozen(args.frozen_dir)
-    frames = read_frames(cases)
+    frames, fields = read_frames(
+        cases, flat_field_frames=args.flat_field_frames if args.flat_field else None
+    )
     config = MaskFitConfig()
     classical = ClassicalConfig()
+    previous: dict[int, dict[str, Any]] = {}
+    if args.compare_to is not None:
+        previous = {
+            int(case["sample_index"]): case
+            for case in json.loads(args.compare_to.read_text())["per_case"]
+        }
 
+    corrected_frames: dict[int, np.ndarray] = {}
     segmentations: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, int]] = {}
     for case in cases:
         index = int(case["sample_index"])
-        segmentation = segment_dark_ridge(frames[index], classical)
+        field = fields[str(case["recording"])]
+        corrected_frames[index] = (
+            frames[index].astype(np.float64)
+            if field is None
+            else apply_flat_field(frames[index], field, clip=(0.0, 255.0))
+        )
+        segmentation = segment_dark_ridge(corrected_frames[index], classical)
         target, filled_area = fill_narrow_holes(
             segmentation.component, HOLE_FILL_RADIUS_PX, device=args.device
         )
@@ -367,6 +462,7 @@ def main() -> int:
             "recording": case["recording"],
             "frame_index": int(case["frame_index"]),
             "expected_no_worm": index in EXPECTED_NO_WORM_INDICES,
+            "flat_field_applied": fields[str(case["recording"])] is not None,
             "frozen_group": group,
             "frozen_failure_stage": None if frozen_case is None else frozen_case.get("failure_stage"),
             "component_area_px": int(component.sum()),
@@ -387,9 +483,16 @@ def main() -> int:
             "crop": asdict(result.crop),
             "runtime_seconds": runtime,
         }
+        if index in previous:
+            record["previous_final_iou_target"] = previous[index].get("final_iou_target")
+            record["previous_component_area_px"] = previous[index].get("component_area_px")
+            record["previous_body_length_px"] = previous[index].get("body_length_px")
         visual_name = f"sample_{index:02d}_{case['recording']}_frame_{int(case['frame_index']):05d}.jpg"
         record["visual_artifact"] = f"frame_steps/{visual_name}"
-        plot_case(frames[index], target, raw, result, record, visual_dir / visual_name)
+        plot_case(
+            frames[index], corrected_frames[index], target, raw, result, record,
+            visual_dir / visual_name,
+        )
         predictions[f"sample_{index:02d}_centerline_xy"] = result.centerline_xy
         predictions[f"sample_{index:02d}_latent"] = result.latent
         predictions[f"sample_{index:02d}_width_profile"] = result.width_profile
@@ -420,6 +523,21 @@ def main() -> int:
         },
         "method": {
             "observed_mask": "Section 3 largest component of the frozen local-darkness threshold, enclosed holes narrower than a 17 px square filled",
+            "flat_field": (
+                {
+                    "applied": True,
+                    "calibration_frames_per_recording": args.flat_field_frames,
+                    "temporal_quantile": 0.8,
+                    "spatial_radius_px": 31,
+                    "gain_limits": [0.5, 2.5],
+                    "per_recording": {
+                        name: flat_field_summary(field) for name, field in fields.items()
+                    },
+                }
+                if args.flat_field
+                else {"applied": False}
+            ),
+            "compared_to": None if args.compare_to is None else str(args.compare_to),
             "hole_fill_radius_px": HOLE_FILL_RADIUS_PX,
             "body_model": "16 cubic tangent coefficients, rotation, length, centroid, one width scale",
             "width_template_source": {

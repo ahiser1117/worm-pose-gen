@@ -77,9 +77,17 @@ starts recover the truth to a median point error of `0.2 px` and IoU `0.99`.
 ## 3. Observed mask
 
 The observed mask is the Section 3 largest component of the frozen
-local-darkness threshold (`31 / 2 / 2.6 / disabled / 2`), with one change:
-enclosed background regions too narrow to contain a `17 x 17 px` square are
-filled. Those regions are segmentation texture inside the body; the interior
+local-darkness threshold (`31 / 2 / 2.6 / disabled / 2`), computed on a
+flat-fielded frame, with one further change: enclosed background regions too
+narrow to contain a `17 x 17 px` square are filled.
+
+The flat field is the per-recording divisive correction from
+`src/worm_pose_gen/flat_field.py`: the illumination is the temporal 80th
+percentile of 64 uniformly spaced frames, spatially smoothed, and each frame
+is divided by it with the gain capped to `[0.5, 2.5]`. On these three
+recordings the gain reaches `1.93x` in the darkest corner and about `14%` of
+the frame lies where the gain exceeds `1.3x`. Section 4.1 measures what the
+correction changes. Those regions are segmentation texture inside the body; the interior
 of a coiled worm is far wider and is never filled, and background connected
 to the image border is never filled. IoU is also reported against the
 unfilled component and the raw threshold mask.
@@ -93,36 +101,77 @@ The frozen pipeline outcome is the Section 7 result on the same frame.
 
 | Frozen pipeline outcome | Frames | Median IoU after fit | Frames with IoU >= 0.8 | Median IoU of winning start before fit |
 |---|---:|---:|---:|---:|
-| Accepted through A6 | 11 | 0.933 | 11 | 0.870 |
-| Rejected at A1 geometry selection | 11 | 0.900 | 11 | 0.836 |
-| Rejected at A5 or A6 | 5 | 0.912 | 5 | 0.823 |
-| Known empty frame | 3 | 0.668 | 0 | 0.703 |
+| Accepted through A6 | 11 | 0.922 | 11 | 0.859 |
+| Rejected at A1 geometry selection | 11 | 0.902 | 11 | 0.820 |
+| Rejected at A5 or A6 | 5 | 0.911 | 5 | 0.855 |
+| Known empty frame | 3 | 0.518 | 0 | 0.615 |
 
 Across the 27 worm-bearing frames:
 
 | Quantity | Value |
 |---|---:|
-| Median IoU vs hole-filled component | 0.912 |
-| Median IoU vs unfilled component | 0.830 |
-| Frames with IoU >= 0.8 / >= 0.9 | 27 / 17 |
-| Median fitted length | 702 px |
-| Median fitted midbody width | 47.7 px |
+| Median IoU vs hole-filled component | 0.911 |
+| Median IoU vs unfilled component | 0.828 |
+| Frames with IoU >= 0.8 / >= 0.9 | 27 / 20 |
+| Median fitted length | 704 px |
+| Median fitted midbody width | 47.5 px |
 | Median runtime per frame (one GPU, five starts) | 19 s |
 
 The main result is coverage. The frozen pipeline produced a pose on 11 of 27
 worm frames; the fit produces a pose on all 27, and the 11 frames the frozen
 pipeline rejected at A1 fit as well as the 11 it accepted. On the accepted
 frames, the fit improves the overlap of the frozen A6 pose (rendered with the
-same template) on every frame, from a median of `0.86` to `0.93`.
+same template) on every frame, from a median of `0.86` to `0.92`.
 
 Filling narrow holes in the target matters: against the unfilled component
 the same fits score a median IoU of `0.83`, and a first run that fit the
 unfilled component directly scored `0.80`, because interior texture holes
 count as background in the energy and pull the tube narrower.
 
+### 4.1 What flat-fielding changes
+
+The same 30 frames were fit without the flat field first; that run's metrics
+are kept as `mask_fit_unannotated30/metrics_without_flat_field.json` and the
+current `metrics.json` records the per-frame differences.
+
+| Quantity | Without flat field | With flat field |
+|---|---:|---:|
+| Median IoU, 27 worm frames | 0.912 | 0.911 |
+| Frames with IoU >= 0.9 | 17 | 20 |
+| Frames changed by more than 0.005 IoU | | 4 better, 3 worse |
+| Median component area change | | -121 px |
+| Empty-frame IoU (samples 9, 19, 29) | 0.67, 0.71, 0.60 | 0.69, 0.52, 0.14 |
+
+On this uniformly sampled set the correction is nearly neutral, which is
+expected: the local-darkness score already compares each pixel with a 31 px
+neighborhood, so a smooth fall-off only matters where it is steep or where
+the absolute contrast drops, and few of these 30 frames place the animal in
+a corner. The correction does remove debris on the empty frames, which makes
+them easier to reject.
+
+To test the corner case directly, `scripts/scan_flat_field_vignette_frames.py`
+samples 300 frames of `2024-01-31-02`, keeps the 35 whose component overlaps
+the region where the gain exceeds `1.3x`, and compares masks. Flat-fielding
+adds a median `317 px` (`1.4%`) of component area and produces a net gain on
+33 of the 35. Fitting the four frames with the largest change both ways
+(`mask_fit_unannotated30/flat_field_vignette_scan.json`):
+
+| Frame | IoU raw | IoU flat-fielded | Length raw | Length flat-fielded |
+|---:|---:|---:|---:|---:|
+| 136 | 0.864 | 0.869 | 610 px | 668 px |
+| 8561 | 0.889 | 0.889 | 680 px | 683 px |
+| 13219 | 0.895 | 0.895 | 671 px | 678 px |
+| 17329 | 0.852 | 0.885 | 677 px | 680 px |
+
+Frame 136 is the clipped-tail case the correction exists for: `58 px` of body
+comes back once the corner is brightened. The others change little, so the
+flat field is a targeted fix for a minority of frames rather than a general
+gain, and it stays in the pipeline as the input normalization for any later
+learned segmenter.
+
 The three empty frames are not rejected by the fitter itself: it fits the
 largest debris component. They separate on the fitted width and overlap
-(sample 9 fits a `16 px` wide scratch at IoU `0.67`), so a width gate
+(sample 9 fits a `16 px` wide scratch at IoU `0.69`), so a width gate
 and an IoU floor are the obvious fail-closed checks, but they were not
 pre-declared and are not applied here.
 
@@ -137,9 +186,9 @@ show three consistent residual patterns:
    cannot follow that, so the fit compromises: the tube is too narrow at the
    thick end and too wide at the thin end, and the centerline shifts toward
    one side where the width error is largest. This is the largest remaining
-   error on the lowest-scoring worm frames (samples 14, 27, and 17).
+   error on the lowest-scoring worm frames (samples 27, 2, and 14).
 2. **Length is unobservable when the body leaves the camera.** The fitted
-   length reached the `750 px` bound on 8 frames. In 6 of them the crop
+   length reached the `750 px` bound on 7 frames. In 5 of them the crop
    touches an image edge: censoring works as intended, nothing pulls the
    length back, and the bound decides it. The other two are fully in view in
    the highest-magnification recording, where the body is genuinely near the
@@ -186,9 +235,17 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/evaluate_mask_fit_unannotated30.py
 ```
 
-The script reads the three Section 7 recordings, recomputes the Section 3
-masks, measures the width template from the frozen accepted poses in
+The script reads the three Section 7 recordings, fits one flat field per
+recording (`--no-flat-field` disables it), recomputes the Section 3 masks,
+measures the width template from the frozen accepted poses in
 `docs/final_algorithm_unannotated30/`, and writes `metrics.json`,
 `predictions.npz` (per-frame latent, centerline, and width profile), the
 summary figure, and one diagnostic sheet per frame under
-`docs/mask_fit_unannotated30/`.
+`docs/mask_fit_unannotated30/`. Pass `--compare-to` with an earlier
+`metrics.json` to record per-frame IoU changes.
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python \
+  scripts/scan_flat_field_vignette_frames.py \
+  --output docs/mask_fit_unannotated30/flat_field_vignette_scan.json
+```

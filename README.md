@@ -7,7 +7,7 @@ The repository is organized around one geometric algorithm:
 
 and, as of September 2026, its intended replacement: a generative body model
 fit directly to the segmentation mask
-(`local-darkness mask -> render tube model -> optimize pose against the mask`),
+(`flat field -> local-darkness mask -> render tube model -> optimize pose against the mask`),
 documented in [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md).
 
 The canonical description, evidence boundary, current results, and limitations
@@ -43,9 +43,10 @@ and their adjacent generated assets retain the evidence for each stage:
    and the rejected interactively tuned segmentation setting
    (`docs/final_algorithm_tuned_local_darkness_unannotated30/`).
 7. [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md) — the first
-   generative-model step: the 20-value body model plus a width scale is
-   rendered as a soft tube and fit directly to the segmentation mask by
-   gradient descent, producing a pose on all 27 worm frames of the stress set.
+   generative-model step: the frame is flat-fielded, segmented, and the
+   20-value body model plus a width scale is rendered as a soft tube and fit
+   directly to the mask by gradient descent, producing a pose on all 27 worm
+   frames of the stress set.
 
 ## Setup
 
