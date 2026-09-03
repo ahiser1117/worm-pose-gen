@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 import tempfile
 import unittest
 
@@ -55,6 +56,48 @@ class SegmentationDatasetTests(unittest.TestCase):
             self.assertTrue(store.delete(record.sample_id))
             self.assertEqual(sum(store.counts().values()), 0)
             self.assertFalse(store.sample_path(record.sample_id).exists())
+
+    def test_split_pledge_survives_delete_and_relabel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SegmentationStore(directory)
+            image, mask = _sample(0)
+            records = [
+                store.save("rec", index, image, mask, source_path="/x.h5", label_source="bootstrap")
+                for index in range(12)
+            ]
+            held_out = [r for r in records if r.split != "train"]
+            self.assertEqual(len(held_out), 2)
+            for record in held_out:
+                self.assertTrue(store.delete(record.sample_id))
+            self.assertEqual(sum(store.counts().values()), 10)
+            # With val and test empty, the deficit rule alone would put the next
+            # sample there; the pledge must win for a frame that has been held out,
+            # and a brand-new frame must not take over a held-out frame's slot.
+            for record in held_out:
+                again = store.save(record.recording, record.frame_index, image, mask, source_path="/x.h5", label_source="manual")
+                self.assertEqual(again.split, record.split)
+                self.assertEqual(again.revision, 1)
+                self.assertEqual(store.pledged_split(record.recording, record.frame_index), record.split)
+            self.assertIsNone(store.pledged_split("rec", 99))
+            fresh = store.save("rec", 99, image, mask, source_path="/x.h5", label_source="manual")
+            self.assertEqual(fresh.split, "train")
+            self.assertTrue(store.splits_path.exists())
+
+    def test_split_registry_seeds_from_existing_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SegmentationStore(directory)
+            image, mask = _sample(0)
+            records = [
+                store.save("rec", index, image, mask, source_path="/x.h5", label_source="bootstrap")
+                for index in range(12)
+            ]
+            store.splits_path.unlink()  # a store written before the registry existed
+            expected = {r.sample_id: r.split for r in records}
+            self.assertEqual(store._read_splits(), expected)
+            store.save("rec", 12, image, mask, source_path="/x.h5", label_source="manual")
+            registry = json.loads(store.splits_path.read_text())
+            self.assertEqual({k: v for k, v in registry.items() if k in expected}, expected)
+            self.assertIn(make_sample_id("rec", 12), registry)
 
     def test_store_rejects_bad_masks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -115,7 +115,12 @@ class ResNet18UNet(nn.Module):
 def masked_binary_metrics(
     probability: Tensor, target: Tensor, valid: Tensor, threshold: float = 0.5
 ) -> dict[str, Tensor]:
-    """IoU, Dice, precision, and recall over valid pixels, per batch item."""
+    """IoU, Dice, precision, and recall over valid pixels, per batch item.
+
+    A frame whose label and prediction are both empty scores 1 on every
+    metric (an empty frame correctly left empty).  A label that is empty but
+    a prediction that is not scores 0, as the standard formulas give.
+    """
 
     prediction = (probability >= threshold) & valid.bool()
     truth = (target >= 0.5) & valid.bool()
@@ -124,12 +129,14 @@ def masked_binary_metrics(
     fp = (prediction & ~truth).sum(dims).float()
     fn = (~prediction & truth).sum(dims).float()
     eps = 1e-6
-    return {
+    both_empty = (tp + fp + fn) == 0
+    metrics = {
         "iou": tp / (tp + fp + fn + eps),
         "dice": 2 * tp / (2 * tp + fp + fn + eps),
         "precision": tp / (tp + fp + eps),
         "recall": tp / (tp + fn + eps),
     }
+    return {name: torch.where(both_empty, torch.ones_like(value), value) for name, value in metrics.items()}
 
 
 class SegmentationModule(L.LightningModule):

@@ -117,6 +117,7 @@ scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/bootstrap_segmentation_labels.py --frames-per-recording 40
 scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py
 scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
 scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
 ```
 

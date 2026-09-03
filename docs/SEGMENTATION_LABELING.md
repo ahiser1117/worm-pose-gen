@@ -46,8 +46,13 @@ sample, and is rewritten atomically.
 
 A sample's split is assigned when it is first saved, to whichever of train,
 validation, and test is furthest below its `80 / 10 / 10` target, so the
-proportions hold for a small set. Re-saving a refined label bumps the
-revision and never changes the split. All frames come from the same
+proportions hold for a small set. The assignment is pledged in
+`splits.json` next to the index, and that file is append-only: re-saving a
+refined label bumps the revision and keeps the split, deleting a sample
+keeps its pledge, and labeling the same frame again later gets the pledged
+split back. A frame that has ever been validation or test therefore never
+enters the training set. New pledges are balanced against every pledge ever
+made, not just the samples present. All frames come from the same
 recordings, so the test split measures generalization across frames, not
 across recordings; a held-out recording is the stronger test when more
 recordings become readable.
@@ -85,18 +90,48 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segment
 ```
 
 Training writes `checkpoints/segmenter/best.ckpt` (highest validation IoU),
-`last.ckpt`, CSV logs, and `train_summary.json`; the directory is
-git-ignored. Mixed precision, early stopping on validation IoU, and a test
-pass with the best checkpoint are on by default. Pass `--init
-checkpoints/segmenter/best.ckpt` to continue fine-tuning after more labels
-are added.
+`last.ckpt`, and Lightning CSV logs under `logs/version_N/`; the directory
+is git-ignored. Mixed precision, early stopping on validation IoU, and a
+test pass with the best checkpoint are on by default. Without `--init` the
+model starts from ImageNet weights with no worm exposure; with `--init
+checkpoints/segmenter/best.ckpt` it warm-starts from the last model (the
+optimizer and schedule restart either way).
+
+Every run leaves `runs/<start time>.json`: arguments, git revision, the
+fingerprint of the checkpoint it started from, the exact train, validation,
+and test membership (sample id, label source, revision, save time), the CSV
+log directory, the best checkpoint's fingerprint, epochs run, and the final
+metrics. `train_summary.json` is a copy of the latest run's record.
 
 Evaluation reports per-sample IoU, Dice, precision, and recall on the
 validation and test splits, compares the network with the classical
-threshold on the same frames, separates the hand-refined samples from the
-bootstrapped ones, and writes overlay sheets for the worst samples under
-`checkpoints/segmenter/evaluation/`. Bootstrapped labels are not truth, so
-the number that matters is the hand-refined subset.
+threshold on the same frames, and separates the hand-refined samples from
+the bootstrapped ones. Every evaluation is kept under
+`checkpoints/segmenter/evaluations/<evaluation time>/`: `evaluation.json`
+holds the time, git revision, checkpoint fingerprint (path, size,
+modification time, SHA-256), the split membership at that moment, the
+summary, and per-sample metrics with label and predicted pixel counts, and
+the worst-sample overlay sheets sit beside it. One summary line per
+evaluation is appended to `evaluations/history.jsonl`. `--note` stores a
+free-text reason with the record. Bootstrapped labels are not truth, so the
+number that matters is the hand-refined subset.
+
+A frame labeled as all background scores 1 when the prediction is also
+empty and 0 when the network paints anything, so the summary also reports
+the number of false-positive pixels on empty-label frames separately.
+
+### Plots
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
+```
+
+writes four figures to `checkpoints/segmenter/plots/`: training and
+validation loss and validation IoU per epoch with one line per run,
+median IoU of every saved evaluation over time (network and classical on
+the hand-refined labels, network on all labels), per-sample IoU of the
+newest evaluation with hand-refined and empty-label samples marked, and
+the growth of the store by label source.
 
 ### First model (bootstrapped labels only)
 
@@ -165,8 +200,8 @@ evaluation can separate hand-refined labels from bootstrapped ones.
    behavior with its systematic errors masked out.
 2. Label in network-uncertain mode. Correct thin tails, cut fused debris,
    paint ignore over anything ambiguous. Save.
-3. Retrain with `--init checkpoints/segmenter/best.ckpt`, evaluate, restart
-   the app so it loads the new checkpoint.
+3. Retrain with `--init checkpoints/segmenter/best.ckpt`, evaluate, plot,
+   and restart the app so it loads the new checkpoint.
 4. Once the hand-refined validation IoU is high and stable, feed the
    network's probability map to the mask fit as its soft target and return
    to evaluating pose estimation.

@@ -5,6 +5,11 @@ Checkpoints go to a git-ignored local directory (``checkpoints/segmenter`` by
 default): ``best.ckpt`` tracks the highest validation IoU and ``last.ckpt``
 the final epoch.  Pass ``--init`` with an earlier checkpoint to continue
 fine-tuning after more labels are added.
+
+Every run also leaves ``runs/<start time>.json`` in the checkpoint directory:
+the arguments, git revision, the exact train/val/test membership, the
+Lightning CSV log directory, the best checkpoint's fingerprint, and the
+final metrics.  ``train_summary.json`` is a copy of the latest run's record.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 import torch
 
+from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, split_manifest, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, SegmentationDataModule
 from worm_pose_gen.segmenter import SegmentationModule
 
@@ -44,6 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    started_at = utc_now()
     L.seed_everything(args.seed, workers=True)
     torch.set_float32_matmul_precision("high")
     data = SegmentationDataModule(
@@ -79,20 +86,37 @@ def main() -> int:
         log_every_n_steps=5,
         enable_progress_bar=True,
     )
+    manifest = split_manifest(data.store)
     trainer.fit(module, datamodule=data)
     results = {
+        "started_at": started_at,
+        "finished_at": None,
+        "git": git_revision(PROJECT_ROOT),
+        "args": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(args).items()},
+        "init_checkpoint": checkpoint_fingerprint(args.init),
         "dataset_root": str(args.dataset_root),
         "counts": counts,
+        "splits": manifest,
+        "log_dir": str(trainer.logger.log_dir) if trainer.logger is not None else None,
         "best_checkpoint": best.best_model_path,
         "best_val_iou": None if best.best_model_score is None else float(best.best_model_score),
         "last_checkpoint": best.last_model_path,
         "epochs_run": trainer.current_epoch,
+        "stopped_early": trainer.current_epoch < args.epochs,
     }
     if counts["test"]:
         test = trainer.test(module, datamodule=data, ckpt_path=best.best_model_path or None, verbose=False)
         results["test"] = test[0] if test else None
+    results["finished_at"] = utc_now()
+    results["best_checkpoint_fingerprint"] = checkpoint_fingerprint(best.best_model_path or None)
+    runs_dir = args.checkpoint_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    record_path = runs_dir / f"{timestamp_slug(started_at)}.json"
+    record_path.write_text(json.dumps(results, indent=1))
     (args.checkpoint_dir / "train_summary.json").write_text(json.dumps(results, indent=1))
-    print(json.dumps(results, indent=1))
+    printable = {key: value for key, value in results.items() if key != "splits"}
+    printable["record"] = str(record_path)
+    print(json.dumps(printable, indent=1))
     return 0
 
 

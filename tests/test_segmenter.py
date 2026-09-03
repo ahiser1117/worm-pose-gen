@@ -42,6 +42,17 @@ class SegmenterTests(unittest.TestCase):
         metrics = masked_binary_metrics(probability, target, valid)
         self.assertAlmostEqual(float(metrics["iou"][0]), 1.0, places=4)
 
+    def test_empty_label_scoring(self) -> None:
+        target = torch.zeros(2, 4, 4)
+        valid = torch.ones(2, 4, 4)
+        probability = torch.zeros(2, 4, 4)
+        probability[1, 0, 0] = 1.0  # one hallucinated pixel on an empty frame
+        metrics = masked_binary_metrics(probability, target, valid)
+        for name in ("iou", "dice", "precision", "recall"):
+            self.assertAlmostEqual(float(metrics[name][0]), 1.0, places=6)
+        self.assertAlmostEqual(float(metrics["iou"][1]), 0.0, places=6)
+        self.assertAlmostEqual(float(metrics["precision"][1]), 0.0, places=6)
+
     def test_loss_ignores_masked_pixels(self) -> None:
         module = SegmentationModule(pretrained=False)
         logits = torch.full((1, 1, 6, 6), 8.0)

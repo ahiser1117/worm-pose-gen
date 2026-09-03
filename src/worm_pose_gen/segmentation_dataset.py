@@ -7,8 +7,11 @@ the network sees (``image``, flat-fielded uint8), the original frame
 
 A sample's split is assigned once, when it is first saved, to whichever of
 train, validation, and test is furthest below its 80/10/10 target, so the
-proportions hold even for a small set.  Re-saving a refined label never moves
-a frame between splits.
+proportions hold even for a small set.  The assignment is pledged in
+``<root>/splits.json``, which is append-only: re-saving a refined label,
+deleting the sample, or labeling the same frame again later all keep the
+pledged split, so a frame that has ever been validation or test can never
+enter the training set.
 """
 
 from __future__ import annotations
@@ -89,6 +92,7 @@ class SegmentationStore:
         self.root = Path(root)
         self.samples_dir = self.root / "samples"
         self.index_path = self.root / "index.json"
+        self.splits_path = self.root / "splits.json"
         self._lock = threading.Lock()
 
     def _read_index(self) -> dict[str, dict[str, Any]]:
@@ -101,6 +105,28 @@ class SegmentationStore:
         temporary = self.index_path.with_suffix(".json.partial")
         temporary.write_text(json.dumps(index, indent=1, sort_keys=True))
         os.replace(temporary, self.index_path)
+
+    def _read_splits(self, index: dict[str, dict[str, Any]] | None = None) -> dict[str, str]:
+        """The pledged split of every sample ever saved (deleted ones included).
+
+        A store written before the registry existed is seeded from its index.
+        """
+
+        if self.splits_path.exists():
+            return json.loads(self.splits_path.read_text())
+        index = self._read_index() if index is None else index
+        return {sample_id: str(value["split"]) for sample_id, value in index.items()}
+
+    def _write_splits(self, splits: dict[str, str]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        temporary = self.splits_path.with_suffix(".json.partial")
+        temporary.write_text(json.dumps(splits, indent=1, sort_keys=True))
+        os.replace(temporary, self.splits_path)
+
+    def pledged_split(self, recording: str, frame_index: int) -> str | None:
+        """The split this frame will land in, or has ever been in; None if unseen."""
+
+        return self._read_splits().get(make_sample_id(recording, frame_index))
 
     def sample_path(self, sample_id: str) -> Path:
         return self.samples_dir / f"{sample_id}.npz"
@@ -155,14 +181,23 @@ class SegmentationStore:
         with self._lock:
             index = self._read_index()
             previous = index.get(sample_id)
-            counts = {name: 0 for name in SPLITS}
-            for value in index.values():
-                counts[str(value["split"])] += 1
+            splits = self._read_splits(index)
+            if sample_id in splits:
+                split = splits[sample_id]
+            else:
+                # Balance against every pledge ever made, not just the samples
+                # currently present, so deletions cannot skew later assignments.
+                counts = {name: 0 for name in SPLITS}
+                for value in splits.values():
+                    counts[value] += 1
+                split = assign_split(counts)
+                splits[sample_id] = split
+                self._write_splits(splits)
             record = SampleRecord(
                 sample_id=sample_id,
                 recording=str(recording),
                 frame_index=int(frame_index),
-                split=str(previous["split"]) if previous else assign_split(counts),
+                split=split,
                 source_path=str(source_path),
                 label_source=str(label_source),
                 saved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -199,6 +234,8 @@ class SegmentationStore:
             return np.asarray(archive["image_raw"], dtype=np.uint8)
 
     def delete(self, sample_id: str) -> bool:
+        """Remove a sample's files and index entry; its split pledge is kept."""
+
         with self._lock:
             index = self._read_index()
             if sample_id not in index:
