@@ -191,6 +191,17 @@ are also available. A frame with no worm can be saved as all background
 is not worm; the bootstrap skips such frames, so they only enter through
 the app.
 
+The **Saved labels** panel lists every sample in the store, filtered by
+source (bootstrap or hand-labeled), split, and recording. Clicking a row
+opens that frame with its saved label in the editor, and the fourth
+next-frame mode, **Browse saved labels**, makes Next and Save + next walk
+the filtered list in order. Revising a bootstrap label this way is the
+intended fix for the bootstrap's systematic errors: the frame keeps its
+split, its revision goes up, and its source becomes `network+manual`, so it
+leaves the bootstrap filter and counts as hand-refined in evaluation. The
+held-out bootstrap samples are the most valuable to revise first, since
+they grow the part of the evaluation that measures agreement with a human.
+
 Saving records `label_source` as `network+manual` or `classical+manual`, so
 evaluation can separate hand-refined labels from bootstrapped ones.
 

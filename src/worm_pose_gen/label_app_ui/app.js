@@ -20,6 +20,8 @@ const state = {
   painting: false, panning: false, last: null,
   dirty: false,
   history: [], historyPos: -1,
+  samples: [],           // records from /api/samples
+  browseCursor: null,    // sample_id last opened through the browser
 };
 
 const canvas = $("#canvas");
@@ -266,6 +268,7 @@ async function showFrame(recording, index, { record = true } = {}) {
       : (state.probability ? "started from the network proposal" : "started from the classical proposal");
     $("#refine-info").textContent = "";
     renderOverlay(); fitView();
+    renderSampleList();
     setStatus("ready", "ok");
   } catch (error) {
     setStatus(error.message, "error");
@@ -274,8 +277,78 @@ async function showFrame(recording, index, { record = true } = {}) {
   }
 }
 
+// ---------- saved-label browser ----------
+
+function isHandLabeled(record) { return record.label_source.includes("manual"); }
+
+function filteredSamples() {
+  const source = $("#filter-source").value;
+  const split = $("#filter-split").value;
+  const recording = $("#filter-recording").checked ? $("#recording").value : null;
+  return state.samples.filter((record) =>
+    (source === "all" || (source === "manual") === isHandLabeled(record)) &&
+    (split === "all" || record.split === split) &&
+    (recording === null || record.recording === recording));
+}
+
+function currentSampleId() {
+  return state.frame && state.frame.existing_record ? state.frame.existing_record.sample_id : null;
+}
+
+function renderSampleList() {
+  const rows = filteredSamples();
+  const list = $("#sample-list");
+  list.innerHTML = "";
+  $("#sample-count").textContent = `${rows.length} of ${state.samples.length}`;
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "no saved labels match the filter";
+    list.appendChild(empty);
+    return;
+  }
+  const current = currentSampleId();
+  for (const record of rows) {
+    const row = document.createElement("div");
+    row.className = "sample" + (isHandLabeled(record) ? "" : " bootstrap") + (record.sample_id === current ? " current" : "");
+    row.innerHTML =
+      `<span>${record.recording} <b>${record.frame_index}</b></span>` +
+      `<span class="split">${record.split}</span>` +
+      `<span class="source">${isHandLabeled(record) ? "hand" : "boot"}</span>` +
+      `<span class="split">r${record.revision}</span>`;
+    row.title = `${record.sample_id}\n${record.label_source}, saved ${record.saved_at}`;
+    row.addEventListener("click", () => { state.browseCursor = record.sample_id; showFrame(record.recording, record.frame_index); });
+    list.appendChild(row);
+    if (record.sample_id === current) row.scrollIntoView({ block: "nearest" });
+  }
+}
+
+async function refreshSamples() {
+  const payload = await api("/api/samples");
+  state.samples = payload.samples.sort((a, b) => a.sample_id.localeCompare(b.sample_id));
+  renderSampleList();
+}
+
+// The next saved label after the browse cursor in the filtered list; the cursor
+// itself need not still match the filter (a revised bootstrap label leaves the
+// bootstrap filter), so this walks by sample-id order.
+async function nextSavedSample() {
+  await refreshSamples();
+  const rows = filteredSamples();
+  if (!rows.length) throw new Error("no saved labels match the filter");
+  const cursor = state.browseCursor || currentSampleId();
+  const next = cursor ? rows.find((record) => record.sample_id.localeCompare(cursor) > 0) : null;
+  return next || rows[0];
+}
+
 async function nextFrame() {
   const mode = $("#next-mode").value;
+  if (mode === "browse") {
+    const record = await nextSavedSample();
+    state.browseCursor = record.sample_id;
+    await showFrame(record.recording, record.frame_index);
+    return;
+  }
   const payload = await post("/api/next", {
     mode,
     recording: mode === "sequential" ? $("#recording").value : null,
@@ -301,8 +374,10 @@ async function saveLabel() {
       label_source: state.probability ? "network+manual" : "classical+manual",
     });
     state.dirty = false;
+    state.frame.existing_record = payload.record;
     updateDataset(payload.counts);
     setStatus(`saved ${payload.record.sample_id} → ${payload.record.split} (rev ${payload.record.revision})`, "ok");
+    refreshSamples().catch(() => {});
     return true;
   } catch (error) {
     setStatus(error.message, "error");
@@ -431,7 +506,10 @@ $("#delete").addEventListener("click", async () => {
   updateDataset(payload.counts);
   setStatus("deleted saved label", "ok");
   await showFrame(state.frame.recording, state.frame.frame_index, { record: false });
+  refreshSamples().catch(() => {});
 });
+["#filter-source", "#filter-split", "#filter-recording"].forEach((id) => $(id).addEventListener("change", renderSampleList));
+$("#recording").addEventListener("change", renderSampleList);
 
 window.addEventListener("keydown", async (event) => {
   if (event.target.tagName === "INPUT" || event.target.tagName === "SELECT") {
@@ -479,6 +557,7 @@ async function boot() {
     }
     updateDataset(state.info.counts);
     if (!state.info.checkpoint) $("#next-mode").value = "random";
+    await refreshSamples();
     await nextFrame();
   } catch (error) {
     setStatus(error.message, "error");

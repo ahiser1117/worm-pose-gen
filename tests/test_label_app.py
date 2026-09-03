@@ -87,6 +87,9 @@ class LabelAppTests(unittest.TestCase):
                 self.assertIsNone(info["checkpoint"])
                 page = urlopen(f"http://127.0.0.1:{port}/").read().decode()
                 self.assertIn("Worm labeler", page)
+                self.assertIn("Saved labels", page)
+                script = urlopen(f"http://127.0.0.1:{port}/app.js").read().decode()
+                self.assertIn("nextSavedSample", script)
                 frame = json.loads(urlopen(f"http://127.0.0.1:{port}/api/frame?recording=rec-a&index=2").read())
                 self.assertEqual(frame["height"], 96)
                 self.assertIsNone(frame["proposals"]["network"])
@@ -124,6 +127,9 @@ class LabelAppTests(unittest.TestCase):
                 )
                 saved_empty = json.loads(urlopen(request).read())
                 self.assertEqual(saved_empty["record"]["foreground_fraction"], 0.0)
+                samples = json.loads(urlopen(f"http://127.0.0.1:{port}/api/samples").read())["samples"]
+                self.assertEqual(sorted(s["frame_index"] for s in samples), [2, 3])
+                self.assertEqual({s["label_source"] for s in samples}, {"manual"})
                 # A malformed mask is refused with a JSON error.
                 request = Request(
                     f"http://127.0.0.1:{port}/api/save",

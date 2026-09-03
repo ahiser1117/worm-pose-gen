@@ -26,6 +26,7 @@
             <option value="uncertain">Network-uncertain (active)</option>
             <option value="random">Random unlabeled</option>
             <option value="sequential">Sequential (stride)</option>
+            <option value="browse">Browse saved labels (filtered)</option>
           </select>
         </label>
         <label>Stride / candidates
@@ -85,6 +86,26 @@
           <button id="toggle-overlay" type="button" title="O">O Overlay</button>
           <button id="fit-view" type="button" title="0">0 Fit view</button>
         </span>
+      </section>
+
+      <section class="group">
+        <h3>Saved labels <small id="sample-count"></small></h3>
+        <span class="row">
+          <select id="filter-source" title="label source">
+            <option value="all">All sources</option>
+            <option value="bootstrap">Bootstrap only</option>
+            <option value="manual">Hand-labeled only</option>
+          </select>
+          <select id="filter-split" title="split">
+            <option value="all">All splits</option>
+            <option value="val">Val</option>
+            <option value="test">Test</option>
+            <option value="train">Train</option>
+          </select>
+        </span>
+        <label><input id="filter-recording" type="checkbox"> Current recording only</label>
+        <div id="sample-list" class="sample-list"></div>
+        <div class="note">Click a row to open it. With next mode "Browse saved labels", Next and Save + next walk this list in order.</div>
       </section>
 
       <section class="group">
