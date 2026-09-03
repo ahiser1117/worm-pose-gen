@@ -22,7 +22,7 @@ def _load_plot_module():
     return module
 
 
-def _evaluation(evaluated_at: str, sample_ids: list[str], iou: float) -> dict:
+def _evaluation(evaluated_at: str, sample_ids: list[str], iou: float, label: str = "run__best") -> dict:
     per_sample = [
         {
             "sample_id": sid, "recording": "rec", "frame_index": i, "revision": 1, "saved_at": evaluated_at,
@@ -43,7 +43,8 @@ def _evaluation(evaluated_at: str, sample_ids: list[str], iou: float) -> dict:
         "network_beats_classical": len(per_sample), "hand_refined_network_beats_classical": len(per_sample) // 2,
     }
     return {
-        "evaluated_at": evaluated_at, "note": "", "git": {"commit": "abc", "dirty": False},
+        "evaluated_at": evaluated_at, "session": evaluated_at, "checkpoint_label": label,
+        "note": "", "git": {"commit": "abc", "dirty": False},
         "checkpoint": {"sha256": "0" * 64, "modified_at": evaluated_at},
         "dataset_root": "/x", "store_counts": {"train": 8, "val": 1, "test": 1},
         "split_membership": {"val": [], "test": []},
@@ -85,35 +86,42 @@ class SegmenterHistoryTests(unittest.TestCase):
             store = SegmentationStore(root / "dataset")
             # Empty everything still produces the four figures.
             outputs = plots.make_plots(checkpoints, store.root, checkpoints / "plots")
-            self.assertEqual(len(outputs), 4)
+            self.assertEqual(len(outputs), 5)
             self.assertTrue(all(p.exists() and p.stat().st_size > 0 for p in outputs))
             # Now with a training log, run record, two evaluations, and a store.
             image = np.zeros((8, 8), dtype=np.uint8)
             mask = np.zeros((8, 8), dtype=np.uint8)
             for index in range(10):
                 store.save("rec", index, image, mask, source_path="/x", label_source="network+manual" if index % 2 else "bootstrap")
-            log_dir = checkpoints / "logs" / "version_0"
-            log_dir.mkdir(parents=True)
-            (log_dir / "metrics.csv").write_text(
+            run_dir = checkpoints / "runs" / "2026-09-03T18-00-00Z_demo"
+            run_dir.mkdir(parents=True)
+            (run_dir / "metrics.csv").write_text(
                 "epoch,step,train_loss_step,train_loss_epoch,val_loss,val_iou\n"
                 "0,4,0.9,,,\n0,9,,0.8,0.7,0.5\n1,14,0.6,,,\n1,19,,0.5,0.4,0.8\n"
             )
-            (checkpoints / "runs").mkdir()
-            (checkpoints / "runs" / "2026-09-03T18-00-00Z.json").write_text(json.dumps({
-                "started_at": "2026-09-03T18:00:00+00:00", "log_dir": str(log_dir),
-                "counts": {"train": 8, "val": 1, "test": 1}, "init_checkpoint": None,
+            (run_dir / "run.json").write_text(json.dumps({
+                "name": "demo", "started_at": "2026-09-03T18:00:00+00:00",
+                "counts": {"train": 8, "val": 1, "test": 1, "train_used": 5}, "init_checkpoint": None,
             }))
+            ids = [f"rec_f{i:06d}" for i in range(6)]
             for stamp, iou in (("2026-09-03T18:10:00+00:00", 0.8), ("2026-09-03T19:10:00+00:00", 0.9)):
-                folder = checkpoints / "evaluations" / timestamp_slug(stamp)
-                folder.mkdir(parents=True)
-                (folder / "evaluation.json").write_text(json.dumps(_evaluation(stamp, [f"rec_f{i:06d}" for i in range(6)], iou)))
+                for label, offset in (("2026-09-03T18-00-00Z_demo__best", 0.0), ("2026-09-03T18-00-00Z_demo__last", -0.05)):
+                    folder = checkpoints / "evaluations" / timestamp_slug(stamp) / label
+                    folder.mkdir(parents=True)
+                    (folder / "evaluation.json").write_text(json.dumps(_evaluation(stamp, ids, iou + offset, label)))
             runs = plots.load_runs(checkpoints)
             self.assertEqual(len(runs), 1)
-            self.assertIn("train 8", runs[0]["label"])
+            self.assertIn("train 5", runs[0]["label"])
             self.assertEqual(runs[0]["metrics"]["val_iou"], [(0.0, 0.5), (1.0, 0.8)])
             evaluations = plots.load_evaluations(checkpoints)
-            self.assertEqual([e["evaluated_at"] for e in evaluations][-1], "2026-09-03T19:10:00+00:00")
+            self.assertEqual(len(evaluations), 4)
+            session = plots.latest_session(evaluations)
+            self.assertEqual(len(session), 2)
+            self.assertEqual(session[0]["session"], "2026-09-03T19:10:00+00:00")
+            self.assertEqual(plots.short_label("2026-09-03T18-00-00Z_demo__best"), "demo/best")
+            self.assertEqual(plots.short_label("best"), "best")
             outputs = plots.make_plots(checkpoints, store.root, checkpoints / "plots")
+            self.assertEqual(len(outputs), 5)
             self.assertTrue(all(p.exists() and p.stat().st_size > 0 for p in outputs))
 
 

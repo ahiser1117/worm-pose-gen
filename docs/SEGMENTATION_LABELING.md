@@ -85,72 +85,90 @@ skipped, in about `0.3 s` per frame.
 ## 4. Train and evaluate
 
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name all_labels --promote
 scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
-```
-
-Training writes `checkpoints/segmenter/best.ckpt` (highest validation IoU),
-`last.ckpt`, and Lightning CSV logs under `logs/version_N/`; the directory
-is git-ignored. Mixed precision, early stopping on validation IoU, and a
-test pass with the best checkpoint are on by default. Without `--init` the
-model starts from ImageNet weights with no worm exposure; with `--init
-checkpoints/segmenter/best.ckpt` it warm-starts from the last model (the
-optimizer and schedule restart either way).
-
-Every run leaves `runs/<start time>.json`: arguments, git revision, the
-fingerprint of the checkpoint it started from, the exact train, validation,
-and test membership (sample id, label source, revision, save time), the CSV
-log directory, the best checkpoint's fingerprint, epochs run, and the final
-metrics. `train_summary.json` is a copy of the latest run's record.
-
-Evaluation reports per-sample IoU, Dice, precision, and recall on the
-validation and test splits, compares the network with the classical
-threshold on the same frames, and separates the hand-refined samples from
-the bootstrapped ones. Every evaluation is kept under
-`checkpoints/segmenter/evaluations/<evaluation time>/`: `evaluation.json`
-holds the time, git revision, checkpoint fingerprint (path, size,
-modification time, SHA-256), the split membership at that moment, the
-summary, and per-sample metrics with label and predicted pixel counts, and
-the worst-sample overlay sheets sit beside it. One summary line per
-evaluation is appended to `evaluations/history.jsonl`. `--note` stores a
-free-text reason with the record. Bootstrapped labels are not truth, so the
-number that matters is the hand-refined subset.
-
-A frame labeled as all background scores 1 when the prediction is also
-empty and 0 when the network paints anything, so the summary also reports
-the number of false-positive pixels on empty-label frames separately.
-
-### Plots
-
-```bash
 scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
 ```
 
-writes four figures to `checkpoints/segmenter/plots/`: training and
-validation loss and validation IoU per epoch with one line per run,
-median IoU of every saved evaluation over time (network and classical on
-the hand-refined labels, network on all labels), per-sample IoU of the
-newest evaluation with hand-refined and empty-label samples marked, and
-the growth of the store by label source.
+Each training run gets its own directory under `checkpoints/segmenter/runs/`,
+named by start time and `--name`, holding `best.ckpt` (highest validation
+IoU), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
+`run.json`: arguments, git revision, the fingerprint of the checkpoint it
+started from, the exact train, validation, and test membership (sample id,
+label source, revision, save time), the checkpoint fingerprints, epochs run,
+and the final metrics. The directory is git-ignored. Mixed precision, early
+stopping on validation IoU, and a test pass with the best checkpoint are on
+by default.
 
-### First model (bootstrapped labels only)
+`--train-labels bootstrap|manual|all` restricts the training split to one
+label origin; validation and test always use every label they hold. Without
+`--init` the model starts from ImageNet weights with no worm exposure; with
+`--init <checkpoint>` it warm-starts from that model (the optimizer and
+schedule restart either way). `--promote` copies the run's best checkpoint
+to `checkpoints/segmenter/best.ckpt`, which is what the labeling app loads;
+nothing is promoted otherwise.
 
-Trained on the 91 bootstrapped training samples for 26 epochs (early stop,
-about two minutes on the project GPU):
+Evaluation runs **every** `best.ckpt` and `last.ckpt` under `runs/`
+(`--checkpoint` picks files instead). One invocation is a session, kept
+under `checkpoints/segmenter/evaluations/<session time>/<run>__<best|last>/`.
+Each `evaluation.json` holds the time, git revision, checkpoint fingerprint
+(path, size, modification time, SHA-256), the run record it came from, a
+fingerprint of the labels used, the split membership at that moment, the
+summary, and per-sample IoU, Dice, precision, and recall against both the
+network and the classical threshold, with label and predicted pixel counts.
+The worst-sample overlay sheets sit beside it, and one summary line per
+checkpoint is appended to `evaluations/history.jsonl`. `--note` stores a
+free-text reason with every record of the session. Bootstrapped labels are
+not truth, so the number that matters is the hand-refined subset; since
+every validation and test label has been hand-refined, that is now the
+whole held-out set.
 
-| Split | Samples | Network IoU median | Network IoU min | Recall | Precision |
-|---|---:|---:|---:|---:|---:|
-| Validation | 12 | 0.976 | 0.854 | 1.000 | 0.976 |
-| Test | 11 | 0.980 | 0.941 | 1.000 | 0.980 |
+A frame labeled as all background scores 1 when the prediction is also
+empty and 0 when the network paints anything, and the summary reports the
+false-positive pixels on empty-label frames separately.
 
-Two caveats make these numbers a sanity check rather than a result. The
-labels were derived from the classical threshold, so the classical baseline
-scores IoU `1.000` on them by construction and the comparison is
-uninformative until hand-refined labels exist. And the network's only errors
-are extra pixels at the tail tips and boundary, exactly where the bootstrap
-marked ignore, which is the behavior we want but cannot yet score. The
-network is fast enough (a few milliseconds per frame) to propose in the app
-without any perceptible delay.
+### Plots
+
+`scripts/plot_segmenter_history.py` writes five figures to
+`checkpoints/segmenter/plots/`: training and validation loss and validation
+IoU per epoch with one line per run; hand-refined IoU of every checkpoint in
+the newest session, with the classical median as a reference; hand-refined
+median IoU of each checkpoint across sessions; per-sample IoU of every
+checkpoint in the newest session; and the growth of the store by label
+source.
+
+### Three-way comparison (September 3, 2026)
+
+Three models were trained from ImageNet weights with identical settings
+(seed 0, 40 epochs maximum, patience 12) on different training labels, and
+every checkpoint was evaluated against the 21 validation and 20 test labels,
+all hand-refined. Two frames in each split are empty. Median IoU over the
+split, with the lowest IoU over non-empty frames in brackets; "beats" counts
+frames where the network's IoU exceeds the classical threshold's.
+
+| Training labels | Checkpoint | Epoch | Val IoU | Test IoU | Beats classical (val, test) | False-positive px on empty frames (median) |
+|---|---|---:|---:|---:|---|---:|
+| bootstrap only (91) | best | 7 | 0.918 [0.70] | 0.913 [0.77] | 11/21, 13/20 | 1977 |
+| bootstrap only (91) | last | 20 | 0.807 [0.71] | 0.830 [0.76] | 7/21, 6/20 | 3115 |
+| hand only (74) | best | 8 | 0.960 [0.86] | 0.967 [0.87] | 18/21, 19/20 | 0 |
+| hand only (74) | last | 21 | 0.967 [0.86] | 0.974 [0.86] | 18/21, 18/20 | 538 |
+| all (165) | best | 24 | 0.951 [0.90] | 0.953 [0.87] | 20/21, 17/20 | 0 |
+| all (165) | last | 37 | 0.950 [0.88] | 0.958 [0.87] | 18/21, 18/20 | 2179 |
+| classical threshold | | | 0.901 | 0.883 | | 1163 |
+
+Three things follow. Bootstrap labels hurt: the bootstrap-only model barely
+beats the threshold it was distilled from, and keeps getting worse after its
+best epoch. Hand labels alone give the highest medians with a fifth fewer
+training frames, and mixing the bootstrap labels in costs about one IoU
+point at the median while making the worst non-empty frame slightly better.
+Early stopping matters: every final-epoch checkpoint paints hundreds to
+thousands of pixels on empty frames that its best checkpoint leaves clean,
+so `best.ckpt` is the one to use. The hand-only best checkpoint was
+promoted to `checkpoints/segmenter/best.ckpt` for the app.
+
+The bootstrap training labels are now the weakest data in the store, and
+either revising them in the app or training with `--train-labels manual` is
+the better use of them.
 
 ## 5. Label with the app
 
@@ -211,7 +229,7 @@ evaluation can separate hand-refined labels from bootstrapped ones.
    behavior with its systematic errors masked out.
 2. Label in network-uncertain mode. Correct thin tails, cut fused debris,
    paint ignore over anything ambiguous. Save.
-3. Retrain with `--init checkpoints/segmenter/best.ckpt`, evaluate, plot,
+3. Retrain (`--promote` to hand the new model to the app), evaluate, plot,
    and restart the app so it loads the new checkpoint.
 4. Once the hand-refined validation IoU is high and stable, feed the
    network's probability map to the mask fit as its soft target and return
@@ -219,9 +237,9 @@ evaluation can separate hand-refined labels from bootstrapped ones.
 
 ## What is not established
 
-- No hand-labeled frame exists yet, so no number in this document measures
-  agreement with a human. The first model's metrics measure agreement with
-  the bootstrapped labels only.
+- The held-out labels are hand-refined by one person; there is no second
+  annotator, so inter-annotator agreement is unknown and the IoU ceiling a
+  human would reach is not measured.
 - Self-overlap and coils produce a merged mask however good the segmenter
   is; resolving them is the pose model's job.
 - The three recordings share a rig and a year. A recording from another

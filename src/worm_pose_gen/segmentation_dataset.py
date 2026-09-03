@@ -39,6 +39,21 @@ DEFAULT_DATASET_ROOT = Path(
 )
 SPLITS = ("train", "val", "test")
 SPLIT_FRACTIONS = (0.8, 0.1, 0.1)
+LABEL_FILTERS = ("all", "bootstrap", "manual")
+
+
+def is_hand_labeled(label_source: str) -> bool:
+    return "manual" in label_source
+
+
+def matches_label_filter(label_source: str, label_filter: str) -> bool:
+    """``all`` keeps everything; ``bootstrap`` and ``manual`` keep one origin."""
+
+    if label_filter not in LABEL_FILTERS:
+        raise ValueError(f"unknown label filter {label_filter!r}; expected one of {LABEL_FILTERS}")
+    if label_filter == "all":
+        return True
+    return is_hand_labeled(label_source) == (label_filter == "manual")
 
 
 def make_sample_id(recording: str, frame_index: int) -> str:
@@ -286,9 +301,10 @@ class SegmentationDataset(Dataset[dict[str, Tensor | str]]):
         augment: bool = False,
         crop_size: int | None = None,
         seed: int = 0,
+        label_filter: str = "all",
     ) -> None:
         self.store = store
-        self.records = store.records(split)
+        self.records = [r for r in store.records(split) if matches_label_filter(r.label_source, label_filter)]
         self.augment = augment
         self.crop_size = crop_size
         self.seed = seed
@@ -321,16 +337,26 @@ class SegmentationDataModule(L.LightningDataModule):
         crop_size: int | None = 512,
         num_workers: int = 4,
         seed: int = 0,
+        train_label_filter: str = "all",
     ) -> None:
+        """``train_label_filter`` restricts the training split only; validation
+        and test always use every label they hold."""
+
         super().__init__()
         self.store = SegmentationStore(root)
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
         self.seed = seed
+        self.train_label_filter = train_label_filter
+
+    def train_records(self):
+        return [r for r in self.store.records("train") if matches_label_filter(r.label_source, self.train_label_filter)]
 
     def setup(self, stage: str | None = None) -> None:
-        self.train_set = SegmentationDataset(self.store, "train", augment=True, crop_size=self.crop_size, seed=self.seed)
+        self.train_set = SegmentationDataset(
+            self.store, "train", augment=True, crop_size=self.crop_size, seed=self.seed, label_filter=self.train_label_filter,
+        )
         self.val_set = SegmentationDataset(self.store, "val")
         self.test_set = SegmentationDataset(self.store, "test")
 

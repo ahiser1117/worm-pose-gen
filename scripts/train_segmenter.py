@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Fine-tune the worm segmenter on the segmentation store with Lightning.
 
-Checkpoints go to a git-ignored local directory (``checkpoints/segmenter`` by
-default): ``best.ckpt`` tracks the highest validation IoU and ``last.ckpt``
-the final epoch.  Pass ``--init`` with an earlier checkpoint to continue
-fine-tuning after more labels are added.
+Each run gets its own directory under ``checkpoints/segmenter/runs/``, named
+by start time and ``--name``, holding ``best.ckpt`` (highest validation
+IoU), ``last.ckpt`` (the final epoch, which early stopping places
+``--patience`` epochs after the best), ``metrics.csv`` (per-epoch curves), and
+``run.json``: the arguments, git revision, the exact train/val/test
+membership, the checkpoint fingerprints, and the final metrics.  The
+directory is git-ignored.
 
-Every run also leaves ``runs/<start time>.json`` in the checkpoint directory:
-the arguments, git revision, the exact train/val/test membership, the
-Lightning CSV log directory, the best checkpoint's fingerprint, and the
-final metrics.  ``train_summary.json`` is a copy of the latest run's record.
+``--train-labels`` restricts the training split to ``bootstrap`` or
+``manual`` labels (validation and test always use every label they hold).
+Without ``--init`` the model starts from ImageNet weights with no worm
+exposure; with it the weights of an earlier checkpoint are the starting
+point.  ``--promote`` copies the run's best checkpoint to
+``checkpoints/segmenter/best.ckpt``, which is what the labeling app loads.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 
 import lightning as L
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
@@ -24,7 +30,7 @@ from lightning.pytorch.loggers import CSVLogger
 import torch
 
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, split_manifest, timestamp_slug, utc_now
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, SegmentationDataModule
+from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, LABEL_FILTERS, SegmentationDataModule
 from worm_pose_gen.segmenter import SegmentationModule
 
 
@@ -33,10 +39,13 @@ DEFAULT_CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints" / "segmenter"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
     parser.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_DIR)
-    parser.add_argument("--init", type=Path, default=None, help="checkpoint to continue from")
+    parser.add_argument("--name", default="run", help="run name, appended to the timestamped run directory")
+    parser.add_argument("--train-labels", choices=LABEL_FILTERS, default="all", help="which training labels to use")
+    parser.add_argument("--init", type=Path, default=None, help="checkpoint whose weights start the run")
+    parser.add_argument("--promote", action="store_true", help="copy best.ckpt to <checkpoint dir>/best.ckpt for the app")
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--crop-size", type=int, default=512)
@@ -55,11 +64,13 @@ def main() -> int:
     torch.set_float32_matmul_precision("high")
     data = SegmentationDataModule(
         args.dataset_root, batch_size=args.batch_size, crop_size=args.crop_size,
-        num_workers=args.num_workers, seed=args.seed,
+        num_workers=args.num_workers, seed=args.seed, train_label_filter=args.train_labels,
     )
     counts = data.store.counts()
-    if counts["train"] == 0 or counts["val"] == 0:
-        raise SystemExit(f"need train and val samples; store has {counts}")
+    train_records = data.train_records()
+    counts["train_used"] = len(train_records)
+    if not train_records or counts["val"] == 0:
+        raise SystemExit(f"need train and val samples; store has {counts} with train labels {args.train_labels!r}")
     if args.init is not None:
         module = SegmentationModule.load_from_checkpoint(
             str(args.init), pretrained=False, learning_rate=args.learning_rate,
@@ -70,10 +81,11 @@ def main() -> int:
             pretrained=True, learning_rate=args.learning_rate,
             encoder_learning_rate_scale=args.encoder_lr_scale,
         )
-    args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = args.checkpoint_dir / "runs" / f"{timestamp_slug(started_at)}_{args.name}"
+    run_dir.mkdir(parents=True, exist_ok=False)
     best = ModelCheckpoint(
-        dirpath=args.checkpoint_dir, filename="best", monitor="val_iou", mode="max",
-        save_top_k=1, save_last=True, enable_version_counter=False,
+        dirpath=run_dir, filename="best", monitor="val_iou", mode="max",
+        save_top_k=1, save_last=False, enable_version_counter=False,
     )
     trainer = L.Trainer(
         max_epochs=args.epochs,
@@ -81,26 +93,31 @@ def main() -> int:
         devices=1,
         precision="16-mixed" if torch.cuda.is_available() else "32-true",
         callbacks=[best, EarlyStopping(monitor="val_iou", mode="max", patience=args.patience)],
-        logger=CSVLogger(str(args.checkpoint_dir), name="logs"),
-        default_root_dir=str(args.checkpoint_dir),
+        logger=CSVLogger(str(run_dir), name="", version=""),
+        default_root_dir=str(run_dir),
         log_every_n_steps=5,
         enable_progress_bar=True,
     )
     manifest = split_manifest(data.store)
+    manifest["train"] = [row for row in manifest["train"] if row["sample_id"] in {r.sample_id for r in train_records}]
     trainer.fit(module, datamodule=data)
+    # Lightning's save_last only writes when a top-k checkpoint is written, so
+    # the final-epoch weights are saved explicitly here, before the test pass
+    # reloads the best checkpoint into the module.
+    trainer.save_checkpoint(run_dir / "last.ckpt")
     results = {
+        "name": args.name,
+        "run_dir": str(run_dir),
         "started_at": started_at,
         "finished_at": None,
         "git": git_revision(PROJECT_ROOT),
         "args": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(args).items()},
+        "train_labels": args.train_labels,
         "init_checkpoint": checkpoint_fingerprint(args.init),
         "dataset_root": str(args.dataset_root),
         "counts": counts,
         "splits": manifest,
-        "log_dir": str(trainer.logger.log_dir) if trainer.logger is not None else None,
-        "best_checkpoint": best.best_model_path,
         "best_val_iou": None if best.best_model_score is None else float(best.best_model_score),
-        "last_checkpoint": best.last_model_path,
         "epochs_run": trainer.current_epoch,
         "stopped_early": trainer.current_epoch < args.epochs,
     }
@@ -108,14 +125,16 @@ def main() -> int:
         test = trainer.test(module, datamodule=data, ckpt_path=best.best_model_path or None, verbose=False)
         results["test"] = test[0] if test else None
     results["finished_at"] = utc_now()
-    results["best_checkpoint_fingerprint"] = checkpoint_fingerprint(best.best_model_path or None)
-    runs_dir = args.checkpoint_dir / "runs"
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    record_path = runs_dir / f"{timestamp_slug(started_at)}.json"
-    record_path.write_text(json.dumps(results, indent=1))
+    results["checkpoints"] = {
+        "best": checkpoint_fingerprint(run_dir / "best.ckpt"),
+        "last": checkpoint_fingerprint(run_dir / "last.ckpt"),
+    }
+    if args.promote:
+        shutil.copy2(run_dir / "best.ckpt", args.checkpoint_dir / "best.ckpt")
+        results["promoted_to"] = str(args.checkpoint_dir / "best.ckpt")
+    (run_dir / "run.json").write_text(json.dumps(results, indent=1))
     (args.checkpoint_dir / "train_summary.json").write_text(json.dumps(results, indent=1))
     printable = {key: value for key, value in results.items() if key != "splits"}
-    printable["record"] = str(record_path)
     print(json.dumps(printable, indent=1))
     return 0
 

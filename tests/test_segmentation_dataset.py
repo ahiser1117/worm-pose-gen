@@ -15,6 +15,7 @@ from worm_pose_gen.segmentation_dataset import (
     SegmentationStore,
     assign_split,
     make_sample_id,
+    matches_label_filter,
 )
 
 
@@ -98,6 +99,26 @@ class SegmentationDatasetTests(unittest.TestCase):
             registry = json.loads(store.splits_path.read_text())
             self.assertEqual({k: v for k, v in registry.items() if k in expected}, expected)
             self.assertIn(make_sample_id("rec", 12), registry)
+
+    def test_train_label_filter_restricts_training_only(self) -> None:
+        self.assertTrue(matches_label_filter("bootstrap_classical", "bootstrap"))
+        self.assertFalse(matches_label_filter("bootstrap_classical", "manual"))
+        self.assertTrue(matches_label_filter("network+manual", "manual"))
+        self.assertTrue(matches_label_filter("network+manual", "all"))
+        with self.assertRaisesRegex(ValueError, "unknown label filter"):
+            matches_label_filter("x", "nope")
+        with tempfile.TemporaryDirectory() as directory:
+            store = SegmentationStore(directory)
+            image, mask = _sample(0)
+            for index in range(12):
+                source = "network+manual" if index % 3 == 0 else "bootstrap_classical"
+                store.save("rec", index, image, mask, source_path="/x.h5", label_source=source)
+            module = SegmentationDataModule(directory, batch_size=2, crop_size=32, num_workers=0, train_label_filter="manual")
+            module.setup()
+            self.assertTrue(all("manual" in r.label_source for r in module.train_set.records))
+            self.assertEqual(len(module.train_records()), len(module.train_set))
+            self.assertLess(len(module.train_set), store.counts()["train"])
+            self.assertEqual(len(module.val_set) + len(module.test_set), 2)  # held-out splits are unfiltered
 
     def test_store_rejects_bad_masks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
