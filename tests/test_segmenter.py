@@ -19,6 +19,31 @@ from worm_pose_gen.segmenter import (
 
 
 class SegmenterTests(unittest.TestCase):
+    def _check_comparison(self, checkpoint: str, directory: str) -> None:
+        from worm_pose_gen.segmentation_dataset import SegmentationStore
+        from worm_pose_gen.segmenter_eval import compare_on_split, score_split, summarize_iou
+
+        store = SegmentationStore(f"{directory}/store")
+        image = np.zeros((40, 52), dtype=np.uint8)
+        mask = np.zeros((40, 52), dtype=np.uint8)
+        mask[10:20, 10:30] = 1
+        for index in range(12):
+            store.save("rec", index, image, mask, source_path="/x", label_source="network+manual")
+        rows = score_split(load_segmenter(checkpoint, device="cpu"), store, "val")
+        self.assertEqual(len(rows), store.counts()["val"])
+        self.assertEqual(set(rows[0]), {"sample_id", "label_source", "revision", "label_pixels", "iou"})
+        self.assertEqual(summarize_iou([])["n"], 0)
+        # No incumbent: the candidate is promoted by default.
+        first = compare_on_split(checkpoint, f"{directory}/missing.ckpt", store, "val", device="cpu")
+        self.assertTrue(first["promote"])
+        self.assertIsNone(first["incumbent"])
+        # The same weights as incumbent: not strictly better, so not promoted.
+        same = compare_on_split(checkpoint, checkpoint, store, "val", device="cpu")
+        self.assertFalse(same["promote"])
+        self.assertEqual(same["candidate_score"]["mean"], same["incumbent_score"]["mean"])
+        self.assertEqual(len(same["per_sample"]), store.counts()["val"])
+        self.assertIn("<=", same["reason"])
+
     def test_normalize_frame_shape_and_scale(self) -> None:
         frame = np.full((10, 12), 255, dtype=np.uint8)
         tensor = normalize_frame(frame)
@@ -79,6 +104,7 @@ class SegmenterTests(unittest.TestCase):
             path = f"{directory}/model.ckpt"
             trainer.save_checkpoint(path)
             reloaded = load_segmenter(path, device="cpu")
+            self._check_comparison(path, directory)
             probability = reloaded.predict_probability(np.zeros((40, 52), dtype=np.uint8))
             self.assertEqual(probability.shape, (40, 52))
             self.assertTrue(np.all((probability >= 0) & (probability <= 1)))

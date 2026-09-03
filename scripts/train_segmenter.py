@@ -13,8 +13,14 @@ directory is git-ignored.
 ``manual`` labels (validation and test always use every label they hold).
 Without ``--init`` the model starts from ImageNet weights with no worm
 exposure; with it the weights of an earlier checkpoint are the starting
-point.  ``--promote`` copies the run's best checkpoint to
-``checkpoints/segmenter/best.ckpt``, which is what the labeling app loads.
+point.
+
+After training, the run's best checkpoint is scored against the currently
+promoted ``checkpoints/segmenter/best.ckpt`` on the validation split (mean
+IoU over hand-refined labels) and replaces it when it scores higher, so the
+labeling app always proposes from the best validated model.  ``--promote``
+forces the copy; ``--no-promote`` skips the comparison.  Every decision is
+appended to ``checkpoints/segmenter/promotions.jsonl``.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ import torch
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, split_manifest, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, LABEL_FILTERS, SegmentationDataModule
 from worm_pose_gen.segmenter import SegmentationModule
+from worm_pose_gen.segmenter_eval import compare_on_split
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="run", help="run name, appended to the timestamped run directory")
     parser.add_argument("--train-labels", choices=LABEL_FILTERS, default="all", help="which training labels to use")
     parser.add_argument("--init", type=Path, default=None, help="checkpoint whose weights start the run")
-    parser.add_argument("--promote", action="store_true", help="copy best.ckpt to <checkpoint dir>/best.ckpt for the app")
+    parser.add_argument("--promote", action="store_true", help="promote this run's best.ckpt without comparing")
+    parser.add_argument("--no-promote", action="store_true", help="never touch <checkpoint dir>/best.ckpt")
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--crop-size", type=int, default=512)
@@ -129,9 +137,21 @@ def main() -> int:
         "best": checkpoint_fingerprint(run_dir / "best.ckpt"),
         "last": checkpoint_fingerprint(run_dir / "last.ckpt"),
     }
-    if args.promote:
-        shutil.copy2(run_dir / "best.ckpt", args.checkpoint_dir / "best.ckpt")
-        results["promoted_to"] = str(args.checkpoint_dir / "best.ckpt")
+    promoted_path = args.checkpoint_dir / "best.ckpt"
+    if args.no_promote:
+        results["promotion"] = {"promote": False, "reason": "--no-promote"}
+    elif args.promote:
+        results["promotion"] = {"promote": True, "reason": "--promote"}
+    else:
+        results["promotion"] = compare_on_split(run_dir / "best.ckpt", promoted_path, data.store, "val")
+    if results["promotion"]["promote"]:
+        shutil.copy2(run_dir / "best.ckpt", promoted_path)
+        results["promotion"]["promoted_to"] = str(promoted_path)
+    results["promotion"]["run_dir"] = str(run_dir)
+    results["promotion"]["decided_at"] = utc_now()
+    with open(args.checkpoint_dir / "promotions.jsonl", "a") as handle:
+        handle.write(json.dumps({k: v for k, v in results["promotion"].items() if k != "per_sample"}) + "\n")
+    print(f"promotion: {'yes' if results['promotion']['promote'] else 'no'} ({results['promotion']['reason']})")
     (run_dir / "run.json").write_text(json.dumps(results, indent=1))
     (args.checkpoint_dir / "train_summary.json").write_text(json.dumps(results, indent=1))
     printable = {key: value for key, value in results.items() if key != "splits"}

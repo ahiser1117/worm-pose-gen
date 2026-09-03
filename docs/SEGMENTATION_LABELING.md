@@ -85,7 +85,7 @@ skipped, in about `0.3 s` per frame.
 ## 4. Train and evaluate
 
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name all_labels --promote
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels --train-labels manual
 scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
 scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
 ```
@@ -104,9 +104,17 @@ by default.
 label origin; validation and test always use every label they hold. Without
 `--init` the model starts from ImageNet weights with no worm exposure; with
 `--init <checkpoint>` it warm-starts from that model (the optimizer and
-schedule restart either way). `--promote` copies the run's best checkpoint
-to `checkpoints/segmenter/best.ckpt`, which is what the labeling app loads;
-nothing is promoted otherwise.
+schedule restart either way).
+
+After training, the run's best checkpoint is scored against the currently
+promoted `checkpoints/segmenter/best.ckpt` on the validation split, and
+replaces it when its mean IoU over the hand-refined validation labels is
+higher. The mean, not the median, is used so that painting worm onto an
+empty frame or dropping a tail counts in proportion. The labeling app loads
+the promoted file, so it always proposes from the best validated model.
+`--promote` forces the copy, `--no-promote` skips the comparison, and every
+decision, with both scores and checkpoint fingerprints, is appended to
+`checkpoints/segmenter/promotions.jsonl` and stored in the run record.
 
 Evaluation runs **every** `best.ckpt` and `last.ckpt` under `runs/`
 (`--checkpoint` picks files instead). One invocation is a session, kept
@@ -229,8 +237,8 @@ evaluation can separate hand-refined labels from bootstrapped ones.
    behavior with its systematic errors masked out.
 2. Label in network-uncertain mode. Correct thin tails, cut fused debris,
    paint ignore over anything ambiguous. Save.
-3. Retrain (`--promote` to hand the new model to the app), evaluate, plot,
-   and restart the app so it loads the new checkpoint.
+3. Retrain, evaluate, plot, and restart the app; the new model is promoted
+   to the app automatically when it beats the previous one on validation.
 4. Once the hand-refined validation IoU is high and stable, feed the
    network's probability map to the mask fit as its soft target and return
    to evaluating pose estimation.
