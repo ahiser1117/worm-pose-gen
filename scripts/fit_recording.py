@@ -71,7 +71,7 @@ from worm_pose_gen.mask_fit import (
     taper_asymmetry,
 )
 from worm_pose_gen.recording_prior import RecordingPrior, bootstrap_prior_from_masks
-from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
+from worm_pose_gen.pose_run import clean_mask, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
 from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -399,14 +399,6 @@ def main() -> int:
         skipped: dict[str, int] = {"empty_mask": 0, "small_mask": 0, "no_starts": 0, "fit_error": 0}
         timing = {stage: 0.0 for stage in STAGES}
 
-        writer = None
-        if args.video:
-            import imageio.v2 as imageio
-
-            writer = imageio.get_writer(
-                str(run_dir / "overlay.mp4"), fps=args.fps, codec="libx264", quality=args.quality, macro_block_size=1,
-                ffmpeg_params=["-pix_fmt", "yuv420p"],
-            )
         pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
         try:
             for slab_start in range(0, n, args.slab):
@@ -471,7 +463,6 @@ def main() -> int:
                     if device.type == "cuda":
                         torch.cuda.synchronize()
                 t6 = time.perf_counter()
-                by_row: dict[int, MaskFitResult] = {}
                 for row, frame_starts, result in zip(fit_rows, starts, results, strict=True):
                     arrays["n_starts"][row] = len(frame_starts)
                     if result is None:
@@ -481,29 +472,7 @@ def main() -> int:
                         arrays["reversed"][row] = flipped
                     else:
                         arrays["orientation_gap"][row] = orientation_gap(result)
-                    by_row[row] = result
                     store_result(arrays, best_start, row, result)
-                if writer is not None:
-                    for offset, frame in enumerate(corrected):
-                        row = slab_start + offset
-                        result = by_row.get(row)
-                        caption = f"{args.recording.stem} frame {indices[row]}"
-                        if result is not None:
-                            caption += (
-                                f"  iou {arrays['iou'][row]:.3f}  length {arrays['body_length_px'][row]:.0f} px"
-                                f"  width {arrays['width_px'][row]:.1f} px  in view {arrays['points_in_fov'][row] / config.n_points:.2f}"
-                                f"  taper {arrays['taper_asymmetry'][row]:+.2f}"
-                            )
-                            if prior is not None:
-                                caption += f"  gap {arrays['orientation_gap'][row]:.3f}"
-                        else:
-                            caption += "  no fit"
-                        tube = centerline = None
-                        if result is not None:
-                            tube = np.zeros(frame.shape, dtype=bool)
-                            tube[result.crop.y0 : result.crop.y1, result.crop.x0 : result.crop.x1] = result.rendered_hard_mask
-                            centerline = result.centerline_xy
-                        writer.append_data(draw_overlay(frame, centerline, tube, caption, args.scale))
                 t7 = time.perf_counter()
                 for stage, seconds in zip(STAGES, (t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t6 - t5, t7 - t6), strict=True):
                     timing[stage] += seconds
@@ -516,8 +485,6 @@ def main() -> int:
                     flush=True,
                 )
         finally:
-            if writer is not None:
-                writer.close()
             if pool is not None:
                 pool.shutdown()
         # Per-frame ambiguity signals (plan step 4) from the stored arrays.
@@ -577,6 +544,15 @@ def main() -> int:
                 flush=True,
             )
         arrays["best_start"] = np.asarray(best_start)
+        # The overlay video is rendered from the final arrays, after
+        # propagation, so it shows the poses as stored.
+        if args.video:
+            t_video = time.perf_counter()
+            write_overlay_video(
+                run_dir / "overlay.mp4", dataset, field, arrays, caption_prefix=args.recording.stem,
+                fps=args.fps, scale=args.scale, quality=args.quality, slab=args.slab, device=device,
+            )
+            timing["video"] += time.perf_counter() - t_video
         # Residual images for the worst frames and any requested ones: the
         # frames are read and segmented again, which is cheap for a handful.
         requested = [int(v) for v in args.dump_frames.split(",") if v.strip()]

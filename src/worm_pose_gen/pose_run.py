@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw
 import torch
 
 from .connected_components import largest_component
+from .flat_field import apply_flat_field
 from .mask_fit import fill_narrow_holes, render_tube_segments
 
 
@@ -217,6 +218,86 @@ def residual_rows(arrays: dict[str, np.ndarray], worst: int, requested: list[int
         if len(hits) and arrays["fitted"][hits[0]]:
             rows.append(int(hits[0]))
     return sorted(set(rows))
+
+
+def flat_fielded(raw: NDArray[np.generic], field: Any) -> NDArray[np.uint8]:
+    """The flat-fielded 8-bit frame; the raw frame when no field is given."""
+
+    if field is None:
+        return np.asarray(raw, dtype=np.uint8)
+    return np.clip(np.rint(apply_flat_field(raw, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
+
+
+SOURCE_LABELS = {1: "forward", 2: "backward"}
+
+
+def overlay_caption(prefix: str, arrays: dict[str, np.ndarray], row: int) -> str:
+    """One-line caption for a video frame from the stored arrays."""
+
+    caption = f"{prefix} frame {int(arrays['frame_index'][row])}"
+    if not arrays["fitted"][row]:
+        return caption + "  no fit"
+    n_points = arrays["centerline_xy"].shape[1]
+    caption += (
+        f"  iou {float(arrays['iou'][row]):.3f}  length {float(arrays['body_length_px'][row]):.0f} px"
+        f"  width {float(arrays['width_px'][row]):.1f} px  in view {float(arrays['points_in_fov'][row]) / n_points:.2f}"
+    )
+    if "taper_asymmetry" in arrays and np.isfinite(arrays["taper_asymmetry"][row]):
+        caption += f"  taper {float(arrays['taper_asymmetry'][row]):+.2f}"
+    if "orientation_gap" in arrays and np.isfinite(arrays["orientation_gap"][row]):
+        caption += f"  gap {float(arrays['orientation_gap'][row]):.3f}"
+    if "source" in arrays and int(arrays["source"][row]) in SOURCE_LABELS:
+        caption += f"  {SOURCE_LABELS[int(arrays['source'][row])]}"
+    if "ambiguity_score" in arrays and int(arrays["ambiguity_score"][row]):
+        caption += f"  score {int(arrays['ambiguity_score'][row])}"
+    return caption
+
+
+def write_overlay_video(
+    path: Any,
+    dataset: Any,
+    field: Any,
+    arrays: dict[str, np.ndarray],
+    *,
+    caption_prefix: str,
+    fps: float = 20.0,
+    scale: float = 1.0,
+    quality: int = 5,
+    slab: int = 64,
+    device: torch.device | str | None = None,
+) -> None:
+    """Write the overlay MP4 from a run's final arrays.
+
+    Frames are re-read from ``dataset`` (anything indexable by frame, an HDF5
+    dataset or an array) so the video always shows the poses as stored,
+    including frames replaced by propagation after the independent pass.
+    """
+
+    import imageio.v2 as imageio
+
+    frame_index = np.asarray(arrays["frame_index"])
+    writer = imageio.get_writer(
+        str(path), fps=fps, codec="libx264", quality=quality, macro_block_size=1, ffmpeg_params=["-pix_fmt", "yuv420p"]
+    )
+    try:
+        for slab_start in range(0, len(frame_index), max(1, slab)):
+            rows = range(slab_start, min(len(frame_index), slab_start + max(1, slab)))
+            first, last = int(frame_index[rows[0]]), int(frame_index[rows[-1]])
+            if last - first + 1 == len(rows):
+                raw = np.asarray(dataset[first : last + 1], dtype=np.uint8)
+            else:
+                raw = np.stack([np.asarray(dataset[int(frame_index[r])], dtype=np.uint8) for r in rows])
+            for row, raw_frame in zip(rows, raw, strict=True):
+                frame = flat_fielded(raw_frame, field)
+                tube = centerline = None
+                if arrays["fitted"][row]:
+                    centerline = arrays["centerline_xy"][row]
+                    tube = render_tube(
+                        centerline, arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
+                    )
+                writer.append_data(draw_overlay(frame, centerline, tube, overlay_caption(caption_prefix, arrays, row), scale))
+    finally:
+        writer.close()
 
 
 def run_label(summary: dict[str, Any]) -> str:

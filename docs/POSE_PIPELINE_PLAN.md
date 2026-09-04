@@ -429,7 +429,7 @@ Signals. Eight flags, each cheap and from stored arrays:
 | `area_excess` | ratio > 1.1 | the tube misses body: the midbody optimum of a cold start |
 | `self_contact` | closest approach of body points 15 or more apart < 0.8 width | the fitted body touches itself |
 | `holes` | more than 200 filled hole pixels | enclosed background: a tight turn or coil |
-| `fragments` | more than 500 mask pixels outside the largest component | a dropped tail, debris, or a second animal |
+| `fragments` | more than 500 mask pixels outside the largest component | a dropped tail, a tail re-entering the camera, or debris |
 | `length_deviation` | fitted length more than two sigma from the prior | the mask and the recording disagree on length |
 | `pose_jump` | visible centerline moved more than one width since the previous frame | a change of answer, not of pose |
 
@@ -447,8 +447,9 @@ took about 18 minutes each and yielded 8--14 candidate windows apiece
 Seven clips of 300 frames were picked from them: two tight spirals
 (`spiral_0131`, `spiral_0528`), a closed loop (`loop_0131`), an omega turn
 and a held coil (`omega_0822`, `coil_0822`), a body at the border shedding
-mask pieces (`edge_0528`), and a second animal entering while the tracked
-worm is clipped (`second_animal_0623`). Between 52% and 84% of the sampled
+mask pieces (`edge_0528`), and a clipped worm whose tail comes back into
+view as a separate mask component (`tail_reentry_0623`; first read as a
+second animal, but these recordings hold one worm). Between 52% and 84% of the sampled
 frames in these recordings have the mask on the border, so camera exits
 are in every clip.
 
@@ -464,7 +465,7 @@ images of its most ambiguous frames):
 | `coil_0822` | 0.949 | 0.378 | 140 | 148 | 139 | 0.969 | 0.28--0.42 |
 | `spiral_0528` | 0.955 | 0.282 | 137 | 144 | 138 | 0.969 | 0.28--0.49 |
 | `edge_0528` | 0.957 | 0.862 | 46 | 162 | 44 | 0.963 | 0.86 |
-| `second_animal_0623` | 0.970 | 0.958 | 10 | 39 | 6 | 0.970 | 0.68--0.86 |
+| `tail_reentry_0623` | 0.970 | 0.958 | 10 | 39 | 6 | 0.970 | 0.68--0.86 |
 
 Over the 2100 clip frames, 611 have IoU below 0.9. A score of at least 2
 marks 610 frames, of which 594 are among those (precision 0.974, recall
@@ -544,7 +545,7 @@ the first columns):
 | `coil_0822` | 0.949 | 0.960 | 140 | 3 | 147 (11 / 136) | 0.42 -> 0.95 |
 | `spiral_0528` | 0.955 | 0.964 | 137 | 0 | 138 (36 / 102) | 0.33 -> 0.96 |
 | `edge_0528` | 0.957 | 0.959 | 46 | 2 | 62 (33 / 29) | 0.92 -> 0.94 |
-| `second_animal_0623` | 0.970 | 0.970 | 10 | 4 | 18 (13 / 5) | 0.91 -> 0.97 |
+| `tail_reentry_0623` | 0.970 | 0.970 | 10 | 4 | 18 (13 / 5) | 0.91 -> 0.97 |
 
 Over the 2100 clip frames the frames below IoU 0.9 fall from 611 to 62, 53
 of them on the hard spiral where the propagated tube winds through the ring
@@ -577,6 +578,49 @@ can disagree; the energy picks one per frame with no smoothness across
 frames. That, and orientation in general, is step 6. The hard spiral's 53
 remaining frames are the tightest turns, where the 16-coefficient centerline
 and the width prior both strain.
+
+**Correction (2026-09-04).** The overlay videos of the step 5 runs were
+written during the independent pass, before propagation replaced frames, so
+they did not match the residual images and arrays. The video is now
+rendered after propagation from the final arrays, by the same function the
+re-render script uses (`pose_run.write_overlay_video`), and the clip and
+minute videos were re-rendered. Captions now name the source (forward or
+backward) and the ambiguity score.
+
+### Step 5b. Tuning on the sequence set
+
+Added 2026-09-04 after reviewing the step 5 videos: the clips are much
+improved and many frames are still off. Before step 6, a tuning pass judged
+on the sequence set (`scripts/evaluate_sequence_set.py`) alongside the
+30-frame set. Candidate items, to be chosen and ordered by eye from the
+videos:
+
+- **Tail re-entry.** The `tail_reentry_0623` clip (first read as a second
+  animal; these recordings hold one worm) shows the worm clipped by the
+  camera with its tail coming back into view as a separate mask component,
+  which the largest-component rule drops and the `fragments` flag reports.
+  Keep mask components that lie along the fitted body's off-camera
+  continuation, or fit against every component within reach of the tube,
+  and count them toward the visible fraction.
+- **Coil interiors.** 53 frames of `spiral_0131` stay below IoU 0.9 at the
+  tightest turns. Try more shape coefficients inside stretches, a looser
+  length prior when the tube self-overlaps (the winding tube wants more
+  length than the prior allows), and the hole-fill radius against coil
+  evidence.
+- **Chain disagreement.** Forward and backward chains disagree inside long
+  stretches and the energy picks per frame. Pick per stretch, or add a
+  smoothness term over consecutive frames, so a stretch is one consistent
+  track; carry orientation with it.
+- **Ambiguity after propagation.** Separate the flags that describe a coil
+  (`self_contact`, `holes`, `area_deficit`) from those that describe a
+  failure (`low_iou`, `area_excess`, `pose_jump`, `length_deviation`), so
+  the score means one thing.
+- **Propagation cost.** A single long stretch gives two-row lockstep
+  batches; consider splitting long stretches at their least ambiguous frames
+  or running clips of one recording together.
+- **Review loop.** Frames marked by eye from the videos become named
+  examples in the manifest, rendered as before/after strips by
+  `scripts/compare_pose_runs.py` on every run.
 
 ### Step 6. Hypothesis linking across ambiguous stretches
 
@@ -636,5 +680,6 @@ and the width prior both strain.
 | 2 | done (2026-09-04) | log-space B-spline width correction (6 coefficients, prior 1e-3); +0.017 median IoU on the 30-frame set, 0.892 -> 0.975 on one minute of `2024-05-28-02`; tail placed last from the taper asymmetry |
 | 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
 | 4 | done (2026-09-04) | eight-flag ambiguity score stored per frame; seven-clip sequence set (`docs/sequence_eval_set.json`); score >= 2 finds frames below IoU 0.9 with precision 0.97 and recall 0.97 on the set; coils and spirals fail outright and are the target of steps 5--6 |
-| 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame |
+| 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame; videos now rendered from the final arrays |
+| 5b | not started | tuning on the sequence set before step 6: tail re-entry components, coil interiors, chain disagreement, score semantics, propagation cost, review loop |
 | 6 | not started | |

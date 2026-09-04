@@ -501,8 +501,8 @@
    ],
    "video": "/temp_data4/alex/external_artifacts/poses/2026-09-04T16-46-05Z_seq_edge_0528/overlay.mp4"
   },
-  "second_animal_0623": {
-   "name": "second_animal_0623",
+  "tail_reentry_0623": {
+   "name": "tail_reentry_0623",
    "recording": "/store1/shared/all_data_raw/prj_aversion/2023-06-23/2023-06-23-01.h5",
    "start": 8850,
    "frames": 300,
