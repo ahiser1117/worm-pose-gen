@@ -411,6 +411,88 @@ area ratio. Both go into step 4.
   self-contact, and field-of-view exits. Store frame ranges, not copies.
   Evaluate on them alongside the 30-frame set from this step on.
 
+**Result (2026-09-04).** Landed as `src/worm_pose_gen/ambiguity.py` (signals,
+flags, score, summary), computed by `scripts/fit_recording.py` for every run
+(`ambiguity_score`, `flag_*`, `area_ratio`, `self_contact_px`,
+`pose_jump_px`, `length_deviation` in `poses.npz`; an `ambiguity` block in
+`summary.json`; flags in the residual captions), `scripts/ambiguity_report.py`
+for stored runs, `scripts/find_sequence_clips.py` to propose clips, the
+manifest `docs/sequence_eval_set.json`, and `scripts/evaluate_sequence_set.py`
+to fit and score it. Raw numbers are under `pose_pipeline_step4/`.
+
+Signals. Eight flags, each cheap and from stored arrays:
+
+| Flag | Fires when | Meaning |
+|---|---|---|
+| `low_iou` | overlap < 0.9 | the fit disagrees with the mask |
+| `area_deficit` | mask area / visible tube area < 0.9 | the tube overlaps itself: coil or self-contact hides body |
+| `area_excess` | ratio > 1.1 | the tube misses body: the midbody optimum of a cold start |
+| `self_contact` | closest approach of body points 15 or more apart < 0.8 width | the fitted body touches itself |
+| `holes` | more than 200 filled hole pixels | enclosed background: a tight turn or coil |
+| `fragments` | more than 500 mask pixels outside the largest component | a dropped tail, debris, or a second animal |
+| `length_deviation` | fitted length more than two sigma from the prior | the mask and the recording disagree on length |
+| `pose_jump` | visible centerline moved more than one width since the previous frame | a change of answer, not of pose |
+
+The tube area and the jump use only the part of the body inside the camera;
+with the whole tube the area ratio flagged every body completed off camera
+by step 3 (746 of the minute's 1200 frames instead of 4). The score is the
+number of flags.
+
+Sequence evaluation set (`docs/sequence_eval_set.json`, frame ranges only).
+`find_sequence_clips.py` scans a recording at a stride of ten with the
+segmenter alone and flags samples with a short skeleton for a whole worm
+(a coil), filled holes, fragments, or a mask on the border; four recordings
+took about 18 minutes each and yielded 8--14 candidate windows apiece
+(`pose_pipeline_step4/clip_candidates/`, with a montage per recording).
+Seven clips of 300 frames were picked from them: two tight spirals
+(`spiral_0131`, `spiral_0528`), a closed loop (`loop_0131`), an omega turn
+and a held coil (`omega_0822`, `coil_0822`), a body at the border shedding
+mask pieces (`edge_0528`), and a second animal entering while the tracked
+worm is clipped (`second_animal_0623`). Between 52% and 84% of the sampled
+frames in these recordings have the mask on the border, so camera exits
+are in every clip.
+
+Results with the step 3 pipeline (`fast` preset, bootstrapped priors,
+`sequence_eval.json`; each clip's run directory holds video and residual
+images of its most ambiguous frames):
+
+| Clip | Median IoU | P10 IoU | Frames < 0.9 | Score >= 1 | Score >= 2 | Median IoU at score 0 | Median IoU at score >= 2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `spiral_0131` | 0.508 | 0.275 | 163 | 169 | 166 | 0.973 | 0.30--0.47 |
+| `loop_0131` | 0.966 | 0.569 | 55 | 93 | 57 | 0.972 | 0.37--0.63 |
+| `omega_0822` | 0.966 | 0.394 | 60 | 69 | 60 | 0.968 | 0.39--0.49 |
+| `coil_0822` | 0.949 | 0.378 | 140 | 148 | 139 | 0.969 | 0.28--0.42 |
+| `spiral_0528` | 0.955 | 0.282 | 137 | 144 | 138 | 0.969 | 0.28--0.49 |
+| `edge_0528` | 0.957 | 0.862 | 46 | 162 | 44 | 0.963 | 0.86 |
+| `second_animal_0623` | 0.970 | 0.958 | 10 | 39 | 6 | 0.970 | 0.68--0.86 |
+
+Over the 2100 clip frames, 611 have IoU below 0.9. A score of at least 2
+marks 610 frames, of which 594 are among those (precision 0.974, recall
+0.972); a score of at least 1 catches all 611 and adds 213 frames that fit
+well, most of them `fragments` on `edge_0528`, where the extra component is a
+mask artifact, not a fit problem. On ordinary footage (the minute of
+`2024-05-28-02` and 400 frames of `2024-01-31-02`, 1600 frames) a score of
+at least 2 marks 19 frames, 16 of the 22 with IoU below 0.9, and a score of
+at least 1 catches all 22 while adding 36. In every clip the frames with
+score 0 fit at median IoU 0.963--0.973. Score 2 is the working threshold for
+"ambiguous"; score 1 is a watch list.
+
+![One flagged frame per clip](pose_pipeline_step4/sequence_flagged_examples.jpg)
+
+![Frame 447 of the minute: head touching the body, IoU 0.96, flagged by self-contact](pose_pipeline_step4/flagged_self_contact_frame_00447.jpg)
+
+What the failures are. On coils and spirals the single-frame fitter fails
+outright, not marginally: a closed ring has no skeleton endpoints, so the
+start falls back to a straight moment axis that no schedule can wind into a
+spiral, and the tube ends up as a short squiggle inside the ring
+(`area_excess` 2.7, `length_deviation`, `holes`, `self_contact` all fire).
+These are the frames steps 5 and 6 must carry through from the unambiguous
+frames on either side; 131--231 frames of every coil clip are unambiguous
+and fit at 0.97. The `pose_jump` flag also finds flicker between two
+solutions at a camera exit (frames 591--613 of the minute) and the
+`self_contact` flag fires on frames 445--449 of the minute, the omega turn
+that precedes the cold-start failure of frames 450--451 (IoU 0.96 there).
+
 ### Step 5. Temporal propagation without a serial chain
 
 - Split a recording into chunks of about 64 frames. Fit each chunk's first
@@ -478,6 +560,6 @@ area ratio. Both go into step 4.
 | 1 | done (2026-09-04) | `scripts/fit_recording.py`; 244 ms/frame end to end, fit 174 ms; `fast` preset is -0.008 IoU vs the reference on the 30-frame set, `reference` preset exact |
 | 2 | done (2026-09-04) | log-space B-spline width correction (6 coefficients, prior 1e-3); +0.017 median IoU on the 30-frame set, 0.892 -> 0.975 on one minute of `2024-05-28-02`; tail placed last from the taper asymmetry |
 | 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
-| 4 | not started | |
+| 4 | done (2026-09-04) | eight-flag ambiguity score stored per frame; seven-clip sequence set (`docs/sequence_eval_set.json`); score >= 2 finds frames below IoU 0.9 with precision 0.97 and recall 0.97 on the set; coils and spirals fail outright and are the target of steps 5--6 |
 | 5 | not started | |
 | 6 | not started | |

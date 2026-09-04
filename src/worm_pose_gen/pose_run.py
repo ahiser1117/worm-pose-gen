@@ -188,6 +188,10 @@ def residual_caption(frame_index: int, arrays: dict[str, np.ndarray], row: int, 
     parts = [
         f"frame {frame_index}",
         f"iou {float(arrays['iou'][row]):.3f}",
+    ]
+    if "ambiguity_score" in arrays and int(arrays["ambiguity_score"][row]):
+        parts.append("flags " + ",".join(n for n in ("low_iou", "area_deficit", "area_excess", "self_contact", "holes", "fragments", "length_deviation", "pose_jump") if arrays[f"flag_{n}"][row]))
+    parts += [
         f"len {float(arrays['body_length_px'][row]):.0f}",
         f"in-view {float(arrays['points_in_fov'][row]) / arrays['centerline_xy'].shape[1]:.2f}",
         f"mask/tube-area {area_ratio:.2f}",

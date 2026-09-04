@@ -168,8 +168,19 @@ through the point where the mask meets the border, and its off-camera part
 is censored; the in-view fraction reports how much was seen. Every frame is
 started in both orientations and the energy gap between them is stored.
 `--prior none` restores the hard bounds, `--prior-file` reuses a stored
-prior, `--rebootstrap` ignores the cache. The plan this belongs to, with
-measurements, is [`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
+prior, `--rebootstrap` ignores the cache. Every frame also gets an
+ambiguity score (`worm_pose_gen.ambiguity`: low overlap, self-overlap or
+missed body by area, self-contact, enclosed holes, fragments, length far
+from the prior, a jump since the previous frame); a score of 2 or more marks
+a frame whose single-frame answer should not be trusted without its
+neighbours. `scripts/ambiguity_report.py` recomputes it for stored runs.
+
+The sequence evaluation set, seven 300-frame clips with coils, self-contact,
+fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;
+`scripts/find_sequence_clips.py` proposes such clips from a mask-only scan
+and `scripts/evaluate_sequence_set.py` fits and scores the set. The plan
+this belongs to, with measurements, is
+[`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
 `scripts/evaluate_width_model_unannotated30.py` and
 `scripts/evaluate_recording_prior_unannotated30.py` compare width models and
 priors on the 30-frame set.

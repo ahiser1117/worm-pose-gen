@@ -48,6 +48,7 @@ import h5py
 import numpy as np
 import torch
 
+from worm_pose_gen.ambiguity import compute_ambiguity, summarize_ambiguity
 from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig, fit_masks
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
@@ -495,9 +496,15 @@ def main() -> int:
                 writer.close()
             if pool is not None:
                 pool.shutdown()
+        # Per-frame ambiguity signals (plan step 4) from the stored arrays.
+        arrays["best_start"] = np.asarray(best_start)
+        arrays.update(
+            compute_ambiguity(
+                arrays, prior=None if prior is None else prior.to_dict(), image_shape=(int(dataset.shape[1]), int(dataset.shape[2]))
+            )
+        )
         # Residual images for the worst frames and any requested ones: the
         # frames are read and segmented again, which is cheap for a handful.
-        arrays["best_start"] = np.asarray(best_start)
         requested = [int(v) for v in args.dump_frames.split(",") if v.strip()]
         residual_files: list[str] = []
         for row in residual_rows(arrays, args.residual_frames, requested):
@@ -581,6 +588,7 @@ def main() -> int:
             "orientation_consistency": orientation_consistency(arrays),
         },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
+        "ambiguity": summarize_ambiguity(arrays) if fitted.any() else None,
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},
         "mask": {
             "worm_pixels_median": float(np.median(arrays["worm_pixels"])),
