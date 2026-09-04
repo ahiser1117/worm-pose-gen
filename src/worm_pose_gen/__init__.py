@@ -1,10 +1,10 @@
-"""Reusable geometry, research models, and fail-closed worm-pose inference."""
+"""Reusable geometry and supporting research components for worm pose."""
 
 
 def main() -> None:
-    """Report the package's scientific status and direct users to explicit CLIs."""
+    """Direct users to the current geometric pipeline documentation."""
 
     print(
-        "worm-pose-gen: no deployment-authorized model; "
-        "use scripts/infer_hdf5.py --allow-exploratory only for rejected-checkpoint diagnostics"
+        "worm-pose-gen: geometric research pipeline; see "
+        "docs/POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md"
     )

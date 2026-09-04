@@ -23,13 +23,12 @@ from worm_pose_gen.annotation import resample_polyline
 from worm_pose_gen.classical import (
     ClassicalConfig,
     _dilate,
-    _erode,
     _largest_component,
     _prune_skeleton_endpoints,
     _skeleton_longest_path,
     _thin,
     resample_centerline,
-    robust_dark_ridge,
+    segment_dark_ridge,
     tangent_angles,
 )
 from worm_pose_gen.latent import decode_centerline, encode_centerline
@@ -351,10 +350,10 @@ def main() -> None:
 
     frame, provenance = load_real_frame(args.proxy_hdf5)
     cfg = ClassicalConfig()
-    score = robust_dark_ridge(frame, cfg)
-    raw = score >= cfg.foreground_z
-    closed = _erode(_dilate(raw, cfg.close_radius), cfg.close_radius)
-    component, _, component_count = _largest_component(closed)
+    segmentation = segment_dark_ridge(frame, cfg)
+    score = segmentation.score
+    component = segmentation.component
+    component_count = segmentation.component_count
     bounds = crop_bounds(component)
 
     original_path, original_skeleton = initial_path(component)

@@ -14,15 +14,12 @@ import numpy as np
 
 from worm_pose_gen.classical import (
     ClassicalConfig,
-    _dilate,
-    _erode,
-    _largest_component,
     _prune_skeleton_endpoints,
     _skeleton_longest_path,
     _thin,
     extract_centerline,
     resample_centerline,
-    robust_dark_ridge,
+    segment_dark_ridge,
 )
 
 
@@ -43,6 +40,7 @@ MAGENTA = "#ff4fa3"
 GREEN = "#57d68d"
 RED = "#ff5d5d"
 GRAY = "#a7adb4"
+AMBER = "#ffb142"
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,10 +109,17 @@ def main() -> None:
     frame, provenance = load_real_frame(args.proxy_hdf5)
     cfg = ClassicalConfig()
 
-    score = robust_dark_ridge(frame, cfg)
-    raw = score >= cfg.foreground_z
-    closed = _erode(_dilate(raw, cfg.close_radius), cfg.close_radius)
-    component, _, component_count = _largest_component(closed)
+    segmentation = segment_dark_ridge(frame, cfg)
+    score = segmentation.score
+    raw = segmentation.high_threshold_mask
+    faint = (
+        segmentation.connected_threshold_mask & ~raw
+        if segmentation.connected_threshold_mask is not None
+        else np.zeros_like(raw)
+    )
+    closed = segmentation.closed_high_mask
+    component = segmentation.component
+    component_count = segmentation.component_count
     bounds = crop_bounds(component)
 
     yy, xx = np.nonzero(component)
@@ -176,6 +181,7 @@ def main() -> None:
     # 2 — thresholded foreground candidates.
     fig, ax = plt.subplots(figsize=(11, 6.5), constrained_layout=True)
     ax.imshow(frame, cmap="gray", vmin=80, vmax=225)
+    overlay_mask(ax, faint, AMBER, 0.60)
     overlay_mask(ax, raw, MAGENTA, 0.72)
     set_crop(ax, bounds)
     save(fig, args.output_dir / "02_threshold_mask.png")

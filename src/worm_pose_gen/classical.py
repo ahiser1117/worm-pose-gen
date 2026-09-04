@@ -23,6 +23,13 @@ class ClassicalConfig:
     local_radius: int = 31
     smooth_radius: int = 2
     foreground_z: float = 2.6
+    # Optional hysteresis threshold. Pixels below ``foreground_z`` are admitted
+    # only when they connect to the high-confidence largest component. This can
+    # recover faint worm sections without retaining disconnected dark debris.
+    # Disabled by default: the interactively tuned 61/3/4.25/2.05/8 setting cut
+    # 30-frame stress acceptance from 11 to 3 frames (see
+    # docs/final_algorithm_tuned_local_darkness_unannotated30) and was reverted.
+    connected_foreground_z: float | None = None
     close_radius: int = 2
     min_area: int = 2_500
     max_area: int = 30_000
@@ -51,6 +58,22 @@ class ClassicalResult:
     rejection_reasons: tuple[str, ...]
     qc: dict[str, float | int | bool]
     mask: BoolArray | None = None
+
+
+@dataclass(frozen=True)
+class DarkRidgeSegmentation:
+    """Inspectable output of the local-darkness segmentation stages."""
+
+    score: FloatArray
+    high_threshold_mask: BoolArray
+    connected_threshold_mask: BoolArray | None
+    closed_high_mask: BoolArray
+    closed_connected_mask: BoolArray | None
+    high_component: BoolArray
+    component: BoolArray
+    component_count: int
+    recovered_area: int
+    disconnected_connected_area: int
 
 
 def box_blur(image: NDArray[np.generic], radius: int) -> FloatArray:
@@ -142,6 +165,83 @@ def _largest_component(mask: BoolArray) -> tuple[BoolArray, int, int]:
         yy, xx = np.asarray(largest).T
         result[yy, xx] = True
     return result, len(largest), count
+
+
+def _connected_extension(seed: BoolArray, eligible: BoolArray) -> BoolArray:
+    """Grow an 8-connected seed only through eligible pixels."""
+
+    if seed.shape != eligible.shape or seed.ndim != 2:
+        raise ValueError("seed and eligible masks must share a two-dimensional shape")
+    result = seed.copy()
+    queue = deque((int(y), int(x)) for y, x in np.argwhere(seed))
+    height, width = result.shape
+    while queue:
+        y, x = queue.popleft()
+        for neighbor_y in range(max(0, y - 1), min(height, y + 2)):
+            for neighbor_x in range(max(0, x - 1), min(width, x + 2)):
+                if eligible[neighbor_y, neighbor_x] and not result[neighbor_y, neighbor_x]:
+                    result[neighbor_y, neighbor_x] = True
+                    queue.append((neighbor_y, neighbor_x))
+    return result
+
+
+def segment_dark_ridge(
+    image: NDArray[np.generic], config: ClassicalConfig | None = None
+) -> DarkRidgeSegmentation:
+    """Run the local-darkness threshold, cleanup, and optional hysteresis.
+
+    The high threshold remains the seed. When ``connected_foreground_z`` is
+    enabled, lower-confidence pixels survive only if they are connected to the
+    high-confidence largest component after the same morphological closing.
+    """
+
+    cfg = config or ClassicalConfig()
+    values = np.asarray(image)
+    if values.ndim != 2:
+        raise ValueError("image must have shape [height, width]")
+    if cfg.local_radius < 0 or cfg.smooth_radius < 0 or cfg.close_radius < 0:
+        raise ValueError("segmentation radii must be non-negative")
+    if not np.isfinite(cfg.foreground_z):
+        raise ValueError("foreground_z must be finite")
+    if cfg.connected_foreground_z is not None and (
+        not np.isfinite(cfg.connected_foreground_z)
+        or cfg.connected_foreground_z >= cfg.foreground_z
+    ):
+        raise ValueError("connected_foreground_z must be finite and below foreground_z")
+
+    score = robust_dark_ridge(values, cfg)
+    high_mask = score >= cfg.foreground_z
+    high_closed = _erode(_dilate(high_mask, cfg.close_radius), cfg.close_radius)
+    high_component, _, component_count = _largest_component(high_closed)
+
+    connected_mask: BoolArray | None = None
+    connected_closed: BoolArray | None = None
+    component = high_component
+    recovered_area = 0
+    disconnected_connected_area = 0
+    if cfg.connected_foreground_z is not None:
+        connected_mask = score >= cfg.connected_foreground_z
+        connected_closed = _erode(
+            _dilate(connected_mask, cfg.close_radius), cfg.close_radius
+        )
+        component = _connected_extension(high_component, connected_closed)
+        recovered_area = int(np.logical_and(component, ~high_component).sum())
+        disconnected_connected_area = int(
+            np.logical_and(connected_closed, ~component).sum()
+        )
+
+    return DarkRidgeSegmentation(
+        score=score,
+        high_threshold_mask=high_mask,
+        connected_threshold_mask=connected_mask,
+        closed_high_mask=high_closed,
+        closed_connected_mask=connected_closed,
+        high_component=high_component,
+        component=component,
+        component_count=component_count,
+        recovered_area=recovered_area,
+        disconnected_connected_area=disconnected_connected_area,
+    )
 
 
 def _border_mask(shape: tuple[int, int]) -> BoolArray:
@@ -299,10 +399,9 @@ def extract_centerline(
     values = np.asarray(image)
     if values.ndim != 2:
         raise ValueError("image must have shape [height, width]")
-    score = robust_dark_ridge(values, cfg)
-    raw = score >= cfg.foreground_z
-    closed = _erode(_dilate(raw, cfg.close_radius), cfg.close_radius)
-    component, area, component_count = _largest_component(closed)
+    segmentation = segment_dark_ridge(values, cfg)
+    component = segmentation.component
+    component_count = segmentation.component_count
     # Closing repairs small cross-sectional gaps.  Do not indiscriminately fill
     # holes: a tightly bent worm can enclose a large background region whose
     # fill would create a false shortcut through the anatomy.
@@ -311,8 +410,25 @@ def extract_centerline(
     if area < cfg.min_area or area > cfg.max_area:
         reasons.append("implausible_area")
     if not area:
-        return ClassicalResult(False, None, None, 0.0, 0.5, tuple(reasons or ["no_component"]),
-                               {"area": 0, "component_count": component_count}, component if keep_mask else None)
+        qc = {
+            "area": 0,
+            "component_count": component_count,
+            "connected_threshold_enabled": cfg.connected_foreground_z is not None,
+            "connected_threshold_recovered_area": segmentation.recovered_area,
+            "connected_threshold_disconnected_area": (
+                segmentation.disconnected_connected_area
+            ),
+        }
+        return ClassicalResult(
+            False,
+            None,
+            None,
+            0.0,
+            0.5,
+            tuple(reasons or ["no_component"]),
+            qc,
+            component if keep_mask else None,
+        )
 
     yy, xx = np.nonzero(component)
     pad = 3
@@ -322,8 +438,17 @@ def extract_centerline(
     path, endpoint_count, branch_pixels = _skeleton_longest_path(skeleton_crop)
     if path is None:
         reasons.append("unstable_endpoints")
-        qc = {"area": area, "component_count": component_count, "endpoint_count": endpoint_count,
-              "branch_pixels": branch_pixels}
+        qc = {
+            "area": area,
+            "component_count": component_count,
+            "endpoint_count": endpoint_count,
+            "branch_pixels": branch_pixels,
+            "connected_threshold_enabled": cfg.connected_foreground_z is not None,
+            "connected_threshold_recovered_area": segmentation.recovered_area,
+            "connected_threshold_disconnected_area": (
+                segmentation.disconnected_connected_area
+            ),
+        }
         return ClassicalResult(False, None, None, 0.0, 0.5, tuple(dict.fromkeys(reasons)), qc,
                                component if keep_mask else None)
     path[:, 0] += x0
@@ -369,6 +494,9 @@ def extract_centerline(
     qc = {
         "area": area,
         "component_count": component_count,
+        "connected_threshold_enabled": cfg.connected_foreground_z is not None,
+        "connected_threshold_recovered_area": segmentation.recovered_area,
+        "connected_threshold_disconnected_area": segmentation.disconnected_connected_area,
         "length_px": length,
         "boundary_distance_px": boundary_distance,
         "component_boundary_contact": component_boundary_contact,
