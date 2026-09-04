@@ -2,8 +2,8 @@
 """Fine-tune the worm segmenter on the segmentation store with Lightning.
 
 Each run gets its own directory under ``checkpoints/segmenter/runs/``, named
-by start time and ``--name``, holding ``best.ckpt`` (highest validation
-IoU), ``last.ckpt`` (the final epoch, which early stopping places
+by start time and ``--name``, holding ``best.ckpt`` (lowest validation
+loss), ``last.ckpt`` (the final epoch, which early stopping places
 ``--patience`` epochs after the best), ``metrics.csv`` (per-epoch curves), and
 ``run.json``: the arguments, git revision, the exact train/val/test
 membership, the checkpoint fingerprints, and the final metrics.  The
@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init", type=Path, default=None, help="checkpoint whose weights start the run")
     parser.add_argument("--promote", action="store_true", help="promote this run's best.ckpt without comparing")
     parser.add_argument("--no-promote", action="store_true", help="never touch <checkpoint dir>/best.ckpt")
-    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--crop-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -91,8 +91,12 @@ def main() -> int:
         )
     run_dir = args.checkpoint_dir / "runs" / f"{timestamp_slug(started_at)}_{args.name}"
     run_dir.mkdir(parents=True, exist_ok=False)
+    # Validation loss (masked BCE + soft Dice) keeps falling long after the
+    # thresholded IoU has saturated; selecting and stopping on IoU produced
+    # checkpoints whose background probability sat near 0.3.  Loss picks a
+    # calibrated model with the same masks.
     best = ModelCheckpoint(
-        dirpath=run_dir, filename="best", monitor="val_iou", mode="max",
+        dirpath=run_dir, filename="best", monitor="val_loss", mode="min",
         save_top_k=1, save_last=False, enable_version_counter=False,
     )
     trainer = L.Trainer(
@@ -100,7 +104,7 @@ def main() -> int:
         accelerator="auto",
         devices=1,
         precision="16-mixed" if torch.cuda.is_available() else "32-true",
-        callbacks=[best, EarlyStopping(monitor="val_iou", mode="max", patience=args.patience)],
+        callbacks=[best, EarlyStopping(monitor="val_loss", mode="min", patience=args.patience)],
         logger=CSVLogger(str(run_dir), name="", version=""),
         default_root_dir=str(run_dir),
         log_every_n_steps=5,
@@ -125,7 +129,8 @@ def main() -> int:
         "dataset_root": str(args.dataset_root),
         "counts": counts,
         "splits": manifest,
-        "best_val_iou": None if best.best_model_score is None else float(best.best_model_score),
+        "best_val_loss": None if best.best_model_score is None else float(best.best_model_score),
+        "best_epoch": None,
         "epochs_run": trainer.current_epoch,
         "stopped_early": trainer.current_epoch < args.epochs,
     }
@@ -133,6 +138,7 @@ def main() -> int:
         test = trainer.test(module, datamodule=data, ckpt_path=best.best_model_path or None, verbose=False)
         results["test"] = test[0] if test else None
     results["finished_at"] = utc_now()
+    results["best_epoch"] = int(torch.load(run_dir / "best.ckpt", map_location="cpu", weights_only=False)["epoch"])
     results["checkpoints"] = {
         "best": checkpoint_fingerprint(run_dir / "best.ckpt"),
         "last": checkpoint_fingerprint(run_dir / "last.ckpt"),

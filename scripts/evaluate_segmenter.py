@@ -132,7 +132,7 @@ def run_summary(path: Path) -> dict | None:
     if not record_path.exists():
         return None
     record = json.loads(record_path.read_text())
-    return {key: record.get(key) for key in ("name", "run_dir", "started_at", "train_labels", "counts", "init_checkpoint", "best_val_iou", "epochs_run")}
+    return {key: record.get(key) for key in ("name", "run_dir", "started_at", "train_labels", "counts", "init_checkpoint", "best_val_iou", "best_val_loss", "best_epoch", "epochs_run")}
 
 
 def labels_fingerprint(store: SegmentationStore, splits: list[str]) -> str:

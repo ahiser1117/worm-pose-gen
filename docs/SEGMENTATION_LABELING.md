@@ -91,14 +91,21 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_h
 ```
 
 Each training run gets its own directory under `checkpoints/segmenter/runs/`,
-named by start time and `--name`, holding `best.ckpt` (highest validation
-IoU), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
+named by start time and `--name`, holding `best.ckpt` (lowest validation
+loss), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
 `run.json`: arguments, git revision, the fingerprint of the checkpoint it
 started from, the exact train, validation, and test membership (sample id,
 label source, revision, save time), the checkpoint fingerprints, epochs run,
 and the final metrics. The directory is git-ignored. Mixed precision, early
-stopping on validation IoU, and a test pass with the best checkpoint are on
-by default.
+stopping on validation loss, and a test pass with the best checkpoint are on
+by default (`--epochs 60`, `--patience 12`).
+
+Checkpoint selection and early stopping use the validation loss (masked
+BCE plus soft Dice), not the thresholded IoU. IoU saturates within ten
+epochs while the loss keeps falling, and runs selected on IoU produced
+models whose background probability sat near `0.3`: the masks at threshold
+`0.5` were fine, but nearly every pixel fell in the app's uncertain band.
+Selecting on loss picks a calibrated model with the same or better masks.
 
 `--train-labels bootstrap|manual|all` restricts the training split to one
 label origin; validation and test always use every label they hold. Without
@@ -254,13 +261,20 @@ labeled recording, segmented cleanly with the hand-only model: every frame
 had a worm, the median mask was `28k` pixels, and `211` of `1200` frames had
 small extra components (median `0`, at most `3.6k` pixels outside the
 largest) from debris. The same run exposed a calibration problem: that
-checkpoint, chosen by validation IoU at epoch 8, puts background probability
-near `0.34`, so nearly every pixel falls in the uncertain band, while the
-all-labels checkpoint trained to epoch 24 puts background near `0.09`. IoU
-at threshold `0.5` is unaffected, but the app's network-uncertain frame
-selection and any use of the probability map as a soft target need a better
-calibrated model; stopping on validation loss instead of IoU is the obvious
-fix.
+checkpoint, chosen by validation IoU at epoch 8, put background probability
+near `0.34`, so `96%` of pixels fell in the uncertain band, while the
+all-labels checkpoint trained to epoch 24 put background near `0.09`. IoU at
+threshold `0.5` was unaffected, but the app's network-uncertain frame
+selection had been close to random and the probability map was useless as
+a soft target.
+
+Selecting and stopping on validation loss fixed it. The hand-label run
+under that rule (`hand_labels_loss`, best at epoch 52 of 60, loss still
+falling at the cap) has median IoU `0.973` on 25 validation and `0.975` on
+23 test labels against `0.960` / `0.967` for the IoU-selected model, was
+promoted automatically (mean validation IoU `0.969` against `0.959`), and on
+the unseen recording puts background at `0.10` with `0.2%` of pixels in the
+uncertain band and the same masks.
 
 ## 7. The loop
 
