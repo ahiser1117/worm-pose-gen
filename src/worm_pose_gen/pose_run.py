@@ -1,0 +1,211 @@
+"""Shared pieces of a recording-level pose run.
+
+Mask cleanup, tube rendering from stored poses, and the two drawings every
+run produces: the overlay (tube boundary, centerline, head square and tail
+circle) and the residual image, in which mask pixels the tube misses are
+tinted blue and tube pixels outside the mask red.  ``scripts/fit_recording.py``
+uses these while fitting; ``scripts/render_pose_run.py`` and
+``scripts/compare_pose_runs.py`` use them on stored ``poses.npz`` arrays.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
+from PIL import Image, ImageDraw
+import torch
+
+from .connected_components import largest_component
+from .mask_fit import fill_narrow_holes, render_tube_segments
+
+
+BoolArray = NDArray[np.bool_]
+
+TUBE_RGB = (90, 220, 140)
+LINE_RGB = (255, 80, 165)
+HEAD_RGB = (255, 210, 60)
+TAIL_RGB = (80, 200, 255)
+# Residual tints, blended half and half with the image.
+MISSED_RGB = (0, 0, 127)  # mask the tube does not cover
+EXTRA_RGB = (127, 0, 0)  # tube outside the mask
+TEXT_RGB = (255, 255, 255)
+
+
+def clean_mask(
+    probability: np.ndarray, threshold: float, hole_radius: int, device: torch.device | str | None
+) -> tuple[BoolArray, dict[str, int]]:
+    """Threshold, fill narrow holes, keep the largest component; returns the mask and its statistics."""
+
+    raw = probability >= threshold
+    stats = {"raw_worm_pixels": int(raw.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
+    if not raw.any():
+        return raw, stats
+    filled, added = fill_narrow_holes(raw, hole_radius, device=device)
+    largest, area, count = largest_component(filled)
+    stats.update(pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(area))
+    return largest, stats
+
+
+def render_tube(
+    centerline_xy: NDArray[np.generic],
+    width_profile: NDArray[np.generic],
+    height: int,
+    width: int,
+    *,
+    window: tuple[int, int, int, int] | None = None,
+    margin: int = 48,
+    device: torch.device | str | None = None,
+    threshold: float = 0.5,
+) -> BoolArray:
+    """Hard tube occupancy of one stored pose on the full image.
+
+    ``window`` is ``(x0, x1, y0, y1)``, typically the fit's crop; rendering is
+    restricted to it grown by ``margin`` pixels, which is where the tube can be.
+    """
+
+    resolved = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
+    if window is None:
+        x0, y0, x1, y1 = 0, 0, width, height
+    else:
+        x0, y0 = max(0, int(window[0]) - margin), max(0, int(window[2]) - margin)
+        x1, y1 = min(width, int(window[1]) + margin), min(height, int(window[3]) + margin)
+    curve = torch.as_tensor(np.asarray(centerline_xy, dtype=np.float64) - (x0, y0), dtype=torch.float32, device=resolved)[None]
+    profile = torch.as_tensor(np.asarray(width_profile, dtype=np.float64), dtype=torch.float32, device=resolved)[None]
+    with torch.no_grad():
+        rendered = render_tube_segments(curve, profile, y1 - y0, x1 - x0)
+    tube = np.zeros((height, width), dtype=bool)
+    tube[y0:y1, x0:x1] = (rendered[0] >= threshold).cpu().numpy()
+    return tube
+
+
+def boundary(mask: NDArray[np.generic]) -> BoolArray:
+    """Mask pixels with a 4-neighbor outside the mask."""
+
+    binary = np.asarray(mask, dtype=bool)
+    inner = binary.copy()
+    inner[1:] &= binary[:-1]
+    inner[:-1] &= binary[1:]
+    inner[:, 1:] &= binary[:, :-1]
+    inner[:, :-1] &= binary[:, 1:]
+    return binary & ~inner
+
+
+def tube_area_px(width_profile: NDArray[np.generic], body_length_px: float) -> float:
+    """Area of a tube with this width profile along a body of this length."""
+
+    profile = np.asarray(width_profile, dtype=np.float64)
+    return float(np.trapezoid(profile) * body_length_px / max(len(profile) - 1, 1))
+
+
+def _draw_pose(draw: ImageDraw.ImageDraw, centerline_xy: NDArray[np.generic], offset: tuple[float, float] = (0.0, 0.0)) -> None:
+    points = [(float(x) - offset[0], float(y) - offset[1]) for x, y in centerline_xy]
+    draw.line(points, fill=LINE_RGB, width=2)
+    # Head is a square, tail (the thinner end, placed last) a circle.
+    x, y = points[0]
+    draw.rectangle((x - 4, y - 4, x + 4, y + 4), outline=HEAD_RGB, width=2)
+    x, y = points[-1]
+    draw.ellipse((x - 5, y - 5, x + 5, y + 5), outline=TAIL_RGB, width=2)
+
+
+def _resize(image: Image.Image, scale: float) -> Image.Image:
+    if scale == 1.0:
+        return image
+    size = (max(2, int(round(image.width * scale)) // 2 * 2), max(2, int(round(image.height * scale)) // 2 * 2))
+    return image.resize(size, Image.BILINEAR)
+
+
+def draw_overlay(
+    frame: np.ndarray,
+    centerline_xy: NDArray[np.generic] | None,
+    tube: NDArray[np.generic] | None,
+    caption: str,
+    scale: float = 1.0,
+) -> np.ndarray:
+    """Video frame: tube boundary, centerline with head/tail markers, caption."""
+
+    rgb = np.repeat(np.asarray(frame, dtype=np.uint8)[:, :, None], 3, axis=2)
+    if tube is not None:
+        rgb[boundary(tube)] = TUBE_RGB
+    image = Image.fromarray(rgb)
+    draw = ImageDraw.Draw(image)
+    if centerline_xy is not None:
+        _draw_pose(draw, centerline_xy)
+    draw.text((8, 8), caption, fill=TEXT_RGB)
+    return np.asarray(_resize(image, scale))
+
+
+def draw_residual(
+    frame: np.ndarray,
+    mask: NDArray[np.generic],
+    tube: NDArray[np.generic],
+    centerline_xy: NDArray[np.generic] | None,
+    caption: str,
+    *,
+    window: tuple[int, int, int, int] | None = None,
+) -> Image.Image:
+    """Residual image: blue where the mask is not covered, red where the tube leaves the mask."""
+
+    binary = np.asarray(mask, dtype=bool)
+    occupied = np.asarray(tube, dtype=bool)
+    rgb = np.repeat(np.asarray(frame, dtype=np.uint8)[:, :, None], 3, axis=2).astype(np.float32)
+    missed = binary & ~occupied
+    extra = occupied & ~binary
+    rgb[missed] = 0.5 * rgb[missed] + np.asarray(MISSED_RGB, dtype=np.float32)
+    rgb[extra] = 0.5 * rgb[extra] + np.asarray(EXTRA_RGB, dtype=np.float32)
+    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    offset = (0.0, 0.0)
+    if window is not None:
+        x0, x1, y0, y1 = (int(v) for v in window)
+        rgb = rgb[y0:y1, x0:x1]
+        offset = (float(x0), float(y0))
+    image = Image.fromarray(np.ascontiguousarray(rgb))
+    draw = ImageDraw.Draw(image)
+    if centerline_xy is not None:
+        _draw_pose(draw, centerline_xy, offset)
+    draw.text((8, 8), caption, fill=TEXT_RGB)
+    return image
+
+
+def residual_caption(frame_index: int, arrays: dict[str, np.ndarray], row: int, mask: NDArray[np.generic]) -> str:
+    """One-line description of a stored fit and its mask agreement."""
+
+    area_ratio = float(np.asarray(mask, dtype=bool).sum()) / max(tube_area_px(arrays["width_profile"][row], float(arrays["body_length_px"][row])), 1.0)
+    parts = [
+        f"frame {frame_index}",
+        f"iou {float(arrays['iou'][row]):.3f}",
+        f"len {float(arrays['body_length_px'][row]):.0f}",
+        f"in-view {float(arrays['points_in_fov'][row]) / arrays['centerline_xy'].shape[1]:.2f}",
+        f"mask/tube-area {area_ratio:.2f}",
+    ]
+    if "taper_asymmetry" in arrays and np.isfinite(arrays["taper_asymmetry"][row]):
+        parts.append(f"taper {float(arrays['taper_asymmetry'][row]):+.2f}")
+    if "best_start" in arrays:
+        parts.append(f"best {arrays['best_start'][row]}")
+    return "  ".join(parts)
+
+
+def residual_rows(arrays: dict[str, np.ndarray], worst: int, requested: list[int]) -> list[int]:
+    """Rows to dump: the ``worst`` lowest-IoU fitted frames plus the requested frame indices."""
+
+    fitted = np.nonzero(arrays["fitted"])[0]
+    rows: list[int] = []
+    if worst > 0 and len(fitted):
+        order = fitted[np.argsort(arrays["iou"][fitted])]
+        rows.extend(int(r) for r in order[:worst])
+    frame_index = arrays["frame_index"]
+    for frame in requested:
+        hits = np.nonzero(frame_index == frame)[0]
+        if len(hits) and arrays["fitted"][hits[0]]:
+            rows.append(int(hits[0]))
+    return sorted(set(rows))
+
+
+def run_label(summary: dict[str, Any]) -> str:
+    """Short label of a run's width model for figure captions."""
+
+    model = summary.get("width_model")
+    if not model or not model.get("coefficients"):
+        return "symmetric template"
+    return f"{model['coefficients']} width coefficients"

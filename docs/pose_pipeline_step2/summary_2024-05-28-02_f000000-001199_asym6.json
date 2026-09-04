@@ -1,0 +1,111 @@
+{
+ "started_at": "2026-09-04T14:00:21+00:00",
+ "finished_at": "2026-09-04T14:05:19+00:00",
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+ "frames": [
+  0,
+  1199
+ ],
+ "step": 1,
+ "frame_count": 1200,
+ "checkpoint": {
+  "path": "/home/alex/git/worm-pose-gen/checkpoints/segmenter/best.ckpt",
+  "exists": true,
+  "size_bytes": 172054439,
+  "modified_at": "2026-09-04T00:39:03+00:00",
+  "sha256": "121f8418a0feae4c1e01769df357c4dca7fcd4ead3dc2574006e5e4ce6e327a8"
+ },
+ "git": {
+  "commit": "0c5789978bbd63f15a567013a391427aea943e3a",
+  "dirty": true
+ },
+ "device": "cuda:0",
+ "threshold": 0.5,
+ "mask_cleanup": {
+  "fill_holes_radius_px": 8,
+  "largest_component": true,
+  "min_worm_pixels": 500
+ },
+ "width_template": "default_width_template",
+ "preset": "fast",
+ "starts": "skeleton+straight",
+ "init_workers": 8,
+ "flat_field_seconds": 0.05261650774627924,
+ "seconds": {
+  "read": 2.028448804281652,
+  "flat_field": 3.9603889072313905,
+  "network": 17.21393607184291,
+  "cleanup": 23.721303639933467,
+  "init": 19.643832243047655,
+  "fit": 218.64841731172055,
+  "video": 12.110878536477685
+ },
+ "ms_per_frame": {
+  "read": 1.6903740035680432,
+  "flat_field": 3.300324089359492,
+  "network": 14.344946726535758,
+  "cleanup": 19.767753033277888,
+  "init": 16.369860202539712,
+  "fit": 182.2070144264338,
+  "video": 10.09239878039807
+ },
+ "total_ms_per_frame": 247.77267126211277,
+ "frames_fitted": 1200,
+ "frames_skipped": {
+  "empty_mask": 0,
+  "small_mask": 0,
+  "no_starts": 0,
+  "fit_error": 0
+ },
+ "iou": {
+  "median": 0.9748278285768216,
+  "p10": 0.9503027019322,
+  "min": 0.6733030684242193,
+  "fraction_at_least_0.8": 0.9983333333333333,
+  "fraction_at_least_0.9": 0.9983333333333333
+ },
+ "body_length_px": {
+  "median": 641.159623849265,
+  "p10": 514.882844443831,
+  "p90": 750.9929978954872,
+  "at_upper_bound": 372
+ },
+ "width_px": {
+  "median": 46.157976150512695
+ },
+ "width_model": {
+  "coefficients": 6,
+  "prior": 0.001,
+  "tail_placed_last": true,
+  "frames_reversed": 399,
+  "taper_asymmetry": {
+   "median": -0.32219435816834396,
+   "p10": -0.44240784505333386,
+   "p90": -0.0248816952225312,
+   "frames_with_abs_below_0.1": 356
+  },
+  "orientation_consistency": {
+   "consecutive_pairs": 1199,
+   "fraction_consistent": 0.9582985821517932,
+   "flips": 50
+  }
+ },
+ "in_view_fraction": {
+  "median": 0.99,
+  "frames_below_1": 608
+ },
+ "best_start_counts": {
+  "moments_straight": 13,
+  "skeleton_longest_path": 1187
+ },
+ "mask": {
+  "worm_pixels_median": 28172.5,
+  "frames_with_multiple_components": 197,
+  "pixels_outside_largest_median": 0.0,
+  "frames_with_filling": 53
+ },
+ "outputs": {
+  "poses": "/temp_data4/alex/external_artifacts/poses/2026-09-04T14-00-21Z_2024-05-28-02_f000000-001199_asym6/poses.npz",
+  "video": "/temp_data4/alex/external_artifacts/poses/2026-09-04T14-00-21Z_2024-05-28-02_f000000-001199_asym6/overlay.mp4"
+ }
+}

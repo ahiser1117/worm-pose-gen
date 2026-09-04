@@ -145,8 +145,20 @@ Each run writes `summary.json`, `poses.npz`, and `overlay.mp4` to a
 timestamped directory under `/temp_data4/alex/external_artifacts/poses/`.
 `--preset fast` (default, about 0.25 s/frame) trades 0.008 median IoU against
 `--preset reference`, which reproduces the single-frame fitter exactly at
-about 5 s/frame. The plan this belongs to, with measurements, is
-[`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md).
+about 5 s/frame. The width of the tube is a scale times a symmetric template
+times a smooth log-space correction (`--width-coefficients`, default 6, 0 for
+the symmetric model; `--width-prior` pulls it toward zero), so the two ends
+may taper differently; every stored pose is oriented with the thinner end,
+the tail, last (`--no-orient` keeps the fitted orientation). In the overlay
+the head is a square and the tail a circle. Each run also writes residual
+images (mask the tube misses in blue, tube outside the mask in red) for its
+`--residual-frames` worst frames and any `--dump-frames`;
+`scripts/render_pose_run.py` produces the video and residual images for a
+stored run without refitting, and `scripts/compare_pose_runs.py` puts
+several runs side by side on the same frames. The plan this belongs to, with
+measurements, is [`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
+`scripts/evaluate_width_model_unannotated30.py` compares width models on the
+30-frame set.
 
 ## Evaluate the frozen pipeline
 

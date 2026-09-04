@@ -16,7 +16,9 @@ The default schedule stops at downsample 2.  The body is 40--50 px wide, so a
 2 px raster still resolves the edge, and the full-resolution stage dominated
 the runtime of the reference schedule.  Final overlaps are still measured on
 a full-resolution render.  ``PRESETS`` holds the measured speed/accuracy
-trade-offs; ``reference`` reproduces ``fit_mask``'s result exactly.
+trade-offs; ``reference`` reproduces ``fit_mask``'s result exactly.  The width
+model (scale, template, and log-space asymmetry correction) is the one in
+``mask_fit._MaskFitState``.
 """
 
 from __future__ import annotations
@@ -305,7 +307,7 @@ def _fit_group(
         bounds = bounds + (wlow - body_width).clamp_min(0).square() + (body_width - whigh).clamp_min(0).square()
         below = ((edge_lo[:, None, :] - centerline).clamp_min(0).square() * lo_active[:, None, :]).sum(-1).mean(1)
         above = ((centerline - edge_hi[:, None, :]).clamp_min(0).square() * hi_active[:, None, :]).sum(-1).mean(1)
-        return smooth + c.bound_weight * bounds + c.crop_escape_weight * (below + above)
+        return smooth + c.bound_weight * bounds + c.crop_escape_weight * (below + above) + state.width_prior()
 
     def render_rows(centerline: Tensor, diameter: Tensor, factor: int, stride: int, fn: Renderer) -> Tensor:
         index = _point_index(centerline.shape[1], stride, device)
@@ -316,7 +318,7 @@ def _fit_group(
 
     def energy(factor: int, stride: int) -> tuple[Tensor, Tensor]:
         centerline = state.centerline()
-        diameter = state.log_width.exp()[:, None] * template[None, :]
+        diameter = state.diameter(template)
         rendered = render_rows(centerline, diameter, factor, stride, renderer)
         soft, weight = stage_arrays(factor)
         soft = soft[frame_of_row]
@@ -364,7 +366,7 @@ def _fit_group(
         final_dice, _ = energy(finest, finest_stride)
         centerline = state.centerline()
         width_scale = state.log_width.exp()
-        diameter = width_scale[:, None] * template[None, :]
+        diameter = state.diameter(template)
         # Winner per frame, then one full-resolution render of the winners.
         winners: list[int] = []
         row_start = 0
@@ -387,6 +389,7 @@ def _fit_group(
         diameter_np = diameter.cpu().numpy().astype(np.float64)
         latent_np = state.latent().cpu().numpy().astype(np.float64)
         width_np = width_scale.cpu().numpy().astype(np.float64)
+        shape_np = state.width_shape.detach().cpu().numpy().astype(np.float64)
         initial_np = initial_dice.cpu().numpy()
         final_np = final_dice.cpu().numpy()
     history_np = np.asarray(history, dtype=np.float64)
@@ -433,6 +436,7 @@ def _fit_group(
                 energy_history=history_np[:, rows],
                 points_in_fov=in_fov,
                 body_length_px=float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()),
+                width_shape=shape_np[best_row],
             )
         )
         row_start += len(starts)
