@@ -178,8 +178,17 @@ class SegmentationStore:
         label_source: str,
         image_raw: NDArray[np.generic] | None = None,
         flat_fielded: bool = True,
+        split: str | None = None,
     ) -> SampleRecord:
-        """Write one sample atomically; a repeat save replaces the label."""
+        """Write one sample atomically; a repeat save replaces the label.
+
+        ``split`` pledges a new sample to that split instead of the balanced
+        assignment (a recording whose animal should appear only in validation
+        or test).  A sample that already has a pledge keeps it.
+        """
+
+        if split is not None and split not in SPLITS:
+            raise ValueError(f"unknown split {split!r}")
 
         frame = np.asarray(image)
         if frame.ndim != 2:
@@ -200,12 +209,13 @@ class SegmentationStore:
             if sample_id in splits:
                 split = splits[sample_id]
             else:
-                # Balance against every pledge ever made, not just the samples
-                # currently present, so deletions cannot skew later assignments.
-                counts = {name: 0 for name in SPLITS}
-                for value in splits.values():
-                    counts[value] += 1
-                split = assign_split(counts)
+                if split is None:
+                    # Balance against every pledge ever made, not just the samples
+                    # currently present, so deletions cannot skew later assignments.
+                    counts = {name: 0 for name in SPLITS}
+                    for value in splits.values():
+                        counts[value] += 1
+                    split = assign_split(counts)
                 splits[sample_id] = split
                 self._write_splits(splits)
             record = SampleRecord(

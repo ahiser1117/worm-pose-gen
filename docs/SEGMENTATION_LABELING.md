@@ -307,3 +307,47 @@ pixels in the uncertain band and the same masks.
   is; resolving them is the pose model's job.
 - The three recordings share a rig and a year. A recording from another
   setup should be labeled before the network is trusted on it.
+
+## Targeted labeling round (round 2, 2026-09-04)
+
+The pose pipeline's remaining failures are coils and camera exits, and both
+trace back to the mask: the segmenter merges adjacent body turns into one
+solid ring (the gap between turns survives only near the tail), and at the
+camera edge the body's returning tail becomes a separate component. Round 2
+targets exactly those frames, across more animals, with some animals held
+out of training entirely.
+
+1. **Candidate scan.** `scripts/find_sequence_clips.py --recording <h5>
+   --stride 20` runs the segmenter over a recording and flags samples with a
+   short skeleton for a whole worm (a coil), filled holes, fragments, or a
+   mask on the image border, grouped into windows with a montage per
+   recording under `docs/pose_pipeline_step4/clip_candidates/`. Frames whose
+   HDF5 chunks need a compression plugin that is not installed are skipped
+   and counted.
+2. **Manifest.** `scripts/build_labeling_manifest.py` turns the scans into
+   `docs/labeling_round_2/manifest.json`: per recording, the peak, first and
+   last frame of each candidate window (coils and holes first, up to 30),
+   six border-touching samples, and six ordinary frames spread over the
+   recording; frames already in the store are skipped. Each recording
+   carries a split policy: `auto` keeps the store's balanced per-frame
+   assignment, `train`, `val` or `test` pledge every new label of that
+   recording to one split, so an animal can be unique to validation or test.
+3. **Labeling.** `python -m worm_pose_gen.label_app --queue
+   docs/labeling_round_2/manifest.json` opens the manifest's recordings,
+   selects the "Queue (manifest)" next mode, and walks the queued frames in
+   order, skipping labeled ones; the frame info shows the queue position,
+   the reasons the frame was picked, and the split its label will get. Saves
+   pledge the recording's split (`SegmentationStore.save(..., split=...)`).
+   Progress is in `/api/queue` and in the status line after each save.
+4. **Retrain and re-evaluate.** After the round, retrain from the promoted
+   checkpoint as before; then re-evaluate hole filling and the
+   largest-component rule on the sequence set
+   (`scripts/evaluate_sequence_set.py`), since a segmenter that resolves the
+   gap between turns may no longer need the fill, and the tail re-entry clip
+   needs the fragments kept.
+
+Recordings and split policy of round 2 are listed in the manifest summary;
+the animals of `2024-05-28-02` (the pose pipeline's main test recording),
+`2023-10-26-01` and `2024-06-18-12` are test-only, `2023-09-07-13` and
+`2024-02-01-07` validation-only, and the rest join training alongside the
+three recordings of round 1.

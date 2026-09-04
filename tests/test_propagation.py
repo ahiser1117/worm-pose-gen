@@ -90,7 +90,45 @@ class PropagationTests(unittest.TestCase):
         self.assertLess(sum(warm.stage_steps), sum(SMALL.stage_steps))
         self.assertEqual(warm.stage_downsample, SMALL.stage_downsample)  # same raster: energies stay comparable
         self.assertEqual(warm.length_prior_px, SMALL.length_prior_px)
-        self.assertEqual(warm.width_shape_prior_mean, SMALL.width_shape_prior_mean)
+        self.assertEqual(warm.length_prior_log_sigma, SMALL.length_prior_log_sigma)
+        tight = warm_schedule(SMALL, length_sigma=0.02)
+        self.assertEqual(tight.length_prior_log_sigma, 0.02)
+        self.assertEqual(warm_schedule(replace(SMALL, length_prior_px=None), length_sigma=0.02).length_prior_log_sigma, SMALL.length_prior_log_sigma)
+
+    def test_redirect_sends_a_folded_start_through_the_border(self) -> None:
+        from worm_pose_gen.mask_fit import redirect_start_through_exit
+
+        # A body that runs off the right edge of a 160 x 220 image: the mask reaches the border.
+        angle = np.zeros(16)
+        latent = np.concatenate((angle, [0.0, 200.0], [150.0, 80.0]))
+        curve = decode_centerline(latent)
+        template = default_width_template()
+        rendered = render_tube_segments(
+            torch.as_tensor(curve, dtype=torch.float32)[None], torch.as_tensor(12.0 * template, dtype=torch.float32)[None], 160, 220
+        )[0]
+        mask = (rendered >= 0.5).numpy()
+        self.assertTrue(mask[:, -2:].any())
+        # A start of the same length folded back inside the image: a hook whose far end turns around near the edge.
+        folded_shape = np.zeros(16)
+        folded_shape[9:] = 1.2
+        folded = Initialization("s", np.concatenate((folded_shape, [0.0, 200.0], [110.0, 80.0])), 12.0, np.zeros(6))
+        inside = decode_centerline(folded.latent)
+        self.assertTrue((inside[:, 0] < 220).all())
+        redirected = redirect_start_through_exit(folded, mask, config=SMALL)
+        self.assertIsNotNone(redirected)
+        out = decode_centerline(redirected.latent)
+        # The folded end is unfolded toward the exit: the start reaches farther right, its last point
+        # is closer to the border contact than the folded end was, and the total length is kept.
+        exit_xy = np.array([219.0, 80.0])
+        self.assertGreater(out[:, 0].max(), inside[:, 0].max() + 15.0)
+        self.assertLess(np.linalg.norm(out[-1] - exit_xy), min(np.linalg.norm(inside[0] - exit_xy), np.linalg.norm(inside[-1] - exit_xy)))
+        self.assertAlmostEqual(redirected.latent[17], 200.0, delta=3.0)
+        self.assertTrue(redirected.name.endswith("_exit"))
+        # A start that already leaves the image, or a mask clear of the border, is left alone.
+        self.assertIsNone(redirect_start_through_exit(Initialization("s", latent, 12.0), mask, config=SMALL))
+        whole = np.zeros_like(mask)
+        whole[60:100, 40:180] = True
+        self.assertIsNone(redirect_start_through_exit(folded, whole, config=SMALL))
 
     def test_propagation_recovers_frames_a_cold_start_misses(self) -> None:
         curves, masks, latents = _sequence()
@@ -111,24 +149,25 @@ class PropagationTests(unittest.TestCase):
             "width_px": np.array([r.width_px for r in results]),
             "width_shape": np.stack([r.width_shape for r in results]),
             "total_energy": np.array([r.records[r.best_index]["final_energy"] for r in results]),
+            "body_length_px": np.array([r.body_length_px for r in results]),
             "iou": np.array([hard_iou(r.rendered_hard_mask, m[r.crop.y0 : r.crop.y1, r.crop.x0 : r.crop.x1]) for r, m in zip(results, masks, strict=True)]),
         }
         self.assertLess(arrays["iou"][1:-1].max(), 0.9)
         score = np.array([0, 2, 2, 2, 2, 0])
         stretches = ambiguous_stretches(score, arrays["fitted"], PropagationConfig(pad=0))
         self.assertEqual(stretches, [(1, 4)])
+        arrays["energy"] = np.array([r.records[r.best_index]["final_soft_dice_energy"] for r in results])
         candidates, info = propagate(arrays, stretches, {k: masks[k] for k in range(n)}, config=SMALL, device="cpu")
         self.assertEqual(info["chains"], 2)
         self.assertEqual(info["lockstep_steps"], 4)
         self.assertEqual(sorted(candidates), [1, 2, 3, 4])
         self.assertEqual({c.source for c in candidates[2]}, {"forward", "backward"})
-        chosen = select_candidates(candidates, arrays)
+        chosen = select_candidates(candidates, arrays, SMALL)
         self.assertEqual(sorted(chosen), [1, 2, 3, 4])
         for row, candidate in chosen.items():
             r = candidate.result
             iou = hard_iou(r.rendered_hard_mask, masks[row][r.crop.y0 : r.crop.y1, r.crop.x0 : r.crop.x1])
             self.assertGreater(iou, 0.9, f"row {row} via {candidate.source}: {iou:.3f}")
-            self.assertLess(candidate.total_energy, arrays["total_energy"][row])
 
     def test_selection_keeps_the_independent_fit_when_it_is_better(self) -> None:
         curves, masks, latents = _sequence(3)

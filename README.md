@@ -130,6 +130,20 @@ classical pipeline, refines them with pipeline elements, and saves edited
 labels back into the store. Details and keyboard shortcuts are in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
 
+A targeted round (coils, self-contact, holes, fragments, camera-edge frames
+across 13 recordings, with some animals held out for validation or test only)
+is queued in `docs/labeling_round_2/manifest.json`, built by
+`scripts/build_labeling_manifest.py` from the clip-candidate scans. Open it
+with:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app \
+  --queue docs/labeling_round_2/manifest.json
+```
+
+The "Queue (manifest)" next mode walks the frames in order; each save
+pledges the recording's split.
+
 ## Fit poses over a recording
 
 Segment, clean, and fit the body model to every frame of a stretch, in GPU

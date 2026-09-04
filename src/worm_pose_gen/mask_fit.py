@@ -406,6 +406,64 @@ def extend_start_to_length(
     return replace(start, latent=encode_centerline(extended, config.coefficients))
 
 
+def redirect_start_through_exit(
+    start: Initialization,
+    mask: NDArray[np.generic],
+    *,
+    config: MaskFitConfig = MaskFitConfig(),
+) -> Initialization | None:
+    """Send the end of a start off camera through the point where the mask meets the border.
+
+    For a start whose every point lies inside the image while the mask
+    reaches the border, the body continues off camera but the start does
+    not; the fitter then folds the tube back from the edge instead of
+    leaving.  The start is cut at its point nearest the border contact and
+    that end is replaced by a straight run through the contact and beyond,
+    keeping the total length.  Returns ``None`` when the mask does not reach
+    the border or the start already leaves the image.
+    """
+
+    binary = np.asarray(mask, dtype=bool)
+    height, width = binary.shape[:2]
+    edge = np.zeros_like(binary)
+    edge[:2] = edge[-2:] = True
+    edge[:, :2] = edge[:, -2:] = True
+    yy, xx = np.nonzero(binary & edge)
+    if not len(yy):
+        return None
+    curve = decode_centerline(start.latent, config.coefficients)
+    inside = (curve[:, 0] >= 0) & (curve[:, 0] < width) & (curve[:, 1] >= 0) & (curve[:, 1] < height)
+    if not inside.all():
+        return None
+    border_xy = np.column_stack((xx, yy)).astype(np.float64)
+    exit_xy = border_xy.mean(0)
+    distance = np.linalg.norm(curve - exit_xy, axis=1)
+    cut = int(np.argmin(distance))
+    n = len(curve)
+    if cut < n // 2:
+        curve = curve[::-1]
+        cut = n - 1 - cut
+    kept = curve[: cut + 1]
+    total = float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum())
+    kept_length = float(np.linalg.norm(np.diff(kept, axis=0), axis=1).sum())
+    direction = exit_xy - kept[-1]
+    reach = float(np.linalg.norm(direction))
+    if reach < 1.0:
+        direction = kept[-1] - kept[-2]
+        reach = 0.0
+    direction /= max(float(np.linalg.norm(direction)), 1e-6)
+    remaining = max(total - kept_length, 1.0)
+    pieces = [kept]
+    if reach >= remaining:
+        # Not enough length left to reach the border: head straight for it.
+        pieces.append((kept[-1] + direction * remaining)[None, :])
+    else:
+        pieces.append(exit_xy[None, :])
+        pieces.append((exit_xy + direction * (remaining - reach))[None, :])
+    extended = resample_centerline(np.vstack(pieces), config.n_points)
+    return replace(start, name=f"{start.name}_exit", latent=encode_centerline(extended, config.coefficients))
+
+
 def orientation_pair(start: Initialization, *, config: MaskFitConfig = MaskFitConfig()) -> list[Initialization]:
     """The start and its reversal with the *same* width correction.
 

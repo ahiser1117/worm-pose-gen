@@ -673,6 +673,75 @@ Temporal smoothness of the in-view fraction can follow if the chain alone
 leaves flicker; the `edge_0528` clip, with 22 in-view jumps in 300 frames,
 is the test.
 
+**Result (2026-09-04).** Both fixes are in; numbers in
+`pose_pipeline_step5b/sequence_eval_tuned.json` and
+`minute_comparison_*.json`, strips as `*_before_after_frame_*.jpg`.
+
+*Spiral over-length.* The propagation chain's length prior is centred on the
+anchor frame's own fitted length (the last good frame before or after the
+stretch) with a 2% log-sigma, instead of the recording prior at 5%. The
+anchor matters as much as the sigma: the fitted length of a whole worm
+drifts by several percent over a recording (715--790 px within one minute
+of `2024-05-28-02`), and a tight prior on the recording value dragged the
+whole worms of `edge_0528` off their length (2 -> 12 failures), while 3% let
+a forward chain drift to 750 px inside the spiral. Chains are batched by
+anchor-length bucket. Candidates are compared under the fit's own prior
+(`comparable_energy`), so the tighter chain prior shapes the optimization
+but not the choice between independent and propagated.
+
+*Camera edge.* `mask_on_border` is stored per frame and `edge_inside`
+(mask on the border, tube fully inside) is the ninth ambiguity flag, so such
+frames enter propagation; in a chain, when the mask reaches the border and
+the carried start does not leave the image, `redirect_start_through_exit`
+adds a second start whose end runs through the border contact and off
+camera, and the energy chooses.
+
+| Clip | Frames < 0.9, independent (step 4) | Step 5 | Step 5b | Median IoU, step 5b | P10 IoU, step 5 -> 5b | Stretch length p50 / p90 |
+|---|---:|---:|---:|---:|---|---|
+| `spiral_0131` | 163 | 53 | 1 | 0.955 | 0.882 -> 0.932 | 737 / 746 (worm 730) |
+| `loop_0131` | 55 | 0 | 0 | 0.969 | 0.929 -> 0.941 | 723 / 729 |
+| `omega_0822` | 60 | 0 | 0 | 0.966 | 0.935 -> 0.947 | 776 / 782 |
+| `coil_0822` | 140 | 3 | 0 | 0.956 | 0.924 -> 0.928 | 785 / 788 |
+| `spiral_0528` | 137 | 0 | 0 | 0.970 | 0.953 -> 0.959 | 780 / 781 |
+| `edge_0528` | 46 | 2 | 5 | 0.959 | 0.920 -> 0.924 | 752 / 778 |
+| `tail_reentry_0623` | 10 | 4 | 5 | 0.970 | 0.960 -> 0.960 | 778 / 785 |
+
+Over the 2100 clip frames the frames below IoU 0.9 go 611 -> 62 -> 11. The
+spiral's tube now holds the worm's length (median 737 px against 787
+before) and its ends sit on the visible tips (`spiral_0131_before_after_*`).
+On the minute of `2024-05-28-02` nothing regresses (median 0.9686 either
+way, frames 450--451 at 0.95, frame 1053 0.904 -> 0.920) and propagation
+costs 19 ms per frame.
+
+![Spiral frame 3848: step 5 and step 5b](pose_pipeline_step5b/spiral_0131_before_after_frame_03848.jpg)
+
+What the edge fix does and does not do. The redirected start wins on 12 of
+the 85 replaced frames of `edge_0528` and on the loop clip, but the small
+change in that clip's failure count (2 -> 5 -> 9 across variants, out of
+300) is noise around the mask's own instability at the border, and on the
+minute the 60 frames where the tube stops inside while the mask touches the
+border are unchanged (163 and 193 among them): when the mask ends at the
+edge, a tube that stops there fits the visible pixels exactly as well as one
+that leaves, so energy has nothing to choose with. A tie-break accepting a
+leaving candidate within 0.005 of the independent energy was tried and
+switched off: it did nothing on 163 and 193 and accepted a lower-overlap
+candidate on frame 64. The remaining answer is a temporal smoothness term on
+the pose (or on the in-view fraction) inside stretches, which is step 6's
+linking. The `edge_inside` flag stays as the marker of these frames.
+
+*Labeling round 2.* The segmenter is the root of the spiral problem (it
+merges adjacent turns before any hole fill runs), and the tail re-entry clip
+shows the largest-component rule dropping body. `docs/labeling_round_2/
+manifest.json` queues 393 frames over 13 recordings from the clip-candidate
+scans (coils and holes first, then border and ordinary frames), with five
+new training recordings, two validation-only animals (`2023-09-07-13`,
+`2024-02-01-07`) and three test-only animals (`2024-05-28-02`,
+`2023-10-26-01`, `2024-06-18-12`); `worm_pose_gen.label_app --queue` walks
+it and pledges each recording's split. Three recordings of the archive need
+an HDF5 filter plugin that is not installed (`2023-06-30-01`,
+`2023-08-15-01`, `2023-12-11-06`) and were left out; the scan and the
+flat-field estimate now skip unreadable frames.
+
 ### Step 6. Hypothesis linking across ambiguous stretches
 
 - Keep the top few distinct local optima per ambiguous frame instead of one.
@@ -732,5 +801,5 @@ is the test.
 | 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
 | 4 | done (2026-09-04) | eight-flag ambiguity score stored per frame; seven-clip sequence set (`docs/sequence_eval_set.json`); score >= 2 finds frames below IoU 0.9 with precision 0.97 and recall 0.97 on the set; coils and spirals fail outright and are the target of steps 5--6 |
 | 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame; videos now rendered from the final arrays |
-| 5b | not started | tuning on the sequence set before step 6: tail re-entry components, coil interiors, chain disagreement, score semantics, propagation cost, review loop |
+| 5b | in progress (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 6 | not started | |

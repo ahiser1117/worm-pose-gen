@@ -258,9 +258,11 @@ async function showFrame(recording, index, { record = true } = {}) {
     $("#recording").value = recording;
     $("#frame-index").value = index;
     const existing = payload.existing_record;
+    const queued = payload.queue_entry;
     $("#frame-info").textContent =
       `${recording} frame ${index} of ${payload.frame_count}` +
-      (existing ? `\nsaved: split ${existing.split}, rev ${existing.revision}, from ${existing.label_source}` : "\nunlabeled") +
+      (queued ? `\nqueue ${queued.position}/${queued.total}: ${(queued.reasons || []).join(", ")} → split ${queued.split}` : "") +
+      (existing ? `\nsaved: split ${existing.split}, rev ${existing.revision}, from ${existing.label_source}` : `\nunlabeled${payload.pledged_split ? ` (will be ${payload.pledged_split})` : ""}`) +
       (payload.network_uncertain_fraction != null ? `\nnetwork uncertain fraction ${(payload.network_uncertain_fraction * 100).toFixed(2)}%` : "\nno network loaded") +
       `\nproposals in ${payload.proposal_seconds.toFixed(2)} s`;
     $("#proposal-info").textContent = existing
@@ -376,7 +378,8 @@ async function saveLabel() {
     state.dirty = false;
     state.frame.existing_record = payload.record;
     updateDataset(payload.counts);
-    setStatus(`saved ${payload.record.sample_id} → ${payload.record.split} (rev ${payload.record.revision})`, "ok");
+    setStatus(`saved ${payload.record.sample_id} → ${payload.record.split} (rev ${payload.record.revision})` +
+      (payload.queue ? `; queue ${payload.queue.remaining} left` : ""), "ok");
     refreshSamples().catch(() => {});
     return true;
   } catch (error) {
@@ -557,6 +560,10 @@ async function boot() {
     }
     updateDataset(state.info.counts);
     if (!state.info.checkpoint) $("#next-mode").value = "random";
+    if (state.info.queue) {
+      $("#next-mode").value = "queue";
+      setStatus(`queue ${state.info.queue.name}: ${state.info.queue.remaining} of ${state.info.queue.frames} frames to label`, "ok");
+    }
     await refreshSamples();
     await nextFrame();
   } catch (error) {

@@ -1,0 +1,117 @@
+{
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2023-07-14/2023-07-14-08.h5",
+ "stride": 20,
+ "frames_scanned": 1039,
+ "seconds": 205.7223619222641,
+ "whole_worm_median_skeleton_px": 693.2951917033201,
+ "fraction_touching_border": 0.4790602655771195,
+ "thresholds": {
+  "short_skeleton": 0.75,
+  "holes_px": 200,
+  "fragments_px": 500
+ },
+ "candidates": [
+  {
+   "start": 1160,
+   "end": 1180,
+   "samples": 2,
+   "reasons": {
+    "holes": 2,
+    "short_skeleton": 1
+   },
+   "peak_frame": 1180,
+   "peak_skeleton_fraction": 0.27675278337765075,
+   "border_samples": 0
+  },
+  {
+   "start": 1400,
+   "end": 1420,
+   "samples": 2,
+   "reasons": {
+    "short_skeleton": 2,
+    "holes": 1
+   },
+   "peak_frame": 1400,
+   "peak_skeleton_fraction": 0.22868874992391927,
+   "border_samples": 0
+  },
+  {
+   "start": 3060,
+   "end": 3080,
+   "samples": 2,
+   "reasons": {
+    "short_skeleton": 2,
+    "holes": 2
+   },
+   "peak_frame": 3080,
+   "peak_skeleton_fraction": 0.2506211014854261,
+   "border_samples": 0
+  },
+  {
+   "start": 5160,
+   "end": 5240,
+   "samples": 2,
+   "reasons": {
+    "holes": 2
+   },
+   "peak_frame": 5160,
+   "peak_skeleton_fraction": null,
+   "border_samples": 0
+  },
+  {
+   "start": 5980,
+   "end": 6040,
+   "samples": 2,
+   "reasons": {
+    "holes": 1,
+    "fragments": 1,
+    "border": 1
+   },
+   "peak_frame": 6040,
+   "peak_skeleton_fraction": 0.7449459604381533,
+   "border_samples": 1
+  },
+  {
+   "start": 11000,
+   "end": 11020,
+   "samples": 2,
+   "reasons": {
+    "short_skeleton": 1,
+    "holes": 2
+   },
+   "peak_frame": 11000,
+   "peak_skeleton_fraction": 0.21447038382038788,
+   "border_samples": 0
+  },
+  {
+   "start": 11940,
+   "end": 11980,
+   "samples": 2,
+   "reasons": {
+    "short_skeleton": 2,
+    "holes": 1
+   },
+   "peak_frame": 11980,
+   "peak_skeleton_fraction": 0.16380001126621788,
+   "border_samples": 0
+  },
+  {
+   "start": 18580,
+   "end": 18640,
+   "samples": 3,
+   "reasons": {
+    "holes": 3
+   },
+   "peak_frame": 18620,
+   "peak_skeleton_fraction": null,
+   "border_samples": 0
+  }
+ ],
+ "samples_summary": {
+  "count": 1039,
+  "with_worm": 979,
+  "touching_border": 469,
+  "holes_over_threshold": 19,
+  "fragments_over_threshold": 3
+ }
+}

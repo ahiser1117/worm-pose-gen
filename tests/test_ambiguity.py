@@ -34,6 +34,7 @@ def _arrays(curves: list[np.ndarray], **overrides) -> dict[str, np.ndarray]:
         "iou": np.full(n, 0.95),
         "pixels_filled": np.zeros(n, dtype=np.int64),
         "pixels_outside_largest": np.zeros(n, dtype=np.int64),
+        "points_in_fov": np.full(n, 100),
     }
     arrays["worm_pixels"] = np.array([tube_area_px(profile, L) for L in arrays["body_length_px"]]).astype(np.int64)
     arrays.update(overrides)
@@ -91,6 +92,15 @@ class AmbiguityTests(unittest.TestCase):
         self.assertEqual(set(summary["flag_counts"]), set(FLAG_NAMES))
         self.assertEqual(summary["frames_with_score_at_least_1"], 4)
         self.assertIn("0", summary["iou_by_score"])
+
+    def test_edge_inside_fires_only_when_the_mask_reaches_the_border(self) -> None:
+        arrays = _arrays([_straight(), _straight(), _straight()])
+        arrays["points_in_fov"] = np.array([100, 100, 80])
+        arrays["mask_on_border"] = np.array([False, True, True])
+        out = compute_ambiguity(arrays, prior=None)
+        self.assertEqual(out["flag_edge_inside"].tolist(), [False, True, False])
+        self.assertEqual(int(out["ambiguity_score"][1]), 1)
+        self.assertFalse(compute_ambiguity(_arrays([_straight()]) | {"points_in_fov": np.array([100])}, prior=None)["flag_edge_inside"].any())
 
     def test_unfitted_frames_and_no_prior(self) -> None:
         arrays = _arrays([_straight(), _straight()])

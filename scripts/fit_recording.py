@@ -71,7 +71,15 @@ from worm_pose_gen.mask_fit import (
     taper_asymmetry,
 )
 from worm_pose_gen.recording_prior import RecordingPrior, bootstrap_prior_from_masks
-from worm_pose_gen.pose_run import clean_mask, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
+from worm_pose_gen.pose_run import (
+    clean_mask,
+    draw_residual,
+    render_tube,
+    residual_caption,
+    residual_rows,
+    touches_border,
+    write_overlay_video,
+)
 from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -141,6 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--propagate-min-score", type=int, default=2, help="ambiguity score that seeds a stretch")
     parser.add_argument("--propagate-pad", type=int, default=2, help="frames added on each side of a seed")
     parser.add_argument("--propagate-max-gap", type=int, default=3, help="seeds closer than this are one stretch")
+    parser.add_argument("--chain-length-sigma", type=float, default=0.02, help="log-sigma of the length prior inside propagation chains (0 = the fit's own)")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -384,6 +393,7 @@ def main() -> int:
             "energy": _nan((n,)),
             "total_energy": _nan((n,)),
             "source": np.zeros(n, dtype=np.int8),
+            "mask_on_border": np.zeros(n, dtype=bool),
             "points_in_fov": np.zeros(n, dtype=np.int64),
             "body_length_px": _nan((n,)),
             "crop": np.zeros((n, 4), dtype=np.int64),
@@ -424,6 +434,8 @@ def main() -> int:
                     mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
                     for key, value in stats.items():
                         arrays[key][row] = value
+                    if stats["worm_pixels"]:
+                        arrays["mask_on_border"][row] = touches_border(mask, 2)
                     if stats["worm_pixels"] == 0:
                         skipped["empty_mask"] += 1
                     elif stats["worm_pixels"] < args.min_worm_pixels:
@@ -498,7 +510,8 @@ def main() -> int:
             # Temporal propagation (plan step 5) across the ambiguous stretches.
             t_prop = time.perf_counter()
             propagation_config = PropagationConfig(
-                min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap
+                min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap,
+                chain_length_sigma=None if args.chain_length_sigma <= 0 else args.chain_length_sigma,
             )
             stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
             stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
@@ -516,7 +529,7 @@ def main() -> int:
             candidates, propagation_info = propagate(
                 arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config
             )
-            chosen = select_candidates(candidates, arrays)
+            chosen = select_candidates(candidates, arrays, config, propagation_config)
             before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
             for row, candidate in chosen.items():
                 store_result(arrays, best_start, row, candidate.result)

@@ -1,0 +1,46 @@
+{
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-21.h5",
+ "stride": 20,
+ "frames_scanned": 1015,
+ "seconds": 295.00532090384513,
+ "whole_worm_median_skeleton_px": 769.2578000510703,
+ "fraction_touching_border": 0.8994708994708994,
+ "thresholds": {
+  "short_skeleton": 0.75,
+  "holes_px": 200,
+  "fragments_px": 500
+ },
+ "candidates": [
+  {
+   "start": 2300,
+   "end": 2320,
+   "samples": 2,
+   "reasons": {
+    "fragments": 2,
+    "border": 2
+   },
+   "peak_frame": 2320,
+   "peak_skeleton_fraction": 0.6358008159062573,
+   "border_samples": 2
+  },
+  {
+   "start": 11520,
+   "end": 11600,
+   "samples": 2,
+   "reasons": {
+    "fragments": 2,
+    "border": 2
+   },
+   "peak_frame": 11600,
+   "peak_skeleton_fraction": 0.6443531212753852,
+   "border_samples": 2
+  }
+ ],
+ "samples_summary": {
+  "count": 1015,
+  "with_worm": 945,
+  "touching_border": 850,
+  "holes_over_threshold": 0,
+  "fragments_over_threshold": 10
+ }
+}
