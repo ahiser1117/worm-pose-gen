@@ -218,6 +218,27 @@ class SegmentationModule(L.LightningModule):
             self.train(was_training)
         return torch.sigmoid(logits)[0, 0].cpu().numpy().astype(np.float32)
 
+    @torch.no_grad()
+    def predict_probability_batch(self, frames: NDArray[np.generic] | Tensor, batch_size: int = 16) -> NDArray[np.float32]:
+        """Worm probability for ``[N,H,W]`` frames, run through the network in batches."""
+
+        stack = torch.as_tensor(np.asarray(frames)) if not isinstance(frames, Tensor) else frames
+        if stack.ndim != 3:
+            raise ValueError("frames must have shape [N,H,W]")
+        was_training = self.training
+        self.eval()
+        outputs = []
+        try:
+            for start in range(0, stack.shape[0], max(1, batch_size)):
+                chunk = stack[start : start + batch_size].to(self.device, dtype=torch.float32)
+                image = ((chunk / 255.0 - INPUT_MEAN) / INPUT_STD).unsqueeze(1)
+                with torch.autocast(device_type=self.device.type, enabled=self.device.type == "cuda"):
+                    logits = self(image)
+                outputs.append(torch.sigmoid(logits.float())[:, 0].cpu())
+        finally:
+            self.train(was_training)
+        return torch.cat(outputs).numpy().astype(np.float32)
+
 
 def load_segmenter(
     checkpoint_path: str | Path, device: torch.device | str | None = None

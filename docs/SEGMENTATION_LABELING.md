@@ -231,7 +231,38 @@ they grow the part of the evaluation that measures agreement with a human.
 Saving records `label_source` as `network+manual` or `classical+manual`, so
 evaluation can separate hand-refined labels from bootstrapped ones.
 
-## 6. The loop
+## 6. Run on an unseen recording
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python scripts/segment_video.py \
+  --recording /store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5 \
+  --start 0 --frames 1200
+```
+
+`scripts/segment_video.py` reads a stretch of a recording in slabs,
+flat-fields it with the cached per-recording correction, runs the promoted
+checkpoint in batches (`--batch-size 16`, about `27 ms` per frame on the
+project GPU including padding to full resolution), and writes an MP4 under
+`checkpoints/segmenter/videos/` with the mask filled in magenta and
+outlined in green, plus a JSON file of per-frame worm pixels, component
+counts, and pixels outside the largest component. `--scale 0.5` halves the
+output for sharing; `--show-uncertain` tints the `0.2` to `0.8` probability
+band yellow.
+
+The first minute of `2024-05-28-02`, a session four months after the newest
+labeled recording, segmented cleanly with the hand-only model: every frame
+had a worm, the median mask was `28k` pixels, and `211` of `1200` frames had
+small extra components (median `0`, at most `3.6k` pixels outside the
+largest) from debris. The same run exposed a calibration problem: that
+checkpoint, chosen by validation IoU at epoch 8, puts background probability
+near `0.34`, so nearly every pixel falls in the uncertain band, while the
+all-labels checkpoint trained to epoch 24 puts background near `0.09`. IoU
+at threshold `0.5` is unaffected, but the app's network-uncertain frame
+selection and any use of the probability map as a soft target need a better
+calibrated model; stopping on validation loss instead of IoU is the obvious
+fix.
+
+## 7. The loop
 
 1. Bootstrap, train, evaluate. The first model learns the threshold's
    behavior with its systematic errors masked out.
