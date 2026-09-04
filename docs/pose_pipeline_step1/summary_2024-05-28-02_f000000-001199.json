@@ -1,0 +1,94 @@
+{
+ "started_at": "2026-09-04T03:07:36+00:00",
+ "finished_at": "2026-09-04T03:12:30+00:00",
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+ "frames": [
+  0,
+  1199
+ ],
+ "step": 1,
+ "frame_count": 1200,
+ "checkpoint": {
+  "path": "/home/alex/git/worm-pose-gen/checkpoints/segmenter/best.ckpt",
+  "exists": true,
+  "size_bytes": 172054439,
+  "modified_at": "2026-09-04T00:39:03+00:00",
+  "sha256": "121f8418a0feae4c1e01769df357c4dca7fcd4ead3dc2574006e5e4ce6e327a8"
+ },
+ "git": {
+  "commit": "cde2e4e972da6b7b6a3958c8445ffa9b2b377a71",
+  "dirty": true
+ },
+ "device": "cuda:0",
+ "threshold": 0.5,
+ "mask_cleanup": {
+  "fill_holes_radius_px": 8,
+  "largest_component": true,
+  "min_worm_pixels": 500
+ },
+ "width_template": "default_width_template",
+ "preset": "fast",
+ "starts": "skeleton+straight",
+ "init_workers": 8,
+ "flat_field_seconds": 0.05338182765990496,
+ "seconds": {
+  "read": 1.7076619351282716,
+  "flat_field": 4.700574908405542,
+  "network": 24.79138911701739,
+  "cleanup": 22.889205775223672,
+  "init": 19.415106567554176,
+  "fit": 208.31881200894713,
+  "video": 11.543058498762548
+ },
+ "ms_per_frame": {
+  "read": 1.423051612606893,
+  "flat_field": 3.9171457570046186,
+  "network": 20.659490930847824,
+  "cleanup": 19.074338146019727,
+  "init": 16.179255472961813,
+  "fit": 173.59901000745595,
+  "video": 9.619215415635457
+ },
+ "total_ms_per_frame": 244.47150734253228,
+ "frames_fitted": 1200,
+ "frames_skipped": {
+  "empty_mask": 0,
+  "small_mask": 0,
+  "no_starts": 0,
+  "fit_error": 0
+ },
+ "iou": {
+  "median": 0.8923392837319107,
+  "p10": 0.8785942878351817,
+  "min": 0.6656612465381557,
+  "fraction_at_least_0.8": 0.9983333333333333,
+  "fraction_at_least_0.9": 0.2866666666666667
+ },
+ "body_length_px": {
+  "median": 627.015315202274,
+  "p10": 520.5803401233007,
+  "p90": 750.0694468540902,
+  "at_upper_bound": 251
+ },
+ "width_px": {
+  "median": 49.2895565032959
+ },
+ "in_view_fraction": {
+  "median": 1.0,
+  "frames_below_1": 589
+ },
+ "best_start_counts": {
+  "moments_straight": 214,
+  "skeleton_longest_path": 986
+ },
+ "mask": {
+  "worm_pixels_median": 28172.5,
+  "frames_with_multiple_components": 197,
+  "pixels_outside_largest_median": 0.0,
+  "frames_with_filling": 53
+ },
+ "outputs": {
+  "poses": "/temp_data4/alex/external_artifacts/poses/2026-09-04T03-07-36Z_2024-05-28-02_f000000-001199/poses.npz",
+  "video": "/temp_data4/alex/external_artifacts/poses/2026-09-04T03-07-36Z_2024-05-28-02_f000000-001199/overlay.mp4"
+ }
+}
