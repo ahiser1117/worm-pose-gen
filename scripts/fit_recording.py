@@ -10,8 +10,12 @@ width scale and profile, centerline, body length, in-view fraction, final
 energy and overlap, mask statistics, and per-stage timing.
 
 Outputs land in one directory per run: ``summary.json`` (aggregates and
-timing), ``poses.npz`` (per-frame arrays), and with ``--video`` an MP4 overlay
-of the fitted tube outline and centerline on the flat-fielded frame.
+timing), ``poses.npz`` (per-frame arrays), with ``--video`` an MP4 overlay
+of the fitted tube outline and centerline on the flat-fielded frame, and
+residual images (mask the tube misses in blue, tube outside the mask in red)
+for the ``--residual-frames`` worst frames plus any ``--dump-frames``.
+``scripts/render_pose_run.py`` produces the same video and residual images
+for a stored run without refitting.
 
 Example (one minute at 20 fps of an unseen recording, with video):
 
@@ -33,22 +37,20 @@ from typing import Any
 
 import h5py
 import numpy as np
-from PIL import Image, ImageDraw
 import torch
 
 from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig, fit_masks
-from worm_pose_gen.connected_components import largest_component
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
 from worm_pose_gen.mask_fit import (
     Initialization,
     MaskFitResult,
     default_width_template,
-    fill_narrow_holes,
     orient_tail_last,
     standard_initializations,
     taper_asymmetry,
 )
+from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -66,10 +68,6 @@ START_SETS = {
     "skeleton+straight": ("skeleton_longest_path", "moments_straight"),
     "all": None,
 }
-TUBE_RGB = (90, 220, 140)
-LINE_RGB = (255, 80, 165)
-HEAD_RGB = (255, 210, 60)
-TAIL_RGB = (80, 200, 255)
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,6 +102,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-orient", action="store_true", help="keep the fitted orientation instead of placing the thinner (tail) end last")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
+    parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
+    parser.add_argument("--dump-frames", default="", help="comma-separated frame indices that also get residual images")
     parser.add_argument("--fps", type=float, default=20.0)
     parser.add_argument("--scale", type=float, default=1.0, help="resize factor for the video")
     parser.add_argument("--quality", type=int, default=5, help="imageio/ffmpeg quality, 0 worst to 10 best")
@@ -128,17 +128,6 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
     return replace(config, **overrides)
 
 
-def clean_mask(probability: np.ndarray, threshold: float, hole_radius: int, device: torch.device) -> tuple[np.ndarray, dict[str, int]]:
-    raw = probability >= threshold
-    stats = {"raw_worm_pixels": int(raw.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
-    if not raw.any():
-        return raw, stats
-    filled, added = fill_narrow_holes(raw, hole_radius, device=device)
-    largest, area, count = largest_component(filled)
-    stats.update(pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(area))
-    return largest, stats
-
-
 def initializations_for(mask: np.ndarray, config: BatchFitConfig, names: tuple[str, ...] | None = None) -> list[Initialization]:
     """Standard starts, restricted to ``names`` when given (falling back to whatever exists)."""
 
@@ -147,38 +136,6 @@ def initializations_for(mask: np.ndarray, config: BatchFitConfig, names: tuple[s
         return starts
     chosen = [s for s in starts if s.name in names]
     return chosen if chosen else starts[:1]
-
-
-def _boundary(mask: np.ndarray) -> np.ndarray:
-    inner = mask.copy()
-    inner[1:] &= mask[:-1]
-    inner[:-1] &= mask[1:]
-    inner[:, 1:] &= mask[:, :-1]
-    inner[:, :-1] &= mask[:, 1:]
-    return mask & ~inner
-
-
-def draw_overlay(frame: np.ndarray, result: MaskFitResult | None, caption: str, scale: float) -> np.ndarray:
-    rgb = np.repeat(frame[:, :, None], 3, axis=2).astype(np.uint8)
-    if result is not None:
-        crop = result.crop
-        edge = _boundary(result.rendered_hard_mask)
-        region = rgb[crop.y0 : crop.y1, crop.x0 : crop.x1]
-        region[edge] = TUBE_RGB
-    image = Image.fromarray(rgb)
-    draw = ImageDraw.Draw(image)
-    if result is not None:
-        points = [(float(x), float(y)) for x, y in result.centerline_xy]
-        draw.line(points, fill=LINE_RGB, width=2)
-        # Head is a square, tail (the thinner end, placed last) a circle.
-        x, y = points[0]
-        draw.rectangle((x - 4, y - 4, x + 4, y + 4), outline=HEAD_RGB, width=2)
-        x, y = points[-1]
-        draw.ellipse((x - 5, y - 5, x + 5, y + 5), outline=TAIL_RGB, width=2)
-    draw.text((8, 8), caption, fill=(255, 255, 255))
-    if scale != 1.0:
-        image = image.resize((max(2, int(round(image.width * scale)) // 2 * 2), max(2, int(round(image.height * scale)) // 2 * 2)), Image.BILINEAR)
-    return np.asarray(image)
 
 
 def _nan(shape: tuple[int, ...]) -> np.ndarray:
@@ -358,7 +315,12 @@ def main() -> int:
                             )
                         else:
                             caption += "  no fit"
-                        writer.append_data(draw_overlay(frame, result, caption, args.scale))
+                        tube = centerline = None
+                        if result is not None:
+                            tube = np.zeros(frame.shape, dtype=bool)
+                            tube[result.crop.y0 : result.crop.y1, result.crop.x0 : result.crop.x1] = result.rendered_hard_mask
+                            centerline = result.centerline_xy
+                        writer.append_data(draw_overlay(frame, centerline, tube, caption, args.scale))
                 t7 = time.perf_counter()
                 for stage, seconds in zip(STAGES, (t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t6 - t5, t7 - t6), strict=True):
                     timing[stage] += seconds
@@ -375,9 +337,26 @@ def main() -> int:
                 writer.close()
             if pool is not None:
                 pool.shutdown()
+        # Residual images for the worst frames and any requested ones: the
+        # frames are read and segmented again, which is cheap for a handful.
+        arrays["best_start"] = np.asarray(best_start)
+        requested = [int(v) for v in args.dump_frames.split(",") if v.strip()]
+        residual_files: list[str] = []
+        for row in residual_rows(arrays, args.residual_frames, requested):
+            frame_index = int(arrays["frame_index"][row])
+            raw_frame = np.asarray(dataset[frame_index], dtype=np.uint8)
+            frame = np.clip(np.rint(apply_flat_field(raw_frame, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
+            probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
+            mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device)
+            tube = render_tube(
+                arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
+            )
+            image = draw_residual(frame, mask, tube, arrays["centerline_xy"][row], residual_caption(frame_index, arrays, row, mask))
+            path = run_dir / f"frame_{frame_index:06d}_iou{float(arrays['iou'][row]):.3f}.png"
+            image.save(path)
+            residual_files.append(path.name)
     source.close()
 
-    arrays["best_start"] = np.asarray(best_start)
     np.savez_compressed(run_dir / "poses.npz", **arrays)
     fitted = arrays["fitted"]
     iou = arrays["iou"][fitted]
@@ -438,7 +417,11 @@ def main() -> int:
             "pixels_outside_largest_median": float(np.median(arrays["pixels_outside_largest"])),
             "frames_with_filling": int(np.sum(arrays["pixels_filled"] > 0)),
         },
-        "outputs": {"poses": str(run_dir / "poses.npz"), "video": str(run_dir / "overlay.mp4") if args.video else None},
+        "outputs": {
+            "poses": str(run_dir / "poses.npz"),
+            "video": str(run_dir / "overlay.mp4") if args.video else None,
+            "residual_frames": residual_files,
+        },
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps({k: v for k, v in summary.items() if k != "fit_config"}, indent=1))

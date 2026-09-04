@@ -228,6 +228,28 @@ stays the default (`--width-coefficients` changes it).
 
 ![Frame 1052: symmetric template versus asymmetric width](pose_pipeline_step2/frame_01052_before_after.jpg)
 
+Visual comparison. Every run directory under
+`/temp_data4/alex/external_artifacts/poses/` (the step 1 run and the
+`asym6`, `asym8`, `asym12` runs) has an `overlay.mp4` and residual images
+`frame_<index>_iou<value>.png` for its worst frames plus frames 71, 131,
+352, 451, 1010, 1021, and 1052; blue is mask the tube misses, red is tube
+outside the mask. `scripts/render_pose_run.py` writes these for any stored
+run without refitting, and `scripts/compare_pose_runs.py` lays several runs
+side by side on the same segmented frame. The strips below are symmetric,
+6, 8, and 12 coefficients from left to right
+(`pose_pipeline_step2/residual_frame_*.jpg`, six frames).
+
+![Frame 1052 residuals: symmetric, 6, 8, 12 coefficients](pose_pipeline_step2/residual_frame_01052.jpg)
+
+![Frame 1021 residuals, self-contact: symmetric, 6, 8, 12 coefficients](pose_pipeline_step2/residual_frame_01021.jpg)
+
+The strips show what the numbers do not: the asymmetric width clears the red
+band along the tail everywhere, but a red patch at the tight bend of frame
+1052 survives every variant, because the 16-coefficient centerline cannot
+turn that sharply. That residual belongs to the centerline model, not the
+width, and is a candidate for more shape coefficients once the priors of
+step 3 are in place.
+
 Head (square) and tail (circle) labels. The taper asymmetry is a graded
 confidence: the 19 wrong labels among the 844 frames with absolute
 asymmetry >= 0.1 all lie in two stretches, the cold-start failure around

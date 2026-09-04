@@ -150,7 +150,12 @@ times a smooth log-space correction (`--width-coefficients`, default 6, 0 for
 the symmetric model; `--width-prior` pulls it toward zero), so the two ends
 may taper differently; every stored pose is oriented with the thinner end,
 the tail, last (`--no-orient` keeps the fitted orientation). In the overlay
-the head is a square and the tail a circle. The plan this belongs to, with
+the head is a square and the tail a circle. Each run also writes residual
+images (mask the tube misses in blue, tube outside the mask in red) for its
+`--residual-frames` worst frames and any `--dump-frames`;
+`scripts/render_pose_run.py` produces the video and residual images for a
+stored run without refitting, and `scripts/compare_pose_runs.py` puts
+several runs side by side on the same frames. The plan this belongs to, with
 measurements, is [`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
 `scripts/evaluate_width_model_unannotated30.py` compares width models on the
 30-frame set.
