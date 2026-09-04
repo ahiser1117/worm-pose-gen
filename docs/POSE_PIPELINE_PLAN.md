@@ -622,6 +622,57 @@ videos:
   examples in the manifest, rendered as before/after strips by
   `scripts/compare_pose_runs.py` on every run.
 
+**Findings (2026-09-04, from the video review; assets under
+`pose_pipeline_step5b/`).** Two failure modes were investigated before
+choosing the tuning items.
+
+*Spirals: the tube grows longer than the worm.* On the 177 stretch frames of
+`spiral_0131` the propagated tube is 787 px at the median and 835 px at the
+90th percentile against a 730 px worm (65 frames beyond the prior's two
+sigma), and the extra length winds around the ring, which moves the fitted
+end away from the visible tip. Two causes were checked
+(`spiral_diag_frame_*.jpg`): the segmenter itself merges adjacent turns
+(its probability map is a solid ring with the gap between turns visible only
+near the inner tail), and the narrow-hole fill then closes what remains
+(220--720 px per frame). Four variants of the clip:
+
+| Variant | Stretch median IoU | Frames < 0.9 | Stretch length p50 / p90 | Frames beyond prior + 2 sigma |
+|---|---:|---:|---|---:|
+| baseline: fill radius 8, length sigma 5% | 0.927 | 53 | 787 / 835 | 67 |
+| no hole fill | 0.920 | 52 | 783 / 819 | 39 |
+| length sigma 2% | 0.947 | 1 | 740 / 742 | 0 |
+| no hole fill, length sigma 2% | 0.930 | 17 | 742 / 747 | 0 |
+
+Tightening the length prior is what works: with sigma 2% the tube stays at
+the worm's length, the ends sit at the visible tips, and 52 of the 53
+failures disappear (`sigma_frame_*.jpg`). Removing the hole fill on its own
+changes little, because the segmenter has already merged the turns; the
+mask needs the segmenter to see the gaps, which is a targeted labeling round
+on coil and intersection frames (the clip candidates give the frames), after
+which the hole fill and largest-component rules can be re-evaluated on the
+set. The 5% sigma came from whole worms, whose fitted length varies with
+posture; a coil needs the tighter value. The natural place is the
+propagation chain, whose pose already has the right length: tighten the
+prior inside `warm_schedule` and leave the independent fits at 5%.
+
+*Camera edge: the tube stays inside instead of leaving.* On the minute of
+`2024-05-28-02`, 21 frames have the mask on the border while every
+centerline point stays inside the image (`edge_inside_frame_*.jpg`): the
+tube stops at or bends back from the edge, mostly in the frames where the
+body first reaches it (162--164, 192--194) and on propagated frame 64,
+whose tail folds sharply near the edge. In these frames the start extension
+did not fire (the mask touches the border only slightly, so the skeleton end
+is far from the border pixels), and the length prior at 5% accepts a 746 px
+tube. The temporal signature is an in-view fraction that returns to 1.0
+between two clipped frames (7 such dips on the minute). Planned fix: store
+whether the mask reaches the border per frame, flag `edge_inside` (mask on
+the border, tube fully inside) as an ambiguity signal so propagation covers
+these frames, and in the chain extend a warm start off camera through the
+border contact when the mask reaches the border and the start does not.
+Temporal smoothness of the in-view fraction can follow if the chain alone
+leaves flicker; the `edge_0528` clip, with 22 in-view jumps in 300 frames,
+is the test.
+
 ### Step 6. Hypothesis linking across ambiguous stretches
 
 - Keep the top few distinct local optima per ambiguous frame instead of one.
