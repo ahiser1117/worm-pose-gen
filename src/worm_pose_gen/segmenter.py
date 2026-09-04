@@ -149,6 +149,7 @@ class SegmentationModule(L.LightningModule):
         encoder_learning_rate_scale: float = 0.25,
         weight_decay: float = 1e-4,
         dice_weight: float = 1.0,
+        plateau_patience: int = 2,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -201,9 +202,16 @@ class SegmentationModule(L.LightningModule):
             ],
             weight_decay=float(self.hparams.weight_decay),
         )
-        total_steps = max(int(self.trainer.estimated_stepping_batches), 1)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=lr * 0.02)
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
+        # Halve the learning rate when the validation loss stalls, so a run
+        # that stops on validation loss has actually converged rather than
+        # having run out of a schedule tied to the epoch cap.
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=int(self.hparams.plateau_patience), min_lr=lr * 0.01,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch", "monitor": "val_loss", "strict": False},
+        }
 
     @torch.no_grad()
     def predict_probability(self, frame: NDArray[np.generic] | Tensor) -> NDArray[np.float32]:

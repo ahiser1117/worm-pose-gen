@@ -31,7 +31,8 @@ class SegmenterTests(unittest.TestCase):
             store.save("rec", index, image, mask, source_path="/x", label_source="network+manual")
         rows = score_split(load_segmenter(checkpoint, device="cpu"), store, "val")
         self.assertEqual(len(rows), store.counts()["val"])
-        self.assertEqual(set(rows[0]), {"sample_id", "label_source", "revision", "label_pixels", "iou"})
+        self.assertEqual(set(rows[0]), {"sample_id", "label_source", "revision", "label_pixels", "iou", "loss"})
+        self.assertGreater(rows[0]["loss"], 0.0)
         self.assertEqual(summarize_iou([])["n"], 0)
         # No incumbent: the candidate is promoted by default.
         first = compare_on_split(checkpoint, f"{directory}/missing.ckpt", store, "val", device="cpu")
@@ -40,9 +41,9 @@ class SegmenterTests(unittest.TestCase):
         # The same weights as incumbent: not strictly better, so not promoted.
         same = compare_on_split(checkpoint, checkpoint, store, "val", device="cpu")
         self.assertFalse(same["promote"])
-        self.assertEqual(same["candidate_score"]["mean"], same["incumbent_score"]["mean"])
+        self.assertEqual(same["candidate_score"]["loss"], same["incumbent_score"]["loss"])
         self.assertEqual(len(same["per_sample"]), store.counts()["val"])
-        self.assertIn("<=", same["reason"])
+        self.assertIn(">=", same["reason"])
 
     def test_normalize_frame_shape_and_scale(self) -> None:
         frame = np.full((10, 12), 255, dtype=np.uint8)

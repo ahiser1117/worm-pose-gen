@@ -85,7 +85,7 @@ skipped, in about `0.3 s` per frame.
 ## 4. Train and evaluate
 
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels --train-labels manual
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
 scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
 scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
 ```
@@ -96,29 +96,33 @@ loss), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
 `run.json`: arguments, git revision, the fingerprint of the checkpoint it
 started from, the exact train, validation, and test membership (sample id,
 label source, revision, save time), the checkpoint fingerprints, epochs run,
-and the final metrics. The directory is git-ignored. Mixed precision, early
-stopping on validation loss, and a test pass with the best checkpoint are on
-by default (`--epochs 60`, `--patience 12`).
+and the final metrics. The directory is git-ignored. Mixed precision and a
+test pass with the best checkpoint are on by default.
 
-Checkpoint selection and early stopping use the validation loss (masked
-BCE plus soft Dice), not the thresholded IoU. IoU saturates within ten
-epochs while the loss keeps falling, and runs selected on IoU produced
-models whose background probability sat near `0.3`: the masks at threshold
-`0.5` were fine, but nearly every pixel fell in the app's uncertain band.
-Selecting on loss picks a calibrated model with the same or better masks.
+A run ends when the validation loss (masked BCE plus soft Dice) has not
+improved for `--patience 5` epochs, and the learning rate halves whenever
+the loss stalls for `--plateau-patience 2` epochs, so the stop means the
+model has converged rather than that a schedule tied to an epoch cap ran
+out (`--epochs 300` is only a cap). Checkpoint selection uses the same
+validation loss, not the thresholded IoU: IoU saturates within ten epochs
+while the loss keeps falling, and runs selected on IoU produced models whose
+background probability sat near `0.3`. The masks at threshold `0.5` were
+fine, but nearly every pixel fell in the app's uncertain band. Selecting on
+loss picks a calibrated model with the same or better masks.
 
-`--train-labels bootstrap|manual|all` restricts the training split to one
-label origin; validation and test always use every label they hold. Without
+`--train-labels manual|bootstrap|all` picks the training labels, hand-refined
+by default; validation and test always use every label they hold. Without
 `--init` the model starts from ImageNet weights with no worm exposure; with
 `--init <checkpoint>` it warm-starts from that model (the optimizer and
 schedule restart either way).
 
 After training, the run's best checkpoint is scored against the currently
 promoted `checkpoints/segmenter/best.ckpt` on the validation split, and
-replaces it when its mean IoU over the hand-refined validation labels is
-higher. The mean, not the median, is used so that painting worm onto an
-empty frame or dropping a tail counts in proportion. The labeling app loads
-the promoted file, so it always proposes from the best validated model.
+replaces it when its mean validation loss over the hand-refined validation
+labels is lower. That is the quantity training selects and stops on, so a
+better-calibrated model wins even when the thresholded masks tie; the mean
+IoU of both is recorded alongside. The labeling app loads the promoted
+file, so it always proposes from the best validated model.
 `--promote` forces the copy, `--no-promote` skips the comparison, and every
 decision, with both scores and checkpoint fingerprints, is appended to
 `checkpoints/segmenter/promotions.jsonl` and stored in the run record.
@@ -269,12 +273,16 @@ selection had been close to random and the probability map was useless as
 a soft target.
 
 Selecting and stopping on validation loss fixed it. The hand-label run
-under that rule (`hand_labels_loss`, best at epoch 52 of 60, loss still
-falling at the cap) has median IoU `0.973` on 25 validation and `0.975` on
-23 test labels against `0.960` / `0.967` for the IoU-selected model, was
-promoted automatically (mean validation IoU `0.969` against `0.959`), and on
-the unseen recording puts background at `0.10` with `0.2%` of pixels in the
-uncertain band and the same masks.
+under that rule with a cosine schedule (`hand_labels_loss`, best at epoch
+52 of 60, loss still falling at the cap) reached median IoU `0.973` on 25
+validation and `0.975` on 23 test labels against `0.960` / `0.967` for the
+IoU-selected model, and put background at `0.10` on the unseen recording.
+The run under the plateau schedule with patience 5 (`hand_labels_plateau`,
+100 hand labels, best at epoch 99 of 105) took the validation loss from
+`0.751` to `0.236` at the same median IoU (`0.972` / `0.974`, worst
+non-empty test frame `0.956`), was promoted on that loss, and on the unseen
+recording puts background at `0.004` and worm at `0.999`, with `0.07%` of
+pixels in the uncertain band and the same masks.
 
 ## 7. The loop
 
@@ -283,7 +291,7 @@ uncertain band and the same masks.
 2. Label in network-uncertain mode. Correct thin tails, cut fused debris,
    paint ignore over anything ambiguous. Save.
 3. Retrain, evaluate, plot, and restart the app; the new model is promoted
-   to the app automatically when it beats the previous one on validation.
+   to the app automatically when its validation loss beats the previous one.
 4. Once the hand-refined validation IoU is high and stable, feed the
    network's probability map to the mask fit as its soft target and return
    to evaluating pose estimation.

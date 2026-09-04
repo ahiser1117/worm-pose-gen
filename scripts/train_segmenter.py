@@ -9,15 +9,18 @@ loss), ``last.ckpt`` (the final epoch, which early stopping places
 membership, the checkpoint fingerprints, and the final metrics.  The
 directory is git-ignored.
 
-``--train-labels`` restricts the training split to ``bootstrap`` or
-``manual`` labels (validation and test always use every label they hold).
+``--train-labels`` picks the training labels (``manual`` by default, the
+hand-refined ones; validation and test always use every label they hold).
+The run ends when the validation loss has not improved for ``--patience``
+epochs; the learning rate halves whenever it stalls for
+``--plateau-patience`` epochs.
 Without ``--init`` the model starts from ImageNet weights with no worm
 exposure; with it the weights of an earlier checkpoint are the starting
 point.
 
 After training, the run's best checkpoint is scored against the currently
 promoted ``checkpoints/segmenter/best.ckpt`` on the validation split (mean
-IoU over hand-refined labels) and replaces it when it scores higher, so the
+validation loss over hand-refined labels) and replaces it when it is lower, so the
 labeling app always proposes from the best validated model.  ``--promote``
 forces the copy; ``--no-promote`` skips the comparison.  Every decision is
 appended to ``checkpoints/segmenter/promotions.jsonl``.
@@ -50,16 +53,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
     parser.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_DIR)
     parser.add_argument("--name", default="run", help="run name, appended to the timestamped run directory")
-    parser.add_argument("--train-labels", choices=LABEL_FILTERS, default="all", help="which training labels to use")
+    parser.add_argument("--train-labels", choices=LABEL_FILTERS, default="manual", help="which training labels to use")
     parser.add_argument("--init", type=Path, default=None, help="checkpoint whose weights start the run")
     parser.add_argument("--promote", action="store_true", help="promote this run's best.ckpt without comparing")
     parser.add_argument("--no-promote", action="store_true", help="never touch <checkpoint dir>/best.ckpt")
-    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--epochs", type=int, default=300, help="cap; early stopping normally ends the run first")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--crop-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--encoder-lr-scale", type=float, default=0.25)
-    parser.add_argument("--patience", type=int, default=12)
+    parser.add_argument("--patience", type=int, default=5, help="stop after this many epochs without a lower validation loss")
+    parser.add_argument("--plateau-patience", type=int, default=2, help="halve the learning rate after this many stalled epochs")
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
@@ -82,12 +86,12 @@ def main() -> int:
     if args.init is not None:
         module = SegmentationModule.load_from_checkpoint(
             str(args.init), pretrained=False, learning_rate=args.learning_rate,
-            encoder_learning_rate_scale=args.encoder_lr_scale,
+            encoder_learning_rate_scale=args.encoder_lr_scale, plateau_patience=args.plateau_patience,
         )
     else:
         module = SegmentationModule(
             pretrained=True, learning_rate=args.learning_rate,
-            encoder_learning_rate_scale=args.encoder_lr_scale,
+            encoder_learning_rate_scale=args.encoder_lr_scale, plateau_patience=args.plateau_patience,
         )
     run_dir = args.checkpoint_dir / "runs" / f"{timestamp_slug(started_at)}_{args.name}"
     run_dir.mkdir(parents=True, exist_ok=False)
