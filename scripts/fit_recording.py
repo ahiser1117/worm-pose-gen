@@ -40,7 +40,15 @@ from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig, fit_masks
 from worm_pose_gen.connected_components import largest_component
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
-from worm_pose_gen.mask_fit import Initialization, MaskFitResult, default_width_template, fill_narrow_holes, standard_initializations
+from worm_pose_gen.mask_fit import (
+    Initialization,
+    MaskFitResult,
+    default_width_template,
+    fill_narrow_holes,
+    orient_tail_last,
+    standard_initializations,
+    taper_asymmetry,
+)
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -60,7 +68,8 @@ START_SETS = {
 }
 TUBE_RGB = (90, 220, 140)
 LINE_RGB = (255, 80, 165)
-END_RGB = (255, 210, 60)
+HEAD_RGB = (255, 210, 60)
+TAIL_RGB = (80, 200, 255)
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,6 +96,12 @@ def parse_args() -> argparse.Namespace:
         help="starting states per frame (default skeleton+straight; the reference preset uses all). The skeleton start wins on nearly every frame",
     )
     parser.add_argument("--no-compile", action="store_true", help="render eagerly instead of through torch.compile")
+    parser.add_argument(
+        "--width-coefficients", type=int, default=None,
+        help="cubic B-spline coefficients of the log-space width correction (0 = symmetric template; preset default 6)",
+    )
+    parser.add_argument("--width-prior", type=float, default=None, help="Gaussian prior weight pulling the width correction toward zero")
+    parser.add_argument("--no-orient", action="store_true", help="keep the fitted orientation instead of placing the thinner (tail) end last")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--fps", type=float, default=20.0)
@@ -106,6 +121,10 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
         overrides["crop_padding"] = args.padding
     if args.fine_stride is not None:
         overrides["stage_point_stride"] = config.stage_point_stride[:-1] + (args.fine_stride,)
+    if args.width_coefficients is not None:
+        overrides["width_coefficients"] = args.width_coefficients
+    if args.width_prior is not None:
+        overrides["width_shape_prior"] = args.width_prior
     return replace(config, **overrides)
 
 
@@ -151,8 +170,11 @@ def draw_overlay(frame: np.ndarray, result: MaskFitResult | None, caption: str, 
     if result is not None:
         points = [(float(x), float(y)) for x, y in result.centerline_xy]
         draw.line(points, fill=LINE_RGB, width=2)
-        for x, y in (points[0], points[-1]):
-            draw.ellipse((x - 4, y - 4, x + 4, y + 4), outline=END_RGB, width=2)
+        # Head is a square, tail (the thinner end, placed last) a circle.
+        x, y = points[0]
+        draw.rectangle((x - 4, y - 4, x + 4, y + 4), outline=HEAD_RGB, width=2)
+        x, y = points[-1]
+        draw.ellipse((x - 5, y - 5, x + 5, y + 5), outline=TAIL_RGB, width=2)
     draw.text((8, 8), caption, fill=(255, 255, 255))
     if scale != 1.0:
         image = image.resize((max(2, int(round(image.width * scale)) // 2 * 2), max(2, int(round(image.height * scale)) // 2 * 2)), Image.BILINEAR)
@@ -161,6 +183,22 @@ def draw_overlay(frame: np.ndarray, result: MaskFitResult | None, caption: str, 
 
 def _nan(shape: tuple[int, ...]) -> np.ndarray:
     return np.full(shape, np.nan, dtype=np.float64)
+
+
+def orientation_consistency(arrays: dict[str, np.ndarray]) -> dict[str, Any] | None:
+    """How often consecutive fitted frames agree on which end is the head."""
+
+    fitted = np.nonzero(arrays["fitted"])[0]
+    pairs = [(a, b) for a, b in zip(fitted[:-1], fitted[1:], strict=False) if b == a + 1]
+    if not pairs:
+        return None
+    curves = arrays["centerline_xy"]
+    agree = 0
+    for a, b in pairs:
+        same = np.linalg.norm(curves[b, 0] - curves[a, 0]) + np.linalg.norm(curves[b, -1] - curves[a, -1])
+        swapped = np.linalg.norm(curves[b, 0] - curves[a, -1]) + np.linalg.norm(curves[b, -1] - curves[a, 0])
+        agree += int(same <= swapped)
+    return {"consecutive_pairs": len(pairs), "fraction_consistent": agree / len(pairs), "flips": len(pairs) - agree}
 
 
 def main() -> int:
@@ -198,6 +236,9 @@ def main() -> int:
             "width_px": _nan((n,)),
             "centerline_xy": _nan((n, config.n_points, 2)),
             "width_profile": _nan((n, config.n_points)),
+            "width_shape": _nan((n, config.width_coefficients)),
+            "taper_asymmetry": _nan((n,)),
+            "reversed": np.zeros(n, dtype=bool),
             "iou": _nan((n,)),
             "energy": _nan((n,)),
             "points_in_fov": np.zeros(n, dtype=np.int64),
@@ -287,8 +328,13 @@ def main() -> int:
                     arrays["n_starts"][row] = len(frame_starts)
                     if result is None:
                         continue
+                    if not args.no_orient:
+                        result, flipped = orient_tail_last(result, config=config)
+                        arrays["reversed"][row] = flipped
                     by_row[row] = result
                     arrays["fitted"][row] = True
+                    arrays["width_shape"][row] = result.width_shape
+                    arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
                     arrays["latent"][row] = result.latent
                     arrays["width_px"][row] = result.width_px
                     arrays["centerline_xy"][row] = result.centerline_xy
@@ -308,6 +354,7 @@ def main() -> int:
                             caption += (
                                 f"  iou {arrays['iou'][row]:.3f}  length {arrays['body_length_px'][row]:.0f} px"
                                 f"  width {arrays['width_px'][row]:.1f} px  in view {arrays['points_in_fov'][row] / config.n_points:.2f}"
+                                f"  taper {arrays['taper_asymmetry'][row]:+.2f}"
                             )
                         else:
                             caption += "  no fit"
@@ -370,6 +417,19 @@ def main() -> int:
             "at_upper_bound": int(np.sum(arrays["body_length_px"][fitted] >= 0.99 * config.length_bounds_px[1])),
         },
         "width_px": None if not fitted.any() else {"median": float(np.median(arrays["width_px"][fitted]))},
+        "width_model": {
+            "coefficients": config.width_coefficients,
+            "prior": config.width_shape_prior,
+            "tail_placed_last": not args.no_orient,
+            "frames_reversed": int(arrays["reversed"].sum()),
+            "taper_asymmetry": None if not fitted.any() else {
+                "median": float(np.median(arrays["taper_asymmetry"][fitted])),
+                "p10": float(np.percentile(arrays["taper_asymmetry"][fitted], 10)),
+                "p90": float(np.percentile(arrays["taper_asymmetry"][fitted], 90)),
+                "frames_with_abs_below_0.1": int(np.sum(np.abs(arrays["taper_asymmetry"][fitted]) < 0.1)),
+            },
+            "orientation_consistency": orientation_consistency(arrays),
+        },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},
         "mask": {

@@ -162,6 +162,90 @@ warm starts are the next levers, in that order.
 - Judge on the 30-frame set. The lowest-scoring worm frames (samples 27, 2,
   14) are the ones the fixed template hurts most.
 
+**Result (2026-09-04).** Landed in `mask_fit._MaskFitState` (shared by the
+single-frame and batched fitters), with `orient_tail_last`,
+`reverse_initialization`, `reverse_result`, and
+`scripts/evaluate_width_model_unannotated30.py`; raw numbers are under
+`pose_pipeline_step2/`.
+
+Model. Full width along the body is `scale x template x exp(c)`, where `c` is
+a mean-centered clamped cubic B-spline over body position with
+`width_coefficients` coefficients (default 6, learning rate 0.01) and a
+Gaussian prior `width_shape_prior x |coefficients|^2` (default 1e-3). Zero
+coefficients restore the symmetric model exactly. The correction adds one
+`[rows, 6] x [6, 100]` product per step, so the fit cost is unchanged.
+
+Orientation, a change to the plan. Under a zero-centered prior a reversed
+start is the exact mirror image of the forward one (the bases are
+mirror-symmetric, verified to 1e-13), so trying both orientations cannot
+change the energy and was dropped for this step. Instead each fit is
+oriented after the fact: `taper_asymmetry` is the mean log width over the
+last 30% of the body minus the first 30%, and the thinner end is placed
+last as the tail. Trying both orientations returns in step 3, where an
+asymmetric per-recording prior makes the two starts different.
+
+30-frame stress set, reference schedule, all starts
+(`width_model_sweep.json`; the symmetric row reproduces the stored
+reference within compile noise, one frame -0.017):
+
+| Width model | Median IoU | Median delta | Frames better by 0.01 / worse | Frames at IoU >= 0.9 |
+|---|---:|---:|---:|---:|
+| symmetric template | 0.911 | 0.000 | 0 / 1 | 20 |
+| 6 coefficients, prior 0 | 0.927 | +0.018 | 20 / 0 | 26 |
+| 6 coefficients, prior 1e-3 (default) | 0.926 | +0.017 | 20 / 0 | 26 |
+| 6 coefficients, prior 1e-2 | 0.924 | +0.013 | 19 / 0 | 26 |
+| 8 coefficients, prior 1e-3 | 0.932 | +0.022 | 24 / 0 | 26 |
+| 10 coefficients, prior 1e-3 | 0.936 | +0.024 | 26 / 0 | 26 |
+| 12 coefficients, prior 1e-3 | 0.940 | +0.028 | 27 / 0 | 26 |
+
+Every asymmetric variant improves every frame. The prior weight 1e-2 costs
+IoU and halves the taper signal; 0 and 1e-3 are equivalent, and 1e-3 is kept
+so the correction has a defined value where the mask says nothing. The
+worst frames of the reference run (27, 2, 14) gain 0.017, 0.030, and 0.026,
+and their fitted profiles show a short head taper and a tail taper that
+begins around 60% of the body.
+
+![Worst frames of the reference run, symmetric versus asymmetric](pose_pipeline_step2/width_model_worst_frames.jpg)
+
+One minute of `2024-05-28-02` (1200 frames, `fast` preset, segmenter masks;
+`recording_comparison_*.json`, `recording_coefficient_comparison_*.json`,
+`orientation_analysis_*.json`). Flips are orientation changes between
+consecutive frames; a frame's label is *wrong* when it disagrees with the
+orientation propagated geometrically along the whole track.
+
+| Width model | Median IoU | P10 IoU | Frames at IoU >= 0.9 | Fit ms/frame | Flips | Wrong labels among frames with abs. asymmetry >= 0.1 |
+|---|---:|---:|---:|---:|---:|---:|
+| symmetric (step 1) | 0.892 | 0.847 | 28.7% | 174 | | |
+| 6 coefficients (default) | 0.975 | 0.950 | 99.8% | 182 | 50 | 19 / 844 |
+| 8 coefficients | 0.977 | 0.959 | 99.8% | 175 | 66 | 25 / 854 |
+| 12 coefficients | 0.978 | 0.961 | 99.8% | 178 | 62 | 24 / 849 |
+
+With six coefficients 1199 of 1200 frames improve by more than 0.01 and none
+worsen; the median frame moves from 0.892 to 0.975. More coefficients add
+0.002--0.004 on these masks while orientation gets slightly noisier, and a
+low-dimensional correction is easier to learn per recording in step 3, so 6
+stays the default (`--width-coefficients` changes it).
+
+![Frame 1052: symmetric template versus asymmetric width](pose_pipeline_step2/frame_01052_before_after.jpg)
+
+Head (square) and tail (circle) labels. The taper asymmetry is a graded
+confidence: the 19 wrong labels among the 844 frames with absolute
+asymmetry >= 0.1 all lie in two stretches, the cold-start failure around
+frames 434--451 and frames 1047--1052; above 0.15 there are 5 wrong in 799
+frames, above 0.3 none in 641. The remaining 356 frames are ambiguous
+(absolute asymmetry below 0.1), and only 15 of them have the body leaving
+the view, so ambiguity comes from the mask, not the field of view; their
+labels are coin flips and account for 49 of the 50 flips. Step 6 should use
+the asymmetry as a soft orientation observation, not a hard label.
+
+Two inputs to step 3. The median log correction on this recording is +0.07
+to +0.15 over the front 60% of the body and -0.12, -0.29, -0.43 over the
+last three deciles; that profile is the natural center of the per-recording
+width prior. The number of frames at the 750 px length bound rose from 251
+to 372, because a thinner tail lets the tube extend further, so the length
+prior is more urgent, not less. Frames 450--451 are unchanged at IoU 0.67:
+a start problem, for steps 4 and 5.
+
 ### Step 3. Per-recording priors
 
 - Bootstrap pass: fit a spread sample of frames, keep those fully in view with
@@ -230,13 +314,18 @@ warm starts are the next levers, in that order.
 - Full sequential Monte Carlo (the old `smc.py`) is not resurrected; K-best
   hypotheses plus Viterbi give the same benefit with deterministic output.
 - Hard length and width bounds are replaced by per-recording priors.
+- Trying every start in both orientations, planned for step 2, was dropped
+  there: under a zero-centered width prior the reversed start is an exact
+  mirror image with the same energy. Orientation is decided after the fit
+  from the taper asymmetry; both orientations return in step 3, where the
+  per-recording width prior is asymmetric.
 
 ## 6. Status
 
 | Step | State | Notes |
 |---|---|---|
 | 1 | done (2026-09-04) | `scripts/fit_recording.py`; 244 ms/frame end to end, fit 174 ms; `fast` preset is -0.008 IoU vs the reference on the 30-frame set, `reference` preset exact |
-| 2 | not started | |
+| 2 | done (2026-09-04) | log-space B-spline width correction (6 coefficients, prior 1e-3); +0.017 median IoU on the 30-frame set, 0.892 -> 0.975 on one minute of `2024-05-28-02`; tail placed last from the taper asymmetry |
 | 3 | not started | |
 | 4 | not started | |
 | 5 | not started | |

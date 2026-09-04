@@ -1,0 +1,56 @@
+{
+ "run": "2026-09-04T14-00-21Z_2024-05-28-02_f000000-001199_asym6",
+ "method": "orientation propagated geometrically along consecutive frames; the confidence-weighted majority end is taken as the head of the track; a frame is wrong when its taper-based label puts the tail at the other end",
+ "consecutive_pairs": 1199,
+ "orientation_flips_between_consecutive_frames": 50,
+ "frames_wrong_vs_track": 280,
+ "by_abs_taper_threshold": {
+  "0.0": {
+   "frames": 1200,
+   "wrong": 280
+  },
+  "0.05": {
+   "frames": 973,
+   "wrong": 128
+  },
+  "0.1": {
+   "frames": 844,
+   "wrong": 19
+  },
+  "0.15": {
+   "frames": 799,
+   "wrong": 5
+  },
+  "0.2": {
+   "frames": 766,
+   "wrong": 2
+  },
+  "0.3": {
+   "frames": 641,
+   "wrong": 0
+  }
+ },
+ "ambiguous_frames_abs_taper_below_0.1": 356,
+ "ambiguous_frames_with_body_leaving_view": 15,
+ "wrong_frames_with_abs_taper_at_least_0.1": [
+  434,
+  436,
+  438,
+  439,
+  440,
+  441,
+  442,
+  443,
+  444,
+  445,
+  448,
+  449,
+  450,
+  451,
+  1047,
+  1049,
+  1050,
+  1051,
+  1052
+ ]
+}

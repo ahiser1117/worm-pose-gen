@@ -2,10 +2,18 @@
 
 Instead of thinning a mask into a skeleton and requiring that skeleton to have
 simple topology, this module renders the low-dimensional body model (16 cubic
-tangent-angle coefficients, global rotation, length, centroid, and one width
+tangent-angle coefficients, global rotation, length, centroid, and a width
 scale over a fixed width template) as a soft tube and moves it by gradient
 descent until the rendered mask agrees with the observed one.  Several
 initializations are optimized as one batch and the best final overlap wins.
+
+The width template is symmetric; a smooth log-space correction (a few cubic
+B-spline coefficients over body position, pulled toward zero by a Gaussian
+prior) lets the two ends taper differently.  That asymmetry is what tells the
+tail from the head: ``orient_tail_last`` reverses a fit whose thinner end came
+first.  A reversed start is an exact mirror image of the forward one under a
+zero-centered prior, so orientation is decided after the fit rather than by
+doubling the starts.
 
 Rendering happens on a padded crop around the observed mask, coarse to fine.
 Pixels outside the camera are never instantiated, so anatomy that leaves the
@@ -17,7 +25,7 @@ Coordinates are ``(x, y)`` pixel centers of the full source image.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Sequence
 
@@ -34,7 +42,7 @@ from .classical import (
     _thin,
     resample_centerline,
 )
-from .latent import cubic_bspline_basis, decode_centerline_torch, encode_centerline
+from .latent import cubic_bspline_basis, decode_centerline, decode_centerline_torch, encode_centerline
 from .observation import soft_dice_energy
 
 
@@ -62,6 +70,12 @@ class MaskFitConfig:
     log_length_lr: float = 0.005
     shape_lr: float = 0.02
     log_width_lr: float = 0.01
+    # Asymmetric width: the template is multiplied by exp of a mean-centered
+    # cubic B-spline over body position (0 disables the correction).  The
+    # Gaussian prior toward zero decides the profile where the mask does not.
+    width_coefficients: int = 6
+    width_shape_lr: float = 0.01
+    width_shape_prior: float = 1e-3
     length_bounds_px: tuple[float, float] = (250.0, 750.0)
     width_bounds_px: tuple[float, float] = (15.0, 90.0)
     # Zero by default: under Adam even a tiny consistent regularizer gradient
@@ -83,6 +97,8 @@ class Initialization:
     name: str
     latent: FloatArray
     width_px: float
+    # Log-space width correction coefficients; ``None`` starts symmetric.
+    width_shape: FloatArray | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +134,7 @@ class MaskFitResult:
     points_in_fov: int
     body_length_px: float
     extra_iou: dict[str, float] = field(default_factory=dict)
+    width_shape: FloatArray = field(default_factory=lambda: np.zeros(0))
 
 
 def default_width_template(n_points: int = 100, cap_fraction: float = 0.12) -> FloatArray:
@@ -283,6 +300,67 @@ def standard_initializations(
     return starts
 
 
+def reverse_initialization(
+    start: Initialization, *, config: MaskFitConfig = MaskFitConfig()
+) -> Initialization:
+    """The same starting body traversed from the other end.
+
+    The clamped uniform B-spline bases are mirror-symmetric, so the width
+    correction reverses coefficient-wise; the centerline is re-encoded.
+    """
+
+    curve = decode_centerline(start.latent, config.coefficients)[::-1]
+    latent = encode_centerline(curve, config.coefficients)
+    shape = None if start.width_shape is None else np.asarray(start.width_shape, dtype=np.float64)[::-1].copy()
+    return Initialization(f"{start.name}_reversed", latent, start.width_px, shape)
+
+
+def taper_asymmetry(width_profile: NDArray[np.generic], fraction: float = 0.3) -> float:
+    """Mean log width over the last ``fraction`` of the body minus the first.
+
+    Negative means the last end is the thinner one.  The tail of *C. elegans*
+    tapers over a longer stretch than the head, so the sign labels the ends.
+    """
+
+    profile = np.asarray(width_profile, dtype=np.float64)
+    if profile.ndim != 1 or len(profile) < 2 or not 0 < fraction <= 0.5:
+        raise ValueError("width_profile must be 1-D and 0 < fraction <= 0.5")
+    n = max(1, int(round(fraction * len(profile))))
+    log_profile = np.log(np.clip(profile, 1e-6, None))
+    return float(log_profile[-n:].mean() - log_profile[:n].mean())
+
+
+def reverse_result(result: MaskFitResult, *, config: MaskFitConfig = MaskFitConfig()) -> MaskFitResult:
+    """The same fit with the body traversed from the other end."""
+
+    curve = result.centerline_xy[::-1].copy()
+    return replace(
+        result,
+        latent=encode_centerline(curve, config.coefficients),
+        centerline_xy=curve,
+        width_profile=result.width_profile[::-1].copy(),
+        width_shape=result.width_shape[::-1].copy(),
+    )
+
+
+def orient_tail_last(
+    result: MaskFitResult,
+    *,
+    config: MaskFitConfig = MaskFitConfig(),
+    fraction: float = 0.3,
+    minimum_asymmetry: float = 1e-6,
+) -> tuple[MaskFitResult, bool]:
+    """Reverse the fit when its first end is the thinner one; returns whether it was reversed.
+
+    A symmetric profile (correction disabled) is left as fitted: its asymmetry
+    is float noise, below ``minimum_asymmetry``.
+    """
+
+    if taper_asymmetry(result.width_profile, fraction) > minimum_asymmetry:
+        return reverse_result(result, config=config), True
+    return result, False
+
+
 def fill_narrow_holes(
     mask: NDArray[np.generic],
     radius: int,
@@ -418,10 +496,23 @@ class _MaskFitState(nn.Module):
         self.log_length = nn.Parameter(latents[:, k + 1].clamp_min(1.0).log())
         self.centroid = nn.Parameter(latents[:, k + 2 :].clone())
         self.log_width = nn.Parameter(widths.clamp_min(1.0).log())
+        kw = config.width_coefficients
+        if kw < 0 or 0 < kw < 4:
+            raise ValueError("width_coefficients must be 0 or at least 4")
+        shapes = np.zeros((len(starts), kw), dtype=np.float64)
+        for index, start in enumerate(starts):
+            if start.width_shape is not None:
+                values = np.asarray(start.width_shape, dtype=np.float64)
+                if values.shape != (kw,):
+                    raise ValueError(f"width_shape of start {index} must have shape [{kw}]")
+                shapes[index] = values
+        self.width_shape = nn.Parameter(torch.as_tensor(shapes, dtype=torch.float32, device=device))
         self.register_buffer(
             "basis",
             torch.as_tensor(cubic_bspline_basis(config.n_points - 1, k), dtype=torch.float32, device=device),
         )
+        width_basis = cubic_bspline_basis(config.n_points, kw) if kw else np.zeros((config.n_points, 0))
+        self.register_buffer("width_basis", torch.as_tensor(width_basis, dtype=torch.float32, device=device))
         self.config = config
 
     def parameter_snapshot(self) -> list[Tensor]:
@@ -440,17 +531,38 @@ class _MaskFitState(nn.Module):
     def centerline(self) -> Tensor:
         return decode_centerline_torch(self.latent(), self.basis, self.config.coefficients)
 
+    def log_width_correction(self) -> Tensor:
+        """Mean-centered log correction per body position, ``[B, n_points]``."""
+
+        if self.width_shape.shape[1] == 0:
+            return torch.zeros(
+                (len(self.width_shape), self.config.n_points), dtype=torch.float32, device=self.width_shape.device
+            )
+        correction = self.width_shape @ self.width_basis.T
+        return correction - correction.mean(1, keepdim=True)
+
+    def diameter(self, template: Tensor) -> Tensor:
+        """Full width along the body: scale times template times the correction."""
+
+        return (self.log_width[:, None] + self.log_width_correction()).exp() * template[None, :]
+
     def optimizer(self) -> torch.optim.Optimizer:
         c = self.config
-        return torch.optim.Adam(
-            [
-                {"params": [self.centroid], "lr": c.translation_lr},
-                {"params": [self.rotation], "lr": c.rotation_lr},
-                {"params": [self.log_length], "lr": c.log_length_lr},
-                {"params": [self.shape], "lr": c.shape_lr},
-                {"params": [self.log_width], "lr": c.log_width_lr},
-            ]
-        )
+        groups = [
+            {"params": [self.centroid], "lr": c.translation_lr},
+            {"params": [self.rotation], "lr": c.rotation_lr},
+            {"params": [self.log_length], "lr": c.log_length_lr},
+            {"params": [self.shape], "lr": c.shape_lr},
+            {"params": [self.log_width], "lr": c.log_width_lr},
+        ]
+        if self.width_shape.shape[1]:
+            groups.append({"params": [self.width_shape], "lr": c.width_shape_lr})
+        return torch.optim.Adam(groups)
+
+    def width_prior(self) -> Tensor:
+        if self.width_shape.shape[1] == 0:
+            return torch.zeros(len(self.width_shape), dtype=torch.float32, device=self.width_shape.device)
+        return self.config.width_shape_prior * self.width_shape.square().sum(1)
 
     def regularization(self, centerline: Tensor, crop: CropWindow) -> Tensor:
         c = self.config
@@ -473,7 +585,7 @@ class _MaskFitState(nn.Module):
             escape = escape + (crop.y0 - y).clamp_min(0).square().mean(1)
         if crop.y1 < crop.image_height:
             escape = escape + (y - (crop.y1 - 1)).clamp_min(0).square().mean(1)
-        return smooth + c.bound_weight * bounds + c.crop_escape_weight * escape
+        return smooth + c.bound_weight * bounds + c.crop_escape_weight * escape + self.width_prior()
 
 
 def render_tube_segments(
@@ -602,7 +714,7 @@ def fit_mask(
 
     def energy(factor: int) -> tuple[Tensor, Tensor]:
         centerline = state.centerline()
-        width = state.log_width.exp()[:, None] * template_t[None, :]
+        width = state.diameter(template_t)
         rendered = _render_in_crop(centerline, width, crop, factor, config.edge_softness)
         dice = soft_dice_energy(rendered, stage_target(factor))
         return dice, dice + state.regularization(centerline, crop)
@@ -643,13 +755,13 @@ def fit_mask(
         final_dice, _ = energy(1)
         centerline = state.centerline()
         width_scale = state.log_width.exp()
-        width = width_scale[:, None] * template_t[None, :]
+        width = state.diameter(template_t)
         rendered = _render_in_crop(centerline, width, crop, 1, config.edge_softness)
         hard = (rendered >= config.hard_threshold).cpu().numpy()
         target_np = binary[crop.y0 : crop.y1, crop.x0 : crop.x1]
         # Initial hard IoU for the record: render the starting states once more.
         start_state = _MaskFitState(initializations, config, resolved_device)
-        start_width = start_state.log_width.exp()[:, None] * template_t[None, :]
+        start_width = start_state.diameter(template_t)
         start_hard = (
             _render_in_crop(start_state.centerline(), start_width, crop, 1, config.edge_softness)
             >= config.hard_threshold
@@ -694,4 +806,5 @@ def fit_mask(
         points_in_fov=in_fov,
         body_length_px=float(np.linalg.norm(np.diff(best_centerline, axis=0), axis=1).sum()),
         extra_iou=extra,
+        width_shape=state.width_shape[best].detach().cpu().numpy().astype(np.float64),
     )
