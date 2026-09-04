@@ -1,0 +1,216 @@
+{
+ "before": "2026-09-04T14-00-21Z_2024-05-28-02_f000000-001199_asym6",
+ "after": "2026-09-04T15-52-08Z_2024-05-28-02_f000000-001199_prior_final",
+ "prior": {
+  "length_px": 778.3315519931032,
+  "log_length_sigma": 0.05,
+  "width_px": 43.59420640298714,
+  "log_width_sigma": 0.05,
+  "frames_used": 16,
+  "frames_candidates": 416,
+  "selection": {
+   "min_iou": 0.85,
+   "min_taper": 0.1,
+   "area_ratio": 0.15
+  }
+ },
+ "prior_width_shape": [
+  -0.286,
+  0.024,
+  0.323,
+  0.342,
+  -0.067,
+  -0.555
+ ],
+ "bootstrap": {
+  "frames_sampled": 442,
+  "frames_with_worm": 416,
+  "frames_fit": 416,
+  "frames_used": 16,
+  "selection": {
+   "min_iou": 0.85,
+   "min_taper": 0.1,
+   "area_ratio": 0.15
+  },
+  "fit_length_px_p10_p50_p90": [
+   505.0773900085037,
+   617.4877440842349,
+   780.6719681152716
+  ],
+  "seconds": 373.27833043877035
+ },
+ "frames": 1200,
+ "iou_median_before": 0.9748278285768216,
+ "iou_median_after": 0.9684738327009013,
+ "iou_p10_before": 0.9503027019322,
+ "iou_p10_after": 0.955437845063719,
+ "iou_delta_median": -0.004020739267317386,
+ "frames_better_by_0.01": 251,
+ "frames_worse_by_0.01": 352,
+ "fraction_ge_0.9_before": 0.9983333333333333,
+ "fraction_ge_0.9_after": 0.995,
+ "length_before_p10_p50_p90": [
+  514.882844443831,
+  641.159623849265,
+  750.9929978954872
+ ],
+ "length_after_p10_p50_p90": [
+  770.6720244724763,
+  790.7635333648634,
+  800.1387873131916
+ ],
+ "frames_at_750_bound_before": 372,
+ "frames_beyond_2sigma_after": 6,
+ "in_view_below_1_before": 608,
+ "in_view_below_1_after": 872,
+ "in_view_after_p10_p50": [
+  0.61,
+  0.78
+ ],
+ "fit_ms_before": 182.2070144264338,
+ "fit_ms_after": 172.0988663317015,
+ "total_ms_after": 249.8038350371644,
+ "bootstrap_seconds": 373.27833043877035,
+ "orientation_after": {
+  "gap_median": 0.0003903321921825409,
+  "gap_p10": 6.977617740631105e-05,
+  "frames_gap_below_0.002": 1181,
+  "frames_gap_below_0.01": 1200,
+  "reversed_start_won": 833
+ },
+ "width_model_after": {
+  "coefficients": 6,
+  "prior": 0.01,
+  "tail_placed_last": true,
+  "frames_reversed": 0,
+  "taper_asymmetry": {
+   "median": -0.0920367798531414,
+   "p10": -0.1359552424083521,
+   "p90": -0.035492023934478915,
+   "frames_with_abs_below_0.1": 697
+  },
+  "orientation_consistency": {
+   "consecutive_pairs": 1199,
+   "fraction_consistent": 0.8423686405337781,
+   "flips": 189
+  }
+ },
+ "frame_450": {
+  "before": {
+   "iou": 0.691,
+   "len": 551,
+   "inview": 1.0
+  },
+  "after": {
+   "iou": 0.654,
+   "len": 524,
+   "inview": 1.0,
+   "gap": 0.0067,
+   "taper": -0.64,
+   "best": "skeleton_longest_path_reversed"
+  }
+ },
+ "frame_451": {
+  "before": {
+   "iou": 0.673,
+   "len": 534,
+   "inview": 1.0
+  },
+  "after": {
+   "iou": 0.62,
+   "len": 519,
+   "inview": 1.0,
+   "gap": 0.0059,
+   "taper": -0.57,
+   "best": "skeleton_longest_path_reversed"
+  }
+ },
+ "frame_0": {
+  "before": {
+   "iou": 0.974,
+   "len": 581,
+   "inview": 1.0
+  },
+  "after": {
+   "iou": 0.969,
+   "len": 788,
+   "inview": 0.72,
+   "gap": 0.0002,
+   "taper": -0.1,
+   "best": "skeleton_longest_path"
+  }
+ },
+ "frame_345": {
+  "before": {
+   "iou": 0.976,
+   "len": 519,
+   "inview": 1.0
+  },
+  "after": {
+   "iou": 0.969,
+   "len": 795,
+   "inview": 0.62,
+   "gap": 0.0001,
+   "taper": -0.07,
+   "best": "skeleton_longest_path_reversed"
+  }
+ },
+ "frame_690": {
+  "before": {
+   "iou": 0.976,
+   "len": 535,
+   "inview": 0.95
+  },
+  "after": {
+   "iou": 0.972,
+   "len": 804,
+   "inview": 0.63,
+   "gap": 0.0007,
+   "taper": -0.12,
+   "best": "skeleton_longest_path_reversed"
+  }
+ },
+ "frame_1052": {
+  "before": {
+   "iou": 0.925,
+   "len": 750,
+   "inview": 1.0
+  },
+  "after": {
+   "iou": 0.918,
+   "len": 758,
+   "inview": 1.0,
+   "gap": 0.0006,
+   "taper": -0.15,
+   "best": "skeleton_longest_path"
+  }
+ },
+ "orientation_flips_after": 189,
+ "orientation_gap_quartiles": [
+  0.0001939833164215088,
+  0.0003903321921825409,
+  0.0006596241146326065
+ ],
+ "after_worst_frames": [
+  [
+   451,
+   0.62
+  ],
+  [
+   450,
+   0.654
+  ],
+  [
+   1181,
+   0.791
+  ],
+  [
+   18,
+   0.867
+  ],
+  [
+   64,
+   0.871
+  ]
+ ]
+}

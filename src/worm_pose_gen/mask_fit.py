@@ -76,8 +76,21 @@ class MaskFitConfig:
     width_coefficients: int = 6
     width_shape_lr: float = 0.01
     width_shape_prior: float = 1e-3
-    length_bounds_px: tuple[float, float] = (250.0, 750.0)
-    width_bounds_px: tuple[float, float] = (15.0, 90.0)
+    # Center of the width correction (tail last); ``None`` means zero, the
+    # symmetric template.  A recording prior (``recording_prior.py``) sets it.
+    width_shape_prior_mean: tuple[float, ...] | None = None
+    # Hard bounds, ``None`` to remove them.  Recording priors replace them.
+    length_bounds_px: tuple[float, float] | None = (250.0, 750.0)
+    width_bounds_px: tuple[float, float] | None = (15.0, 90.0)
+    # Gaussian priors on log body length and log width scale, centered on a
+    # recording's values; ``None`` disables them.  ``prior_weight`` converts a
+    # squared deviation in sigmas into dice units: 0.0025 makes a two-sigma
+    # deviation cost 0.01, about the energy gap between a good and a poor fit.
+    length_prior_px: float | None = None
+    length_prior_log_sigma: float = 0.05
+    width_prior_px: float | None = None
+    width_prior_log_sigma: float = 0.05
+    prior_weight: float = 0.0025
     # Zero by default: under Adam even a tiny consistent regularizer gradient
     # becomes a full-size step once the data gradient vanishes.
     shape_smoothness: float = 0.0
@@ -271,7 +284,8 @@ def init_from_moments(
     width = float(config.default_width_px)
     # The mask area gives a crude width for a body of the prior length.
     area_width = float(binary.sum()) / max(length, 1.0)
-    if np.isfinite(area_width) and config.width_bounds_px[0] < area_width < config.width_bounds_px[1]:
+    wlow, whigh = config.width_bounds_px or (3.0, float("inf"))
+    if np.isfinite(area_width) and wlow < area_width < whigh:
         width = area_width
     name = "moments_straight" if curvature == 0 else f"moments_arc_{curvature:+.4f}"
     return Initialization(name, latent, width)
@@ -313,6 +327,95 @@ def reverse_initialization(
     latent = encode_centerline(curve, config.coefficients)
     shape = None if start.width_shape is None else np.asarray(start.width_shape, dtype=np.float64)[::-1].copy()
     return Initialization(f"{start.name}_reversed", latent, start.width_px, shape)
+
+
+def extend_start_to_length(
+    start: Initialization,
+    mask: NDArray[np.generic],
+    target_length_px: float,
+    *,
+    border_margin: float = 80.0,
+    config: MaskFitConfig = MaskFitConfig(),
+) -> Initialization:
+    """Lengthen a start to the prior length, straight out past the camera edge.
+
+    A start built from the mask is as long as the visible body.  Mask pixels
+    on the image border mark where the body leaves the camera; an end of the
+    start within ``border_margin`` pixels of such pixels is cut off, so the
+    missing length is added there along the end tangent (split between both
+    ends if both are cut).  Skeleton ends stop well inside a body that exits
+    through a wide cross-section, hence the generous margin.  A start whose
+    ends are both inside the image is returned unchanged: its length is the
+    mask's, and the fit decides.
+    """
+
+    binary = np.asarray(mask, dtype=bool)
+    curve = decode_centerline(start.latent, config.coefficients)
+    height, width = binary.shape[:2]
+    length = float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum())
+    missing = float(target_length_px) - length
+    if missing <= 1.0:
+        return start
+    edge = np.zeros_like(binary)
+    edge[:2] = edge[-2:] = True
+    edge[:, :2] = edge[:, -2:] = True
+    yy, xx = np.nonzero(binary & edge)
+    if not len(yy):
+        return start
+    border_xy = np.column_stack((xx, yy)).astype(np.float64)
+
+    def at_border(point: NDArray[np.float64]) -> bool:
+        return bool(np.linalg.norm(border_xy - point, axis=1).min() <= border_margin)
+
+    ends = [at_border(curve[0]), at_border(curve[-1])]
+    if all(ends):
+        # Both ends near border pixels: give the length to the nearer one
+        # unless the border pixels split into two far-apart groups.
+        d0 = np.linalg.norm(border_xy - curve[0], axis=1)
+        d1 = np.linalg.norm(border_xy - curve[-1], axis=1)
+        near0, near1 = d0 <= border_margin, d1 <= border_margin
+        if not (near0 & ~near1).any() or not (near1 & ~near0).any():
+            ends = [bool(d0.min() <= d1.min()), bool(d1.min() < d0.min())]
+    if not any(ends):
+        return start
+    share = missing / sum(ends)
+
+    def continuation(end: NDArray[np.float64], inner: NDArray[np.float64]) -> list[NDArray[np.float64]]:
+        # Head for the border pixels nearest this end (where the body leaves
+        # the camera), then keep going straight; a skeleton's last segment
+        # inside a wide exit blob is not a reliable direction.
+        distance = np.linalg.norm(border_xy - end, axis=1)
+        exit_xy = border_xy[distance <= distance.min() + 0.5 * border_margin].mean(0)
+        to_exit = exit_xy - end
+        reach = float(np.linalg.norm(to_exit))
+        if reach < 2.0:
+            direction = end - inner
+            direction /= max(float(np.linalg.norm(direction)), 1e-6)
+            return [(end + direction * share)[None, :]]
+        direction = to_exit / reach
+        if reach >= share:
+            return [(end + direction * share)[None, :]]
+        return [exit_xy[None, :], (exit_xy + direction * (share - reach))[None, :]]
+
+    pieces = [curve]
+    if ends[0]:
+        pieces = continuation(curve[0], curve[1])[::-1] + pieces
+    if ends[1]:
+        pieces = pieces + continuation(curve[-1], curve[-2])
+    extended = resample_centerline(np.vstack(pieces), config.n_points)
+    return replace(start, latent=encode_centerline(extended, config.coefficients))
+
+
+def orientation_pair(start: Initialization, *, config: MaskFitConfig = MaskFitConfig()) -> list[Initialization]:
+    """The start and its reversal with the *same* width correction.
+
+    Under an asymmetric width prior the model's tail is always at the end of
+    the body, so both orientations begin at the prior's profile and the
+    energy decides which physical end is the tail.
+    """
+
+    reversed_start = reverse_initialization(start, config=config)
+    return [start, replace(reversed_start, width_shape=start.width_shape)]
 
 
 def taper_asymmetry(width_profile: NDArray[np.generic], fraction: float = 0.3) -> float:
@@ -513,6 +616,12 @@ class _MaskFitState(nn.Module):
         )
         width_basis = cubic_bspline_basis(config.n_points, kw) if kw else np.zeros((config.n_points, 0))
         self.register_buffer("width_basis", torch.as_tensor(width_basis, dtype=torch.float32, device=device))
+        mean = np.zeros(kw, dtype=np.float64)
+        if config.width_shape_prior_mean is not None:
+            mean = np.asarray(config.width_shape_prior_mean, dtype=np.float64)
+            if mean.shape != (kw,):
+                raise ValueError(f"width_shape_prior_mean must have shape [{kw}]")
+        self.register_buffer("width_shape_mean", torch.as_tensor(mean, dtype=torch.float32, device=device))
         self.config = config
 
     def parameter_snapshot(self) -> list[Tensor]:
@@ -560,32 +669,53 @@ class _MaskFitState(nn.Module):
         return torch.optim.Adam(groups)
 
     def width_prior(self) -> Tensor:
+        """Gaussian pull of the width correction toward its prior mean."""
+
         if self.width_shape.shape[1] == 0:
             return torch.zeros(len(self.width_shape), dtype=torch.float32, device=self.width_shape.device)
-        return self.config.width_shape_prior * self.width_shape.square().sum(1)
+        return self.config.width_shape_prior * (self.width_shape - self.width_shape_mean[None, :]).square().sum(1)
+
+    def size_regularization(self) -> Tensor:
+        """Hard bounds (when set) and Gaussian priors (when set) on length and width scale."""
+
+        c = self.config
+        length = self.log_length.exp()
+        width = self.log_width.exp()
+        total = torch.zeros_like(length)
+        if c.length_bounds_px is not None:
+            low, high = c.length_bounds_px
+            total = total + c.bound_weight * ((low - length).clamp_min(0).square() + (length - high).clamp_min(0).square())
+        if c.width_bounds_px is not None:
+            wlow, whigh = c.width_bounds_px
+            total = total + c.bound_weight * ((wlow - width).clamp_min(0).square() + (width - whigh).clamp_min(0).square())
+        if c.length_prior_px is not None:
+            deviation = (self.log_length - math.log(c.length_prior_px)) / c.length_prior_log_sigma
+            total = total + c.prior_weight * deviation.square()
+        if c.width_prior_px is not None:
+            deviation = (self.log_width - math.log(c.width_prior_px)) / c.width_prior_log_sigma
+            total = total + c.prior_weight * deviation.square()
+        return total
 
     def regularization(self, centerline: Tensor, crop: CropWindow) -> Tensor:
         c = self.config
         smooth = c.shape_smoothness * (self.shape[:, 1:] - self.shape[:, :-1]).square().mean(1)
         length = self.log_length.exp()
-        low, high = c.length_bounds_px
-        bounds = (low - length).clamp_min(0).square() + (length - high).clamp_min(0).square()
-        width = self.log_width.exp()
-        wlow, whigh = c.width_bounds_px
-        bounds = bounds + (wlow - width).clamp_min(0).square() + (width - whigh).clamp_min(0).square()
         x, y = centerline.unbind(-1)
-        escape = torch.zeros_like(length)
+        escape = torch.zeros_like(x)
         # Only crop edges strictly inside the image constrain the body; a crop
-        # edge that coincides with the camera edge is a censoring boundary.
+        # edge that coincides with the camera edge is a censoring boundary,
+        # and a point past the camera edge is censored altogether.
         if crop.x0 > 0:
-            escape = escape + (crop.x0 - x).clamp_min(0).square().mean(1)
+            escape = escape + (crop.x0 - x).clamp_min(0).square()
         if crop.x1 < crop.image_width:
-            escape = escape + (x - (crop.x1 - 1)).clamp_min(0).square().mean(1)
+            escape = escape + (x - (crop.x1 - 1)).clamp_min(0).square()
         if crop.y0 > 0:
-            escape = escape + (crop.y0 - y).clamp_min(0).square().mean(1)
+            escape = escape + (crop.y0 - y).clamp_min(0).square()
         if crop.y1 < crop.image_height:
-            escape = escape + (y - (crop.y1 - 1)).clamp_min(0).square().mean(1)
-        return smooth + c.bound_weight * bounds + c.crop_escape_weight * escape + self.width_prior()
+            escape = escape + (y - (crop.y1 - 1)).clamp_min(0).square()
+        inside_camera = ((x >= 0) & (x < crop.image_width) & (y >= 0) & (y < crop.image_height)).to(x.dtype)
+        escape = (escape * inside_camera).mean(1)
+        return smooth + self.size_regularization() + c.crop_escape_weight * escape + self.width_prior()
 
 
 def render_tube_segments(
@@ -752,7 +882,7 @@ def fit_mask(
         state.restore_rows(best_snapshot, rows)
 
     with torch.no_grad():
-        final_dice, _ = energy(1)
+        final_dice, final_loss = energy(1)
         centerline = state.centerline()
         width_scale = state.log_width.exp()
         width = state.diameter(template_t)
@@ -774,11 +904,13 @@ def fit_mask(
                 "name": start.name,
                 "initial_soft_dice_energy": float(initial_dice[index]),
                 "final_soft_dice_energy": float(final_dice[index]),
+                "final_energy": float(final_loss[index]),
                 "initial_iou": hard_iou(start_hard[index], target_np),
                 "final_iou": hard_iou(hard[index], target_np),
             }
         )
-    best = int(torch.argmin(final_dice))
+    # Winner by total energy: overlap plus priors.
+    best = int(torch.argmin(final_loss))
     best_centerline = centerline[best].cpu().numpy().astype(np.float64)
     in_fov = int(
         np.sum(

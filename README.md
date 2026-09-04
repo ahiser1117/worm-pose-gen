@@ -155,10 +155,24 @@ images (mask the tube misses in blue, tube outside the mask in red) for its
 `--residual-frames` worst frames and any `--dump-frames`;
 `scripts/render_pose_run.py` produces the video and residual images for a
 stored run without refitting, and `scripts/compare_pose_runs.py` puts
-several runs side by side on the same frames. The plan this belongs to, with
+several runs side by side on the same frames.
+
+By default the run first bootstraps a recording prior: frames spread over
+the whole recording are fit with the hard bounds opened, whole worms (mask
+clear of the image border) are kept, and robust medians of body length,
+width scale and width profile become Gaussian priors that replace the hard
+bounds (`recording_prior.json` in the run directory, cached under
+`/temp_data4/alex/external_artifacts/recording_priors/`). A body that
+leaves the camera is started at the prior length, extended off camera
+through the point where the mask meets the border, and its off-camera part
+is censored; the in-view fraction reports how much was seen. Every frame is
+started in both orientations and the energy gap between them is stored.
+`--prior none` restores the hard bounds, `--prior-file` reuses a stored
+prior, `--rebootstrap` ignores the cache. The plan this belongs to, with
 measurements, is [`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
-`scripts/evaluate_width_model_unannotated30.py` compares width models on the
-30-frame set.
+`scripts/evaluate_width_model_unannotated30.py` and
+`scripts/evaluate_recording_prior_unannotated30.py` compare width models and
+priors on the 30-frame set.
 
 ## Evaluate the frozen pipeline
 
