@@ -1,0 +1,187 @@
+{
+ "started_at": "2026-09-04T15:52:08+00:00",
+ "finished_at": "2026-09-04T16:03:23+00:00",
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+ "frames": [
+  0,
+  1199
+ ],
+ "step": 1,
+ "frame_count": 1200,
+ "checkpoint": {
+  "path": "/home/alex/git/worm-pose-gen/checkpoints/segmenter/best.ckpt",
+  "exists": true,
+  "size_bytes": 172054439,
+  "modified_at": "2026-09-04T00:39:03+00:00",
+  "sha256": "121f8418a0feae4c1e01769df357c4dca7fcd4ead3dc2574006e5e4ce6e327a8"
+ },
+ "git": {
+  "commit": "a7e462e7589ea97a2457c54c8fda29abbb394655",
+  "dirty": true
+ },
+ "device": "cuda:0",
+ "threshold": 0.5,
+ "mask_cleanup": {
+  "fill_holes_radius_px": 8,
+  "largest_component": true,
+  "min_worm_pixels": 500
+ },
+ "width_template": "default_width_template",
+ "preset": "fast",
+ "starts": "skeleton+reversed",
+ "prior": {
+  "length_px": 778.3315519931032,
+  "log_length_sigma": 0.05,
+  "width_px": 43.59420640298714,
+  "log_width_sigma": 0.05,
+  "width_shape": [
+   -0.2857084423303604,
+   0.023976732045412064,
+   0.3228251785039902,
+   0.3422497808933258,
+   -0.06740876100957394,
+   -0.5547966957092285
+  ],
+  "width_shape_sigma": [
+   0.05,
+   0.06565624967738985,
+   0.05,
+   0.05,
+   0.05,
+   0.05410673604011535
+  ],
+  "frames_used": 16,
+  "frames_candidates": 416,
+  "selection": {
+   "min_iou": 0.85,
+   "min_taper": 0.1,
+   "area_ratio": 0.15
+  },
+  "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+  "source": "bootstrap of 416 frames spread over 20382, preset balanced"
+ },
+ "prior_source": "bootstrap",
+ "bootstrap": {
+  "frames_sampled": 442,
+  "frames_with_worm": 416,
+  "frames_fit": 416,
+  "frames_used": 16,
+  "selection": {
+   "min_iou": 0.85,
+   "min_taper": 0.1,
+   "area_ratio": 0.15
+  },
+  "fit_length_px_p10_p50_p90": [
+   505.0773900085037,
+   617.4877440842349,
+   780.6719681152716
+  ],
+  "seconds": 373.27833043877035
+ },
+ "init_workers": 4,
+ "flat_field_seconds": 0.0538131445646286,
+ "seconds": {
+  "read": 0.894833373837173,
+  "flat_field": 3.5271891159936786,
+  "network": 12.367895283736289,
+  "cleanup": 24.311729123815894,
+  "init": 39.05078951828182,
+  "fit": 206.51863959804177,
+  "video": 13.093526030890644
+ },
+ "ms_per_frame": {
+  "read": 0.7456944781976441,
+  "flat_field": 2.9393242633280656,
+  "network": 10.306579403113574,
+  "cleanup": 20.259774269846577,
+  "init": 32.54232459856818,
+  "fit": 172.0988663317015,
+  "video": 10.911271692408869
+ },
+ "total_ms_per_frame": 249.8038350371644,
+ "frames_fitted": 1200,
+ "frames_skipped": {
+  "empty_mask": 0,
+  "small_mask": 0,
+  "no_starts": 0,
+  "fit_error": 0
+ },
+ "iou": {
+  "median": 0.9684738327009013,
+  "p10": 0.955437845063719,
+  "min": 0.6200983227299017,
+  "fraction_at_least_0.8": 0.9975,
+  "fraction_at_least_0.9": 0.995
+ },
+ "body_length_px": {
+  "median": 790.7635333648634,
+  "p10": 770.6720244724763,
+  "p90": 800.1387873131916,
+  "at_upper_bound": null,
+  "beyond_2_sigma_of_prior": 6
+ },
+ "orientation": {
+  "gap_median": 0.0003903321921825409,
+  "gap_p10": 6.977617740631105e-05,
+  "frames_gap_below_0.002": 1181,
+  "frames_gap_below_0.01": 1200,
+  "reversed_start_won": 833
+ },
+ "width_px": {
+  "median": 43.55728340148926
+ },
+ "width_model": {
+  "coefficients": 6,
+  "prior": 0.01,
+  "tail_placed_last": true,
+  "frames_reversed": 0,
+  "taper_asymmetry": {
+   "median": -0.0920367798531414,
+   "p10": -0.1359552424083521,
+   "p90": -0.035492023934478915,
+   "frames_with_abs_below_0.1": 697
+  },
+  "orientation_consistency": {
+   "consecutive_pairs": 1199,
+   "fraction_consistent": 0.8423686405337781,
+   "flips": 189
+  }
+ },
+ "in_view_fraction": {
+  "median": 0.78,
+  "frames_below_1": 872
+ },
+ "best_start_counts": {
+  "skeleton_longest_path": 367,
+  "skeleton_longest_path_reversed": 833
+ },
+ "mask": {
+  "worm_pixels_median": 28172.5,
+  "frames_with_multiple_components": 197,
+  "pixels_outside_largest_median": 0.0,
+  "frames_with_filling": 53
+ },
+ "outputs": {
+  "poses": "/temp_data4/alex/external_artifacts/poses/2026-09-04T15-52-08Z_2024-05-28-02_f000000-001199_prior_final/poses.npz",
+  "video": "/temp_data4/alex/external_artifacts/poses/2026-09-04T15-52-08Z_2024-05-28-02_f000000-001199_prior_final/overlay.mp4",
+  "residual_frames": [
+   "frame_000000_iou0.969.png",
+   "frame_000011_iou0.941.png",
+   "frame_000018_iou0.867.png",
+   "frame_000019_iou0.875.png",
+   "frame_000064_iou0.871.png",
+   "frame_000071_iou0.971.png",
+   "frame_000131_iou0.967.png",
+   "frame_000345_iou0.969.png",
+   "frame_000352_iou0.950.png",
+   "frame_000450_iou0.654.png",
+   "frame_000451_iou0.620.png",
+   "frame_000690_iou0.972.png",
+   "frame_001010_iou0.959.png",
+   "frame_001021_iou0.970.png",
+   "frame_001052_iou0.918.png",
+   "frame_001053_iou0.904.png",
+   "frame_001181_iou0.791.png"
+  ]
+ }
+}

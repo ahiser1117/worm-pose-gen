@@ -80,6 +80,19 @@ def render_tube(
     return tube
 
 
+def touches_border(mask: NDArray[np.generic], margin: int = 1) -> bool:
+    """Whether any mask pixel lies within ``margin`` pixels of the image border.
+
+    A body cut off by the camera edge keeps every centerline point inside the
+    image, so the in-view count cannot tell it from a whole body; the mask
+    reaching the border can.
+    """
+
+    binary = np.asarray(mask, dtype=bool)
+    m = max(1, margin)
+    return bool(binary[:m].any() or binary[-m:].any() or binary[:, :m].any() or binary[:, -m:].any())
+
+
 def boundary(mask: NDArray[np.generic]) -> BoolArray:
     """Mask pixels with a 4-neighbor outside the mask."""
 

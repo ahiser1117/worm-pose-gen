@@ -14,6 +14,15 @@ timing), ``poses.npz`` (per-frame arrays), with ``--video`` an MP4 overlay
 of the fitted tube outline and centerline on the flat-fielded frame, and
 residual images (mask the tube misses in blue, tube outside the mask in red)
 for the ``--residual-frames`` worst frames plus any ``--dump-frames``.
+
+By default a recording prior is bootstrapped first (``--prior bootstrap``):
+``--bootstrap-frames`` frames spread over the whole recording are fit with
+the bounds opened wide, and robust medians of body length, width scale, and
+width profile replace the hard bounds with Gaussian priors
+(``recording_prior.json`` in the run directory, cached under
+``--prior-cache``).  Under that asymmetric prior every frame is started in
+both orientations and the energy gap between them is stored as the
+orientation confidence.
 ``scripts/render_pose_run.py`` produces the same video and residual images
 for a stored run without refitting.
 
@@ -46,10 +55,13 @@ from worm_pose_gen.mask_fit import (
     Initialization,
     MaskFitResult,
     default_width_template,
+    extend_start_to_length,
     orient_tail_last,
+    orientation_pair,
     standard_initializations,
     taper_asymmetry,
 )
+from worm_pose_gen.recording_prior import RecordingPrior, bootstrap_prior_from_masks
 from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -66,8 +78,10 @@ STAGES = ("read", "flat_field", "network", "cleanup", "init", "fit", "video")
 START_SETS = {
     "skeleton": ("skeleton_longest_path",),
     "skeleton+straight": ("skeleton_longest_path", "moments_straight"),
+    "skeleton+reversed": ("skeleton_longest_path", "skeleton_longest_path_reversed"),
     "all": None,
 }
+DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +114,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--width-prior", type=float, default=None, help="Gaussian prior weight pulling the width correction toward zero")
     parser.add_argument("--no-orient", action="store_true", help="keep the fitted orientation instead of placing the thinner (tail) end last")
+    parser.add_argument(
+        "--prior", default="bootstrap", choices=("bootstrap", "none"),
+        help="bootstrap a recording prior (length, width, width profile) and fit under it, or fit with the hard bounds",
+    )
+    parser.add_argument("--prior-file", type=Path, default=None, help="use this recording_prior.json instead of bootstrapping")
+    parser.add_argument("--bootstrap-frames", type=int, default=64, help="frames spread over the recording for the bootstrap pass")
+    parser.add_argument("--bootstrap-target", type=int, default=12, help="whole-worm fits wanted; the sample is enlarged up to 4x to reach it")
+    parser.add_argument("--bootstrap-preset", default="balanced", choices=tuple(PRESETS))
+    parser.add_argument("--prior-cache", type=Path, default=DEFAULT_PRIOR_CACHE, help="directory of cached priors, one per recording and coefficient count")
+    parser.add_argument("--no-prior-cache", action="store_true", help="neither read nor write the prior cache")
+    parser.add_argument("--rebootstrap", action="store_true", help="ignore a cached prior and bootstrap again")
+    parser.add_argument("--prior-shape-weight", type=float, default=0.01, help="weight of the width-profile prior once a recording prior is active")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -128,14 +154,102 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
     return replace(config, **overrides)
 
 
-def initializations_for(mask: np.ndarray, config: BatchFitConfig, names: tuple[str, ...] | None = None) -> list[Initialization]:
-    """Standard starts, restricted to ``names`` when given (falling back to whatever exists)."""
+def initializations_for(
+    mask: np.ndarray,
+    config: BatchFitConfig,
+    names: tuple[str, ...] | None = None,
+    width_shape: np.ndarray | None = None,
+    target_length_px: float | None = None,
+) -> list[Initialization]:
+    """Standard starts, restricted to ``names`` when given (falling back to whatever exists).
+
+    ``skeleton_longest_path_reversed`` adds the skeleton start traversed from
+    the other end; ``width_shape`` (the prior's profile) is given to every
+    start; with ``target_length_px`` a start whose end touches the image
+    border is lengthened off camera to that length before fitting.
+    """
 
     starts = standard_initializations(mask, config=config)
     if names is None:
-        return starts
-    chosen = [s for s in starts if s.name in names]
-    return chosen if chosen else starts[:1]
+        chosen = starts
+    else:
+        chosen = [s for s in starts if s.name in names] or starts[:1]
+        if target_length_px is not None:
+            chosen = [extend_start_to_length(s, mask, target_length_px, config=config) for s in chosen]
+        if "skeleton_longest_path_reversed" in names:
+            skeleton = next((s for s in chosen if s.name == "skeleton_longest_path"), None)
+            if skeleton is not None:
+                chosen = chosen + [orientation_pair(skeleton, config=config)[1]]
+    if width_shape is not None:
+        chosen = [replace(s, width_shape=np.asarray(width_shape, dtype=np.float64)) for s in chosen]
+    return chosen
+
+
+def orientation_gap(result: MaskFitResult) -> float:
+    """Energy of the best start of the other orientation minus the winner's; NaN without both orientations."""
+
+    reversed_names = {str(r["name"]) for r in result.records if str(r["name"]).endswith("_reversed")}
+    forward = [float(r["final_energy"]) for r in result.records if str(r["name"]) not in reversed_names]
+    reverse = [float(r["final_energy"]) for r in result.records if str(r["name"]) in reversed_names]
+    if not forward or not reverse:
+        return float("nan")
+    winner_reversed = str(result.initializations[result.best_index].name) in reversed_names
+    best = float(result.records[result.best_index]["final_energy"])
+    return (min(forward) if winner_reversed else min(reverse)) - best
+
+
+def flat_fielded(raw: np.ndarray, field) -> np.ndarray:
+    return np.clip(np.rint(apply_flat_field(raw, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
+
+
+def bootstrap_prior(dataset, total: int, field, module, args: argparse.Namespace, config: BatchFitConfig, device: torch.device) -> tuple[RecordingPrior, dict[str, Any]]:
+    """Segment frames spread over the whole recording and estimate its body-size prior."""
+
+    boot_config = replace(
+        PRESETS[args.bootstrap_preset],
+        compile_renderer=not args.no_compile,
+        row_pixel_budget=args.row_pixel_budget,
+        width_coefficients=config.width_coefficients,
+        width_shape_prior=config.width_shape_prior,
+    )
+    seen: set[int] = set()
+    masks: list[np.ndarray] = []
+    prior = results = used = None
+    # Whole worms (mask clear of the border) may be rare; enlarge the sample until enough are found.
+    for factor in (1, 2, 4):
+        count = min(args.bootstrap_frames * factor, total)
+        indices = [i for i in sorted(set(int(v) for v in np.linspace(0, total - 1, count))) if i not in seen]
+        seen.update(indices)
+        for chunk_start in range(0, len(indices), args.batch_size):
+            chunk = indices[chunk_start : chunk_start + args.batch_size]
+            corrected = np.stack([flat_fielded(np.asarray(dataset[i], dtype=np.uint8), field) for i in chunk])
+            probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
+            for prob in probability:
+                mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                if stats["worm_pixels"] >= args.min_worm_pixels:
+                    masks.append(mask)
+        try:
+            prior, results, used = bootstrap_prior_from_masks(masks, config=boot_config, device=device, recording=str(args.recording))
+        except ValueError as error:
+            if factor == 4:
+                raise
+            print(f"bootstrap: {error}; enlarging the sample", flush=True)
+            continue
+        if prior.frames_used >= args.bootstrap_target or count >= total:
+            break
+        print(f"bootstrap: {prior.frames_used} whole worms among {len(used)} fits; enlarging the sample", flush=True)
+    assert prior is not None and results is not None and used is not None
+    prior = replace(prior, source=f"bootstrap of {len(used)} frames spread over {total}, preset {args.bootstrap_preset}")
+    lengths = [r.body_length_px for r in results]
+    info = {
+        "frames_sampled": len(seen),
+        "frames_with_worm": len(masks),
+        "frames_fit": len(used),
+        "frames_used": prior.frames_used,
+        "selection": prior.selection,
+        "fit_length_px_p10_p50_p90": [float(v) for v in np.percentile(lengths, [10, 50, 90])],
+    }
+    return prior, info
 
 
 def _nan(shape: tuple[int, ...]) -> np.ndarray:
@@ -164,7 +278,6 @@ def main() -> int:
         raise SystemExit("--step and --slab must be positive")
     started = utc_now()
     config = build_config(args)
-    start_set = args.starts or ("all" if args.preset == "reference" else "skeleton+straight")
     module = load_segmenter(args.checkpoint, args.device)
     device = module.device
     source = RecordingSource(args.recording, args.dataset_root / "flat_fields")
@@ -186,6 +299,41 @@ def main() -> int:
         run_dir = args.output_dir / f"{timestamp_slug(started)}_{stem}"
         run_dir.mkdir(parents=True, exist_ok=False)
 
+        prior: RecordingPrior | None = None
+        prior_source = None
+        bootstrap_info: dict[str, Any] | None = None
+        bootstrap_seconds = 0.0
+        if args.prior_file is not None:
+            prior, prior_source = RecordingPrior.load(args.prior_file), str(args.prior_file)
+        elif args.prior == "bootstrap":
+            cache_path = None if args.no_prior_cache else args.prior_cache / f"{args.recording.stem}_k{config.width_coefficients}.json"
+            if cache_path is not None and cache_path.exists() and not args.rebootstrap:
+                prior, prior_source = RecordingPrior.load(cache_path), f"cache {cache_path}"
+            else:
+                t = time.perf_counter()
+                prior, bootstrap_info = bootstrap_prior(dataset, total, field, module, args, config, device)
+                bootstrap_seconds = time.perf_counter() - t
+                prior_source = "bootstrap"
+                if cache_path is not None:
+                    prior.save(cache_path)
+                print(
+                    f"bootstrap: length {prior.length_px:.0f} px (log sigma {prior.log_length_sigma:.3f}), width {prior.width_px:.1f} px,"
+                    f" {prior.frames_used} of {bootstrap_info['frames_fit']} fits used, {bootstrap_seconds:.0f} s",
+                    flush=True,
+                )
+        if prior is not None:
+            config = prior.apply(config, shape_weight=args.prior_shape_weight)
+            prior.save(run_dir / "recording_prior.json")
+        if args.starts is not None:
+            start_set = args.starts
+        elif prior is not None:
+            start_set = "skeleton+reversed"
+        else:
+            start_set = "all" if args.preset == "reference" else "skeleton+straight"
+        start_shape = np.asarray(prior.width_shape, dtype=np.float64) if prior is not None else None
+        start_length = prior.length_px if prior is not None else None
+        orient_after_fit = prior is None and not args.no_orient
+
         arrays: dict[str, np.ndarray] = {
             "frame_index": np.asarray(indices, dtype=np.int64),
             "fitted": np.zeros(n, dtype=bool),
@@ -196,6 +344,7 @@ def main() -> int:
             "width_shape": _nan((n, config.width_coefficients)),
             "taper_asymmetry": _nan((n,)),
             "reversed": np.zeros(n, dtype=bool),
+            "orientation_gap": _nan((n,)),
             "iou": _nan((n,)),
             "energy": _nan((n,)),
             "points_in_fov": np.zeros(n, dtype=np.int64),
@@ -256,9 +405,14 @@ def main() -> int:
                 t4 = time.perf_counter()
                 names = START_SETS[start_set]
                 if pool is not None:
-                    starts = list(pool.map(initializations_for, masks, [config] * len(masks), [names] * len(masks)))
+                    starts = list(
+                        pool.map(
+                            initializations_for, masks, [config] * len(masks), [names] * len(masks),
+                            [start_shape] * len(masks), [start_length] * len(masks),
+                        )
+                    )
                 else:
-                    starts = [initializations_for(m, config, names) for m in masks]
+                    starts = [initializations_for(m, config, names, start_shape, start_length) for m in masks]
                 keep = [k for k, s in enumerate(starts) if s]
                 skipped["no_starts"] += len(starts) - len(keep)
                 masks = [masks[k] for k in keep]
@@ -285,9 +439,11 @@ def main() -> int:
                     arrays["n_starts"][row] = len(frame_starts)
                     if result is None:
                         continue
-                    if not args.no_orient:
+                    if orient_after_fit:
                         result, flipped = orient_tail_last(result, config=config)
                         arrays["reversed"][row] = flipped
+                    else:
+                        arrays["orientation_gap"][row] = orientation_gap(result)
                     by_row[row] = result
                     arrays["fitted"][row] = True
                     arrays["width_shape"][row] = result.width_shape
@@ -313,6 +469,8 @@ def main() -> int:
                                 f"  width {arrays['width_px'][row]:.1f} px  in view {arrays['points_in_fov'][row] / config.n_points:.2f}"
                                 f"  taper {arrays['taper_asymmetry'][row]:+.2f}"
                             )
+                            if prior is not None:
+                                caption += f"  gap {arrays['orientation_gap'][row]:.3f}"
                         else:
                             caption += "  no fit"
                         tube = centerline = None
@@ -378,6 +536,9 @@ def main() -> int:
         "width_template": "default_width_template",
         "preset": args.preset,
         "starts": start_set,
+        "prior": None if prior is None else prior.to_dict(),
+        "prior_source": prior_source,
+        "bootstrap": None if bootstrap_info is None else {**bootstrap_info, "seconds": bootstrap_seconds},
         "init_workers": args.init_workers,
         "flat_field_seconds": field_seconds,
         "seconds": timing,
@@ -393,7 +554,17 @@ def main() -> int:
             "median": float(np.median(arrays["body_length_px"][fitted])),
             "p10": float(np.percentile(arrays["body_length_px"][fitted], 10)),
             "p90": float(np.percentile(arrays["body_length_px"][fitted], 90)),
-            "at_upper_bound": int(np.sum(arrays["body_length_px"][fitted] >= 0.99 * config.length_bounds_px[1])),
+            "at_upper_bound": None if config.length_bounds_px is None else int(np.sum(arrays["body_length_px"][fitted] >= 0.99 * config.length_bounds_px[1])),
+            "beyond_2_sigma_of_prior": None if prior is None else int(np.sum(
+                np.abs(np.log(arrays["body_length_px"][fitted] / prior.length_px)) > 2 * prior.log_length_sigma
+            )),
+        },
+        "orientation": None if prior is None or not fitted.any() else {
+            "gap_median": float(np.nanmedian(arrays["orientation_gap"][fitted])),
+            "gap_p10": float(np.nanpercentile(arrays["orientation_gap"][fitted], 10)),
+            "frames_gap_below_0.002": int(np.sum(arrays["orientation_gap"][fitted] < 0.002)),
+            "frames_gap_below_0.01": int(np.sum(arrays["orientation_gap"][fitted] < 0.01)),
+            "reversed_start_won": int(np.sum([b.endswith("_reversed") for b in best_start if b])),
         },
         "width_px": None if not fitted.any() else {"median": float(np.median(arrays["width_px"][fitted]))},
         "width_model": {

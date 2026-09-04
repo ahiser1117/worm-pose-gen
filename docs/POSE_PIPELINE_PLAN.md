@@ -268,6 +268,21 @@ to 372, because a thinner tail lets the tube extend further, so the length
 prior is more urgent, not less. Frames 450--451 are unchanged at IoU 0.67:
 a start problem, for steps 4 and 5.
 
+**Correction (2026-09-04, found in step 3).** The in-view fraction used
+above counts centerline points inside the image, and a body cut off by the
+camera edge keeps every point inside the image, so the 608 frames it
+flagged undercount the clipped frames: 872 of the 1200 have the mask on the
+border. That changes two readings. The frames "at the length bound" were
+mostly clipped bodies whose visible part was shorter than 750 px, not
+whole worms held back by the bound (the whole worms of this minute fit at
+765--790 px, and the bound was binding on those). And the strong taper
+values came from clipped frames: the cut end is as wide as the body and the
+visible tip is thin, so the tip reads as the tail whatever it is. Whole
+worms in this minute have absolute taper asymmetry of 0.05--0.13. The
+label-consistency table above therefore measures consistency along the
+track, not anatomical head/tail identification, which on this recording
+the width alone does not provide.
+
 ### Step 3. Per-recording priors
 
 - Bootstrap pass: fit a spread sample of frames, keep those fully in view with
@@ -280,6 +295,112 @@ a start problem, for steps 4 and 5.
   pose.
 - Test on the corner frames from the flat-field vignette scan of
   `2024-01-31-02` (frame 136 is the reference clipped-tail case).
+
+**Result (2026-09-04).** Landed as `src/worm_pose_gen/recording_prior.py`,
+the size priors and censored escape penalty in `mask_fit._MaskFitState`,
+`extend_start_to_length` and `orientation_pair` in `mask_fit.py`, the
+bootstrap in `scripts/fit_recording.py`, and
+`scripts/evaluate_recording_prior_unannotated30.py`; raw numbers, priors,
+and residual strips are under `pose_pipeline_step3/`.
+
+What a recording prior is. A spread sample of frames (64, enlarged up to
+4x until 12 whole worms are found) is segmented and fit with the bounds
+opened to 100--3000 px. Whole means the mask is clear of the image border;
+the in-view count cannot tell a cut body from a whole one (see the step 2
+correction). Fits with IoU >= 0.85 and mask area within 15% of tube area
+are oriented tail last and reduced to robust medians of log length, log
+width scale, and the six correction coefficients, with a 5% floor on the
+log sigmas. `RecordingPrior.apply` removes the hard bounds and adds
+Gaussian penalties `prior_weight x (deviation / sigma)^2` on log length and
+log width (`prior_weight` 0.0025: two sigmas cost 0.01 dice) and centers the
+width correction on the recording's profile with weight 0.01. Priors are
+cached per recording under `/temp_data4/alex/external_artifacts/recording_priors/`.
+
+Four things had to change for a body that leaves the camera to be fit at
+the prior length. (1) The crop-escape penalty applied to every centerline
+point, including censored points past the camera edge, so any off-camera
+continuation was punished; it now applies to in-camera points only. (2)
+The winner among starts was chosen on the overlap term alone; it is now
+chosen on the total energy, so priors can decide. (3) A skeleton start is
+as long as the visible body, and even 550 steps could not grow it off
+camera through the coupled length/centroid/shape parameters; a start whose
+end lies near the mask's border pixels is now lengthened to the prior
+length through the point where the mask meets the border and straight on.
+(4) Whole-worm sigmas: a 3% floor cost 0.012 IoU on whole worms of
+`2024-01-31-02`, 5% costs 0.003.
+
+Orientation. Under an asymmetric prior every frame is started forward and
+reversed (`orientation_pair`, replacing the moments start at no extra
+cost) and the energy gap between the two orientations is stored. On these
+recordings the whole-worm profile asymmetry is weak, so the gap is tiny
+(median 0.0004 on the minute below; 1181 of 1200 frames below 0.002) and
+the orientation it picks is close to arbitrary. Head/tail labels need the
+motion and linking cues of step 6.
+
+30-frame stress set, reference schedule, all starts plus the reversed
+skeleton (`prior_sweep.json`; priors from 48 classically segmented frames
+per recording, 10--12 whole worms each):
+
+| Model | Median IoU | Frames at IoU >= 0.9 | Frames at the 750 px bound | Median length p10/p50/p90 |
+|---|---:|---:|---:|---|
+| hard bounds (step 2) | 0.926 | 26 | 7 | 546 / 699 / 751 |
+| recording prior | 0.917 | 25 | 0 | 630 / 717 / 775 |
+
+The prior costs 0.009 median IoU here. Eight frames are extended off camera.
+The largest loss (sample 6, -0.05) is a fully visible mask 493 px long in a
+recording whose worm is 702 px: a coil or a body partly missing from the
+mask, where the length prior fights the mask. That deficit between mask
+length and prior length is the ambiguity signal step 4 wanted.
+
+One minute of `2024-05-28-02` (1200 frames, `fast` preset,
+`recording_comparison_*.json`, `summary_*_prior.json`). The bootstrap
+found 16 whole worms among 416 fits (442 frames sampled, 373 s once per
+recording): length 778 px, width 43.6 px.
+
+| Model | Median IoU | P10 IoU | Frames at IoU >= 0.9 | Length p10/p50/p90 | Frames beyond the prior | Frames with body off camera | Fit ms/frame |
+|---|---:|---:|---:|---|---:|---:|---:|
+| hard bounds (step 2) | 0.975 | 0.950 | 99.8% | 515 / 641 / 751 | 372 at the bound | 608 (in-view count) | 182 |
+| recording prior | 0.968 | 0.955 | 99.5% | 771 / 791 / 800 | 6 beyond two sigma | 872 (mask on border) | 172 |
+
+The median frame loses 0.004 IoU and the tenth percentile gains 0.005: the
+visible part of a clipped body is fit about as well as before while the
+pose now carries the whole worm, with the in-view fraction (median 0.78,
+tenth percentile 0.61) saying how much was seen. Frames 0, 345, and 690,
+whose visible parts are 519--581 px, are fit at 788--804 px with 62--72%
+in view and IoU 0.969--0.972 (was 0.974--0.976). Frames 450--451 stay at
+IoU 0.62--0.65: the prior cannot pull a tube out of the midbody optimum
+because growing it pushes the ends through the mask's neighborhood, a start
+problem as predicted. Frame 1053, where the tail exits through a wide blob
+at the border, loses 0.06: the extra length wiggles inside the image
+instead of leaving it. Orientation flips between consecutive frames rose
+from 50 to 189, consistent with the gap being uninformative here.
+
+![Frame 345: hard bounds versus recording prior](pose_pipeline_step3/minute_residual_frame_00345.jpg)
+
+400 frames of `2024-01-31-02`, the corner-frame recording
+(`corner_comparison_*.json`, `corner_residual_frame_*.jpg`). Prior 730 px,
+width 40.9 px from 21 whole worms (190 frames sampled, 148 s).
+
+| Frames | Median IoU, bounds | Median IoU, prior | Notes |
+|---|---:|---:|---|
+| all 400 | 0.971 | 0.963 | 6 frames beyond two sigma of the prior |
+| 178 whole | 0.970 | 0.965 | |
+| 222 with the mask on the border | 0.972 | 0.961 | median in-view fraction 0.89 under the prior |
+
+Frame 136, the reference clipped-tail case, goes from 691 px fully in view
+to 749 px with 89% in view at IoU 0.960 (was 0.973); the tube leaves the
+image where the body does.
+
+![Frame 136: hard bounds versus recording prior](pose_pipeline_step3/corner_residual_frame_00136.jpg)
+
+Judgment. The prior does what it was for: lengths are anchored to the
+recording, bodies leaving the camera are completed off camera with a
+censored extension, and the hard bounds are gone. It costs 0.004--0.01
+median IoU on the visible mask, most of it on clipped frames whose visible
+part must now share the spline and the profile with an unseen part, and
+more on coils, where it fights the mask. Two cheap ambiguity signals fall
+out: the mask-length deficit against the prior length and the mask/tube
+area ratio. Both go into step 4.
 
 ### Step 4. Ambiguity score and a sequence evaluation set
 
@@ -341,6 +462,14 @@ a start problem, for steps 4 and 5.
   mirror image with the same energy. Orientation is decided after the fit
   from the taper asymmetry; both orientations return in step 3, where the
   per-recording width prior is asymmetric.
+- The in-view fraction (centerline points inside the image) does not detect
+  a body cut off by the camera edge; the mask reaching the border does. The
+  bootstrap of step 3 selects whole worms by the latter, and the step 2
+  orientation confidence is reinterpreted accordingly.
+- Head/tail from width alone is not available on these recordings: whole
+  worms show absolute taper asymmetry of about 0.1 and the orientation
+  energy gap under the recording prior is below 0.002 on nearly every frame.
+  Orientation is left to the motion and linking cues of step 6.
 
 ## 6. Status
 
@@ -348,7 +477,7 @@ a start problem, for steps 4 and 5.
 |---|---|---|
 | 1 | done (2026-09-04) | `scripts/fit_recording.py`; 244 ms/frame end to end, fit 174 ms; `fast` preset is -0.008 IoU vs the reference on the 30-frame set, `reference` preset exact |
 | 2 | done (2026-09-04) | log-space B-spline width correction (6 coefficients, prior 1e-3); +0.017 median IoU on the 30-frame set, 0.892 -> 0.975 on one minute of `2024-05-28-02`; tail placed last from the taper asymmetry |
-| 3 | not started | |
+| 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
 | 4 | not started | |
 | 5 | not started | |
 | 6 | not started | |

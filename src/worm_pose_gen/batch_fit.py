@@ -282,6 +282,9 @@ def _fit_group(
     hi_active = torch.as_tensor(
         [[w.x1 < w.image_width, w.y1 < w.image_height] for w in row_windows], dtype=torch.float32, device=device
     )
+    camera_size = torch.as_tensor(
+        [[w.image_width, w.image_height] for w in row_windows], dtype=torch.float32, device=device
+    )
 
     state = _MaskFitState(starts_flat, config, device)
     optimizer = state.optimizer()
@@ -299,15 +302,12 @@ def _fit_group(
     def regularization(centerline: Tensor) -> Tensor:
         c = config
         smooth = c.shape_smoothness * (state.shape[:, 1:] - state.shape[:, :-1]).square().mean(1)
-        length = state.log_length.exp()
-        low, high = c.length_bounds_px
-        bounds = (low - length).clamp_min(0).square() + (length - high).clamp_min(0).square()
-        body_width = state.log_width.exp()
-        wlow, whigh = c.width_bounds_px
-        bounds = bounds + (wlow - body_width).clamp_min(0).square() + (body_width - whigh).clamp_min(0).square()
-        below = ((edge_lo[:, None, :] - centerline).clamp_min(0).square() * lo_active[:, None, :]).sum(-1).mean(1)
-        above = ((centerline - edge_hi[:, None, :]).clamp_min(0).square() * hi_active[:, None, :]).sum(-1).mean(1)
-        return smooth + c.bound_weight * bounds + c.crop_escape_weight * (below + above) + state.width_prior()
+        below = ((edge_lo[:, None, :] - centerline).clamp_min(0).square() * lo_active[:, None, :]).sum(-1)
+        above = ((centerline - edge_hi[:, None, :]).clamp_min(0).square() * hi_active[:, None, :]).sum(-1)
+        # Points past the camera edge are censored: no data, no escape penalty.
+        inside_camera = ((centerline >= 0) & (centerline < camera_size[:, None, :])).all(-1).to(centerline.dtype)
+        escape = ((below + above) * inside_camera).mean(1)
+        return smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
 
     def render_rows(centerline: Tensor, diameter: Tensor, factor: int, stride: int, fn: Renderer) -> Tensor:
         index = _point_index(centerline.shape[1], stride, device)
@@ -363,15 +363,16 @@ def _fit_group(
         state.restore_rows(best_snapshot, rows)
 
     with torch.no_grad():
-        final_dice, _ = energy(finest, finest_stride)
+        final_dice, final_loss = energy(finest, finest_stride)
         centerline = state.centerline()
         width_scale = state.log_width.exp()
         diameter = state.diameter(template)
-        # Winner per frame, then one full-resolution render of the winners.
+        # Winner per frame by total energy (overlap plus priors), then one
+        # full-resolution render of the winners.
         winners: list[int] = []
         row_start = 0
         for starts in initializations:
-            block = final_dice[row_start : row_start + len(starts)]
+            block = final_loss[row_start : row_start + len(starts)]
             winners.append(row_start + int(torch.argmin(block)))
             row_start += len(starts)
         winner_rows = torch.as_tensor(winners, device=device)
@@ -392,6 +393,7 @@ def _fit_group(
         shape_np = state.width_shape.detach().cpu().numpy().astype(np.float64)
         initial_np = initial_dice.cpu().numpy()
         final_np = final_dice.cpu().numpy()
+        loss_np = final_loss.cpu().numpy()
     history_np = np.asarray(history, dtype=np.float64)
 
     results: list[MaskFitResult] = []
@@ -413,6 +415,7 @@ def _fit_group(
                     "name": start.name,
                     "initial_soft_dice_energy": float(initial_np[row]),
                     "final_soft_dice_energy": float(final_np[row]),
+                    "final_energy": float(loss_np[row]),
                     "final_iou": iou if row == best_row else float("nan"),
                 }
             )

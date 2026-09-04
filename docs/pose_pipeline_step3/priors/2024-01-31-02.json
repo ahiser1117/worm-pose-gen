@@ -1,0 +1,31 @@
+{
+ "length_px": 702.0975932751514,
+ "log_length_sigma": 0.05,
+ "width_px": 38.015685768480715,
+ "log_width_sigma": 0.05355825542471936,
+ "width_shape": [
+  -0.13334400951862335,
+  0.14926298707723618,
+  0.1798350140452385,
+  0.4910454601049423,
+  -0.21486519277095795,
+  -0.3493843674659729
+ ],
+ "width_shape_sigma": [
+  0.08010111296027898,
+  0.07882783050611615,
+  0.05,
+  0.15120462909042834,
+  0.15162695963233708,
+  0.09387972835600375
+ ],
+ "frames_used": 12,
+ "frames_candidates": 48,
+ "selection": {
+  "min_iou": 0.9,
+  "min_taper": 0.15,
+  "area_ratio": 0.1
+ },
+ "recording": "2024-01-31-02",
+ "source": "bootstrap of 48 classically segmented frames, preset balanced"
+}

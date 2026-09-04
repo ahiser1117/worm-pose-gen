@@ -1,0 +1,31 @@
+{
+ "length_px": 778.3315519931032,
+ "log_length_sigma": 0.05,
+ "width_px": 43.59420640298714,
+ "log_width_sigma": 0.05,
+ "width_shape": [
+  -0.2857084423303604,
+  0.023976732045412064,
+  0.3228251785039902,
+  0.3422497808933258,
+  -0.06740876100957394,
+  -0.5547966957092285
+ ],
+ "width_shape_sigma": [
+  0.05,
+  0.06565624967738985,
+  0.05,
+  0.05,
+  0.05,
+  0.05410673604011535
+ ],
+ "frames_used": 16,
+ "frames_candidates": 416,
+ "selection": {
+  "min_iou": 0.85,
+  "min_taper": 0.1,
+  "area_ratio": 0.15
+ },
+ "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+ "source": "bootstrap of 416 frames spread over 20382, preset balanced"
+}
