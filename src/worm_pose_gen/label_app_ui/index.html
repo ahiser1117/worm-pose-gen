@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worm segmentation labeler</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h1>Worm labeler</h1>
+      <section class="group">
+        <h3>Frame</h3>
+        <label>Recording
+          <select id="recording"></select>
+        </label>
+        <label>Frame index
+          <span class="row">
+            <input id="frame-index" type="number" min="0" step="1" value="0">
+            <button id="go" type="button">Go</button>
+          </span>
+        </label>
+        <label>Next mode
+          <select id="next-mode">
+            <option value="uncertain">Network-uncertain (active)</option>
+            <option value="random">Random unlabeled</option>
+            <option value="sequential">Sequential (stride)</option>
+            <option value="browse">Browse saved labels (filtered)</option>
+          </select>
+        </label>
+        <label>Stride / candidates
+          <span class="row">
+            <input id="stride" type="number" min="1" value="200">
+            <input id="candidates" type="number" min="1" max="24" value="6">
+          </span>
+        </label>
+        <span class="row">
+          <button id="prev" type="button" title="P">Prev</button>
+          <button id="next" type="button" title="N">Next</button>
+          <button id="save-next" type="button" class="primary" title="Space / Enter">Save + next</button>
+        </span>
+        <div id="frame-info" class="note"></div>
+      </section>
+
+      <section class="group">
+        <h3>Proposals <small>(key = replace · Shift = union · Alt = intersect)</small></h3>
+        <span class="row wrap">
+          <button data-proposal="network" type="button" title="1">1 Network</button>
+          <button data-proposal="classical" type="button" title="2">2 Classical</button>
+          <button data-proposal="raw_threshold" type="button" title="4">4 Threshold</button>
+          <button data-proposal="existing" type="button" title="5">5 Saved</button>
+        </span>
+        <label>Network threshold <output id="threshold-value">0.50</output>
+          <input id="threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5">
+        </label>
+        <div id="proposal-info" class="note"></div>
+      </section>
+
+      <section class="group">
+        <h3>Refine current mask</h3>
+        <span class="row wrap">
+          <button data-refine="fill_holes" type="button" title="H">H Fill holes</button>
+          <button data-refine="largest_component" type="button" title="L">L Largest</button>
+          <button data-refine="dilate" type="button" title="D">D Grow</button>
+          <button data-refine="erode" type="button" title="S">S Shrink</button>
+          <button data-refine="mask_fit" type="button" title="3">3 Tube fit</button>
+        </span>
+        <div id="refine-info" class="note"></div>
+      </section>
+
+      <section class="group">
+        <h3>Brush</h3>
+        <span class="row wrap">
+          <button data-brush="worm" type="button" class="active" title="B">B Worm</button>
+          <button data-brush="background" type="button" title="E">E Erase</button>
+          <button data-brush="ignore" type="button" title="I">I Ignore</button>
+        </span>
+        <label>Size <output id="brush-size-value">12 px</output>
+          <input id="brush-size" type="range" min="1" max="80" step="1" value="12">
+        </label>
+        <span class="row wrap">
+          <button id="undo" type="button" title="Z">Z Undo</button>
+          <button id="clear" type="button">Clear</button>
+          <button id="toggle-raw" type="button" title="F">F Raw/flat</button>
+          <button id="toggle-overlay" type="button" title="O">O Overlay</button>
+          <button id="fit-view" type="button" title="0">0 Fit view</button>
+        </span>
+      </section>
+
+      <section class="group">
+        <h3>Saved labels <small id="sample-count"></small></h3>
+        <span class="row">
+          <select id="filter-source" title="label source">
+            <option value="all">All sources</option>
+            <option value="bootstrap">Bootstrap only</option>
+            <option value="manual">Hand-labeled only</option>
+          </select>
+          <select id="filter-split" title="split">
+            <option value="all">All splits</option>
+            <option value="val">Val</option>
+            <option value="test">Test</option>
+            <option value="train">Train</option>
+          </select>
+        </span>
+        <label><input id="filter-recording" type="checkbox"> Current recording only</label>
+        <div id="sample-list" class="sample-list"></div>
+        <div class="note">Click a row to open it. With next mode "Browse saved labels", Next and Save + next walk this list in order.</div>
+      </section>
+
+      <section class="group">
+        <h3>Dataset</h3>
+        <div id="dataset-info" class="note"></div>
+        <span class="row">
+          <button id="delete" type="button" class="danger">Delete saved label</button>
+        </span>
+      </section>
+      <div id="status" class="status"></div>
+      <p class="hint">Wheel: zoom · Right/middle drag or Shift+drag: pan · Left drag: paint.
+        Keys: 1/2/3/4/5 proposals · B/E/I brush · [ ] size · Z undo · H/L/D/S refine ·
+        Space save+next · N next · P prev · F raw · O overlay · 0 fit.</p>
+    </aside>
+    <main id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="loading" hidden>Working…</div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

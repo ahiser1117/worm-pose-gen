@@ -9,15 +9,19 @@ authors = [
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "h5py>=3.16.0",
+    "imageio>=2.37.4",
+    "imageio-ffmpeg>=0.6.0",
     "lightning>=2.6.5",
     "matplotlib>=3.11.1",
     "numpy>=2.5.2",
     "torch>=2.13.0",
+    "torchvision>=0.28.0",
 ]
 
 [project.scripts]
 worm-pose-gen = "worm_pose_gen:main"
 worm-pose-tuner = "worm_pose_gen.heuristic_tuner:main"
+worm-pose-labeler = "worm_pose_gen.label_app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

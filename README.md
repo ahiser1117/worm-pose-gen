@@ -47,6 +47,10 @@ and their adjacent generated assets retain the evidence for each stage:
    20-value body model plus a width scale is rendered as a soft tube and fit
    directly to the mask by gradient descent, producing a pose on all 27 worm
    frames of the stress set.
+8. [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md) — the
+   learned-segmentation loop: bootstrap labels from the pipeline, fine-tune a
+   pretrained ResNet-18 U-Net with Lightning, and refine labels in the
+   browser app with the network proposing.
 
 ## Setup
 
@@ -104,6 +108,28 @@ under `docs/final_algorithm_tuned_local_darkness_unannotated30/`.
 Use `--proxy-hdf5 /path/to/proxy_labels.h5` or `--port PORT` to override the
 defaults. The app binds to localhost and does not modify the source HDF5.
 
+## Segment with a fine-tuned network
+
+Bootstrap labels, train, evaluate, and label interactively:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python \
+  scripts/bootstrap_segmentation_labels.py --frames-per-recording 40
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
+scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
+```
+
+Labels are stored under
+`/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
+on flv-c4 with an 80/10/10 train/val/test assignment; checkpoints go to the
+git-ignored `checkpoints/segmenter/` directory. The labeling app runs at
+`http://127.0.0.1:8767`, proposes masks from the current checkpoint and the
+classical pipeline, refines them with pipeline elements, and saves edited
+labels back into the store. Details and keyboard shortcuts are in
+[`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
+
 ## Evaluate the frozen pipeline
 
 The annotation-free stress run accepts exactly three `--recording` arguments
@@ -137,7 +163,8 @@ import its per-frame fitting code.
 
 ## Repository layout
 
-- `src/worm_pose_gen/` contains reusable geometry, classical extraction, and
+- `src/worm_pose_gen/` contains reusable geometry, classical extraction, the
+  mask fitter, the segmenter and its dataset store, the labeling app, and
   supporting research modules.
 - `scripts/` contains only environment setup and the builders/evaluators for
   the current geometric pipeline.
