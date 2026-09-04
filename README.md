@@ -130,6 +130,24 @@ classical pipeline, refines them with pipeline elements, and saves edited
 labels back into the store. Details and keyboard shortcuts are in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
 
+## Fit poses over a recording
+
+Segment, clean, and fit the body model to every frame of a stretch, in GPU
+batches, with an optional overlay video:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python scripts/fit_recording.py \
+  --recording /store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5 \
+  --start 0 --frames 1200 --video --scale 0.5
+```
+
+Each run writes `summary.json`, `poses.npz`, and `overlay.mp4` to a
+timestamped directory under `/temp_data4/alex/external_artifacts/poses/`.
+`--preset fast` (default, about 0.25 s/frame) trades 0.008 median IoU against
+`--preset reference`, which reproduces the single-frame fitter exactly at
+about 5 s/frame. The plan this belongs to, with measurements, is
+[`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md).
+
 ## Evaluate the frozen pipeline
 
 The annotation-free stress run accepts exactly three `--recording` arguments
