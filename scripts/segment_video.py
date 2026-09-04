@@ -5,11 +5,12 @@ Frames are read from the HDF5 recording in slabs, flat-fielded with the same
 correction the labeling app uses (estimated once per recording and cached
 under the dataset root), pushed through the network in batches, and stitched
 into an MP4: the flat-fielded frame in gray, the worm mask (probability at or
-above ``--threshold``) filled in magenta with a green outline, and, with
+above ``--threshold``, then narrow holes filled and the largest component
+kept unless ``--raw-mask``) filled in magenta with a green outline, and, with
 ``--show-uncertain``, the band between ``0.2`` and ``0.8`` tinted yellow.
 A JSON file beside the video records per-frame worm and uncertain pixel
-counts, component counts, pixels outside the largest component, and
-throughput.  ``--scale 0.5`` halves the output size for sharing.
+counts, component counts and pixels outside the largest component before
+cleanup, pixels added by hole filling, and throughput.  ``--scale 0.5`` halves the output size for sharing.
 
 Example (one minute at 20 fps of an unseen recording):
 
@@ -33,6 +34,7 @@ import torch
 
 from worm_pose_gen.classical import _erode, _largest_component
 from worm_pose_gen.flat_field import apply_flat_field
+from worm_pose_gen.mask_fit import fill_narrow_holes
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
 from worm_pose_gen.run_records import checkpoint_fingerprint, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -43,6 +45,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "segmenter" / "best.ckpt"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "checkpoints" / "segmenter" / "videos"
 UNCERTAIN_BAND = (0.2, 0.8)
+HOLE_FILL_RADIUS_PX = 8
 WORM_RGB = np.array([255, 80, 165], dtype=np.float32)
 EDGE_RGB = np.array([90, 220, 140], dtype=np.float32)
 UNCERTAIN_RGB = np.array([255, 210, 60], dtype=np.float32)
@@ -59,6 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slab", type=int, default=64, help="frames read from disk at once")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--show-uncertain", action="store_true", help="tint the 0.2-0.8 probability band yellow")
+    parser.add_argument("--raw-mask", action="store_true", help="skip hole filling and largest-component selection")
+    parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
     parser.add_argument("--scale", type=float, default=1.0, help="resize factor for the output video")
     parser.add_argument("--quality", type=int, default=5, help="imageio/ffmpeg quality, 0 worst to 10 best")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
@@ -76,9 +81,18 @@ def component_stats(mask: np.ndarray) -> tuple[int, int]:
     return int(count), int(mask.sum() - largest.sum())
 
 
-def render(frame: np.ndarray, probability: np.ndarray, threshold: float, caption: str, *, show_uncertain: bool, scale: float) -> np.ndarray:
+def clean_mask(worm: np.ndarray, hole_radius: int, device: torch.device) -> tuple[np.ndarray, int]:
+    """Fill narrow holes and keep the largest component; returns (mask, pixels added by filling)."""
+
+    if not worm.any():
+        return worm, 0
+    filled, added = fill_narrow_holes(worm, hole_radius, device=device)
+    largest, _, _ = _largest_component(filled)
+    return largest, int(added)
+
+
+def render(frame: np.ndarray, probability: np.ndarray, worm: np.ndarray, caption: str, *, show_uncertain: bool, scale: float) -> np.ndarray:
     rgb = np.repeat(frame[:, :, None].astype(np.float32), 3, axis=2)
-    worm = probability >= threshold
     edge = worm & ~_erode(worm, 1)
     rgb[worm] = 0.55 * rgb[worm] + 0.45 * WORM_RGB
     if show_uncertain:
@@ -137,15 +151,20 @@ def main() -> int:
                 t3 = time.perf_counter()
                 for offset, (frame, prob) in enumerate(zip(corrected, probability)):
                     index = slab_start + offset
-                    worm = prob >= args.threshold
-                    worm_pixels = int(worm.sum())
+                    raw_mask = prob >= args.threshold
                     uncertain_pixels = int(((prob > UNCERTAIN_BAND[0]) & (prob < UNCERTAIN_BAND[1])).sum())
-                    components, extra_pixels = component_stats(worm)
-                    caption = f"{args.recording.stem} frame {index}  worm {worm_pixels} px  components {components}  outside largest {extra_pixels} px"
-                    writer.append_data(render(frame, prob, args.threshold, caption, show_uncertain=args.show_uncertain, scale=args.scale))
+                    components, extra_pixels = component_stats(raw_mask)
+                    worm, filled_pixels = (raw_mask, 0) if args.raw_mask else clean_mask(raw_mask, args.hole_radius, module.device)
+                    worm_pixels = int(worm.sum())
+                    caption = (
+                        f"{args.recording.stem} frame {index}  worm {worm_pixels} px  raw components {components}  "
+                        f"dropped {extra_pixels} px  filled {filled_pixels} px"
+                    )
+                    writer.append_data(render(frame, prob, worm, caption, show_uncertain=args.show_uncertain, scale=args.scale))
                     rows.append({
-                        "frame_index": index, "worm_pixels": worm_pixels, "uncertain_pixels": uncertain_pixels,
-                        "components": components, "pixels_outside_largest_component": extra_pixels,
+                        "frame_index": index, "worm_pixels": worm_pixels, "raw_worm_pixels": int(raw_mask.sum()),
+                        "uncertain_pixels": uncertain_pixels, "components": components,
+                        "pixels_outside_largest_component": extra_pixels, "pixels_filled": filled_pixels,
                     })
                 t4 = time.perf_counter()
                 timing["read"] += t1 - t0
@@ -166,6 +185,7 @@ def main() -> int:
         "frame_count": n,
         "checkpoint": checkpoint_fingerprint(args.checkpoint),
         "threshold": args.threshold,
+        "mask_cleanup": None if args.raw_mask else {"fill_holes_radius_px": args.hole_radius, "largest_component": True},
         "batch_size": args.batch_size,
         "device": str(module.device),
         "flat_field_seconds": field_seconds,
@@ -178,6 +198,11 @@ def main() -> int:
         "pixels_outside_largest_component": {
             "median": float(np.median([r["pixels_outside_largest_component"] for r in rows])),
             "max": int(max(r["pixels_outside_largest_component"] for r in rows)),
+        },
+        "pixels_filled": {
+            "median": float(np.median([r["pixels_filled"] for r in rows])),
+            "max": int(max(r["pixels_filled"] for r in rows)),
+            "frames_with_filling": int(sum(r["pixels_filled"] > 0 for r in rows)),
         },
         "uncertain_fraction_median": float(np.median([r["uncertain_pixels"] for r in rows]) / (rows and (frames_shape[0] * frames_shape[1]) or 1)),
         "uncertain_pixels_median": float(np.median([r["uncertain_pixels"] for r in rows])),
