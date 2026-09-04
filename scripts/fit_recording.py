@@ -23,6 +23,14 @@ width profile replace the hard bounds with Gaussian priors
 ``--prior-cache``).  Under that asymmetric prior every frame is started in
 both orientations and the energy gap between them is stored as the
 orientation confidence.
+
+After the independent fits, stretches of frames whose ambiguity score
+reaches ``--propagate-min-score`` are refit by temporal propagation (plan
+step 5): the good pose before the stretch is carried forward through it and
+the good pose after it backward, each frame warm-started from its
+neighbour, all stretches in lockstep; per frame the lowest total energy
+among independent, forward and backward wins (``source`` in ``poses.npz``;
+``--no-propagate`` skips this).
 ``scripts/render_pose_run.py`` produces the same video and residual images
 for a stored run without refitting.
 
@@ -64,6 +72,7 @@ from worm_pose_gen.mask_fit import (
 )
 from worm_pose_gen.recording_prior import RecordingPrior, bootstrap_prior_from_masks
 from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
+from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -83,6 +92,7 @@ START_SETS = {
     "all": None,
 }
 DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
+SOURCE_CODES = {"independent": 0, "forward": 1, "backward": 2}
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,6 +137,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-prior-cache", action="store_true", help="neither read nor write the prior cache")
     parser.add_argument("--rebootstrap", action="store_true", help="ignore a cached prior and bootstrap again")
     parser.add_argument("--prior-shape-weight", type=float, default=0.01, help="weight of the width-profile prior once a recording prior is active")
+    parser.add_argument("--no-propagate", action="store_true", help="skip temporal propagation across ambiguous stretches")
+    parser.add_argument("--propagate-min-score", type=int, default=2, help="ambiguity score that seeds a stretch")
+    parser.add_argument("--propagate-pad", type=int, default=2, help="frames added on each side of a seed")
+    parser.add_argument("--propagate-max-gap", type=int, default=3, help="seeds closer than this are one stretch")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -257,6 +271,26 @@ def _nan(shape: tuple[int, ...]) -> np.ndarray:
     return np.full(shape, np.nan, dtype=np.float64)
 
 
+def store_result(arrays: dict[str, np.ndarray], best_start: list[str], row: int, result: MaskFitResult) -> None:
+    """Write one fit into the per-frame arrays."""
+
+    best = result.records[result.best_index]
+    arrays["fitted"][row] = True
+    arrays["width_shape"][row] = result.width_shape
+    arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
+    arrays["latent"][row] = result.latent
+    arrays["width_px"][row] = result.width_px
+    arrays["centerline_xy"][row] = result.centerline_xy
+    arrays["width_profile"][row] = result.width_profile
+    arrays["iou"][row] = best["final_iou"]
+    arrays["energy"][row] = best["final_soft_dice_energy"]
+    arrays["total_energy"][row] = best["final_energy"]
+    arrays["points_in_fov"][row] = result.points_in_fov
+    arrays["body_length_px"][row] = result.body_length_px
+    arrays["crop"][row] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
+    best_start[row] = str(result.initializations[result.best_index].name)
+
+
 def orientation_consistency(arrays: dict[str, np.ndarray]) -> dict[str, Any] | None:
     """How often consecutive fitted frames agree on which end is the head."""
 
@@ -348,6 +382,8 @@ def main() -> int:
             "orientation_gap": _nan((n,)),
             "iou": _nan((n,)),
             "energy": _nan((n,)),
+            "total_energy": _nan((n,)),
+            "source": np.zeros(n, dtype=np.int8),
             "points_in_fov": np.zeros(n, dtype=np.int64),
             "body_length_px": _nan((n,)),
             "crop": np.zeros((n, 4), dtype=np.int64),
@@ -446,19 +482,7 @@ def main() -> int:
                     else:
                         arrays["orientation_gap"][row] = orientation_gap(result)
                     by_row[row] = result
-                    arrays["fitted"][row] = True
-                    arrays["width_shape"][row] = result.width_shape
-                    arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
-                    arrays["latent"][row] = result.latent
-                    arrays["width_px"][row] = result.width_px
-                    arrays["centerline_xy"][row] = result.centerline_xy
-                    arrays["width_profile"][row] = result.width_profile
-                    arrays["iou"][row] = result.records[result.best_index]["final_iou"]
-                    arrays["energy"][row] = result.records[result.best_index]["final_soft_dice_energy"]
-                    arrays["points_in_fov"][row] = result.points_in_fov
-                    arrays["body_length_px"][row] = result.body_length_px
-                    arrays["crop"][row] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
-                    best_start[row] = str(result.initializations[result.best_index].name)
+                    store_result(arrays, best_start, row, result)
                 if writer is not None:
                     for offset, frame in enumerate(corrected):
                         row = slab_start + offset
@@ -497,12 +521,62 @@ def main() -> int:
             if pool is not None:
                 pool.shutdown()
         # Per-frame ambiguity signals (plan step 4) from the stored arrays.
-        arrays["best_start"] = np.asarray(best_start)
-        arrays.update(
-            compute_ambiguity(
-                arrays, prior=None if prior is None else prior.to_dict(), image_shape=(int(dataset.shape[1]), int(dataset.shape[2]))
+        image_shape = (int(dataset.shape[1]), int(dataset.shape[2]))
+        prior_dict = None if prior is None else prior.to_dict()
+        arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
+        arrays["iou_independent"] = arrays["iou"].copy()
+        arrays["score_independent"] = arrays["ambiguity_score"].copy()
+        propagation_info: dict[str, Any] | None = None
+        if not args.no_propagate:
+            # Temporal propagation (plan step 5) across the ambiguous stretches.
+            t_prop = time.perf_counter()
+            propagation_config = PropagationConfig(
+                min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap
             )
-        )
+            stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
+            stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
+            stretch_masks: dict[int, np.ndarray] = {}
+            for chunk_start in range(0, len(stretch_rows), args.batch_size):
+                chunk = stretch_rows[chunk_start : chunk_start + args.batch_size]
+                corrected = np.stack(
+                    [flat_fielded(np.asarray(dataset[int(arrays["frame_index"][r])], dtype=np.uint8), field) for r in chunk]
+                )
+                probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
+                for r, prob in zip(chunk, probability, strict=True):
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                    if stats["worm_pixels"] >= args.min_worm_pixels:
+                        stretch_masks[r] = mask
+            candidates, propagation_info = propagate(
+                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config
+            )
+            chosen = select_candidates(candidates, arrays)
+            before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
+            for row, candidate in chosen.items():
+                store_result(arrays, best_start, row, candidate.result)
+                arrays["source"][row] = SOURCE_CODES[candidate.source]
+                arrays["orientation_gap"][row] = np.nan
+                arrays["reversed"][row] = False
+            arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
+            timing["propagate"] = time.perf_counter() - t_prop
+            propagation_info.update(
+                {
+                    "frames_replaced": len(chosen),
+                    "replaced_by_source": {name: int(sum(c.source == name for c in chosen.values())) for name in ("forward", "backward")},
+                    "stretch_iou_median_before": before_iou,
+                    "stretch_iou_median_after": float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None,
+                    "stretch_frames_score_at_least_2_before": int(np.sum(arrays["score_independent"][stretch_rows] >= 2)) if stretch_rows else 0,
+                    "stretch_frames_score_at_least_2_after": int(np.sum(arrays["ambiguity_score"][stretch_rows] >= 2)) if stretch_rows else 0,
+                    "seconds": timing["propagate"],
+                }
+            )
+            print(
+                f"propagation: {len(stretches)} stretches, {len(stretch_rows)} frames, {len(chosen)} replaced"
+                f" ({propagation_info['replaced_by_source']}), stretch median IoU"
+                f" {before_iou if before_iou is None else round(before_iou, 3)} -> {propagation_info['stretch_iou_median_after'] if propagation_info['stretch_iou_median_after'] is None else round(propagation_info['stretch_iou_median_after'], 3)},"
+                f" {timing['propagate']:.0f} s",
+                flush=True,
+            )
+        arrays["best_start"] = np.asarray(best_start)
         # Residual images for the worst frames and any requested ones: the
         # frames are read and segmented again, which is cheap for a handful.
         requested = [int(v) for v in args.dump_frames.split(",") if v.strip()]
@@ -589,6 +663,7 @@ def main() -> int:
         },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
         "ambiguity": summarize_ambiguity(arrays) if fitted.any() else None,
+        "propagation": propagation_info,
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},
         "mask": {
             "worm_pixels_median": float(np.median(arrays["worm_pixels"])),

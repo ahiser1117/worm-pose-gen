@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--extra", default="", help="extra arguments passed to fit_recording.py")
+    parser.add_argument("--output-name", default="sequence_eval.json", help="result file inside --output-dir")
     return parser.parse_args()
 
 
@@ -102,6 +103,9 @@ def clip_entry(clip: dict, run_dir: Path, seconds: float, ambiguous_frames: list
         "orientation": summary.get("orientation"),
         "orientation_flips": (summary.get("width_model") or {}).get("orientation_consistency"),
         "prior": None if summary.get("prior") is None else {k: summary["prior"][k] for k in ("length_px", "width_px", "frames_used")},
+        "propagation": summary.get("propagation"),
+        "iou_independent_median": float(np.median(arrays["iou_independent"][fitted])) if "iou_independent" in arrays else None,
+        "frames_iou_independent_below_0.9": int((arrays["iou_independent"][fitted] < 0.9).sum()) if "iou_independent" in arrays else None,
         "fit_ms_per_frame": summary["ms_per_frame"]["fit"],
         "ambiguous_frames_rendered": ambiguous_frames,
         "video": summary["outputs"]["video"],
@@ -115,7 +119,7 @@ def main() -> int:
     if not clips:
         raise SystemExit("no clips selected")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = args.output_dir / "sequence_eval.json"
+    output_path = args.output_dir / args.output_name
     output = json.loads(output_path.read_text()) if output_path.exists() else {"clips": {}}
     output.update({"generated_at": utc_now(), "git": git_revision(PROJECT_ROOT), "manifest": str(args.manifest.relative_to(PROJECT_ROOT)), "preset": args.preset, "prior": args.prior})
     for clip in clips:

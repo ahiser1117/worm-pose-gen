@@ -503,6 +503,81 @@ that precedes the cold-start failure of frames 450--451 (IoU 0.96 there).
   step 1 measurements: if independent fits are fast and consistent, use
   propagation only across ambiguous stretches.
 
+**Result (2026-09-04).** Landed as `src/worm_pose_gen/propagation.py`, run by
+`scripts/fit_recording.py` after the independent fits (`--no-propagate`
+skips it); raw numbers are under `pose_pipeline_step5/`, and
+`pose_pipeline_step4/sequence_eval.json` now holds the propagated results
+with the step 4 independent results kept as
+`sequence_eval_step4_independent.json`.
+
+The decision the step left open is settled by step 4: independent fits are
+fast and consistent wherever the frame is unambiguous (median IoU 0.97 at
+score 0 in every clip), and the failures are the coils and self-contact
+where the mask-built start is wrong. So propagation runs only across
+ambiguous stretches. A stretch is the frames with ambiguity score >= 2,
+padded by two frames on each side and merged across gaps of up to three.
+From the last good frame before a stretch the pose is carried forward
+through it, and from the first good frame after it backward, each frame
+fit from its neighbour's pose (latent, width scale, width correction) with
+the `fast` stages at 70% of the steps; all chains of a recording advance
+together, one lockstep batch per step, so wall-clock is sequential only
+over the longest stretch. Per frame the lowest total energy (overlap plus
+priors, measured on the same raster) wins among independent, forward and
+backward; `source` in `poses.npz` records which, and `iou_independent` and
+`score_independent` keep the single-frame answer for comparison.
+
+Two things mattered in getting there. A propagated chain must use the same
+stages as the independent fits, or its energy is measured on a different
+raster and cannot be compared. And the chain must be able to keep up with
+the change between two frames of a forming coil: a 20/40-step warm schedule
+fell behind and lost to the poor independent fit on energy; 70% of the
+`fast` steps (42 and 70) does not.
+
+Sequence evaluation set (`sequence_eval_propagated.json`, step 4 numbers in
+the first columns):
+
+| Clip | Median IoU, independent | Median IoU, propagated | Frames < 0.9, independent | Frames < 0.9, propagated | Frames replaced (forward / backward) | Stretch median IoU |
+|---|---:|---:|---:|---:|---:|---|
+| `spiral_0131` | 0.508 | 0.952 | 163 | 53 | 166 (78 / 88) | 0.32 -> 0.93 |
+| `loop_0131` | 0.966 | 0.967 | 55 | 0 | 63 (19 / 44) | 0.58 -> 0.95 |
+| `omega_0822` | 0.966 | 0.966 | 60 | 0 | 63 (48 / 15) | 0.39 -> 0.94 |
+| `coil_0822` | 0.949 | 0.960 | 140 | 3 | 147 (11 / 136) | 0.42 -> 0.95 |
+| `spiral_0528` | 0.955 | 0.964 | 137 | 0 | 138 (36 / 102) | 0.33 -> 0.96 |
+| `edge_0528` | 0.957 | 0.959 | 46 | 2 | 62 (33 / 29) | 0.92 -> 0.94 |
+| `second_animal_0623` | 0.970 | 0.970 | 10 | 4 | 18 (13 / 5) | 0.91 -> 0.97 |
+
+Over the 2100 clip frames the frames below IoU 0.9 fall from 611 to 62, 53
+of them on the hard spiral where the propagated tube winds through the ring
+at 0.85--0.93 rather than failing (frame 3777 below: 0.16 -> 0.92). 657
+frames were replaced. Propagation took 359 s over the seven clips, most of
+it on the two spirals, whose single stretches of 170--180 frames give
+lockstep batches of only two rows; on a whole recording with many stretches
+the batches are larger and the cost amortizes. The ambiguity score after
+propagation stays at 2 or more on 435 frames: on a well-fit coil the
+`self_contact`, `holes` and `area_deficit` flags still fire, because they
+describe the pose, not the failure. From this step on, score >= 2 means
+"this pose is a coil or contact and came from its neighbours" rather than
+"this fit failed"; `iou` and `source` say which.
+
+![Frame 3848 of the spiral: independent fit and propagated fit](pose_pipeline_step5/spiral_residual_frame_03848.jpg)
+
+![Frame 3777 of the spiral: independent fit and propagated fit](pose_pipeline_step5/spiral_residual_frame_03777.jpg)
+
+One minute of `2024-05-28-02` (`summary_*_propagated.json`): six stretches,
+39 frames, 27 replaced, 12 s (10 ms per frame of the minute). Frames
+450--451, the cold-start failure carried since step 1, go from IoU
+0.62--0.65 to 0.951 by the forward chain; the six frames below 0.9 and the
+nine with score >= 2 both go to zero; median IoU is unchanged at 0.969.
+Frame 1053 (the wide exit) keeps its independent fit at 0.904, since no
+chain beat it on energy.
+
+Remaining limits. Inside a coil the head/tail assignment and the exact
+winding are whatever the chain carried in, and forward and backward chains
+can disagree; the energy picks one per frame with no smoothness across
+frames. That, and orientation in general, is step 6. The hard spiral's 53
+remaining frames are the tightest turns, where the 16-coefficient centerline
+and the width prior both strain.
+
 ### Step 6. Hypothesis linking across ambiguous stretches
 
 - Keep the top few distinct local optima per ambiguous frame instead of one.
@@ -561,5 +636,5 @@ that precedes the cold-start failure of frames 450--451 (IoU 0.96 there).
 | 2 | done (2026-09-04) | log-space B-spline width correction (6 coefficients, prior 1e-3); +0.017 median IoU on the 30-frame set, 0.892 -> 0.975 on one minute of `2024-05-28-02`; tail placed last from the taper asymmetry |
 | 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
 | 4 | done (2026-09-04) | eight-flag ambiguity score stored per frame; seven-clip sequence set (`docs/sequence_eval_set.json`); score >= 2 finds frames below IoU 0.9 with precision 0.97 and recall 0.97 on the set; coils and spirals fail outright and are the target of steps 5--6 |
-| 5 | not started | |
+| 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame |
 | 6 | not started | |

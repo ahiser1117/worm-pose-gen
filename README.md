@@ -174,6 +174,12 @@ missed body by area, self-contact, enclosed holes, fragments, length far
 from the prior, a jump since the previous frame); a score of 2 or more marks
 a frame whose single-frame answer should not be trusted without its
 neighbours. `scripts/ambiguity_report.py` recomputes it for stored runs.
+Stretches of such frames are then refit by temporal propagation: the good
+pose before the stretch is carried forward through it and the good pose
+after it backward, each frame warm-started from its neighbour, all
+stretches in lockstep, and per frame the lowest total energy among
+independent, forward and backward wins (`source` in `poses.npz`;
+`--no-propagate` skips it).
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
 fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;
