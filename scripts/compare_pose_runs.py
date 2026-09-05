@@ -27,7 +27,7 @@ import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
-from worm_pose_gen.pose_run import clean_mask, draw_residual, render_tube, run_label
+from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, run_label
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
 
@@ -47,7 +47,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pad", type=int, default=24, help="pixels around the union of crop windows")
     parser.add_argument("--max-width", type=int, default=1800, help="downscale wider strips to this width")
     parser.add_argument("--quality", type=int, default=85, help="JPEG quality")
-    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument(
+        "--checkpoint", type=Path, default=None,
+        help="segmenter for every panel's mask (default: each run's own checkpoint from its summary, else the promoted one)",
+    )
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
     parser.add_argument("--device", default=None)
     return parser.parse_args()
@@ -66,9 +69,17 @@ def main() -> int:
         raise SystemExit("one --label per --run is required")
     frames = [int(v) for v in args.frames.split(",") if v.strip()]
     device = torch.device(args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu"))
-    module = load_segmenter(args.checkpoint, device)
-    threshold = float(summaries[0].get("threshold", 0.5))
-    hole_radius = int(summaries[0].get("mask_cleanup", {}).get("fill_holes_radius_px", 8))
+    # Each run is drawn against the mask it was fit to: its own segmenter and cleanup.
+    checkpoint_paths = [
+        args.checkpoint or Path((s.get("checkpoint") or {}).get("path") or DEFAULT_CHECKPOINT) for s in summaries
+    ]
+    checkpoint_paths = [p if p.exists() else DEFAULT_CHECKPOINT for p in checkpoint_paths]
+    modules = {}
+    for path in checkpoint_paths:
+        if path not in modules:
+            modules[path] = load_segmenter(path, device)
+    thresholds = [float(s.get("threshold", 0.5)) for s in summaries]
+    cleanups = [cleanup_options(s) for s in summaries]
     source = RecordingSource(recording, args.dataset_root / "flat_fields")
     field = source.flat_field()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -86,14 +97,17 @@ def main() -> int:
                 raw = np.asarray(dataset[index], dtype=np.uint8)
                 frame = np.clip(np.rint(apply_flat_field(raw, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
                 height, width = frame.shape
-                probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
-                mask, _ = clean_mask(probability, threshold, hole_radius, device)
+                probabilities = {path: modules[path].predict_probability_batch(frame[None], batch_size=1)[0] for path in modules}
+                masks = [
+                    clean_mask(probabilities[path], threshold, device=device, **c)[0]
+                    for path, threshold, c in zip(checkpoint_paths, thresholds, cleanups, strict=True)
+                ]
                 crops = np.array([a["crop"][r] for a, r in zip(arrays, rows, strict=True) if r is not None])
                 x0, y0 = max(0, int(crops[:, 0].min()) - args.pad), max(0, int(crops[:, 2].min()) - args.pad)
                 x1, y1 = min(width, int(crops[:, 1].max()) + args.pad), min(height, int(crops[:, 3].max()) + args.pad)
                 window = (x0, x1, y0, y1)
                 panels = []
-                for a, row, label in zip(arrays, rows, labels, strict=True):
+                for a, row, label, mask in zip(arrays, rows, labels, masks, strict=True):
                     if row is None:
                         panels.append(draw_residual(frame, mask, np.zeros_like(mask), None, f"{label}: no fit", window=window))
                         continue

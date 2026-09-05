@@ -3,8 +3,10 @@
 
 Frames are read from the HDF5 recording in slabs, flat-fielded with the
 per-recording correction the labeling app uses, pushed through the promoted
-segmenter, cleaned (probability at or above ``--threshold``, narrow holes
-filled, largest component kept), and then fit in GPU batches with
+segmenter, cleaned (probability at or above ``--threshold``; then, unless
+``--no-fill-holes`` / ``--no-largest-component`` / ``--raw-mask`` say
+otherwise, narrow holes filled and the largest component kept), and then
+fit in GPU batches with
 ``worm_pose_gen.batch_fit.fit_masks``.  Per frame the run records the latent,
 width scale and profile, centerline, body length, in-view fraction, final
 energy and overlap, mask statistics, and per-stage timing.
@@ -114,6 +116,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16, help="frames per segmenter forward pass")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
+    parser.add_argument("--fill-holes", action=argparse.BooleanOptionalAction, default=True, help="fill narrow holes in the mask before fitting")
+    parser.add_argument(
+        "--largest-component", action=argparse.BooleanOptionalAction, default=True, help="keep only the largest connected component of the mask"
+    )
+    parser.add_argument("--raw-mask", action="store_true", help="shorthand for --no-fill-holes --no-largest-component")
     parser.add_argument("--min-worm-pixels", type=int, default=MIN_WORM_PIXELS, help="smaller cleaned masks are not fit")
     parser.add_argument("--init-workers", type=int, default=min(8, os.cpu_count() or 1), help="processes for skeleton/moment starts (0 = inline)")
     parser.add_argument(
@@ -178,6 +185,15 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
     return replace(config, **overrides)
 
 
+def cleanup_from_args(args: argparse.Namespace) -> dict[str, bool]:
+    """``clean_mask`` switches from the command line (``--raw-mask`` turns both off)."""
+
+    return {
+        "fill_holes": bool(args.fill_holes) and not args.raw_mask,
+        "largest_only": bool(args.largest_component) and not args.raw_mask,
+    }
+
+
 def initializations_for(
     mask: np.ndarray,
     config: BatchFitConfig,
@@ -228,6 +244,7 @@ def flat_fielded(raw: np.ndarray, field) -> np.ndarray:
 
 def bootstrap_prior(dataset, total: int, field, module, args: argparse.Namespace, config: BatchFitConfig, device: torch.device) -> tuple[RecordingPrior, dict[str, Any]]:
     """Segment frames spread over the whole recording and estimate its body-size prior."""
+    cleanup = cleanup_from_args(args)
 
     boot_config = replace(
         PRESETS[args.bootstrap_preset],
@@ -249,7 +266,7 @@ def bootstrap_prior(dataset, total: int, field, module, args: argparse.Namespace
             corrected = np.stack([flat_fielded(np.asarray(dataset[i], dtype=np.uint8), field) for i in chunk])
             probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
             for prob in probability:
-                mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
                 if stats["worm_pixels"] >= args.min_worm_pixels:
                     masks.append(mask)
         try:
@@ -318,6 +335,7 @@ def orientation_consistency(arrays: dict[str, np.ndarray]) -> dict[str, Any] | N
 
 def main() -> int:
     args = parse_args()
+    cleanup = cleanup_from_args(args)
     if args.step < 1 or args.slab < 1:
         raise SystemExit("--step and --slab must be positive")
     started = utc_now()
@@ -431,7 +449,7 @@ def main() -> int:
                 fit_rows: list[int] = []
                 for offset, prob in enumerate(probability):
                     row = slab_start + offset
-                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
                     for key, value in stats.items():
                         arrays[key][row] = value
                     if stats["worm_pixels"]:
@@ -523,7 +541,7 @@ def main() -> int:
                 )
                 probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
                 for r, prob in zip(chunk, probability, strict=True):
-                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
                     if stats["worm_pixels"] >= args.min_worm_pixels:
                         stretch_masks[r] = mask
             candidates, propagation_info = propagate(
@@ -575,7 +593,7 @@ def main() -> int:
             raw_frame = np.asarray(dataset[frame_index], dtype=np.uint8)
             frame = np.clip(np.rint(apply_flat_field(raw_frame, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
             probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
-            mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device)
+            mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device, **cleanup)
             tube = render_tube(
                 arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
             )
@@ -601,7 +619,10 @@ def main() -> int:
         "git": git_revision(PROJECT_ROOT),
         "device": str(device),
         "threshold": args.threshold,
-        "mask_cleanup": {"fill_holes_radius_px": args.hole_radius, "largest_component": True, "min_worm_pixels": args.min_worm_pixels},
+        "mask_cleanup": {
+            "fill_holes": cleanup["fill_holes"], "fill_holes_radius_px": args.hole_radius,
+            "largest_component": cleanup["largest_only"], "min_worm_pixels": args.min_worm_pixels,
+        },
         "fit_config": asdict(config),
         "width_template": "default_width_template",
         "preset": args.preset,

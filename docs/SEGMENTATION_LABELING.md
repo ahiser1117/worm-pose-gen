@@ -148,13 +148,23 @@ false-positive pixels on empty-label frames separately.
 
 ### Plots
 
-`scripts/plot_segmenter_history.py` writes five figures to
-`checkpoints/segmenter/plots/`: training and validation loss and validation
-IoU per epoch with one line per run; hand-refined IoU of every checkpoint in
-the newest session, with the classical median as a reference; hand-refined
-median IoU of each checkpoint across sessions; per-sample IoU of every
-checkpoint in the newest session; and the growth of the store by label
-source.
+`scripts/plot_segmenter_history.py` writes seven figures to
+`checkpoints/segmenter/plots/`. Models are named by
+`docs/segmenter_model_names.json`: a short display name per run directory
+(`r1-hand100`, `r2-hand165`, ...: labeling round, training-label source,
+number of training labels) and a `headline` list of the models drawn in
+colour and with a fixed marker in every figure; other runs are grey. The
+last headline model is the newest and the one before it its reference.
+
+| Figure | Content |
+|---|---|
+| `training_curves.png` | training and validation loss (log scale) and validation IoU per epoch, selected epoch starred |
+| `checkpoint_comparison.png` | per best checkpoint of the newest session: median (dot), interquartile range (bar), and a line down to the lowest non-empty frame; the promoted model is marked |
+| `evaluation_history.png` | median IoU of every model across evaluation sessions (the labels grow between sessions) |
+| `latest_evaluation.png` | per-frame IoU of the headline models, frames grouped by recording and sorted by the newest model |
+| `model_delta.png` | per-frame IoU of the newest model minus its reference, so a regression on one frame is visible next to the gains |
+| `iou_ecdf.png` | cumulative distribution of per-frame IoU per headline model, validation and test pooled |
+| `dataset_growth.png` | labels over time, and labels per recording by split |
 
 ### Three-way comparison (September 3, 2026)
 
@@ -339,15 +349,59 @@ out of training entirely.
    the reasons the frame was picked, and the split its label will get. Saves
    pledge the recording's split (`SegmentationStore.save(..., split=...)`).
    Progress is in `/api/queue` and in the status line after each save.
-4. **Retrain and re-evaluate.** After the round, retrain from the promoted
-   checkpoint as before; then re-evaluate hole filling and the
-   largest-component rule on the sequence set
-   (`scripts/evaluate_sequence_set.py`), since a segmenter that resolves the
-   gap between turns may no longer need the fill, and the tail re-entry clip
-   needs the fragments kept.
+4. **Retrain and re-evaluate.** After the round, retrain and re-evaluate;
+   then re-evaluate hole filling and the largest-component rule on the
+   sequence set (`scripts/evaluate_sequence_set.py`), since a segmenter that
+   resolves the gap between turns may no longer need the fill, and the tail
+   re-entry clip needs the fragments kept.
 
 Recordings and split policy of round 2 are listed in the manifest summary;
 the animals of `2024-05-28-02` (the pose pipeline's main test recording),
 `2023-10-26-01` and `2024-06-18-12` are test-only, `2023-09-07-13` and
 `2024-02-01-07` validation-only, and the rest join training alongside the
 three recordings of round 1.
+
+### Round 2 result (2026-09-05): `r2-hand165`
+
+Alex labeled the first 65 frames of the manifest (all 24 queued frames of
+`2023-06-23-01`, all 21 of `2023-06-29-12`, and 20 of 29 of
+`2023-07-14-08`; 41 of them coil, hole, or fragment windows, 8 border
+frames, 16 ordinary). The 91 bootstrap labels were then retired with
+`scripts/retire_bootstrap_labels.py`, which copies their `.npz` files and
+index rows to `<dataset root>/retired/<time>_bootstrap_classical/` and
+deletes them from the store (split pledges stay), leaving 165 train, 28
+validation, and 26 test labels, all hand-refined; the two new recordings are
+training-only, so validation and test still cover the three round-1 animals.
+
+`r2-hand165` was trained from ImageNet weights on the 165 hand labels with
+the plateau schedule (best epoch 70 of 76, validation loss `0.182` against
+`0.217` for `r1-hand100` on the same 28 labels) and promoted. Every
+checkpoint was re-evaluated on the current labels in one session:
+
+| Model | Train labels | Val median IoU | Val worst non-empty | Val frames < 0.95 (of 24) | Test median | Test worst | Test frames < 0.95 (of 22) | False-positive px on the 8 empty frames |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `r1-boot91` | 91 bootstrap | 0.916 | 0.796 | 24 | 0.913 | 0.856 | 20 | 13746 |
+| `r1-hand74` | 74 hand | 0.966 | 0.856 | 7 | 0.971 | 0.924 | 5 | 0 |
+| `r1-mixed165` | 74 hand + 91 bootstrap | 0.950 | 0.901 | 13 | 0.962 | 0.932 | 8 | 3617 |
+| `r1-hand100` | 100 hand | 0.976 | 0.880 | 2 | 0.976 | 0.956 | 0 | 0 |
+| `r2-hand165` | 165 hand | 0.978 | 0.910 | 1 | 0.981 | 0.952 | 0 | 212 |
+| classical threshold | | 0.895 | | | 0.880 | | | 20662 |
+
+The gain is at the low end: the worst validation frame goes from `0.880` to
+`0.910`, one validation frame instead of two is below `0.95`, and
+`model_delta.png` shows 15 validation and 14 test frames better against 7
+and 6 worse, none by more than `0.015`. The one regression is an empty
+validation frame (`2023-06-23-01` frame 20033) on which the new model
+paints 212 pixels where the classical threshold paints 4089; an empty
+frame scores 0 as soon as anything is painted, which is why the mean IoU
+of the new model is lower while its median, loss, and every non-empty
+frame are better. The remaining 328 manifest frames, including every frame
+of the held-out animals, are still to be labeled, so the test split does
+not yet measure a new animal.
+
+The seven figures of this session are copied to
+`pose_pipeline_step5c/segmenter_plots/`. The pose pipeline's view of the
+new model, including a held-out plate on which it paints a dark streak as
+worm, is in `POSE_PIPELINE_PLAN.md`, step 5c.
+
+![Per-frame IoU of the headline models](pose_pipeline_step5c/segmenter_plots/iou_ecdf.png)

@@ -742,6 +742,125 @@ an HDF5 filter plugin that is not installed (`2023-06-30-01`,
 `2023-08-15-01`, `2023-12-11-06`) and were left out; the scan and the
 flat-field estimate now skip unreadable frames.
 
+### Step 5c. Segmenter round 2 and raw masks (2026-09-05)
+
+Alex labeled the first 65 frames of the round-2 manifest, the 91 bootstrap
+labels were retired, and `r2-hand165` was trained from scratch on the 165
+hand labels (`SEGMENTATION_LABELING.md`, "Round 2 result": median IoU
+0.978 validation / 0.981 test, worst non-empty validation frame 0.880 ->
+0.910, promoted on validation loss 0.182 vs 0.217). The pose pipeline was
+then run with the new model and, as Alex proposed, without the hole fill and
+the largest-component rule (`fit_recording.py --raw-mask`; the ambiguity
+statistics behind the `holes` and `fragments` flags are still computed, so
+the flags keep their meaning). Results are in `pose_pipeline_step5c/`
+(`sequence_eval_r2_clean.json`, `sequence_eval_r2_raw.json`, before/after
+strips `minute_*_before_after_frame_*.jpg`), the minute videos in the run
+directories listed below.
+
+**What the labels say about the holes.** Of the 26 labeled round-2 frames
+picked for coils or short skeletons, 13 have a gap between adjacent turns
+that the 8-pixel hole fill would close (200--390 px), and the new model
+reproduces those gaps within a few dozen pixels on nearly every one. The
+`holes` flag on coil frames therefore marks real background, and filling it
+had been adding 200--700 px of false body exactly where the tube model is
+least constrained. The segmenter did not get *better* at gaps from the 65
+frames (the spiral clip has 95 frames with a fillable gap under either
+model), but it was already drawing them.
+
+**Sequence set** (IoU is tube against the mask each run was fit to, so the
+raw-mask rows are scored against a stricter mask; length is the fitted body
+length, p50/p90; "holes" and "fragments" count frames with more than 200
+fillable pixels or more than 500 pixels outside the largest component):
+
+| Clip | Pipeline | Median IoU | P10 | Frames < 0.9 | Length px | Holes | Fragments | Replaced |
+|---|---|---:|---:|---:|---|---:|---:|---:|
+| `spiral_0131` | step 5b (`r1-hand100`, cleaned) | 0.955 | 0.932 | 1 | 735 / 744 | 99 | 0 | 167 |
+| | `r2-hand165`, cleaned | 0.957 | 0.934 | 0 | 729 / 740 | 95 | 0 | 162 |
+| | `r2-hand165`, raw | 0.960 | 0.915 | 14 | 729 / 742 | 95 | 0 | 165 |
+| `loop_0131` | step 5b | 0.969 | 0.941 | 0 | 725 / 747 | 33 | 13 | 85 |
+| | `r2`, cleaned | 0.967 | 0.927 | 0 | 728 / 746 | 36 | 16 | 64 |
+| | `r2`, raw | 0.967 | 0.931 | 0 | 727 / 739 | 36 | 16 | 80 |
+| `omega_0822` | step 5b | 0.966 | 0.947 | 0 | 788 / 808 | 46 | 6 | 63 |
+| | `r2`, cleaned | 0.965 | 0.950 | 0 | 783 / 807 | 48 | 6 | 63 |
+| | `r2`, raw | 0.965 | 0.931 | 1 | 786 / 808 | 48 | 6 | 69 |
+| `coil_0822` | step 5b | 0.956 | 0.928 | 0 | 784 / 797 | 78 | 0 | 149 |
+| | `r2`, cleaned | 0.965 | 0.947 | 0 | 778 / 796 | 85 | 0 | 141 |
+| | `r2`, raw | 0.966 | 0.957 | 0 | 777 / 798 | 85 | 0 | 143 |
+| `spiral_0528` | step 5b | 0.970 | 0.959 | 0 | 779 / 786 | 133 | 0 | 138 |
+| | `r2`, cleaned | 0.954 | 0.940 | 0 | 783 / 787 | 138 | 0 | 143 |
+| | `r2`, raw | 0.962 | 0.932 | 0 | 775 / 787 | 138 | 0 | 151 |
+| `edge_0528` | step 5b | 0.959 | 0.924 | 5 | 758 / 788 | 0 | 107 | 86 |
+| | `r2`, cleaned | 0.961 | 0.930 | 7 | 760 / 785 | 0 | 0 | 80 |
+| | `r2`, raw | 0.960 | 0.931 | 8 | 760 / 785 | 0 | 0 | 84 |
+| `tail_reentry_0623` | step 5b | 0.970 | 0.960 | 5 | 774 / 780 | 2 | 29 | 14 |
+| | `r2`, cleaned | 0.968 | 0.959 | 5 | 774 / 780 | 0 | 28 | 14 |
+| | `r2`, raw | 0.967 | 0.953 | 6 | 776 / 783 | 0 | 28 | 19 |
+
+Over the 2100 clip frames the count below IoU 0.9 is 11 (step 5b), 12
+(`r2`, cleaned), 29 (`r2`, raw). Three things stand out. The new segmenter
+removes the debris fragments at the camera edge outright (`edge_0528`: 107
+frames with more than 500 stray pixels -> 0, frames with several components
+249 -> 10), which is what made the largest-component rule necessary; with
+`r2-hand165` the rule drops nothing on six of the seven clips and only the
+tail re-entry component on the seventh, where keeping it changes no frame's
+outcome (5 -> 6 below 0.9, all in the same stretch 8981--8986). The fitted length on the spiral
+holds at the worm's 730 px under every variant now, so the over-length
+failure of step 5 does not return. And the 14 low-IoU frames of the raw
+spiral are the consecutive frames 3753--3766 at the coil's tightest, where the tube crosses the real gap the mask
+now shows: the tube model is being scored against evidence it used not to
+see, and the residual there is a pose error, not a mask error
+(`minute_spiral_0131_before_after_frame_03762.jpg`).
+
+**Minute videos.** Five minutes were fit twice, once with the step 5b
+pipeline (`r1-hand100`, hole fill, largest component) and once with
+`r2-hand165` on raw masks; both videos of each pair are in the run
+directories, and the frames where the two poses disagree most are in
+`minute_*_before_after_frame_*.jpg`. "Disagree" is the mean distance between
+the two centerlines, orientation-agnostic.
+
+| Minute | Recording, frames | Why | Frames < 0.9, step 5b -> `r2` raw | Frames > 20 px apart | Fragments > 500 px, step 5b -> `r2` raw |
+|---|---|---|---:|---:|---:|
+| `spiral_0131` | `2024-01-31-02` 3300--4499 | tight spiral | 1 -> 14 | 55 | 0 -> 0 |
+| `coil_0822` | `2023-08-22-01` 10000--11199 | five-second coil | 1 -> 3 | 122 | 6 -> 11 |
+| `edge_0528` | `2024-05-28-02` 6400--7599 | body at the border, debris | 10 -> 6 | 145 | 128 -> 2 |
+| `coil_0201` | `2024-02-01-07` 17500--18699 (validation-only animal, unseen in training) | coil held for seconds | 31 -> 6 | 175 | 0 -> 1 |
+| `edge_0618` | `2024-06-18-12` 9500--10699 (test-only animal, unseen in training) | body at the border, a dark streak across the plate | 63 -> 444 | 452 | 203 -> 332 |
+
+Videos: `<run>/overlay.mp4` for each pair, gathered as
+`/temp_data4/alex/external_artifacts/poses/videos_step5c/<minute>_<r1clean|r2raw>.mp4`.
+
+The two held-out animals split the verdict. On `2024-02-01-07` the raw
+pipeline is better through the coil (31 -> 6 frames below 0.9; the cleaned
+pipeline fills the gap between turns on 216 of 1200 frames and its tube
+follows the fill). On `2024-06-18-12` the raw pipeline fails for a third of
+the minute: that plate has a long dark streak, and `r2-hand165` paints it as
+worm (a second component of 12--19 thousand pixels on 400 frames, where
+`r1-hand100` painted a few hundred), so without the largest-component rule
+the tube runs along the streak (`minute_edge_0618_before_after_frame_09817.jpg`).
+The rule was the only thing hiding that segmentation error, and the model has
+never seen a labeled frame of this animal or this artefact: the manifest's
+37 frames of `2024-06-18-12` are unlabeled. The elongated dark shape is
+exactly what the network was taught to call worm, so this is a training-data
+gap, not a threshold to tune.
+
+Where the two pipelines disagree it is, in order of frequency: head/tail
+orientation on a body cut by the camera edge (both tubes equal, markers
+swapped), the raw-mask fit stopping short of the border with a squished body
+(`edge_0528` frames 6577 and 6939, `coil_0822` frame 11161: independent fits
+with length 705--726 px against a 780 px prior and an ambiguity score of 1,
+so propagation never reached them), and the tube crossing a gap inside a
+coil. The first and second are step 6's problem (orientation and in-view
+smoothness across frames); none is caused by the raw mask itself.
+
+**Decision.** Keep `r2-hand165` promoted. Raw masks are the right evidence
+inside coils, but the largest-component rule still protects the fit from
+segmentation errors on unseen plates, so the pipeline's default stays on
+cleaned masks; `--no-fill-holes` alone is the natural next default once the
+tube model can use a gap (step 6, or a self-overlap-aware renderer), and
+`--raw-mask` is the switch for experiments. The next labeling work is the
+remaining 328 manifest frames, the held-out animals first, `2024-06-18-12`
+first of all.
+
 ### Step 6. Hypothesis linking across ambiguous stretches
 
 - Keep the top few distinct local optima per ambiguous frame instead of one.
@@ -801,5 +920,6 @@ flat-field estimate now skip unreadable frames.
 | 3 | done (2026-09-04) | bootstrapped per-recording priors replace the bounds; clipped bodies are completed off camera (in-view fraction reported); -0.009 median IoU on the 30-frame set, -0.004 on one minute of `2024-05-28-02`; orientation gap uninformative on these recordings |
 | 4 | done (2026-09-04) | eight-flag ambiguity score stored per frame; seven-clip sequence set (`docs/sequence_eval_set.json`); score >= 2 finds frames below IoU 0.9 with precision 0.97 and recall 0.97 on the set; coils and spirals fail outright and are the target of steps 5--6 |
 | 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame; videos now rendered from the final arrays |
-| 5b | in progress (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
+| 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
+| 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
 | 6 | not started | |

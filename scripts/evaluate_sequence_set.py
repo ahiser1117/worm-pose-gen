@@ -63,7 +63,10 @@ def run_fit(clip: dict, args: argparse.Namespace) -> Path:
     if args.device is not None:
         command += ["--device", args.device]
     command += args.extra.split()
-    completed = subprocess.run(command, check=True, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    completed = subprocess.run(command, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    if completed.returncode != 0:
+        print(completed.stderr[-4000:], file=sys.stderr, flush=True)
+        raise SystemExit(f"fit_recording failed on clip {clip['name']} (exit {completed.returncode}); its stderr tail is above")
     tail = completed.stdout[completed.stdout.rfind("\n{") :]
     summary = json.loads(tail)
     return Path(summary["outputs"]["poses"]).parent

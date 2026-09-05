@@ -35,9 +35,22 @@ TEXT_RGB = (255, 255, 255)
 
 
 def clean_mask(
-    probability: np.ndarray, threshold: float, hole_radius: int, device: torch.device | str | None
+    probability: np.ndarray,
+    threshold: float,
+    hole_radius: int,
+    device: torch.device | str | None,
+    *,
+    fill_holes: bool = True,
+    largest_only: bool = True,
 ) -> tuple[BoolArray, dict[str, int]]:
-    """Threshold, fill narrow holes, keep the largest component; returns the mask and its statistics."""
+    """Threshold, then optionally fill narrow holes and keep the largest component.
+
+    Returns the mask and its statistics.  The statistics (pixels a hole fill
+    would add, component count, pixels outside the largest component) are
+    computed whether or not the corresponding step is applied, so the
+    ambiguity flags ``holes`` and ``fragments`` keep their meaning on a raw
+    mask; ``worm_pixels`` counts the mask that is returned.
+    """
 
     raw = probability >= threshold
     stats = {"raw_worm_pixels": int(raw.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
@@ -45,8 +58,24 @@ def clean_mask(
         return raw, stats
     filled, added = fill_narrow_holes(raw, hole_radius, device=device)
     largest, area, count = largest_component(filled)
-    stats.update(pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(area))
-    return largest, stats
+    mask = filled if fill_holes else raw
+    if largest_only:
+        mask = largest if fill_holes else (raw & largest)
+    stats.update(
+        pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(mask.sum())
+    )
+    return mask, stats
+
+
+def cleanup_options(summary: dict[str, Any]) -> dict[str, Any]:
+    """``clean_mask`` keyword arguments recorded in a run's ``summary.json``."""
+
+    cleanup = summary.get("mask_cleanup") or {}
+    return {
+        "hole_radius": int(cleanup.get("fill_holes_radius_px", 8)),
+        "fill_holes": bool(cleanup.get("fill_holes", True)),
+        "largest_only": bool(cleanup.get("largest_component", True)),
+    }
 
 
 def render_tube(

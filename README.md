@@ -124,7 +124,11 @@ scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_a
 Labels are stored under
 `/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
 on flv-c4 with an 80/10/10 train/val/test assignment; checkpoints go to the
-git-ignored `checkpoints/segmenter/` directory. The labeling app runs at
+git-ignored `checkpoints/segmenter/` directory. The bootstrap step only
+matters for a fresh store: the bootstrapped labels of this one were retired
+on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
+hand-refined, and the promoted model is `r2-hand165` (see
+`docs/segmenter_model_names.json` for the model names the plots use). The labeling app runs at
 `http://127.0.0.1:8767`, proposes masks from the current checkpoint and the
 classical pipeline, refines them with pipeline elements, and saves edited
 labels back into the store. Details and keyboard shortcuts are in

@@ -27,7 +27,7 @@ import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
-from worm_pose_gen.pose_run import clean_mask, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
+from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
 
@@ -83,12 +83,12 @@ def main() -> int:
             if rows:
                 module = load_segmenter(args.checkpoint, device)
                 threshold = float(summary.get("threshold", 0.5))
-                hole_radius = int(summary.get("mask_cleanup", {}).get("fill_holes_radius_px", 8))
+                cleanup = cleanup_options(summary)
                 for row in rows:
                     index = int(frame_index[row])
                     frame = flat_fielded(np.asarray(dataset[index], dtype=np.uint8), field)
                     probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
-                    mask, _ = clean_mask(probability, threshold, hole_radius, device)
+                    mask, _ = clean_mask(probability, threshold, device=device, **cleanup)
                     tube = render_tube(
                         arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
                     )
