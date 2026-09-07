@@ -221,6 +221,14 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertEqual(len(pose["width_prior_profile"]), 100)
                 self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
 
+                light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
+                self.assertEqual(light["detail"], "light")
+                self.assertEqual(sorted(light["layers"]), ["image", "tube"])
+                self.assertEqual(light["errors"], [])
+                self.assertEqual(light["stats"]["frame_index"], 2)
+                with self.assertRaises(Exception):
+                    urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=medium")
+
                 other = json.loads(urlopen(f"{base}/api/pose?run=2026-09-06T11-00-00Z_other&frame=3").read())
                 self.assertTrue(other["present"])
                 self.assertNotIn("independent", other["pose"])

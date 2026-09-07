@@ -86,6 +86,7 @@
         Keys: ←/→ ±1 (Shift ±10, Ctrl ±100) · Space play · [ ] flagged · , . low IoU · 1–9 layers · F raw · 0 fit · N note.</p>
     </aside>
 
+    <div id="split-left" class="splitter v" title="drag to resize · double-click to reset"><button type="button">◂</button></div>
     <main id="stage">
       <canvas id="canvas"></canvas>
       <div id="caption"></div>
@@ -93,6 +94,7 @@
       <div id="loading" hidden>Working…</div>
     </main>
 
+    <div id="split-right" class="splitter v" title="drag to resize · double-click to reset"><button type="button">▸</button></div>
     <aside id="details">
       <div id="classification" class="badge">–</div>
       <div id="tags" class="tags"></div>
@@ -106,12 +108,12 @@
       </section>
       <section class="group">
         <h3>Width along the body <small>head → tail, px</small></h3>
-        <canvas id="width-chart" class="chart" height="150"></canvas>
+        <canvas id="width-chart" class="chart" data-height="150"></canvas>
         <div class="note">solid: fitted · dotted: symmetric template × width · dashed: prior shape × width · grey: independent fit · orange: compare run</div>
       </section>
       <section class="group">
         <h3>Curvature along the body <small>1/px · shaded where |κ| exceeds 1/width</small></h3>
-        <canvas id="curvature-chart" class="chart" height="110"></canvas>
+        <canvas id="curvature-chart" class="chart" data-height="110"></canvas>
       </section>
       <section class="group">
         <h3>Mask pipeline on this frame</h3>
@@ -123,6 +125,7 @@
       </section>
     </aside>
 
+    <div id="split-bottom" class="splitter h" title="drag to resize · double-click to reset"><button type="button">▾</button></div>
     <footer id="timeline">
       <div id="timeline-head">
         <span id="timeline-range" class="note"></span>

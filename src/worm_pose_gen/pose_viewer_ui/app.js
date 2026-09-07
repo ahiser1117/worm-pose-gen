@@ -47,7 +47,7 @@ const state = {
   compareRows: null,     // frame_index -> row in the compare run
   row: 0,
   frame: null,           // decoded frame payload
-  frameCache: new Map(), // key -> raw payload
+  frameCache: new Map(), // cacheKey -> payload (with decoded images attached)
   decoded: null,         // Uint8Array layers of the current frame
   image: null, imageRaw: null,
   showRaw: false,
@@ -57,6 +57,8 @@ const state = {
   panning: false, last: null,
   playing: null,
   loading: 0,
+  fitPending: false,     // fit the view when the next frame arrives
+  userView: false,       // the user zoomed or panned; keep their view on resize
   timeline: { start: 0, end: 0, dragging: false },
   charts: [],
   notes: [],
@@ -78,7 +80,7 @@ function setStatus(text, kind) {
 
 function setLoading(delta) {
   state.loading = Math.max(0, state.loading + delta);
-  $("#loading").hidden = state.loading === 0;
+  updateLoadingIndicator();
 }
 
 async function api(path, options) {
@@ -179,9 +181,12 @@ async function selectRun(name, frameIndex) {
   setLoading(1);
   try {
     const run = await api(`/api/run?name=${encodeURIComponent(name)}`);
+    abortLoad("light"); abortLoad("full"); abortLoad("compare"); cancelPendingFull();
+    loads.lightWanted = null;
     state.run = run;
     state.runName = name;
     state.frameCache.clear();
+    state.frame = null; state.decoded = null;
     state.starts = null;
     state.compare = null; state.compareName = null; state.comparePose = null;
     const entry = run.entry;
@@ -226,7 +231,8 @@ async function selectCompare(name) {
     }
   }
   drawCharts();
-  await showRow(state.row, { keepView: true });
+  fetchCompare(state.row);
+  renderDetails();
 }
 
 function populateWorst() {
@@ -245,35 +251,57 @@ function populateWorst() {
 }
 
 // ---------------------------------------------------------------- frames
+//
+// Two tiers keep scrubbing smooth.  A light request (image, tube, pose and
+// statistics; no segmenter) follows the cursor at once and aborts whatever
+// it superseded; the full mask layers are asked for only once the cursor
+// has rested.  Payloads and their decoded images are cached by row.
 
-function frameKey(row, raw) {
-  const threshold = $("#threshold-on").checked ? $("#threshold").value : "";
-  return `${row}|${threshold}|${raw ? 1 : 0}`;
-}
+const loads = { light: null, lightRow: null, lightWanted: null, full: null, compare: null, fullTimer: null, fullResolve: null, prefetching: false, seq: 0, applied: 0 };
+const FULL_DELAY_MS = 150;
+const CACHE_ENTRIES = 24;
 
-function frameUrl(row, raw) {
+function thresholdParam() { return $("#threshold-on").checked ? $("#threshold").value : ""; }
+
+function cacheKey(row, detail, raw) { return `${row}|${thresholdParam()}|${detail}|${raw ? 1 : 0}`; }
+
+function frameUrl(row, detail, raw) {
   const frame = state.run.series.frame_index[row];
-  const threshold = $("#threshold-on").checked ? `&threshold=${$("#threshold").value}` : "";
-  return `/api/frame?run=${encodeURIComponent(state.runName)}&frame=${frame}${threshold}${raw ? "&raw=1" : ""}`;
+  const threshold = thresholdParam() ? `&threshold=${thresholdParam()}` : "";
+  return `/api/frame?run=${encodeURIComponent(state.runName)}&frame=${frame}&detail=${detail}${threshold}${raw ? "&raw=1" : ""}`;
 }
 
-async function fetchFrame(row, raw) {
-  const key = frameKey(row, raw);
-  let pending = state.frameCache.get(key);
-  if (!pending) {
-    pending = api(frameUrl(row, raw)).catch((error) => { state.frameCache.delete(key); throw error; });
-    state.frameCache.set(key, pending);
-    if (state.frameCache.size > 40) state.frameCache.delete(state.frameCache.keys().next().value);
-  }
-  return pending;
+async function fetchJson(url, controller) {
+  const response = await fetch(url, controller ? { signal: controller.signal } : undefined);
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || response.statusText);
+  return payload;
 }
 
-function prefetch(row, count) {
-  const n = state.run.series.frame_index.length;
-  for (let k = 1; k <= count; k++) {
-    const r = row + k;
-    if (r < n) fetchFrame(r, state.showRaw).catch(() => {});
-  }
+const isAbort = (error) => error && error.name === "AbortError";
+
+function abortLoad(kind) {
+  if (loads[kind]) { loads[kind].abort(); loads[kind] = null; }
+}
+
+
+function trimCache() {
+  while (state.frameCache.size > CACHE_ENTRIES) state.frameCache.delete(state.frameCache.keys().next().value);
+}
+
+function cachedFrame(row, raw) {
+  return state.frameCache.get(cacheKey(row, "full", raw)) || null;
+}
+
+async function loadTier(row, detail, controller) {
+  const raw = state.showRaw;
+  let payload = state.frameCache.get(cacheKey(row, "full", raw));
+  if (!payload && detail === "light") payload = state.frameCache.get(cacheKey(row, "light", raw));
+  if (payload) return payload;
+  payload = await fetchJson(frameUrl(row, detail, raw), controller);
+  state.frameCache.set(cacheKey(row, detail, raw), payload);
+  trimCache();
+  return payload;
 }
 
 async function decodeFrame(payload) {
@@ -285,48 +313,162 @@ async function decodeFrame(payload) {
   return decoded;
 }
 
-async function showRow(row, options = {}) {
-  if (!state.run) return;
+// Decode once per payload, then show it if the cursor is still on its row.
+// While scrubbing, a light payload a step behind the cursor is still shown
+// (``stale``) so the view keeps moving; anything older than what is on
+// screen is dropped.
+async function applyPayload(payload, row, stale = false) {
+  if (!payload._decoded) {
+    const [decoded, image, imageRaw] = await Promise.all([decodeFrame(payload), loadImage(payload.layers && payload.layers.image), loadImage(payload.image_raw)]);
+    payload._decoded = decoded; payload._image = image; payload._imageRaw = imageRaw;
+  }
+  if (row !== state.row && !stale) return false;
+  if (stale && row !== state.row && payload._seq !== undefined && payload._seq < loads.applied) return false;
+  if (payload._seq !== undefined) loads.applied = Math.max(loads.applied, payload._seq);
+  state.frame = payload;
+  state.decoded = payload._decoded;
+  state.image = payload._image;
+  state.imageRaw = payload._imageRaw;
+  if (state.fitPending) { fitView(); state.fitPending = false; }
+  buildOverlay();
+  draw();
+  renderDetails();
+  return true;
+}
+
+function frameStatus(row, payload) {
+  const n = state.run.series.frame_index.length;
+  const frame = state.run.series.frame_index[row];
+  if (payload.errors && payload.errors.length) { setStatus(payload.errors.join("; "), "error"); return; }
+  setStatus(`frame ${frame} · row ${row + 1}/${n}${payload.detail === "light" ? " · mask layers…" : ""}`, payload.detail === "light" ? "" : "ok");
+}
+
+function updateLoadingIndicator() {
+  const busy = loads.full !== null || loads.fullTimer !== null || state.loading > 0;
+  $("#loading").hidden = !busy;
+  $("#loading").textContent = state.loading > 0 ? "Working…" : "mask layers…";
+}
+
+function fetchCompare(row) {
+  abortLoad("compare");
+  state.comparePose = null;
+  if (!state.compareName) return;
+  const controller = new AbortController();
+  loads.compare = controller;
+  const frame = state.run.series.frame_index[row];
+  fetchJson(`/api/pose?run=${encodeURIComponent(state.compareName)}&frame=${frame}`, controller)
+    .then((payload) => {
+      if (row !== state.row) return;
+      state.comparePose = payload.present ? payload : null;
+      draw(); renderDetails();
+    })
+    .catch((error) => { if (!isAbort(error)) setStatus(error.message, "error"); })
+    .finally(() => { if (loads.compare === controller) loads.compare = null; });
+}
+
+// One background loop fills the cache with the full layers of the rows just
+// ahead of the cursor, one request at a time, re-aiming after each; it runs
+// while the cursor rests and during playback, and idles when nothing is left.
+const PREFETCH_AHEAD = 4;
+
+async function prefetchLoop() {
+  if (loads.prefetching || !state.run) return;
+  loads.prefetching = true;
+  const runName = state.runName;
+  try {
+    for (;;) {
+      if (state.runName !== runName) break;
+      const n = state.run.series.frame_index.length;
+      let target = null;
+      for (let k = 1; k <= PREFETCH_AHEAD; k++) {
+        const r = state.row + k;
+        if (r < n && !cachedFrame(r, state.showRaw)) { target = r; break; }
+      }
+      if (target === null) break;
+      const payload = await loadTier(target, "full", null);
+      if (state.runName !== runName) break;
+      await applyPayload(payload, -1);  // decode ahead of time; never shown from here
+    }
+  } catch (error) {
+    console.warn("prefetch", error);
+  } finally {
+    loads.prefetching = false;
+  }
+}
+
+// Light requests: at most one in flight; when it lands it is shown even if
+// the cursor moved on, and the cursor's current row is requested next.
+function requestLight(row) {
+  loads.lightWanted = row;
+  if (loads.light) return;
+  const controller = new AbortController();
+  loads.light = controller;
+  loads.lightRow = row;
+  const seq = ++loads.seq;
+  loadTier(row, "light", controller)
+    .then((payload) => { payload._seq = Math.max(payload._seq || 0, seq); return applyPayload(payload, row, true).then((ok) => { if (ok && row === state.row) frameStatus(row, payload); }); })
+    .catch((error) => { if (!isAbort(error)) setStatus(error.message, "error"); })
+    .finally(() => {
+      loads.light = null;
+      if (loads.lightWanted !== null && loads.lightWanted !== row && !cachedFrame(loads.lightWanted, state.showRaw)) requestLight(loads.lightWanted);
+    });
+}
+
+// Move the cursor.  Resolves when the full layers are shown for this row, or
+// false when the cursor moved on first.
+function showRow(row, options = {}) {
+  if (!state.run) return Promise.resolve(false);
   const n = state.run.series.frame_index.length;
   row = Math.max(0, Math.min(n - 1, row));
   state.row = row;
-  const id = ++state.requestId;
-  const frame = state.run.series.frame_index[row];
-  $("#frame-index").value = frame;
+  $("#frame-index").value = state.run.series.frame_index[row];
+  if (options.fit) state.fitPending = true;
+  if (!options.keepStarts) state.starts = null;
   drawCharts();
   updateHash();
-  setLoading(1);
-  try {
-    const wantRaw = state.showRaw;
-    const [payload, comparePose] = await Promise.all([
-      fetchFrame(row, wantRaw),
-      state.compareName ? api(`/api/pose?run=${encodeURIComponent(state.compareName)}&frame=${frame}`).catch(() => null) : Promise.resolve(null),
-    ]);
-    if (id !== state.requestId) return;
-    const [decoded, image, imageRaw] = await Promise.all([
-      decodeFrame(payload),
-      loadImage(payload.layers && payload.layers.image),
-      loadImage(payload.image_raw),
-    ]);
-    if (id !== state.requestId) return;
-    state.frame = payload;
-    state.decoded = decoded;
-    state.image = image;
-    state.imageRaw = imageRaw;
-    state.comparePose = comparePose && comparePose.present ? comparePose : null;
-    if (!options.keepStarts) state.starts = null;
-    if (payload.errors && payload.errors.length) setStatus(payload.errors.join("; "), "error");
-    else setStatus(`frame ${frame} · row ${row + 1}/${n}`, "ok");
-    if (options.fit) fitView();
-    buildOverlay();
-    draw();
-    renderDetails();
-    prefetch(row, state.playing ? 3 : 2);
-  } catch (error) {
-    if (id === state.requestId) setStatus(error.message, "error");
-  } finally {
-    setLoading(-1);
+  abortLoad("full");
+  cancelPendingFull();
+  fetchCompare(row);
+  renderNotes();
+  const full = cachedFrame(row, state.showRaw);
+  if (full) {
+    loads.lightWanted = null;
+    full._seq = ++loads.seq;
+    updateLoadingIndicator();
+    return applyPayload(full, row).then((ok) => { if (ok) { frameStatus(row, full); prefetchLoop(); } return ok; });
   }
+  requestLight(row);
+  const delay = options.immediate || state.playing ? 0 : FULL_DELAY_MS;
+  return new Promise((resolve) => {
+    loads.fullResolve = resolve;
+    loads.fullTimer = setTimeout(async () => {
+      loads.fullTimer = null; loads.fullResolve = null;
+      if (row !== state.row) return resolve(false);
+      const controller = new AbortController();
+      loads.full = controller;
+      updateLoadingIndicator();
+      try {
+        const payload = await loadTier(row, "full", controller);
+        payload._seq = ++loads.seq;
+        const ok = await applyPayload(payload, row);
+        if (ok) { frameStatus(row, payload); prefetchLoop(); }
+        resolve(ok);
+      } catch (error) {
+        if (!isAbort(error)) setStatus(error.message, "error");
+        resolve(false);
+      } finally {
+        if (loads.full === controller) loads.full = null;
+        updateLoadingIndicator();
+      }
+    }, delay);
+    updateLoadingIndicator();
+  });
+}
+
+// A superseded full request that has not been sent yet still owes its caller an answer.
+function cancelPendingFull() {
+  if (loads.fullTimer) { clearTimeout(loads.fullTimer); loads.fullTimer = null; }
+  if (loads.fullResolve) { const resolve = loads.fullResolve; loads.fullResolve = null; resolve(false); }
 }
 
 function step(delta) { showRow(state.row + delta, { keepView: true }); }
@@ -398,9 +540,14 @@ function renderLegend() {
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(rect.width * ratio);
-  canvas.height = Math.round(rect.height * ratio);
-  draw();
+  const width = Math.max(1, Math.round(rect.width * ratio));
+  const height = Math.max(1, Math.round(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  if (!state.userView && state.decoded) fitView();
+  else draw();
 }
 
 function fitView() {
@@ -409,6 +556,7 @@ function fitView() {
   const rect = canvas.getBoundingClientRect();
   const scale = Math.min(rect.width / d.width, rect.height / d.height) * 0.98;
   state.view = { scale, tx: (rect.width - d.width * scale) / 2, ty: (rect.height - d.height * scale) / 2 };
+  state.userView = false;
   draw();
 }
 
@@ -593,7 +741,8 @@ function renderDetails() {
     if (f.checkpoint && state.run.entry.checkpoint_path && !f.checkpoint.endsWith(state.run.entry.checkpoint_path.split("/").slice(-2).join("/")) && f.checkpoint !== state.run.entry.checkpoint_path) {
       mrows.push(`<tr><td colspan="3" class="diff">segmenter differs from the run's: ${f.checkpoint}</td></tr>`);
     }
-  } else mrows.push(`<tr><td colspan="3">no mask layers (${(f.errors || []).join("; ") || "recording or checkpoint unavailable"})</td></tr>`);
+  } else if (f.detail === "light") mrows.push('<tr><td colspan="3">mask layers loading…</td></tr>');
+  else mrows.push(`<tr><td colspan="3">no mask layers (${(f.errors || []).join("; ") || "recording or checkpoint unavailable"})</td></tr>`);
   $("#mask-stats").innerHTML = mrows.join("");
 
   drawWidthChart();
@@ -603,15 +752,24 @@ function renderDetails() {
 
 // ---------------------------------------------------------------- small charts
 
+// A chart canvas is laid out at its CSS size and backed at device pixels;
+// drawing happens in CSS pixels through the transform.
 function chartBox(canvasNode) {
   const ratio = window.devicePixelRatio || 1;
+  // Setting canvas.height rewrites the height attribute, so the intended CSS
+  // height lives in data-height and is never read back from the element.
+  if (!canvasNode.dataset.height) canvasNode.dataset.height = canvasNode.getAttribute("height");
+  const cssHeight = Number(canvasNode.dataset.height);
+  if (canvasNode.style.height !== `${cssHeight}px`) canvasNode.style.height = `${cssHeight}px`;
   const rect = canvasNode.getBoundingClientRect();
-  if (canvasNode.width !== Math.round(rect.width * ratio)) canvasNode.width = Math.round(rect.width * ratio);
-  canvasNode.height = Math.round(canvasNode.getAttribute("height") * ratio);
+  const width = Math.max(1, Math.round(rect.width * ratio));
+  const height = Math.max(1, Math.round(cssHeight * ratio));
+  if (canvasNode.width !== width) canvasNode.width = width;
+  if (canvasNode.height !== height) canvasNode.height = height;
   const c = canvasNode.getContext("2d");
   c.setTransform(ratio, 0, 0, ratio, 0, 0);
-  c.clearRect(0, 0, rect.width, canvasNode.height / ratio);
-  return { c, w: rect.width, h: canvasNode.height / ratio };
+  c.clearRect(0, 0, rect.width, cssHeight);
+  return { c, w: rect.width, h: cssHeight };
 }
 
 function polyline(c, xs, ys, color, dash, width = 1.5) {
@@ -711,7 +869,7 @@ function buildCharts() {
     label.className = "label";
     label.textContent = spec.label;
     const node = document.createElement("canvas");
-    node.setAttribute("height", spec.height);
+    node.dataset.height = spec.height;
     node.style.height = `${spec.height}px`;
     container.appendChild(label); container.appendChild(node);
     node.addEventListener("pointerdown", (event) => { state.timeline.dragging = true; node.setPointerCapture(event.pointerId); seekFromEvent(node, event); });
@@ -760,7 +918,13 @@ function compareValues(key) {
   return series.frame_index.map((f) => { const r = state.compareRows.get(f); return r === undefined ? null : values[r]; });
 }
 
+let chartsFrame = null;
 function drawCharts() {
+  if (chartsFrame) return;
+  chartsFrame = requestAnimationFrame(() => { chartsFrame = null; drawChartsNow(); });
+}
+
+function drawChartsNow() {
   if (!state.run) return;
   const series = state.run.series;
   const n = series.frame_index.length;
@@ -885,18 +1049,16 @@ function jump(kind, direction) {
 function togglePlay() {
   if (state.playing) { clearInterval(state.playing); state.playing = null; $("#play").textContent = "Play"; return; }
   const period = 1000 / Math.max(1, Math.min(30, parseInt($("#fps").value, 10) || 10));
-  let busy = false;
-  state.playing = setInterval(async () => {
-    if (busy) return;
-    busy = true;
-    try {
-      const n = state.run.series.frame_index.length;
-      let next = state.row + 1;
-      const stretch = state.frame && state.frame.stats && state.frame.stats.stretch;
-      if ($("#loop-stretch").checked && stretch && next > stretch.rows[1]) next = stretch.rows[0];
-      if (next >= n) { togglePlay(); return; }
-      await showRow(next, { keepView: true });
-    } finally { busy = false; }
+  // The cursor advances at the requested rate; frames whose full layers are
+  // already cached show them, the others show the light tier and the mask
+  // layers catch up when playback stops.
+  state.playing = setInterval(() => {
+    const n = state.run.series.frame_index.length;
+    let next = state.row + 1;
+    const stretch = state.frame && state.frame.stats && state.frame.stats.stretch;
+    if ($("#loop-stretch").checked && stretch && next > stretch.rows[1]) next = stretch.rows[0];
+    if (next >= n) { togglePlay(); return; }
+    showRow(next, { keepView: true, immediate: true });
   }, period);
   $("#play").textContent = "Pause";
 }
@@ -936,6 +1098,10 @@ function toggleLayer(index) {
 function renderLayerAvailability() {
   const d = state.decoded || {};
   const pose = state.frame && state.frame.pose;
+  if (state.frame && state.frame.detail === "light") {
+    for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", ["independent", "compare", "starts"].includes(node.dataset.layer) && !{ independent: pose && pose.independent, compare: state.comparePose, starts: state.starts }[node.dataset.layer]);
+    return;
+  }
   const available = {
     probability: !!d.probability, mask_raw: !!d.mask_raw, fill_adds: !!d.mask_filled, largest_drops: !!d.mask_largest,
     residual: !!(d.mask_final && d.tube), tube: !!d.tube, tube_fill: !!d.tube, final_outline: !!d.mask_final,
@@ -1008,10 +1174,15 @@ async function saveNote() {
 
 // ---------------------------------------------------------------- misc
 
+let hashTimer = null;
 function updateHash() {
-  if (!state.run) return;
-  const frame = state.run.series.frame_index[state.row];
-  history.replaceState(null, "", `#run=${encodeURIComponent(state.runName)}&frame=${frame}`);
+  if (hashTimer) return;
+  hashTimer = setTimeout(() => {
+    hashTimer = null;
+    if (!state.run) return;
+    const frame = state.run.series.frame_index[state.row];
+    history.replaceState(null, "", `#run=${encodeURIComponent(state.runName)}&frame=${frame}`);
+  }, 250);
 }
 
 function parseHash() {
@@ -1031,6 +1202,73 @@ async function computeStarts() {
   } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
 }
 
+// ---------------------------------------------------------------- panels
+//
+// The three panels around the stage are sized by CSS variables; the
+// splitters drag them, their buttons collapse and restore them, and the
+// layout persists in localStorage.
+
+const LAYOUT_DEFAULT = { left: 290, right: 360, bottom: 330 };
+const LAYOUT_MIN = { left: 160, right: 220, bottom: 60 };
+const layout = { sizes: { ...LAYOUT_DEFAULT }, collapsed: {}, restore: {} };
+
+function loadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("poseViewer.layout") || "null");
+    if (saved && saved.sizes) { Object.assign(layout.sizes, saved.sizes); Object.assign(layout.collapsed, saved.collapsed || {}); }
+  } catch (error) { /* first visit or blocked storage */ }
+}
+
+function saveLayout() {
+  try { localStorage.setItem("poseViewer.layout", JSON.stringify({ sizes: layout.sizes, collapsed: layout.collapsed })); } catch (error) { /* ignore */ }
+}
+
+function applyLayout() {
+  const app = $("#app");
+  for (const side of ["left", "right", "bottom"]) {
+    const size = layout.collapsed[side] ? 0 : layout.sizes[side];
+    app.style.setProperty(`--${side}`, `${size}px`);
+    const splitter = $(`#split-${side}`);
+    splitter.classList.toggle("collapsed", !!layout.collapsed[side]);
+    const button = splitter.querySelector("button");
+    button.textContent = { left: layout.collapsed.left ? "▸" : "◂", right: layout.collapsed.right ? "◂" : "▸", bottom: layout.collapsed.bottom ? "▴" : "▾" }[side];
+    button.title = layout.collapsed[side] ? "expand panel" : "collapse panel";
+  }
+  $("#timeline").classList.toggle("collapsed", !!layout.collapsed.bottom);
+}
+
+function togglePanel(side) {
+  layout.collapsed[side] = !layout.collapsed[side];
+  applyLayout();
+  saveLayout();
+}
+
+function initSplitters() {
+  loadLayout();
+  applyLayout();
+  for (const side of ["left", "right", "bottom"]) {
+    const splitter = $(`#split-${side}`);
+    splitter.querySelector("button").addEventListener("click", (event) => { event.stopPropagation(); togglePanel(side); });
+    splitter.addEventListener("dblclick", () => { layout.sizes[side] = LAYOUT_DEFAULT[side]; layout.collapsed[side] = false; applyLayout(); saveLayout(); });
+    splitter.addEventListener("pointerdown", (event) => {
+      if (event.target.tagName === "BUTTON") return;
+      event.preventDefault();
+      splitter.setPointerCapture(event.pointerId);
+      const rect = $("#app").getBoundingClientRect();
+      const move = (e) => {
+        let size = side === "left" ? e.clientX - rect.left : side === "right" ? rect.right - e.clientX : rect.bottom - e.clientY;
+        size = Math.round(Math.max(0, Math.min(size, side === "bottom" ? rect.height * 0.8 : rect.width * 0.5)));
+        if (size < LAYOUT_MIN[side] / 2) { layout.collapsed[side] = true; }
+        else { layout.collapsed[side] = false; layout.sizes[side] = Math.max(LAYOUT_MIN[side], size); }
+        applyLayout();
+      };
+      const up = () => { splitter.removeEventListener("pointermove", move); splitter.removeEventListener("pointerup", up); saveLayout(); };
+      splitter.addEventListener("pointermove", move);
+      splitter.addEventListener("pointerup", up);
+    });
+  }
+}
+
 function bindEvents() {
   $("#run").addEventListener("change", (e) => selectRun(e.target.value));
   $("#run-filter").addEventListener("input", renderRunList);
@@ -1045,18 +1283,18 @@ function bindEvents() {
     const [kind, direction] = button.dataset.jump.split(":");
     button.addEventListener("click", () => jump(kind, parseInt(direction, 10)));
   }
-  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); showRow(state.row, { keepView: true, keepStarts: true }); });
+  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
   $("#fit-view").addEventListener("click", fitView);
   $("#starts").addEventListener("click", computeStarts);
-  $("#threshold").addEventListener("input", (e) => { $("#threshold-value").textContent = e.target.value; if ($("#threshold-on").checked) showRow(state.row, { keepView: true }); });
-  $("#threshold-on").addEventListener("change", (e) => { $("#threshold-value").textContent = e.target.checked ? $("#threshold").value : "run"; showRow(state.row, { keepView: true }); });
+  $("#threshold").addEventListener("input", (e) => { $("#threshold-value").textContent = e.target.value; if ($("#threshold-on").checked) showRow(state.row, { keepView: true, keepStarts: true }); });
+  $("#threshold-on").addEventListener("change", (e) => { $("#threshold-value").textContent = e.target.checked ? $("#threshold").value : "run"; showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
   $("#note-save").addEventListener("click", saveNote);
   $("#note-comment").addEventListener("keydown", (e) => { if (e.key === "Enter") saveNote(); e.stopPropagation(); });
   $("#extra-series").addEventListener("change", (e) => { state.extra = e.target.value; drawCharts(); });
   $("#show-independent").addEventListener("change", drawCharts);
   $("#show-compare").addEventListener("change", drawCharts);
   $("#jump-iou").addEventListener("change", drawCharts);
-  $("#timeline-toggle").addEventListener("click", () => { const t = $("#timeline"); t.classList.toggle("collapsed"); $("#timeline-toggle").textContent = t.classList.contains("collapsed") ? "▴" : "▾"; resizeCanvas(); });
+  $("#timeline-toggle").addEventListener("click", () => togglePanel("bottom"));
 
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
@@ -1066,13 +1304,14 @@ function bindEvents() {
     const rect = canvas.getBoundingClientRect();
     state.view.tx = event.clientX - rect.left - before.x * state.view.scale;
     state.view.ty = event.clientY - rect.top - before.y * state.view.scale;
+    state.userView = true;
     draw();
   }, { passive: false });
   canvas.addEventListener("pointerdown", (event) => { state.panning = true; state.last = { x: event.clientX, y: event.clientY }; canvas.setPointerCapture(event.pointerId); canvas.style.cursor = "grabbing"; });
   canvas.addEventListener("pointermove", (event) => {
     if (state.panning && state.last) {
       state.view.tx += event.clientX - state.last.x; state.view.ty += event.clientY - state.last.y;
-      state.last = { x: event.clientX, y: event.clientY }; draw();
+      state.last = { x: event.clientX, y: event.clientY }; state.userView = true; draw();
     } else if (state.decoded) {
       const p = toImage(event.clientX, event.clientY);
       const x = Math.floor(p.x), y = Math.floor(p.y);
@@ -1088,7 +1327,17 @@ function bindEvents() {
     }
   });
   canvas.addEventListener("pointerup", () => { state.panning = false; state.last = null; canvas.style.cursor = "grab"; });
-  window.addEventListener("resize", () => { resizeCanvas(); drawCharts(); renderDetails(); });
+  // Panels resize the stage and the charts without a window resize.
+  let pending = null;
+  const relayout = () => {
+    if (pending) return;
+    pending = requestAnimationFrame(() => { pending = null; resizeCanvas(); drawCharts(); if (state.frame) { drawWidthChart(); drawCurvatureChart(); } });
+  };
+  new ResizeObserver(relayout).observe($("#stage"));
+  new ResizeObserver(relayout).observe($("#charts"));
+  new ResizeObserver(relayout).observe($("#details"));
+  window.addEventListener("resize", relayout);
+  initSplitters();
 
   window.addEventListener("keydown", (event) => {
     const tag = document.activeElement && document.activeElement.tagName;

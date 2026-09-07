@@ -434,17 +434,28 @@ class LoadedRun:
             }
         return out
 
-    def frame(self, row: int, segmenters: Segmenters, threshold: float | None, device: torch.device, *, raw: bool = False) -> dict[str, Any]:
-        """All layers and statistics of one frame; image layers cached per threshold."""
+    def frame(
+        self, row: int, segmenters: Segmenters, threshold: float | None, device: torch.device, *, raw: bool = False, detail: str = "full"
+    ) -> dict[str, Any]:
+        """Layers and statistics of one frame, cached per threshold.
+
+        ``detail="light"`` skips the segmenter and the mask layers (image,
+        tube, pose and statistics only), which is what the browser asks for
+        while the user scrubs; the full layers follow once the cursor rests.
+        """
 
         threshold = self.threshold if threshold is None else float(threshold)
-        key = (row, threshold)
+        light = detail == "light"
+        key = (row, threshold, "full")
         with self._lock:
             cached = self._cache.get(key)
+            if cached is None and light:
+                key = (row, threshold, "light")
+                cached = self._cache.get(key)
             if cached is not None:
                 self._cache.move_to_end(key)
         if cached is None:
-            cached = self._layers(row, segmenters, threshold, device)
+            cached = self._layers(row, segmenters, threshold, device, light=light)
             with self._lock:
                 self._cache[key] = cached
                 while len(self._cache) > FRAME_CACHE_SIZE:
@@ -456,10 +467,13 @@ class LoadedRun:
         payload["pose"] = self.pose(row)
         return payload
 
-    def _layers(self, row: int, segmenters: Segmenters, threshold: float, device: torch.device) -> dict[str, Any]:
+    def _layers(self, row: int, segmenters: Segmenters, threshold: float, device: torch.device, *, light: bool = False) -> dict[str, Any]:
         arrays = self.arrays
         frame_index = int(self.frame_index[row])
-        payload: dict[str, Any] = {"row": row, "frame_index": frame_index, "threshold": threshold, "layers": {}, "mask_stats": None, "errors": []}
+        payload: dict[str, Any] = {
+            "row": row, "frame_index": frame_index, "threshold": threshold, "detail": "light" if light else "full",
+            "layers": {}, "mask_stats": None, "errors": [],
+        }
         if self.source is None:
             payload["errors"].append(f"recording not readable: {self.source_error}")
             height, width = (int(v) for v in (self.summary.get("image_shape") or (0, 0)))
@@ -467,9 +481,10 @@ class LoadedRun:
             _, image = self.source.corrected(frame_index)
             height, width = image.shape
             payload["layers"]["image"] = jpeg_data_url(image)
-            probability, checkpoint = segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
+            probability, checkpoint = (None, None) if light else segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
             if probability is None:
-                payload["errors"].append("no segmenter checkpoint available; mask layers skipped")
+                if not light:
+                    payload["errors"].append("no segmenter checkpoint available; mask layers skipped")
             else:
                 payload["checkpoint"] = checkpoint
                 payload["layers"]["probability"] = probability_data_url(probability)
@@ -668,9 +683,11 @@ class ViewerState:
         rows.sort(key=lambda r: (-r["overlap"], r["name"]))
         return rows
 
-    def frame_payload(self, name: str, frame: int, threshold: float | None, raw: bool) -> dict[str, Any]:
+    def frame_payload(self, name: str, frame: int, threshold: float | None, raw: bool, detail: str = "full") -> dict[str, Any]:
+        if detail not in ("full", "light"):
+            raise ValueError("detail must be 'full' or 'light'")
         run = self.run(name)
-        return run.frame(run.row_of(frame), self.segmenters, threshold, self.device, raw=raw)
+        return run.frame(run.row_of(frame), self.segmenters, threshold, self.device, raw=raw, detail=detail)
 
     def pose_payload(self, name: str, frame: int) -> dict[str, Any]:
         run = self.run(name)
@@ -713,6 +730,16 @@ class ViewerHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], state: ViewerState) -> None:
         super().__init__(address, ViewerRequestHandler)
         self.state = state
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # The browser aborts frame requests it no longer needs while the
+        # user scrubs; a closed connection is not worth a traceback.
+        import sys
+
+        error = sys.exc_info()[1]
+        if isinstance(error, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class ViewerRequestHandler(BaseHTTPRequestHandler):
@@ -767,7 +794,8 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
                 threshold = query.get("threshold")
                 self._send_json(
                     state.frame_payload(
-                        query["run"], int(query["frame"]), None if threshold in (None, "") else float(threshold), query.get("raw", "0") == "1"
+                        query["run"], int(query["frame"]), None if threshold in (None, "") else float(threshold), query.get("raw", "0") == "1",
+                        query.get("detail", "full"),
                     )
                 )
             elif parsed.path == "/api/pose":

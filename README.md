@@ -184,9 +184,10 @@ scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.pose_vi
 ```
 
 It scrubs through a run's frames (arrow keys, play, click or drag on the
-timeline, wheel to zoom the timeline range) and composites every layer the
-pipeline produced on the flat-fielded frame, each with its own toggle and
-opacity: the segmenter's probability heat map, the thresholded mask, the
+timeline, wheel to zoom the timeline range; the image, tube and statistics
+follow the cursor at once and the mask layers arrive once it rests) and
+composites every layer the pipeline produced on the flat-fielded frame,
+each with its own toggle and opacity: the segmenter's probability heat map, the thresholded mask, the
 pixels a hole fill adds and the pixels the largest-component rule drops,
 the mask the fit was scored against, the fitted tube's outline and
 centerline with head and tail markers, the residual (mask the tube misses
@@ -206,7 +207,10 @@ selectable extra series (pose jump, self-contact, width, energy, ...), the
 flag raster, and a class/source strip, with propagation stretches shaded.
 "Jump to" walks flagged or low-IoU frames, stretches, jumps and edge
 frames; review notes (tags and a comment per frame) are appended to the
-file named by `--notes`, `docs/pose_review/notes.json` by default.
+file named by `--notes`, `docs/pose_review/notes.json` by default. The
+three panels around the frame resize by dragging their splitters and
+collapse from the splitter buttons (double-click resets); the layout is
+remembered by the browser.
 
 By default the run first bootstraps a recording prior: frames spread over
 the whole recording are fit with the hard bounds opened, whole worms (mask
