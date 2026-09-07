@@ -22,6 +22,7 @@ dependencies = [
 worm-pose-gen = "worm_pose_gen:main"
 worm-pose-tuner = "worm_pose_gen.heuristic_tuner:main"
 worm-pose-labeler = "worm_pose_gen.label_app:main"
+worm-pose-viewer = "worm_pose_gen.pose_viewer:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

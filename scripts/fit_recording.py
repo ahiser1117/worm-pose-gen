@@ -523,6 +523,11 @@ def main() -> int:
         arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
         arrays["iou_independent"] = arrays["iou"].copy()
         arrays["score_independent"] = arrays["ambiguity_score"].copy()
+        # The independent pose itself is kept so a viewer can show what
+        # propagation replaced (worm_pose_gen.pose_viewer).
+        arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
+        arrays["width_profile_independent"] = arrays["width_profile"].copy()
+        arrays["body_length_independent"] = arrays["body_length_px"].copy()
         propagation_info: dict[str, Any] | None = None
         if not args.no_propagate:
             # Temporal propagation (plan step 5) across the ambiguous stretches.

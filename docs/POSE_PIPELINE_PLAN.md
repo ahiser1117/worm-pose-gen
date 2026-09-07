@@ -620,7 +620,15 @@ videos:
   or running clips of one recording together.
 - **Review loop.** Frames marked by eye from the videos become named
   examples in the manifest, rendered as before/after strips by
-  `scripts/compare_pose_runs.py` on every run.
+  `scripts/compare_pose_runs.py` on every run. Since 2026-09-07 the
+  browser viewer (`python -m worm_pose_gen.pose_viewer`, see the README)
+  does the marking: it scrubs a stored run with every pipeline layer
+  composited on the frame, the per-frame statistics and flags, the width
+  and curvature profiles, synced time series, and appends review notes to
+  `docs/pose_review/notes.json`. Runs fit from that date on also store the
+  independent pose (`centerline_xy_independent`, `width_profile_independent`,
+  `body_length_independent` in `poses.npz`) so the viewer can show what
+  propagation replaced.
 
 **Findings (2026-09-04, from the video review; assets under
 `pose_pipeline_step5b/`).** Two failure modes were investigated before
@@ -922,4 +930,5 @@ first of all.
 | 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame; videos now rendered from the final arrays |
 | 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
+| viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
 | 6 | not started | |

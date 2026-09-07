@@ -175,6 +175,39 @@ images (mask the tube misses in blue, tube outside the mask in red) for its
 stored run without refitting, and `scripts/compare_pose_runs.py` puts
 several runs side by side on the same frames.
 
+The pose viewer is the interactive way to look at a run:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.pose_viewer
+# every run under /temp_data4/alex/external_artifacts/poses/; --run <dir> adds
+# others, --only-runs serves just those; then open http://127.0.0.1:8768/
+```
+
+It scrubs through a run's frames (arrow keys, play, click or drag on the
+timeline, wheel to zoom the timeline range) and composites every layer the
+pipeline produced on the flat-fielded frame, each with its own toggle and
+opacity: the segmenter's probability heat map, the thresholded mask, the
+pixels a hole fill adds and the pixels the largest-component rule drops,
+the mask the fit was scored against, the fitted tube's outline and
+centerline with head and tail markers, the residual (mask the tube misses
+in blue, tube outside the mask in red), the independent fit that
+propagation replaced (runs fit after 2026-09-07 store it), the pose of a
+second run of the same recording, the fitter's skeleton and moment starts,
+and the crop window. The right panel lists every per-frame statistic the
+run tracks, the nine ambiguity flags with the value each tested against its
+threshold, a classification of the frame (clean, watch, or ambiguous;
+coil, camera edge, fragmented mask, or suspected fit failure; propagated
+forward or backward), the width profile along the body against the
+symmetric template and the recording prior's shape, the body's curvature,
+and the mask statistics recomputed on the spot next to the stored ones.
+The timeline shows IoU (with the independent fit's), body length with the
+prior's two-sigma band, mask and visible tube area, the ambiguity score, a
+selectable extra series (pose jump, self-contact, width, energy, ...), the
+flag raster, and a class/source strip, with propagation stretches shaded.
+"Jump to" walks flagged or low-IoU frames, stretches, jumps and edge
+frames; review notes (tags and a comment per frame) are appended to the
+file named by `--notes`, `docs/pose_review/notes.json` by default.
+
 By default the run first bootstraps a recording prior: frames spread over
 the whole recording are fit with the hard bounds opened, whole worms (mask
 clear of the image border) are kept, and robust medians of body length,
