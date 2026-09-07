@@ -871,12 +871,140 @@ first of all.
 
 ### Step 6. Hypothesis linking across ambiguous stretches
 
-- Keep the top few distinct local optima per ambiguous frame instead of one.
-- Viterbi over the recording: nodes are per-frame hypotheses, node cost is
-  fit energy, edge cost is pose change between neighbors plus an
-  orientation-flip penalty. The minimum-cost path resolves each ambiguous
-  stretch from the unambiguous frames on both sides and fixes head/tail
-  orientation across the track.
+**Plan (drafted 2026-09-07, for discussion).** Steps 1--5c leave a
+pipeline that fits nearly every frame of the sequence set to the mask (12
+of 2100 frames below IoU 0.9) but does not yet produce a *track*: each frame
+is answered on its own, and where the mask does not decide, the answer is
+whatever the energy happened to prefer. Three symptoms, all recorded in the
+5b and 5c findings and all visible in the viewer:
+
+1. **Orientation is undetermined per frame.** The energy gap between a pose
+   and its reversal is below 0.002 on most frames (573 of 1200 on the spiral
+   minute, 1005 of 1200 on `edge_0528`, 1053 on `edge_0618`), and the stored
+   orientation flips between consecutive frames 5 to 221 times per minute:
+
+   | Run | Flips per 1200 frames | Frames with orientation gap < 0.002 |
+   |---|---:|---:|
+   | `spiral_0131` minute | 5 | 573 |
+   | `coil_0822` minute | 53 | 880 |
+   | `coil_0201` minute (held out) | 67 | 779 |
+   | `edge_0528` minute | 221 | 1005 |
+   | `edge_0618` minute (held out) | 188 | 1053 |
+
+   The taper asymmetry cannot fix this (step 5 dropped it: absolute
+   asymmetry about 0.1 on whole worms). A track that swaps head and tail
+   every few frames is unusable for behaviour, so this is the first thing
+   step 6 has to deliver, and it needs no refitting.
+2. **Ties inside stretches are broken per frame.** Forward and backward
+   chains disagree inside long stretches and the energy picks one per frame
+   with no smoothness (step 5); at the camera edge a tube that stops at the
+   border and one that leaves fit the visible pixels equally well, so the
+   in-view fraction flickers (60 such frames on the `2024-05-28-02` minute,
+   22 in-view jumps in the `edge_0528` clip; step 5b); the raw-mask fits
+   that stop short with a squished body (`edge_0528` 6577 and 6939,
+   `coil_0822` 11161; step 5c) are independent fits at score 1 that
+   propagation never reached.
+3. **Tight turns are pose errors the mask now exposes.** With raw masks the
+   14 low-IoU frames of the spiral are consecutive frames where the tube
+   crosses the real gap between turns (step 5c). Several distinct windings
+   fit a coil nearly equally well; the right one is the one continuous with
+   the frames on both sides.
+
+The step keeps the principles: independent fits stay independent where the
+frame is unambiguous, the GPU stays batched, and the temporal reasoning is a
+discrete choice among a few hypotheses per frame, resolved by dynamic
+programming, not a serial refit. It is split into four parts so that each
+can be measured on its own, with 6a landing on stored runs before any
+refitting changes.
+
+**6a. Orientation as a track decision (no refitting).** Every stored pose has
+an exact mirror (`reverse_result`): the same tube, points and width profile
+reversed. Treat orientation as a two-state hidden sequence over the frames of
+a run and solve it by Viterbi: the transition cost is the oriented pose
+distance between consecutive frames (mean distance between the in-view
+centerline points, in units of the fitted width; a flip costs roughly half a
+body length and is therefore never chosen unless the poses themselves say
+so), and the unary cost is a weak motion cue, the projection of the
+centroid's velocity over a window of about one second onto the head-to-tail
+axis (a worm moves head first most of the time, so the head end should lead
+the displacement; reversals are short and are outvoted over the track). The
+result is one consistent orientation per contiguous fitted segment, with the
+absolute label set by the motion majority of the segment. Unfitted frames and
+frames where the body is mostly off camera break the chain into segments;
+a segment too short or too still for the motion cue to decide inherits the
+label of its neighbour across the gap if the poses on both sides match.
+Stored as `orientation_track` (0 keep, 1 reversed) in `poses.npz`, applied
+to the stored arrays on write, and recomputable for old runs by a script
+(`scripts/orient_pose_run.py`). Measurement: flips per minute on the five
+minute runs and the sequence set (target: zero within segments, a handful of
+segment boundaries), and head accuracy against a small truth set (below).
+
+**6b. Keep the hypotheses.** The fitter already computes more than it keeps:
+each independent frame tries its starts in both orientations and each
+stretch frame gets an independent, a forward and a backward candidate, plus
+the redirected off-camera start at the border. Store the K best *distinct*
+local optima per frame (K = 4; distinct means oriented pose distance above
+one width) as `hypotheses_latent` [n, K, 20], `hypotheses_width` [n, K],
+`hypotheses_width_shape` [n, K, 6], `hypotheses_energy` [n, K] (comparable
+energy, step 5b) and `hypotheses_source` [n, K], with the chosen index per
+frame. Inside stretches, add the two cheap hypotheses that step 5 showed
+matter: the anchor pose carried forward *and* backward are already there;
+add the reversal of each carried pose (exact, free) and, on `edge_inside`
+frames, the stopping and the leaving start both as candidates rather than
+letting energy pick. Outside stretches K is effectively 2 (the fit and its
+mirror), so the arrays stay small. The viewer gets a "hypotheses" layer
+that draws all K centerlines of a frame with their energies, which is the
+tool for judging what the linking has to choose between.
+
+**6c. Linking by Viterbi over the hypothesis graph.** Nodes are the
+hypotheses of each frame, node cost is the comparable energy scaled by a
+temperature, edge cost is the oriented pose distance between consecutive
+hypotheses in widths (in-view points only, plus a term for the change in
+in-view count so the tube does not enter and leave the camera frame by
+frame), and the motion unary of 6a rides along. The minimum-cost path picks
+one hypothesis per frame; frames outside stretches keep their fit (only the
+orientation can change there, which is 6a), so the path is decided by the
+unambiguous frames on both sides of each stretch, which is the plan's
+original intent. Two parameters, the temperature and the distance weight,
+are tuned on the sequence set by two numbers that must not trade against
+each other: frames below IoU 0.9 (the path must not prefer smoothness to
+evidence; 12 today) and flips plus in-view jumps (it must remove the
+flicker). Cost is negligible: 72k frames times K = 4 is a few million edge
+evaluations on the CPU. Optionally, one warm refit of the chosen path's
+frames whose neighbours changed (a single lockstep batch) tightens the joins.
+
+**6d. Truth for head and tail, and the raw-mask default.** There is no
+ground truth pose, and IoU cannot see orientation. The viewer's notes are the
+instrument: a "head at square / head at circle" pair of tags (one key each)
+on about 60 frames across the seven clips and the five minutes, chosen where
+the head is unmistakable (pharynx visible, or clear forward crawling), gives
+head accuracy per recording; the same set measures 6a before 6c. Once the
+path chooses windings from continuity rather than from the filled mask,
+re-run the sequence set without the hole fill (`--no-fill-holes`, keeping
+the largest-component rule that step 5c showed still guards unseen plates)
+and flip the default if the spiral's 14 raw-mask failures go and nothing
+else regresses.
+
+**Order and measurement.** 6a first, on the stored minute runs (it is an
+afternoon and answers whether pose distance plus motion suffices for
+orientation; if the flip counts do not fall to segment boundaries the plan
+for 6c changes). Then 6b and 6c together on the sequence set, judged
+against `pose_pipeline_step5c/sequence_eval_r2_clean.json`; then the five
+minutes and the head truth set. Numbers to report per run: frames below
+IoU 0.9, orientation flips, in-view jumps, frames where the path overrode
+the lowest-energy hypothesis (and their IoU), head accuracy on the truth
+set, seconds. What the step does not attempt: intensity cues for overlaps
+and a body-coordinate segmenter head stay in section 4; they become
+worthwhile only if 6c leaves coil windings wrong where continuity cannot
+decide (a coil held for seconds with no unambiguous frame nearby, as in
+`coil_0201`).
+
+**Open questions for Alex.** Whether head identity must be right absolutely
+(the motion cue is the only absolute cue this plan uses; an intensity cue or
+a labeled head would be step 7) or consistent within a track is enough for
+the first use; whether 60 head-marked frames through the viewer is an
+acceptable labeling cost; and whether the raw-mask default should wait for
+6d or be decided per recording from the fragment statistics.
 
 ## 4. Further ideas (after step 6)
 
@@ -931,4 +1059,4 @@ first of all.
 | 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
 | viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
-| 6 | not started | |
+| 6 | planned (2026-09-07) | draft in the step 6 section: 6a orientation track by Viterbi on stored runs (no refit), 6b K-best hypotheses stored per frame, 6c Viterbi linking with pose-distance, in-view and motion costs, 6d head truth set via viewer notes and the raw-mask default decision |
