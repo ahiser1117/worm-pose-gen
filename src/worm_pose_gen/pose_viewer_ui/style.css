@@ -80,6 +80,7 @@ button.tag { padding: 2px 7px; font-size: 12px; }
 .stats td { padding: 1px 4px; border-bottom: 1px solid #131a20; vertical-align: top; }
 .stats td:first-child { color: var(--muted); white-space: nowrap; }
 .stats td.num { text-align: right; white-space: nowrap; }
+.stats td.wrap { white-space: normal; word-break: break-all; }
 .stats tr.section td { color: var(--accent); padding-top: 5px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .stats tr.fired td { color: var(--danger); }
 .stats tr.fired td:first-child { color: var(--danger); font-weight: 600; }
@@ -109,3 +110,72 @@ button.tag { padding: 2px 7px; font-size: 12px; }
 #charts canvas { display: block; width: 100%; background: #0b0f12; border: 1px solid var(--border); border-radius: 3px; cursor: crosshair; }
 label input[type="checkbox"] { width: auto; margin-right: 4px; }
 .stats td.dim { color: var(--muted); }
+
+/* ---- sidebar tabs and the Phase 1 panels (recordings, stages, jobs) ---- */
+#tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-top: 4px; }
+#tabs button { flex: 1 1 0; border-radius: 4px 4px 0 0; border-bottom: none; background: #131a20; color: var(--muted); padding: 5px 4px; }
+#tabs button.active { background: var(--panel); color: var(--text); border-color: var(--accent); border-bottom: 1px solid var(--panel); margin-bottom: -1px; font-weight: 600; }
+.badge-count { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--warn); color: #1a1400; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; vertical-align: 1px; }
+.tab > .group:first-child { border-top: none; }
+.group h4 { margin: 8px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.group h4 small { font-weight: normal; }
+.table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: #0b0f12; }
+table.recordings { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+table.recordings th { position: sticky; top: 0; background: #131a20; color: var(--muted); font-weight: normal; text-align: left; padding: 3px 5px; border-bottom: 1px solid var(--border); font-size: 11px; white-space: nowrap; }
+table.recordings th.num, table.recordings td.num { text-align: right; }
+table.recordings td { padding: 2px 5px; border-bottom: 1px solid #131a20; white-space: nowrap; }
+table.recordings tbody tr { cursor: pointer; }
+table.recordings tbody tr:hover { background: #1a242c; }
+table.recordings tbody tr.current { background: #1f6b44; }
+table.recordings tr.unreadable td:first-child { color: var(--muted); text-decoration: line-through; }
+table.recordings td.flags span { display: inline-block; width: 14px; text-align: center; margin-right: 2px; }
+table.recordings .ok { color: var(--accent); }
+table.recordings .bad { color: var(--danger); }
+table.recordings .dim { color: #3a4852; }
+.thumb-box { margin: 8px 0 4px; }
+.thumb-box img { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 4px; background: #000; min-height: 24px; }
+.thumb-box img:not([src]) { height: 0; min-height: 0; border: none; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+.form-grid label { margin: 2px 0; }
+.form-grid label:first-child { grid-column: 1 / -1; }
+.stage { border: 1px solid var(--border); border-radius: 4px; margin: 4px 0; background: #0b0f12; }
+.stage.running { border-color: var(--warn); }
+.stage.failed { border-color: var(--danger); }
+.stage.done { border-color: #2e9a63; }
+.stage-head { display: flex; align-items: center; gap: 6px; padding: 4px 6px; }
+.stage-head input[type="checkbox"] { width: auto; margin: 0; }
+.stage-head b { min-width: 68px; }
+.stage-toggle { padding: 1px 6px; font-size: 11px; }
+.stage-meta { flex: 1 1 auto; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-run { padding: 2px 8px; }
+.stage-form { padding: 2px 6px 6px; border-top: 1px solid #131a20; }
+.param { display: grid; grid-template-columns: minmax(90px, 40%) 1fr; gap: 6px; align-items: center; margin: 2px 0; }
+.param.edited .param-name { color: var(--warn); }
+.param.edited input { border-color: var(--warn); }
+.param-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.param input[type="checkbox"] { width: auto; justify-self: start; }
+.stage-reset { margin-top: 4px; padding: 1px 8px; font-size: 11px; }
+.chain { display: flex; gap: 6px; align-items: center; margin: 4px 0; padding: 4px 6px; border: 1px dashed var(--warn); border-radius: 4px; font-size: 12px; }
+.chain span { flex: 1 1 auto; }
+.job { border: 1px solid var(--border); border-radius: 4px; margin: 4px 0; padding: 4px 6px; background: #0b0f12; font-size: 12px; }
+.job.running { border-color: var(--warn); }
+.job.failed { border-color: var(--danger); }
+.job.done { border-color: #2e9a63; }
+.job.cancelled { opacity: 0.7; }
+.job-head { display: flex; gap: 6px; align-items: baseline; }
+.job-ws { flex: 1 1 auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-state { font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; }
+.job.running .job-state { color: var(--warn); }
+.job.done .job-state { color: var(--accent); }
+.job.failed .job-state { color: var(--danger); }
+.job.queued .job-state { color: var(--muted); }
+.job .bar { height: 5px; background: #1a242c; border-radius: 3px; margin: 4px 0; overflow: hidden; }
+.job .bar div { height: 100%; background: var(--accent); transition: width 0.4s; }
+.job.failed .bar div { background: var(--danger); }
+.job-line { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.job-msg { color: var(--text); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 3.6em; overflow: hidden; }
+.job.failed .job-msg { color: var(--danger); }
+.job .row button { padding: 1px 8px; font-size: 11px; }
+.job-log { margin: 4px 0 0; max-height: 220px; overflow: auto; background: #05080a; border: 1px solid var(--border); border-radius: 3px; padding: 4px 6px; font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+/* Author display rules above (.chain, .badge-count, #legend) would otherwise beat the UA's [hidden]. */
+[hidden] { display: none !important; }

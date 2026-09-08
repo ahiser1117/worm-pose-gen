@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import h5py
@@ -227,9 +228,21 @@ class PoseViewerServerTests(unittest.TestCase):
                 page = urlopen(f"{base}/").read().decode()
                 self.assertIn("Pose viewer", page)
                 self.assertIn("Width along the body", page)
+                # The UI is split into plain scripts loaded in order; the stdlib server serves the entry script.
+                for name in ("api.js", "layers.js", "charts.js", "viewer.js", "panels.js", "app.js"):
+                    self.assertIn(f"/static/{name}", page)
                 script = urlopen(f"{base}/app.js").read().decode()
-                self.assertIn("buildOverlay", script)
+                self.assertIn("bindEvents", script)
                 self.assertIn("drawCharts", script)
+                # ... and every module the page references under /static/, with the right content type.
+                with urlopen(f"{base}/static/layers.js") as response:
+                    self.assertIn("buildOverlay", response.read().decode())
+                    self.assertIn("javascript", response.headers["Content-Type"])
+                with urlopen(f"{base}/static/style.css") as response:
+                    self.assertIn("text/css", response.headers["Content-Type"])
+                with self.assertRaises(HTTPError) as missing:
+                    urlopen(f"{base}/static/nothing.js")
+                self.assertEqual(missing.exception.code, 404)
 
                 run = json.loads(urlopen(f"{base}/api/run?name=2026-09-06T10-00-00Z_demo").read())
                 self.assertTrue(run["recording_readable"])

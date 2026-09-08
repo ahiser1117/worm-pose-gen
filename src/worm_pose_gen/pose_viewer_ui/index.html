@@ -4,86 +4,168 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Worm pose viewer</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div id="app">
     <aside id="sidebar">
       <h1>Pose viewer</h1>
       <section class="group">
-        <h3>Run</h3>
+        <h3>Workspace</h3>
         <span class="row">
-          <input id="run-filter" type="text" placeholder="filter runs…">
-          <button id="rescan" type="button" title="look for runs written since the server started">↻</button>
+          <input id="run-filter" type="text" placeholder="filter workspaces and runs…">
+          <button id="rescan" type="button" title="re-read the catalog of workspaces and runs">↻</button>
         </span>
-        <select id="run" size="6"></select>
+        <select id="run" size="7"></select>
         <div id="run-info" class="note"></div>
-        <label>Compare run (same recording)
+        <span class="row">
+          <button id="import-run" type="button" title="copy this read-only run into a new workspace" hidden>Import run as workspace</button>
+        </span>
+        <label>Compare (same recording)
           <select id="compare"><option value="">none</option></select>
         </label>
       </section>
 
-      <section class="group">
-        <h3>Frame</h3>
-        <span class="row">
-          <input id="frame-index" type="number" step="1" value="0" title="frame index in the recording">
-          <button id="go" type="button">Go</button>
-        </span>
-        <span class="row">
-          <button id="prev" type="button" title="←">◀</button>
-          <button id="next" type="button" title="→">▶</button>
-          <button id="play" type="button" class="primary" title="Space">Play</button>
-          <input id="fps" type="number" min="1" max="30" value="10" title="playback fps" style="width:56px">
-        </span>
-        <label><input id="loop-stretch" type="checkbox"> Loop inside current stretch</label>
-        <div id="frame-info" class="note"></div>
-      </section>
+      <nav id="tabs">
+        <button type="button" data-tab="view" class="active">View</button>
+        <button type="button" data-tab="data">Recordings</button>
+        <button type="button" data-tab="pipeline">Pipeline <span id="jobs-badge" class="badge-count" hidden></span></button>
+      </nav>
 
-      <section class="group">
-        <h3>Jump to</h3>
-        <span class="row wrap">
-          <button data-jump="flag:-1" type="button" title="[">◀ flagged</button>
-          <button data-jump="flag:1" type="button" title="]">flagged ▶</button>
-          <input id="jump-score" type="number" min="1" max="9" value="2" title="minimum ambiguity score" style="width:48px">
-        </span>
-        <span class="row wrap">
-          <button data-jump="iou:-1" type="button" title=",">◀ low IoU</button>
-          <button data-jump="iou:1" type="button" title=".">low IoU ▶</button>
-          <input id="jump-iou" type="number" min="0" max="1" step="0.01" value="0.9" style="width:60px">
-        </span>
-        <span class="row wrap">
-          <button data-jump="stretch:-1" type="button">◀ stretch</button>
-          <button data-jump="stretch:1" type="button">stretch ▶</button>
-          <button data-jump="jump:1" type="button" title="next pose jump flag">jump ▶</button>
-          <button data-jump="edge:1" type="button" title="next edge frame">edge ▶</button>
-        </span>
-        <label>Worst frames <select id="worst"></select></label>
-      </section>
+      <div id="tab-view" class="tab">
+        <section class="group">
+          <h3>Frame</h3>
+          <span class="row">
+            <input id="frame-index" type="number" step="1" value="0" title="frame index in the recording">
+            <button id="go" type="button">Go</button>
+          </span>
+          <span class="row">
+            <button id="prev" type="button" title="←">◀</button>
+            <button id="next" type="button" title="→">▶</button>
+            <button id="play" type="button" class="primary" title="Space">Play</button>
+            <input id="fps" type="number" min="1" max="30" value="10" title="playback fps" style="width:56px">
+          </span>
+          <label><input id="loop-stretch" type="checkbox"> Loop inside current stretch</label>
+          <div id="frame-info" class="note"></div>
+        </section>
 
-      <section class="group">
-        <h3>Layers <small>(number keys toggle)</small></h3>
-        <div id="layers"></div>
-        <span class="row wrap">
-          <button id="toggle-raw" type="button" title="F">F Raw/flat</button>
-          <button id="fit-view" type="button" title="0">0 Fit view</button>
-          <button id="starts" type="button" title="compute the fitter's starting curves">Starts</button>
-        </span>
-        <label>Threshold override <output id="threshold-value">run</output>
-          <input id="threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5">
-        </label>
-        <label><input id="threshold-on" type="checkbox"> Use override (server recomputes masks)</label>
-      </section>
+        <section class="group">
+          <h3>Jump to</h3>
+          <span class="row wrap">
+            <button data-jump="flag:-1" type="button" title="[">◀ flagged</button>
+            <button data-jump="flag:1" type="button" title="]">flagged ▶</button>
+            <input id="jump-score" type="number" min="1" max="9" value="2" title="minimum ambiguity score" style="width:48px">
+          </span>
+          <span class="row wrap">
+            <button data-jump="iou:-1" type="button" title=",">◀ low IoU</button>
+            <button data-jump="iou:1" type="button" title=".">low IoU ▶</button>
+            <input id="jump-iou" type="number" min="0" max="1" step="0.01" value="0.9" style="width:60px">
+          </span>
+          <span class="row wrap">
+            <button data-jump="stretch:-1" type="button">◀ stretch</button>
+            <button data-jump="stretch:1" type="button">stretch ▶</button>
+            <button data-jump="jump:1" type="button" title="next pose jump flag">jump ▶</button>
+            <button data-jump="edge:1" type="button" title="next edge frame">edge ▶</button>
+          </span>
+          <label>Worst frames <select id="worst"></select></label>
+        </section>
 
-      <section class="group">
-        <h3>Review notes <small id="note-count"></small></h3>
-        <span class="row wrap" id="note-tags"></span>
-        <input id="note-comment" type="text" placeholder="what is wrong / interesting here">
-        <span class="row">
-          <button id="note-save" type="button" class="primary" title="N">Save note</button>
-        </span>
-        <div id="note-list" class="list"></div>
-        <div id="notes-path" class="note"></div>
-      </section>
+        <section class="group">
+          <h3>Layers <small>(number keys toggle)</small></h3>
+          <div id="layers"></div>
+          <span class="row wrap">
+            <button id="toggle-raw" type="button" title="F">F Raw/flat</button>
+            <button id="fit-view" type="button" title="0">0 Fit view</button>
+            <button id="starts" type="button" title="compute the fitter's starting curves">Starts</button>
+          </span>
+          <label>Threshold override <output id="threshold-value">run</output>
+            <input id="threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5">
+          </label>
+          <label><input id="threshold-on" type="checkbox"> Use override (server recomputes masks)</label>
+        </section>
+
+        <section class="group">
+          <h3>Review notes <small id="note-count"></small></h3>
+          <span class="row wrap" id="note-tags"></span>
+          <input id="note-comment" type="text" placeholder="what is wrong / interesting here">
+          <span class="row">
+            <button id="note-save" type="button" class="primary" title="N">Save note</button>
+          </span>
+          <div id="note-list" class="list"></div>
+          <div id="notes-path" class="note"></div>
+        </section>
+      </div>
+
+      <div id="tab-data" class="tab" hidden>
+        <section class="group">
+          <h3>Recordings <small id="recording-count"></small></h3>
+          <span class="row">
+            <input id="recording-filter" type="text" placeholder="filter recordings…">
+            <button id="recordings-rescan" type="button" title="rescan the recording roots">↻</button>
+          </span>
+          <div id="recording-roots" class="note"></div>
+          <div class="table-wrap">
+            <table id="recording-table" class="recordings">
+              <thead><tr><th>recording</th><th class="num">frames</th><th class="num">size</th><th title="readable · prior cached">ok · P</th><th class="num" title="existing runs">runs</th><th class="num" title="workspaces">ws</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="recording-detail" hidden>
+            <div class="thumb-box">
+              <img id="recording-thumb" alt="">
+              <div class="row">
+                <span id="thumb-label" class="note"></span>
+                <label class="inline">frame <input id="thumb-frame" type="number" min="0" step="1" value="0" style="width:80px"></label>
+              </div>
+            </div>
+            <div id="recording-facts" class="note"></div>
+            <h4>Runs <small>(read-only; import copies one into a workspace)</small></h4>
+            <div id="recording-runs" class="list"></div>
+            <h4>Workspaces</h4>
+            <div id="recording-workspaces" class="list"></div>
+            <h4>New workspace</h4>
+            <div class="form-grid">
+              <label>name <input id="ws-name" type="text" data-auto="1"></label>
+              <label>first frame <input id="ws-first" type="number" min="0" step="1" value="0"></label>
+              <label>last frame <input id="ws-last" type="number" min="0" step="1" value="0"></label>
+              <label>step <input id="ws-step" type="number" min="1" step="1" value="1"></label>
+            </div>
+            <span class="row">
+              <button id="ws-create" type="button" class="primary">Create workspace</button>
+              <span id="ws-form-note" class="note"></span>
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <div id="tab-pipeline" class="tab" hidden>
+        <section class="group">
+          <h3>Stages <small id="stages-target"></small></h3>
+          <div id="stages"></div>
+          <span class="row">
+            <button id="run-all" type="button" class="primary" title="queue the checked stages one after another">Run all</button>
+            <span class="note">checked stages, in order, one job at a time</span>
+          </span>
+          <div id="chain" class="chain" hidden></div>
+        </section>
+        <section class="group">
+          <h3>Jobs <small id="jobs-summary"></small></h3>
+          <span class="row">
+            <select id="jobs-state" title="filter by state">
+              <option value="">all states</option>
+              <option value="queued">queued</option>
+              <option value="running">running</option>
+              <option value="done">done</option>
+              <option value="failed">failed</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+            <label class="inline"><input id="jobs-mine" type="checkbox" checked> this workspace</label>
+            <button id="jobs-refresh" type="button" title="refresh now">↻</button>
+          </span>
+          <div id="jobs"></div>
+        </section>
+      </div>
+
       <div id="status" class="status"></div>
       <p class="hint">Wheel: zoom · drag: pan · click timeline: seek · wheel on timeline: zoom range · double-click timeline: reset.
         Keys: ←/→ ±1 (Shift ±10, Ctrl ±100) · Space play · [ ] flagged · , . low IoU · 1–9 layers · F raw · 0 fit · N note.</p>
@@ -123,7 +205,7 @@
         <table id="mask-stats" class="stats"></table>
       </section>
       <section class="group">
-        <h3>Run summary</h3>
+        <h3>Summary</h3>
         <div id="run-summary" class="note"></div>
       </section>
     </aside>
@@ -142,6 +224,11 @@
       <div id="charts"></div>
     </footer>
   </div>
-  <script src="/app.js"></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/layers.js"></script>
+  <script src="/static/charts.js"></script>
+  <script src="/static/viewer.js"></script>
+  <script src="/static/panels.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

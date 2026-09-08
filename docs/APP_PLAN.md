@@ -68,6 +68,13 @@ worm_pose_gen.pose_viewer_ui the browser UI (grows from the viewer)
 The stdlib server of the viewer is replaced by FastAPI; the endpoints keep
 their shapes so the UI carries over. Static assets stay in the package.
 
+Phase 1 has `routers/viewer` (the viewer's endpoints, `/api/state`, `/run`,
+`/frame`, `/pose`, `/starts`, notes), `routers/recordings`,
+`routers/workspaces`, `routers/jobs` (jobs and the stage schemas) and
+`routers/static`; `algorithms`, `edits`, `corpus` and the client arrive with
+their phases. The stdlib viewer (`worm-pose-viewer`) is kept for read-only
+runs and serves the same UI.
+
 ## 4. Workspace
 
 One workspace per recording range, replacing the write-once run directory
@@ -75,17 +82,31 @@ One workspace per recording range, replacing the write-once run directory
 
 ```
 <workspaces>/<name>/
-  workspace.json     recording path, frame range, settings, imported runs
-  masks/             bitpacked cleaned masks in chunks of 1024 frames (npz), a few KB per frame
-  overrides/masks/   sparse: frames whose mask the user edited
-  state.npz          current per-frame arrays (the poses.npz layout, plus below)
-  provenance.npz     per frame: algorithm id, job or edit id, time
-  hypotheses.npz     candidates per frame as stored today (hypotheses_*, path_*)
-  edits.jsonl        append-only log of every intervention with its inputs
-  jobs/<id>.json     job record and log
-  snapshots/<time>/  copies of state and provenance on demand
-  exports/           Parquet files
+  workspace.json         recording path, frame range (first, last, step), settings, imported run
+  state.npz              current per-frame arrays (the poses.npz layout)
+  hypotheses.npz         candidates per frame (hypotheses_*, path_*, prediction_*)
+  provenance.npz         per frame: algorithm id, job or edit id, unix time
+  masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk, a few KB per frame
+  overrides/masks/       sparse: frames whose mask the user edited (NNNNNNN.npz per row)
+  recording_prior.json   the prior the fit stage uses (bootstrapped, cached or given)
+  summary.json           a run-shaped summary kept up to date by the stages, so the
+                         viewer's loaders read a workspace like a run
+  imported_summary.json  the summary.json of an imported run (fallback for the above)
+  edits.jsonl            append-only log of every intervention with its inputs
+  snapshots/<time>_<label>/  copies of state, hypotheses and provenance on demand
+  exports/<time>.parquet     Parquet exports
+  .lock                  flock held by the stage process that is writing the workspace
+<workspaces>/jobs/       job records shared by all workspaces: <id>.json, <id>.log,
+                         <id>.progress.json and the id counter (ids are never reused)
+<workspaces>/recordings_index.json   the recording browser's per-file cache
 ```
+
+Rows are positions in `range(first, last + 1, step)`; every per-frame
+array has one entry per row. Every file is written through a temporary
+file and `os.replace`, so a crash mid-write leaves the previous version
+intact. The job records live beside the workspaces rather than inside them
+(the plan's `jobs/<id>.json`) so one queue can be listed without opening
+every workspace and so a job can outlive the workspace it ran on.
 
 Probability maps are recomputed on demand (700 KB a frame is too much to
 keep); masks are kept because refits and mask edits need them.
@@ -183,9 +204,31 @@ job backend; whole-recording runs; packaging with the bundled checkpoint.
 
 | Phase | State | Notes |
 |---|---|---|
-| 1 | not started | |
+| 1 | done (2026-09-08) | foundation landed on branch `pose-app`; details below |
 | 2 | not started | |
 | 3 | not started | |
 | 4 | not started | |
 | 5 | not started | |
 | 6 | not started | |
+
+**Phase 1.** `worm_pose_gen.app` (FastAPI, `worm-pose-app`) serves the
+viewer's endpoints and adds `/api/recordings` (cached catalog of the HDF5
+roots, thumbnails), `/api/workspaces` (create, import a run, open, frame and
+pose payloads, snapshot, edits) and `/api/jobs` and `/api/stages` (submit,
+list, status, log, cancel; stage parameter schemas). Behind it:
+`workspace.py` (the layout of section 4), `jobs.py` (queue with a local-GPU
+backend, one job per workspace, progress files, restart recovery,
+cancellation), `pipeline.py` (the seven stages of section 5 as functions and
+a `--stage` command line; `scripts/fit_recording.py` composes them and keeps
+its flags) and `recordings.py`. The UI is split into
+`api/layers/charts/viewer/panels/app.js` and gains Recordings and Pipeline
+tabs. The smoke test fit 30- and 80-frame ranges of 2024-01-31-02 from the
+browser through every stage; the 80-frame range matched the reference run
+(IoU median 0.966, no frame below 0.9). Left open: the "Run all" chain is
+driven by the browser tab (sessionStorage) and pauses when the tab closes;
+command-kind jobs run any argv (a localhost-only tool); thumbnails are
+computed cold per request (about 1 s on a real recording); rerunning `fit`
+blanks the refit rows' hypotheses, which `propagate` must rerun to fill; the
+`worm-pose-app` console script appears in `.venv/bin` only after `uv sync`
+(`python -m worm_pose_gen.app` works without); the Python client and command
+line are Phase 5.

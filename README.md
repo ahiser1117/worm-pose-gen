@@ -277,6 +277,64 @@ this belongs to, with measurements, is
 `scripts/evaluate_recording_prior_unannotated30.py` compare width models and
 priors on the 30-frame set.
 
+## Pose app
+
+The pose app is the front end for running the pipeline, auditing its results
+and (in later phases) fixing them by hand; its plan and status are in
+[`docs/APP_PLAN.md`](docs/APP_PLAN.md). Start it with
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.app
+# or, after `uv sync`, `worm-pose-app`; then open http://127.0.0.1:8768/
+```
+
+By default it browses the recordings under
+`/store1/shared/all_data_raw/prj_aversion` (`--recording-root`, repeatable),
+lists the runs under `/temp_data4/alex/external_artifacts/poses/`
+(`--poses-root`, `--run`) and keeps its workspaces and job records under
+`/temp_data4/alex/external_artifacts/workspaces` (`--workspaces-root`);
+`--gpus 1,2,3` restricts the GPUs jobs run on (one job per GPU at a time,
+`--max-concurrent`), `--checkpoint` names the segmenter for on-demand
+probability maps and for the segment stage. The app binds to localhost and
+is meant to be reached through an SSH tunnel; nothing authenticates.
+
+The UI is the pose viewer described above with two more tabs:
+
+- **Recordings** lists every HDF5 file under the roots with its frame count
+  and image size, whether it can be read, whether a recording prior is cached
+  and which runs and workspaces already refer to it (the per-file facts are
+  cached in `recordings_index.json`; the refresh button rescans), shows a
+  flat-fielded thumbnail, and creates a workspace from a recording and a frame
+  range (first, last, step).
+- **Pipeline** runs the seven stages of the pipeline (segment, prior, fit,
+  ambiguity, propagate, track, export) on the selected workspace, each as a
+  job with a form generated from the stage's parameters (the defaults are
+  `fit_recording.py`'s); "Run all" queues the checked stages one after
+  another. The jobs panel shows every job with its state, progress, log tail
+  and result, and cancels running ones. Jobs are subprocesses on the local
+  GPUs; one job runs per workspace at a time, records survive a server
+  restart (a job found finished by its progress file is marked done), and
+  each job is `python -m worm_pose_gen.pipeline --workspace ... --stage ...`,
+  which also works by hand.
+
+A workspace holds a recording range's masks, poses, hypotheses and
+provenance (which algorithm and job produced each frame's pose, and when),
+its snapshots, edit log and Parquet exports (one row per frame with pose,
+statistics, flags, provenance and kinematics); the layout is in section 4 of
+the plan. Existing runs appear read-only in the viewer's source list and
+"Import run as workspace" copies one into a workspace so its stages can be
+rerun. The frame panel shows each frame's provenance (algorithm, job, time)
+and the source summary counts frames per algorithm; a second run or
+workspace of the same recording can be compared on the same frames.
+
+Everything the UI does goes through the HTTP API (`/api/recordings`,
+`/api/workspaces`, `/api/jobs`, `/api/stages`, and the viewer's `/api/state`,
+`/api/run`, `/api/frame`, `/api/pose`, `/api/starts`), so a script can drive
+the same work; `/docs` is the generated OpenAPI page. The stdlib viewer,
+`python -m worm_pose_gen.pose_viewer` (`worm-pose-viewer`), remains for
+looking at runs read-only without the job runner; it serves the same UI on
+the same default port, so run only one of the two or pass `--port`.
+
 ## Evaluate the frozen pipeline
 
 The annotation-free stress run accepts exactly three `--recording` arguments

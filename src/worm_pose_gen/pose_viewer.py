@@ -32,10 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.resources
 import io
 import json
+import mimetypes
 import math
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, Callable, Iterable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -235,6 +236,7 @@ def run_entry(path: Path) -> dict[str, Any]:
     return {
         "name": path.name,
         "path": str(path),
+        "kind": "run",
         "recording": Path(summary["recording"]).stem,
         "recording_path": summary["recording"],
         "frames": [None if frames[0] is None else int(frames[0]), None if frames[1] is None else int(frames[1])],
@@ -285,14 +287,37 @@ class Segmenters:
             return module.predict_probability_batch(image[None], batch_size=1)[0], key
 
 
-class LoadedRun:
-    """One run directory with its arrays, prior, recording, and a frame cache."""
+MaskLookup = Callable[[int], NDArray[np.bool_] | None]
 
-    def __init__(self, path: Path, source: RecordingSource | None, source_error: str | None) -> None:
+
+class LoadedRun:
+    """One run directory with its arrays, prior, recording, and a frame cache.
+
+    By default the arrays and summary come from ``poses.npz`` and
+    ``summary.json`` in ``path``; a workspace passes them in (``arrays`` is
+    its state merged with its hypotheses, ``summary`` its synthesised run
+    summary) together with ``masks``, a lookup from row to the stored final
+    mask, which then replaces re-segmentation for the mask layer and the
+    starts.  ``path`` is still where ``recording_prior.json`` is looked for.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        source: RecordingSource | None,
+        source_error: str | None,
+        *,
+        arrays: dict[str, np.ndarray] | None = None,
+        summary: dict[str, Any] | None = None,
+        masks: MaskLookup | None = None,
+    ) -> None:
         self.path = Path(path)
-        self.summary = _load_json(self.path / "summary.json")
-        with np.load(self.path / "poses.npz", allow_pickle=False) as archive:
-            self.arrays = {name: archive[name] for name in archive.files}
+        self.summary = _load_json(self.path / "summary.json") if summary is None else summary
+        if arrays is None:
+            with np.load(self.path / "poses.npz", allow_pickle=False) as archive:
+                arrays = {name: archive[name] for name in archive.files}
+        self.arrays = arrays
+        self.masks = masks
         self.source = source
         self.source_error = source_error
         prior_path = self.path / "recording_prior.json"
@@ -518,6 +543,40 @@ class LoadedRun:
         payload["pose"] = self.pose(row)
         return payload
 
+    def stored_mask(self, row: int) -> NDArray[np.bool_] | None:
+        """The final mask a workspace stored for ``row``, when there is one."""
+
+        return None if self.masks is None else self.masks(row)
+
+    def _cleaned(self, raw_mask: NDArray[np.bool_], device: torch.device) -> tuple[NDArray[np.bool_], NDArray[np.bool_], NDArray[np.bool_], dict[str, int]]:
+        """The fitter's cleanup of a thresholded mask: filled, largest component, final, and its statistics."""
+
+        filled, added = fill_narrow_holes(raw_mask, self.cleanup["hole_radius"], device=device)
+        largest, area, count = largest_component(filled)
+        final = filled if self.cleanup["fill_holes"] else raw_mask
+        if self.cleanup["largest_only"]:
+            final = largest if self.cleanup["fill_holes"] else (raw_mask & largest)
+        stats = {"pixels_filled": int(added), "components": int(count), "pixels_outside_largest": int(filled.sum()) - int(area), "worm_pixels": int(final.sum())}
+        return filled, largest, final, stats
+
+    def _final_mask(self, row: int, image: NDArray[np.uint8], segmenters: Segmenters, threshold: float, device: torch.device) -> NDArray[np.bool_] | None:
+        """The stored mask when there is one at the run's threshold, else the cleaned mask of a fresh segmentation (None without a checkpoint).
+
+        A threshold other than the run's asks what another threshold would
+        give, so the stored mask is bypassed when a segmenter can answer.
+        """
+
+        stored = self.stored_mask(row)
+        if stored is not None and threshold == self.threshold:
+            return stored
+        probability, _ = segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
+        if probability is None:
+            return stored
+        raw_mask = probability >= threshold
+        if not raw_mask.any():
+            return raw_mask
+        return self._cleaned(raw_mask, device)[2]
+
     def _layers(self, row: int, segmenters: Segmenters, threshold: float, device: torch.device, *, light: bool = False) -> dict[str, Any]:
         arrays = self.arrays
         frame_index = int(self.frame_index[row])
@@ -532,9 +591,13 @@ class LoadedRun:
             _, image = self.source.corrected(frame_index)
             height, width = image.shape
             payload["layers"]["image"] = jpeg_data_url(image)
+            stored_mask = None if light else self.stored_mask(row)
             probability, checkpoint = (None, None) if light else segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
+            # At another threshold than the run's the recomputed mask is what the user asked to see.
+            if threshold != self.threshold and probability is not None:
+                stored_mask = None
             if probability is None:
-                if not light:
+                if not light and stored_mask is None:
                     payload["errors"].append("no segmenter checkpoint available; mask layers skipped")
             else:
                 payload["checkpoint"] = checkpoint
@@ -543,16 +606,19 @@ class LoadedRun:
                 stats = {"raw_worm_pixels": int(raw_mask.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
                 payload["layers"]["mask_raw"] = mask_data_url(raw_mask)
                 if raw_mask.any():
-                    filled, added = fill_narrow_holes(raw_mask, self.cleanup["hole_radius"], device=device)
-                    largest, area, count = largest_component(filled)
-                    final = filled if self.cleanup["fill_holes"] else raw_mask
-                    if self.cleanup["largest_only"]:
-                        final = largest if self.cleanup["fill_holes"] else (raw_mask & largest)
-                    stats.update(pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(final.sum()))
+                    filled, largest, final, cleaned = self._cleaned(raw_mask, device)
+                    stats.update(cleaned)
                     payload["layers"]["mask_filled"] = mask_data_url(filled)
                     payload["layers"]["mask_largest"] = mask_data_url(largest)
                     payload["layers"]["mask_final"] = mask_data_url(final)
                 payload["mask_stats"] = stats
+            if stored_mask is not None:
+                # The mask the fit was scored against, as the workspace stored it.
+                payload["layers"]["mask_final"] = mask_data_url(stored_mask)
+                payload["mask_final_source"] = "stored"
+            elif "mask_final" in payload["layers"]:
+                payload["mask_final_source"] = "recomputed"
+            if not light:
                 stored = {k: int(arrays[k][row]) for k in ("raw_worm_pixels", "pixels_filled", "components", "pixels_outside_largest", "worm_pixels") if k in arrays}
                 payload["mask_stats_stored"] = stored
         payload["height"], payload["width"] = height, width
@@ -573,17 +639,11 @@ class LoadedRun:
         if self.source is None:
             raise ValueError(f"recording not readable: {self.source_error}")
         _, image = self.source.corrected(int(self.frame_index[row]))
-        probability, _ = segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
-        if probability is None:
+        final = self._final_mask(row, image, segmenters, threshold, device)
+        if final is None:
             raise ValueError("no segmenter checkpoint available")
-        raw_mask = probability >= threshold
-        if not raw_mask.any():
+        if not final.any():
             return {"starts": []}
-        filled, _ = fill_narrow_holes(raw_mask, self.cleanup["hole_radius"], device=device)
-        largest, _, _ = largest_component(filled)
-        final = filled if self.cleanup["fill_holes"] else raw_mask
-        if self.cleanup["largest_only"]:
-            final = largest if self.cleanup["fill_holes"] else (raw_mask & largest)
         config = self.fit_config()
         starts = standard_initializations(final, config=config)
         return {
@@ -622,6 +682,55 @@ class Notes:
                 notes.pop(index)
                 self.path.write_text(json.dumps({"notes": notes}, indent=1) + "\n")
         return notes
+
+
+def run_payload(run: LoadedRun, entry: dict[str, Any], compatible: list[dict[str, Any]]) -> dict[str, Any]:
+    """Everything the browser needs to open a run (or a workspace) apart from its frames."""
+
+    summary = run.summary
+    return {
+        "entry": entry,
+        "recording_readable": run.source is not None,
+        "recording_error": run.source_error,
+        "image_shape": None if run.image_shape is None else list(run.image_shape),
+        "recording_frame_count": None if run.source is None else run.source.frame_count,
+        "n_points": run.n_points,
+        "threshold": run.threshold,
+        "cleanup": run.cleanup,
+        "prior": run.prior,
+        "thresholds": run.thresholds.__dict__,
+        "stretches": [[a, b] for a, b in run.stretches],
+        "propagation": summary.get("propagation"),
+        "ambiguity": summary.get("ambiguity"),
+        "fit_config": summary.get("fit_config"),
+        "summary_iou": summary.get("iou"),
+        "summary_length": summary.get("body_length_px"),
+        "has_independent_pose": "centerline_xy_independent" in run.arrays,
+        "has_hypotheses": "hypotheses_centerline_xy" in run.arrays,
+        "continuity": summary.get("continuity"),
+        "track_length": summary.get("track_length"),
+        "series": run.series(),
+        "compatible_runs": compatible,
+    }
+
+
+def compatible_entries(entry: dict[str, Any], entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Catalog entries of the same recording as ``entry``, those overlapping its frames first."""
+
+    first, last = entry["frames"]
+    rows = []
+    identity = (entry.get("kind"), entry["name"])
+    for other in entries:
+        if (other.get("kind"), other["name"]) == identity or other["recording_path"] != entry["recording_path"]:
+            continue
+        a, b = other["frames"]
+        overlap = 0 if None in (first, last, a, b) else max(0, min(last, b) - max(first, a) + 1)
+        rows.append({
+            "name": other["name"], "kind": other.get("kind", "run"), "frames": other["frames"], "overlap": overlap,
+            "iou_median": other["iou_median"], "mask_cleanup": other["mask_cleanup"],
+        })
+    rows.sort(key=lambda r: (-r["overlap"], r["name"]))
+    return rows
 
 
 class ViewerState:
@@ -713,47 +822,12 @@ class ViewerState:
         }
 
     def run_payload(self, name: str) -> dict[str, Any]:
-        run = self.run(name)
-        summary = run.summary
-        return {
-            "entry": self.catalog[name],
-            "recording_readable": run.source is not None,
-            "recording_error": run.source_error,
-            "image_shape": None if run.image_shape is None else list(run.image_shape),
-            "recording_frame_count": None if run.source is None else run.source.frame_count,
-            "n_points": run.n_points,
-            "threshold": run.threshold,
-            "cleanup": run.cleanup,
-            "prior": run.prior,
-            "thresholds": run.thresholds.__dict__,
-            "stretches": [[a, b] for a, b in run.stretches],
-            "propagation": summary.get("propagation"),
-            "ambiguity": summary.get("ambiguity"),
-            "fit_config": summary.get("fit_config"),
-            "summary_iou": summary.get("iou"),
-            "summary_length": summary.get("body_length_px"),
-            "has_independent_pose": "centerline_xy_independent" in run.arrays,
-            "has_hypotheses": "hypotheses_centerline_xy" in run.arrays,
-            "continuity": summary.get("continuity"),
-            "track_length": summary.get("track_length"),
-            "series": run.series(),
-            "compatible_runs": self.compatible_runs(name),
-        }
+        return run_payload(self.run(name), self.catalog[name], self.compatible_runs(name))
 
     def compatible_runs(self, name: str) -> list[dict[str, Any]]:
         """Other runs of the same recording, those overlapping this run's frames first."""
 
-        entry = self.catalog[name]
-        first, last = entry["frames"]
-        rows = []
-        for other in self.catalog.values():
-            if other["name"] == name or other["recording_path"] != entry["recording_path"]:
-                continue
-            a, b = other["frames"]
-            overlap = 0 if None in (first, last, a, b) else max(0, min(last, b) - max(first, a) + 1)
-            rows.append({"name": other["name"], "frames": other["frames"], "overlap": overlap, "iou_median": other["iou_median"], "mask_cleanup": other["mask_cleanup"]})
-        rows.sort(key=lambda r: (-r["overlap"], r["name"]))
-        return rows
+        return compatible_entries(self.catalog[name], self.catalog.values())
 
     def frame_payload(self, name: str, frame: int, threshold: float | None, raw: bool, detail: str = "full") -> dict[str, Any]:
         if detail not in ("full", "light"):
@@ -836,6 +910,18 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_static_named(self, name: str) -> None:
+        """A UI asset by file name: the split UI loads ``/static/<module>.js`` besides ``/app.js`` and ``/style.css``."""
+
+        if not name or name.startswith(".") or not importlib.resources.files("worm_pose_gen.pose_viewer_ui").joinpath(name).is_file():
+            self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+        content_type, _ = mimetypes.guess_type(name)
+        content_type = content_type or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
+            content_type += "; charset=utf-8"
+        self._send_static(name, content_type)
+
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > 4 * 1024 * 1024:
@@ -854,10 +940,8 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path in ("/", "/index.html"):
                 self._send_static("index.html", "text/html; charset=utf-8")
-            elif parsed.path == "/app.js":
-                self._send_static("app.js", "text/javascript; charset=utf-8")
-            elif parsed.path == "/style.css":
-                self._send_static("style.css", "text/css; charset=utf-8")
+            elif parsed.path in ("/app.js", "/style.css") or parsed.path.startswith("/static/"):
+                self._send_static_named(parsed.path.rsplit("/", 1)[1])
             elif parsed.path == "/api/state":
                 added = state.rescan() if query.get("rescan", "0") == "1" else 0
                 self._send_json({**state.state(), "added": added})
