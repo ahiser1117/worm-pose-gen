@@ -19,6 +19,9 @@ without its neighbours:
 - Mask cleanup statistics already stored: filled hole pixels (a tight omega
   turn encloses background), pixels outside the largest component (a
   dropped tail), and the overlap of the fit itself.
+- ``edge_inside``: the mask reaches the image border but every centerline
+  point is inside the image, so the body continues off camera and the tube
+  stopped or folded at the edge instead of leaving.
 
 ``ambiguity_score`` counts the flags that fire; ``summarize_ambiguity``
 reports how often each fires and how overlap degrades with the score.
@@ -42,6 +45,7 @@ FLAG_NAMES = (
     "fragments",
     "length_deviation",
     "pose_jump",
+    "edge_inside",
 )
 
 
@@ -159,6 +163,8 @@ def compute_ambiguity(
             out["length_deviation"][row] = float(np.log(arrays["body_length_px"][row] / prior["length_px"]))
         previous = row
     width = np.asarray(arrays["width_px"], dtype=np.float64)
+    n_points = arrays["centerline_xy"].shape[1]
+    on_border = np.asarray(arrays.get("mask_on_border", np.zeros(n, dtype=bool)), dtype=bool)
     with np.errstate(invalid="ignore"):
         flags = {
             "low_iou": fitted & (np.asarray(arrays["iou"], dtype=np.float64) < thresholds.low_iou),
@@ -174,6 +180,7 @@ def compute_ambiguity(
                 else np.zeros(n, dtype=bool)
             ),
             "pose_jump": fitted & (out["pose_jump_px"] > thresholds.jump_width_fraction * width),
+            "edge_inside": fitted & on_border & (np.asarray(arrays["points_in_fov"]) >= n_points),
         }
     for name in FLAG_NAMES:
         out[f"flag_{name}"] = np.asarray(flags[name], dtype=bool)

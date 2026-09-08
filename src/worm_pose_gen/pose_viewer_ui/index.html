@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worm pose viewer</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h1>Pose viewer</h1>
+      <section class="group">
+        <h3>Run</h3>
+        <input id="run-filter" type="text" placeholder="filter runs…">
+        <select id="run" size="6"></select>
+        <div id="run-info" class="note"></div>
+        <label>Compare run (same recording)
+          <select id="compare"><option value="">none</option></select>
+        </label>
+      </section>
+
+      <section class="group">
+        <h3>Frame</h3>
+        <span class="row">
+          <input id="frame-index" type="number" step="1" value="0" title="frame index in the recording">
+          <button id="go" type="button">Go</button>
+        </span>
+        <span class="row">
+          <button id="prev" type="button" title="←">◀</button>
+          <button id="next" type="button" title="→">▶</button>
+          <button id="play" type="button" class="primary" title="Space">Play</button>
+          <input id="fps" type="number" min="1" max="30" value="10" title="playback fps" style="width:56px">
+        </span>
+        <label><input id="loop-stretch" type="checkbox"> Loop inside current stretch</label>
+        <div id="frame-info" class="note"></div>
+      </section>
+
+      <section class="group">
+        <h3>Jump to</h3>
+        <span class="row wrap">
+          <button data-jump="flag:-1" type="button" title="[">◀ flagged</button>
+          <button data-jump="flag:1" type="button" title="]">flagged ▶</button>
+          <input id="jump-score" type="number" min="1" max="9" value="2" title="minimum ambiguity score" style="width:48px">
+        </span>
+        <span class="row wrap">
+          <button data-jump="iou:-1" type="button" title=",">◀ low IoU</button>
+          <button data-jump="iou:1" type="button" title=".">low IoU ▶</button>
+          <input id="jump-iou" type="number" min="0" max="1" step="0.01" value="0.9" style="width:60px">
+        </span>
+        <span class="row wrap">
+          <button data-jump="stretch:-1" type="button">◀ stretch</button>
+          <button data-jump="stretch:1" type="button">stretch ▶</button>
+          <button data-jump="jump:1" type="button" title="next pose jump flag">jump ▶</button>
+          <button data-jump="edge:1" type="button" title="next edge frame">edge ▶</button>
+        </span>
+        <label>Worst frames <select id="worst"></select></label>
+      </section>
+
+      <section class="group">
+        <h3>Layers <small>(number keys toggle)</small></h3>
+        <div id="layers"></div>
+        <span class="row wrap">
+          <button id="toggle-raw" type="button" title="F">F Raw/flat</button>
+          <button id="fit-view" type="button" title="0">0 Fit view</button>
+          <button id="starts" type="button" title="compute the fitter's starting curves">Starts</button>
+        </span>
+        <label>Threshold override <output id="threshold-value">run</output>
+          <input id="threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5">
+        </label>
+        <label><input id="threshold-on" type="checkbox"> Use override (server recomputes masks)</label>
+      </section>
+
+      <section class="group">
+        <h3>Review notes <small id="note-count"></small></h3>
+        <span class="row wrap" id="note-tags"></span>
+        <input id="note-comment" type="text" placeholder="what is wrong / interesting here">
+        <span class="row">
+          <button id="note-save" type="button" class="primary" title="N">Save note</button>
+        </span>
+        <div id="note-list" class="list"></div>
+        <div id="notes-path" class="note"></div>
+      </section>
+      <div id="status" class="status"></div>
+      <p class="hint">Wheel: zoom · drag: pan · click timeline: seek · wheel on timeline: zoom range · double-click timeline: reset.
+        Keys: ←/→ ±1 (Shift ±10, Ctrl ±100) · Space play · [ ] flagged · , . low IoU · 1–9 layers · F raw · 0 fit · N note.</p>
+    </aside>
+
+    <div id="split-left" class="splitter v" title="drag to resize · double-click to reset"><button type="button">◂</button></div>
+    <main id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="caption"></div>
+      <div id="legend"></div>
+      <div id="loading" hidden>Working…</div>
+    </main>
+
+    <div id="split-right" class="splitter v" title="drag to resize · double-click to reset"><button type="button">▸</button></div>
+    <aside id="details">
+      <div id="classification" class="badge">–</div>
+      <div id="tags" class="tags"></div>
+      <section class="group">
+        <h3>Frame statistics</h3>
+        <table id="stats" class="stats"></table>
+      </section>
+      <section class="group">
+        <h3>Ambiguity flags</h3>
+        <table id="flags" class="stats"></table>
+      </section>
+      <section class="group">
+        <h3>Width along the body <small>head → tail, px</small></h3>
+        <canvas id="width-chart" class="chart" data-height="150"></canvas>
+        <div class="note">solid: fitted · dotted: symmetric template × width · dashed: prior shape × width · grey: independent fit · orange: compare run</div>
+      </section>
+      <section class="group">
+        <h3>Curvature along the body <small>1/px · shaded where |κ| exceeds 1/width</small></h3>
+        <canvas id="curvature-chart" class="chart" data-height="110"></canvas>
+      </section>
+      <section class="group">
+        <h3>Mask pipeline on this frame</h3>
+        <table id="mask-stats" class="stats"></table>
+      </section>
+      <section class="group">
+        <h3>Run summary</h3>
+        <div id="run-summary" class="note"></div>
+      </section>
+    </aside>
+
+    <div id="split-bottom" class="splitter h" title="drag to resize · double-click to reset"><button type="button">▾</button></div>
+    <footer id="timeline">
+      <div id="timeline-head">
+        <span id="timeline-range" class="note"></span>
+        <label class="inline">Extra series
+          <select id="extra-series"></select>
+        </label>
+        <label class="inline"><input id="show-independent" type="checkbox" checked> independent fit</label>
+        <label class="inline"><input id="show-compare" type="checkbox" checked> compare run</label>
+        <button id="timeline-toggle" type="button" title="collapse / expand the timeline">▾</button>
+      </div>
+      <div id="charts"></div>
+    </footer>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

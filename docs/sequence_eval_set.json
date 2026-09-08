@@ -8,7 +8,11 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
    "start": 3650,
    "frames": 300,
-   "reasons": ["coil", "spiral", "holes"],
+   "reasons": [
+    "coil",
+    "spiral",
+    "holes"
+   ],
    "source": "scan window 3740-3850 (short skeleton, holes), peak 3760: a tight spiral with the body wrapped around itself"
   },
   {
@@ -16,7 +20,10 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
    "start": 14700,
    "frames": 300,
-   "reasons": ["self_contact", "holes"],
+   "reasons": [
+    "self_contact",
+    "holes"
+   ],
    "source": "scan window 14830-14850 (short skeleton, holes), peak 14840: head touching the body closing a loop"
   },
   {
@@ -24,7 +31,11 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2023-08-22/2023-08-22-01.h5",
    "start": 1950,
    "frames": 300,
-   "reasons": ["omega", "self_contact", "holes"],
+   "reasons": [
+    "omega",
+    "self_contact",
+    "holes"
+   ],
    "source": "scan window 2040-2080 (short skeleton, holes), peak 2070: omega turn with the head crossing the body"
   },
   {
@@ -32,7 +43,10 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2023-08-22/2023-08-22-01.h5",
    "start": 10400,
    "frames": 300,
-   "reasons": ["coil", "holes"],
+   "reasons": [
+    "coil",
+    "holes"
+   ],
    "source": "scan window 10500-10600 (holes, short skeleton), peak 10520: a coil held for five seconds"
   },
   {
@@ -40,7 +54,11 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
    "start": 8900,
    "frames": 300,
-   "reasons": ["coil", "spiral", "holes"],
+   "reasons": [
+    "coil",
+    "spiral",
+    "holes"
+   ],
    "source": "scan window 8960-9080 (holes, short skeleton), peak 9050: a tight spiral"
   },
   {
@@ -48,16 +66,23 @@
    "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
    "start": 6850,
    "frames": 300,
-   "reasons": ["camera_exit", "fragments"],
+   "reasons": [
+    "camera_exit",
+    "fragments"
+   ],
    "source": "scan windows 6900-6960 and 7040-7100 (fragments, border): body at the image border with mask pieces breaking off"
   },
   {
-   "name": "second_animal_0623",
+   "name": "tail_reentry_0623",
    "recording": "/store1/shared/all_data_raw/prj_aversion/2023-06-23/2023-06-23-01.h5",
    "start": 8850,
    "frames": 300,
-   "reasons": ["fragments", "camera_exit", "holes"],
-   "source": "scan window 8980-9010 (holes, border, fragments), peak 9000: a second animal at the edge while the tracked worm is clipped"
+   "reasons": [
+    "camera_exit",
+    "tail_reentry",
+    "fragments"
+   ],
+   "source": "scan window 8980-9010 (holes, border, fragments), peak 9000: the worm is clipped by the camera edge and its tail comes back into view as a separate mask component (first read as a second animal; there is one worm)"
   }
  ]
 }

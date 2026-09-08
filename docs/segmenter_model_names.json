@@ -1,0 +1,15 @@
+{
+ "description": "Short display names for segmenter training runs (checkpoints/segmenter/runs/<run dir>), used by scripts/plot_segmenter_history.py. The name says the labeling round and the training labels: r1 = first bootstrap-and-refine round (Sept 3-4, 2026), r2 = after labeling round 2 with the bootstrap labels retired (Sept 5, 2026); boot/hand/mixed = training label source; the number is the count of training labels. Suffixes: -warm started from the promoted checkpoint instead of ImageNet, -iou selected checkpoints on validation IoU, -loss selected on validation loss without the plateau schedule. 'headline' lists the models drawn in colour in every figure, oldest first; the last entry is the newest model and the one before it is its reference.",
+ "names": {
+  "2026-09-03T21-28-29Z_bootstrap_only": "r1-boot91",
+  "2026-09-03T21-28-32Z_manual_only": "r1-hand74",
+  "2026-09-03T21-28-34Z_all_labels": "r1-mixed165",
+  "2026-09-03T22-01-15Z_run": "r1-mixed191-warm",
+  "2026-09-03T22-02-16Z_run": "r1-hand100-warm",
+  "2026-09-03T22-06-31Z_run": "r1-hand100-iou",
+  "2026-09-04T00-20-42Z_hand_labels_loss": "r1-hand100-loss",
+  "2026-09-04T00-37-26Z_hand_labels_plateau": "r1-hand100",
+  "2026-09-05T19-43-21Z_r2-hand165": "r2-hand165"
+ },
+ "headline": ["r1-boot91", "r1-hand74", "r1-mixed165", "r1-hand100", "r2-hand165"]
+}

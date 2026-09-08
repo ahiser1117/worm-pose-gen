@@ -78,9 +78,20 @@ def main() -> int:
             total = int(dataset.shape[0])
             stop = total if args.frames is None else min(total, args.start + args.frames)
             indices = list(range(args.start, stop, args.stride))
+            unreadable = 0
             for chunk_start in range(0, len(indices), args.batch_size):
                 chunk = indices[chunk_start : chunk_start + args.batch_size]
-                raw = np.stack([np.asarray(dataset[i], dtype=np.uint8) for i in chunk])
+                readable = []
+                for i in chunk:
+                    try:
+                        readable.append((i, np.asarray(dataset[i], dtype=np.uint8)))
+                    except OSError:
+                        # Some recordings hold chunks compressed with an HDF5 filter plugin that is not installed.
+                        unreadable += 1
+                if not readable:
+                    continue
+                chunk = [i for i, _ in readable]
+                raw = np.stack([frame for _, frame in readable])
                 corrected = np.stack([np.clip(np.rint(apply_flat_field(f, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8) for f in raw])
                 probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
                 for index, frame, prob in zip(chunk, corrected, probability, strict=True):
@@ -144,7 +155,7 @@ def main() -> int:
         })
     border_fraction = float(np.mean([r["touches_border"] for r in rows if r["worm_pixels"] >= args.min_worm_pixels])) if rows else float("nan")
     output = {
-        "recording": str(args.recording), "stride": args.stride, "frames_scanned": len(rows), "seconds": time.perf_counter() - started,
+        "recording": str(args.recording), "stride": args.stride, "frames_scanned": len(rows), "frames_unreadable": unreadable, "seconds": time.perf_counter() - started,
         "whole_worm_median_skeleton_px": reference, "fraction_touching_border": border_fraction,
         "thresholds": {"short_skeleton": args.short_skeleton, "holes_px": args.holes_px, "fragments_px": args.fragments_px},
         "candidates": candidates, "samples": rows,

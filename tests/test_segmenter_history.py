@@ -84,9 +84,9 @@ class SegmenterHistoryTests(unittest.TestCase):
             root = Path(directory)
             checkpoints = root / "checkpoints"
             store = SegmentationStore(root / "dataset")
-            # Empty everything still produces the four figures.
+            # Empty everything still produces every figure.
             outputs = plots.make_plots(checkpoints, store.root, checkpoints / "plots")
-            self.assertEqual(len(outputs), 5)
+            self.assertEqual(len(outputs), 7)
             self.assertTrue(all(p.exists() and p.stat().st_size > 0 for p in outputs))
             # Now with a training log, run record, two evaluations, and a store.
             image = np.zeros((8, 8), dtype=np.uint8)
@@ -109,19 +109,27 @@ class SegmenterHistoryTests(unittest.TestCase):
                     folder = checkpoints / "evaluations" / timestamp_slug(stamp) / label
                     folder.mkdir(parents=True)
                     (folder / "evaluation.json").write_text(json.dumps(_evaluation(stamp, ids, iou + offset, label)))
-            runs = plots.load_runs(checkpoints)
+            names = plots.ModelNames({"2026-09-03T18-00-00Z_demo": "demo-5"}, ["demo-5"])
+            runs = plots.load_runs(checkpoints, names)
             self.assertEqual(len(runs), 1)
-            self.assertIn("train 5", runs[0]["label"])
+            self.assertEqual(runs[0]["name"], "demo-5")
+            self.assertIn("5 train labels", runs[0]["label"])
             self.assertEqual(runs[0]["metrics"]["val_iou"], [(0.0, 0.5), (1.0, 0.8)])
-            evaluations = plots.load_evaluations(checkpoints)
+            evaluations = plots.load_evaluations(checkpoints, names)
             self.assertEqual(len(evaluations), 4)
+            self.assertEqual({e["name"] for e in evaluations}, {"demo-5", "demo-5/last"})
             session = plots.latest_session(evaluations)
             self.assertEqual(len(session), 2)
             self.assertEqual(session[0]["session"], "2026-09-03T19:10:00+00:00")
-            self.assertEqual(plots.short_label("2026-09-03T18-00-00Z_demo__best"), "demo/best")
-            self.assertEqual(plots.short_label("best"), "best")
-            outputs = plots.make_plots(checkpoints, store.root, checkpoints / "plots")
-            self.assertEqual(len(outputs), 5)
+            self.assertEqual(plots.choose_models(session, names, None, None), ("demo-5", None))
+            unnamed = plots.ModelNames({}, [])
+            self.assertEqual(unnamed.checkpoint_name("2026-09-03T18-00-00Z_demo__best"), "demo")
+            self.assertEqual(unnamed.checkpoint_name("2026-09-03T18-00-00Z_demo__last"), "demo/last")
+            self.assertEqual(unnamed.checkpoint_name("best"), "best")
+            self.assertEqual(names.color("demo-5"), plots.SERIES[0])
+            self.assertEqual(names.color("other"), plots.OTHER)
+            outputs = plots.make_plots(checkpoints, store.root, checkpoints / "plots", names)
+            self.assertEqual(len(outputs), 7)
             self.assertTrue(all(p.exists() and p.stat().st_size > 0 for p in outputs))
 
 

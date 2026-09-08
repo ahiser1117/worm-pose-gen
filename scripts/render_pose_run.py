@@ -27,7 +27,7 @@ import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
-from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
+from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
 
@@ -72,53 +72,23 @@ def main() -> int:
             dataset = handle[DATASET_PATH]
             video_path = args.run / "overlay.mp4"
             if args.video and (args.force or not video_path.exists()):
-                import imageio.v2 as imageio
-
                 started = time.perf_counter()
-                writer = imageio.get_writer(
-                    str(video_path), fps=args.fps, codec="libx264", quality=args.quality, macro_block_size=1,
-                    ffmpeg_params=["-pix_fmt", "yuv420p"],
+                write_overlay_video(
+                    video_path, dataset, field, arrays, caption_prefix=recording.stem,
+                    fps=args.fps, scale=args.scale, quality=args.quality, slab=args.slab, device=device,
                 )
-                try:
-                    for slab_start in range(0, len(frame_index), args.slab):
-                        rows = range(slab_start, min(len(frame_index), slab_start + args.slab))
-                        first, last = int(frame_index[rows[0]]), int(frame_index[rows[-1]])
-                        if last - first + 1 == len(rows):
-                            raw = np.asarray(dataset[first : last + 1], dtype=np.uint8)
-                        else:
-                            raw = np.stack([np.asarray(dataset[int(frame_index[r])], dtype=np.uint8) for r in rows])
-                        for row, raw_frame in zip(rows, raw, strict=True):
-                            frame = flat_fielded(raw_frame, field)
-                            caption = f"{recording.stem} frame {int(frame_index[row])}"
-                            tube = centerline = None
-                            if arrays["fitted"][row]:
-                                centerline = arrays["centerline_xy"][row]
-                                tube = render_tube(
-                                    centerline, arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
-                                )
-                                caption += (
-                                    f"  iou {float(arrays['iou'][row]):.3f}  length {float(arrays['body_length_px'][row]):.0f} px"
-                                    f"  width {float(arrays['width_px'][row]):.1f} px  in view {float(arrays['points_in_fov'][row]) / n_points:.2f}"
-                                )
-                                if "taper_asymmetry" in arrays:
-                                    caption += f"  taper {float(arrays['taper_asymmetry'][row]):+.2f}"
-                            else:
-                                caption += "  no fit"
-                            writer.append_data(draw_overlay(frame, centerline, tube, caption, args.scale))
-                finally:
-                    writer.close()
                 print(f"wrote {video_path} in {time.perf_counter() - started:.0f} s", flush=True)
             requested = [int(v) for v in args.frames.split(",") if v.strip()]
             rows = residual_rows(arrays, args.residual_frames, requested)
             if rows:
                 module = load_segmenter(args.checkpoint, device)
                 threshold = float(summary.get("threshold", 0.5))
-                hole_radius = int(summary.get("mask_cleanup", {}).get("fill_holes_radius_px", 8))
+                cleanup = cleanup_options(summary)
                 for row in rows:
                     index = int(frame_index[row])
                     frame = flat_fielded(np.asarray(dataset[index], dtype=np.uint8), field)
                     probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
-                    mask, _ = clean_mask(probability, threshold, hole_radius, device)
+                    mask, _ = clean_mask(probability, threshold, device=device, **cleanup)
                     tube = render_tube(
                         arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
                     )

@@ -3,8 +3,10 @@
 
 Frames are read from the HDF5 recording in slabs, flat-fielded with the
 per-recording correction the labeling app uses, pushed through the promoted
-segmenter, cleaned (probability at or above ``--threshold``, narrow holes
-filled, largest component kept), and then fit in GPU batches with
+segmenter, cleaned (probability at or above ``--threshold``; then, unless
+``--no-fill-holes`` / ``--no-largest-component`` / ``--raw-mask`` say
+otherwise, narrow holes filled and the largest component kept), and then
+fit in GPU batches with
 ``worm_pose_gen.batch_fit.fit_masks``.  Per frame the run records the latent,
 width scale and profile, centerline, body length, in-view fraction, final
 energy and overlap, mask statistics, and per-stage timing.
@@ -23,6 +25,14 @@ width profile replace the hard bounds with Gaussian priors
 ``--prior-cache``).  Under that asymmetric prior every frame is started in
 both orientations and the energy gap between them is stored as the
 orientation confidence.
+
+After the independent fits, stretches of frames whose ambiguity score
+reaches ``--propagate-min-score`` are refit by temporal propagation (plan
+step 5): the good pose before the stretch is carried forward through it and
+the good pose after it backward, each frame warm-started from its
+neighbour, all stretches in lockstep; per frame the lowest total energy
+among independent, forward and backward wins (``source`` in ``poses.npz``;
+``--no-propagate`` skips this).
 ``scripts/render_pose_run.py`` produces the same video and residual images
 for a stored run without refitting.
 
@@ -63,7 +73,16 @@ from worm_pose_gen.mask_fit import (
     taper_asymmetry,
 )
 from worm_pose_gen.recording_prior import RecordingPrior, bootstrap_prior_from_masks
-from worm_pose_gen.pose_run import clean_mask, draw_overlay, draw_residual, render_tube, residual_caption, residual_rows
+from worm_pose_gen.pose_run import (
+    clean_mask,
+    draw_residual,
+    render_tube,
+    residual_caption,
+    residual_rows,
+    touches_border,
+    write_overlay_video,
+)
+from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -83,6 +102,7 @@ START_SETS = {
     "all": None,
 }
 DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
+SOURCE_CODES = {"independent": 0, "forward": 1, "backward": 2}
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,6 +116,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16, help="frames per segmenter forward pass")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
+    parser.add_argument("--fill-holes", action=argparse.BooleanOptionalAction, default=True, help="fill narrow holes in the mask before fitting")
+    parser.add_argument(
+        "--largest-component", action=argparse.BooleanOptionalAction, default=True, help="keep only the largest connected component of the mask"
+    )
+    parser.add_argument("--raw-mask", action="store_true", help="shorthand for --no-fill-holes --no-largest-component")
     parser.add_argument("--min-worm-pixels", type=int, default=MIN_WORM_PIXELS, help="smaller cleaned masks are not fit")
     parser.add_argument("--init-workers", type=int, default=min(8, os.cpu_count() or 1), help="processes for skeleton/moment starts (0 = inline)")
     parser.add_argument(
@@ -127,6 +152,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-prior-cache", action="store_true", help="neither read nor write the prior cache")
     parser.add_argument("--rebootstrap", action="store_true", help="ignore a cached prior and bootstrap again")
     parser.add_argument("--prior-shape-weight", type=float, default=0.01, help="weight of the width-profile prior once a recording prior is active")
+    parser.add_argument("--no-propagate", action="store_true", help="skip temporal propagation across ambiguous stretches")
+    parser.add_argument("--propagate-min-score", type=int, default=2, help="ambiguity score that seeds a stretch")
+    parser.add_argument("--propagate-pad", type=int, default=2, help="frames added on each side of a seed")
+    parser.add_argument("--propagate-max-gap", type=int, default=3, help="seeds closer than this are one stretch")
+    parser.add_argument("--chain-length-sigma", type=float, default=0.02, help="log-sigma of the length prior inside propagation chains (0 = the fit's own)")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -153,6 +183,15 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
     if args.width_prior is not None:
         overrides["width_shape_prior"] = args.width_prior
     return replace(config, **overrides)
+
+
+def cleanup_from_args(args: argparse.Namespace) -> dict[str, bool]:
+    """``clean_mask`` switches from the command line (``--raw-mask`` turns both off)."""
+
+    return {
+        "fill_holes": bool(args.fill_holes) and not args.raw_mask,
+        "largest_only": bool(args.largest_component) and not args.raw_mask,
+    }
 
 
 def initializations_for(
@@ -205,6 +244,7 @@ def flat_fielded(raw: np.ndarray, field) -> np.ndarray:
 
 def bootstrap_prior(dataset, total: int, field, module, args: argparse.Namespace, config: BatchFitConfig, device: torch.device) -> tuple[RecordingPrior, dict[str, Any]]:
     """Segment frames spread over the whole recording and estimate its body-size prior."""
+    cleanup = cleanup_from_args(args)
 
     boot_config = replace(
         PRESETS[args.bootstrap_preset],
@@ -226,7 +266,7 @@ def bootstrap_prior(dataset, total: int, field, module, args: argparse.Namespace
             corrected = np.stack([flat_fielded(np.asarray(dataset[i], dtype=np.uint8), field) for i in chunk])
             probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
             for prob in probability:
-                mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
                 if stats["worm_pixels"] >= args.min_worm_pixels:
                     masks.append(mask)
         try:
@@ -257,6 +297,26 @@ def _nan(shape: tuple[int, ...]) -> np.ndarray:
     return np.full(shape, np.nan, dtype=np.float64)
 
 
+def store_result(arrays: dict[str, np.ndarray], best_start: list[str], row: int, result: MaskFitResult) -> None:
+    """Write one fit into the per-frame arrays."""
+
+    best = result.records[result.best_index]
+    arrays["fitted"][row] = True
+    arrays["width_shape"][row] = result.width_shape
+    arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
+    arrays["latent"][row] = result.latent
+    arrays["width_px"][row] = result.width_px
+    arrays["centerline_xy"][row] = result.centerline_xy
+    arrays["width_profile"][row] = result.width_profile
+    arrays["iou"][row] = best["final_iou"]
+    arrays["energy"][row] = best["final_soft_dice_energy"]
+    arrays["total_energy"][row] = best["final_energy"]
+    arrays["points_in_fov"][row] = result.points_in_fov
+    arrays["body_length_px"][row] = result.body_length_px
+    arrays["crop"][row] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
+    best_start[row] = str(result.initializations[result.best_index].name)
+
+
 def orientation_consistency(arrays: dict[str, np.ndarray]) -> dict[str, Any] | None:
     """How often consecutive fitted frames agree on which end is the head."""
 
@@ -275,6 +335,7 @@ def orientation_consistency(arrays: dict[str, np.ndarray]) -> dict[str, Any] | N
 
 def main() -> int:
     args = parse_args()
+    cleanup = cleanup_from_args(args)
     if args.step < 1 or args.slab < 1:
         raise SystemExit("--step and --slab must be positive")
     started = utc_now()
@@ -348,6 +409,9 @@ def main() -> int:
             "orientation_gap": _nan((n,)),
             "iou": _nan((n,)),
             "energy": _nan((n,)),
+            "total_energy": _nan((n,)),
+            "source": np.zeros(n, dtype=np.int8),
+            "mask_on_border": np.zeros(n, dtype=bool),
             "points_in_fov": np.zeros(n, dtype=np.int64),
             "body_length_px": _nan((n,)),
             "crop": np.zeros((n, 4), dtype=np.int64),
@@ -363,14 +427,6 @@ def main() -> int:
         skipped: dict[str, int] = {"empty_mask": 0, "small_mask": 0, "no_starts": 0, "fit_error": 0}
         timing = {stage: 0.0 for stage in STAGES}
 
-        writer = None
-        if args.video:
-            import imageio.v2 as imageio
-
-            writer = imageio.get_writer(
-                str(run_dir / "overlay.mp4"), fps=args.fps, codec="libx264", quality=args.quality, macro_block_size=1,
-                ffmpeg_params=["-pix_fmt", "yuv420p"],
-            )
         pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
         try:
             for slab_start in range(0, n, args.slab):
@@ -393,9 +449,11 @@ def main() -> int:
                 fit_rows: list[int] = []
                 for offset, prob in enumerate(probability):
                     row = slab_start + offset
-                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device)
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
                     for key, value in stats.items():
                         arrays[key][row] = value
+                    if stats["worm_pixels"]:
+                        arrays["mask_on_border"][row] = touches_border(mask, 2)
                     if stats["worm_pixels"] == 0:
                         skipped["empty_mask"] += 1
                     elif stats["worm_pixels"] < args.min_worm_pixels:
@@ -435,7 +493,6 @@ def main() -> int:
                     if device.type == "cuda":
                         torch.cuda.synchronize()
                 t6 = time.perf_counter()
-                by_row: dict[int, MaskFitResult] = {}
                 for row, frame_starts, result in zip(fit_rows, starts, results, strict=True):
                     arrays["n_starts"][row] = len(frame_starts)
                     if result is None:
@@ -445,41 +502,7 @@ def main() -> int:
                         arrays["reversed"][row] = flipped
                     else:
                         arrays["orientation_gap"][row] = orientation_gap(result)
-                    by_row[row] = result
-                    arrays["fitted"][row] = True
-                    arrays["width_shape"][row] = result.width_shape
-                    arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
-                    arrays["latent"][row] = result.latent
-                    arrays["width_px"][row] = result.width_px
-                    arrays["centerline_xy"][row] = result.centerline_xy
-                    arrays["width_profile"][row] = result.width_profile
-                    arrays["iou"][row] = result.records[result.best_index]["final_iou"]
-                    arrays["energy"][row] = result.records[result.best_index]["final_soft_dice_energy"]
-                    arrays["points_in_fov"][row] = result.points_in_fov
-                    arrays["body_length_px"][row] = result.body_length_px
-                    arrays["crop"][row] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
-                    best_start[row] = str(result.initializations[result.best_index].name)
-                if writer is not None:
-                    for offset, frame in enumerate(corrected):
-                        row = slab_start + offset
-                        result = by_row.get(row)
-                        caption = f"{args.recording.stem} frame {indices[row]}"
-                        if result is not None:
-                            caption += (
-                                f"  iou {arrays['iou'][row]:.3f}  length {arrays['body_length_px'][row]:.0f} px"
-                                f"  width {arrays['width_px'][row]:.1f} px  in view {arrays['points_in_fov'][row] / config.n_points:.2f}"
-                                f"  taper {arrays['taper_asymmetry'][row]:+.2f}"
-                            )
-                            if prior is not None:
-                                caption += f"  gap {arrays['orientation_gap'][row]:.3f}"
-                        else:
-                            caption += "  no fit"
-                        tube = centerline = None
-                        if result is not None:
-                            tube = np.zeros(frame.shape, dtype=bool)
-                            tube[result.crop.y0 : result.crop.y1, result.crop.x0 : result.crop.x1] = result.rendered_hard_mask
-                            centerline = result.centerline_xy
-                        writer.append_data(draw_overlay(frame, centerline, tube, caption, args.scale))
+                    store_result(arrays, best_start, row, result)
                 t7 = time.perf_counter()
                 for stage, seconds in zip(STAGES, (t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t6 - t5, t7 - t6), strict=True):
                     timing[stage] += seconds
@@ -492,17 +515,80 @@ def main() -> int:
                     flush=True,
                 )
         finally:
-            if writer is not None:
-                writer.close()
             if pool is not None:
                 pool.shutdown()
         # Per-frame ambiguity signals (plan step 4) from the stored arrays.
-        arrays["best_start"] = np.asarray(best_start)
-        arrays.update(
-            compute_ambiguity(
-                arrays, prior=None if prior is None else prior.to_dict(), image_shape=(int(dataset.shape[1]), int(dataset.shape[2]))
+        image_shape = (int(dataset.shape[1]), int(dataset.shape[2]))
+        prior_dict = None if prior is None else prior.to_dict()
+        arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
+        arrays["iou_independent"] = arrays["iou"].copy()
+        arrays["score_independent"] = arrays["ambiguity_score"].copy()
+        # The independent pose itself is kept so a viewer can show what
+        # propagation replaced (worm_pose_gen.pose_viewer).
+        arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
+        arrays["width_profile_independent"] = arrays["width_profile"].copy()
+        arrays["body_length_independent"] = arrays["body_length_px"].copy()
+        propagation_info: dict[str, Any] | None = None
+        if not args.no_propagate:
+            # Temporal propagation (plan step 5) across the ambiguous stretches.
+            t_prop = time.perf_counter()
+            propagation_config = PropagationConfig(
+                min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap,
+                chain_length_sigma=None if args.chain_length_sigma <= 0 else args.chain_length_sigma,
             )
-        )
+            stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
+            stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
+            stretch_masks: dict[int, np.ndarray] = {}
+            for chunk_start in range(0, len(stretch_rows), args.batch_size):
+                chunk = stretch_rows[chunk_start : chunk_start + args.batch_size]
+                corrected = np.stack(
+                    [flat_fielded(np.asarray(dataset[int(arrays["frame_index"][r])], dtype=np.uint8), field) for r in chunk]
+                )
+                probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
+                for r, prob in zip(chunk, probability, strict=True):
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
+                    if stats["worm_pixels"] >= args.min_worm_pixels:
+                        stretch_masks[r] = mask
+            candidates, propagation_info = propagate(
+                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config
+            )
+            chosen = select_candidates(candidates, arrays, config, propagation_config)
+            before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
+            for row, candidate in chosen.items():
+                store_result(arrays, best_start, row, candidate.result)
+                arrays["source"][row] = SOURCE_CODES[candidate.source]
+                arrays["orientation_gap"][row] = np.nan
+                arrays["reversed"][row] = False
+            arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
+            timing["propagate"] = time.perf_counter() - t_prop
+            propagation_info.update(
+                {
+                    "frames_replaced": len(chosen),
+                    "replaced_by_source": {name: int(sum(c.source == name for c in chosen.values())) for name in ("forward", "backward")},
+                    "stretch_iou_median_before": before_iou,
+                    "stretch_iou_median_after": float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None,
+                    "stretch_frames_score_at_least_2_before": int(np.sum(arrays["score_independent"][stretch_rows] >= 2)) if stretch_rows else 0,
+                    "stretch_frames_score_at_least_2_after": int(np.sum(arrays["ambiguity_score"][stretch_rows] >= 2)) if stretch_rows else 0,
+                    "seconds": timing["propagate"],
+                }
+            )
+            print(
+                f"propagation: {len(stretches)} stretches, {len(stretch_rows)} frames, {len(chosen)} replaced"
+                f" ({propagation_info['replaced_by_source']}), stretch median IoU"
+                f" {before_iou if before_iou is None else round(before_iou, 3)} -> {propagation_info['stretch_iou_median_after'] if propagation_info['stretch_iou_median_after'] is None else round(propagation_info['stretch_iou_median_after'], 3)},"
+                f" {timing['propagate']:.0f} s",
+                flush=True,
+            )
+        arrays["best_start"] = np.asarray(best_start)
+        # The overlay video is rendered from the final arrays, after
+        # propagation, so it shows the poses as stored.
+        if args.video:
+            t_video = time.perf_counter()
+            write_overlay_video(
+                run_dir / "overlay.mp4", dataset, field, arrays, caption_prefix=args.recording.stem,
+                fps=args.fps, scale=args.scale, quality=args.quality, slab=args.slab, device=device,
+            )
+            timing["video"] += time.perf_counter() - t_video
         # Residual images for the worst frames and any requested ones: the
         # frames are read and segmented again, which is cheap for a handful.
         requested = [int(v) for v in args.dump_frames.split(",") if v.strip()]
@@ -512,7 +598,7 @@ def main() -> int:
             raw_frame = np.asarray(dataset[frame_index], dtype=np.uint8)
             frame = np.clip(np.rint(apply_flat_field(raw_frame, field, clip=(0.0, 255.0))), 0, 255).astype(np.uint8)
             probability = module.predict_probability_batch(frame[None], batch_size=1)[0]
-            mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device)
+            mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device, **cleanup)
             tube = render_tube(
                 arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
             )
@@ -538,7 +624,10 @@ def main() -> int:
         "git": git_revision(PROJECT_ROOT),
         "device": str(device),
         "threshold": args.threshold,
-        "mask_cleanup": {"fill_holes_radius_px": args.hole_radius, "largest_component": True, "min_worm_pixels": args.min_worm_pixels},
+        "mask_cleanup": {
+            "fill_holes": cleanup["fill_holes"], "fill_holes_radius_px": args.hole_radius,
+            "largest_component": cleanup["largest_only"], "min_worm_pixels": args.min_worm_pixels,
+        },
         "fit_config": asdict(config),
         "width_template": "default_width_template",
         "preset": args.preset,
@@ -589,6 +678,7 @@ def main() -> int:
         },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
         "ambiguity": summarize_ambiguity(arrays) if fitted.any() else None,
+        "propagation": propagation_info,
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},
         "mask": {
             "worm_pixels_median": float(np.median(arrays["worm_pixels"])),

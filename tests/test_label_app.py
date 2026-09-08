@@ -5,6 +5,7 @@ import io
 import json
 import tempfile
 import threading
+from pathlib import Path
 import unittest
 from urllib.request import Request, urlopen
 
@@ -156,6 +157,55 @@ class LabelAppTests(unittest.TestCase):
             with self.assertRaises(IndexError):
                 source.read(10)
             source.close()
+
+
+class LabelQueueTests(unittest.TestCase):
+    def test_queue_walks_pending_frames_and_pledges_splits(self) -> None:
+        import json
+        import tempfile
+
+        import numpy as np
+
+        from worm_pose_gen.label_app import LabelQueue
+        from worm_pose_gen.segmentation_dataset import SegmentationStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = {
+                "name": "round",
+                "recordings": {"recA": {"path": str(root / "a.h5"), "split": "val"}, "recB": {"path": str(root / "b.h5"), "split": "auto"}},
+                "frames": [
+                    {"recording": "recA", "frame_index": 5, "reasons": ["window:holes"]},
+                    {"recording": "recB", "frame_index": 7, "reasons": ["border"]},
+                    {"recording": "recA", "frame_index": 9, "reasons": ["ordinary"]},
+                ],
+            }
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            queue = LabelQueue(path)
+            store = SegmentationStore(root / "store")
+            self.assertEqual(queue.split_for("recA"), "val")
+            self.assertIsNone(queue.split_for("recB"))
+            self.assertEqual(queue.progress(store)["remaining"], 3)
+            first = queue.next_pending(store, None)
+            self.assertEqual((first["recording"], first["frame_index"]), ("recA", 5))
+            image = np.zeros((8, 8), dtype=np.uint8)
+            mask = np.zeros((8, 8), dtype=np.uint8)
+            mask[2:5, 2:5] = 1
+            record = store.save("recA", 5, image, mask, source_path="a.h5", label_source="manual", split=queue.split_for("recA"))
+            self.assertEqual(record.split, "val")
+            second = queue.next_pending(store, ("recA", 5))
+            self.assertEqual((second["recording"], second["frame_index"]), ("recB", 7))
+            store.save("recB", 7, image, mask, source_path="b.h5", label_source="manual", split=queue.split_for("recB"))
+            store.save("recA", 9, image, mask, source_path="a.h5", label_source="manual", split="val")
+            self.assertIsNone(queue.next_pending(store, ("recA", 9)))
+            self.assertEqual(queue.progress(store)["labeled"], 3)
+            self.assertEqual(queue.entry("recB", 7)["position"], 2)
+            # A pledge is kept even if a later save asks for another split.
+            again = store.save("recA", 5, image, mask, source_path="a.h5", label_source="manual", split="test")
+            self.assertEqual(again.split, "val")
+            with self.assertRaises(ValueError):
+                store.save("recB", 8, image, mask, source_path="b.h5", label_source="manual", split="nope")
 
 
 if __name__ == "__main__":

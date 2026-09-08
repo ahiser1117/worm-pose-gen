@@ -124,11 +124,29 @@ scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_a
 Labels are stored under
 `/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
 on flv-c4 with an 80/10/10 train/val/test assignment; checkpoints go to the
-git-ignored `checkpoints/segmenter/` directory. The labeling app runs at
+git-ignored `checkpoints/segmenter/` directory. The bootstrap step only
+matters for a fresh store: the bootstrapped labels of this one were retired
+on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
+hand-refined, and the promoted model is `r2-hand165` (see
+`docs/segmenter_model_names.json` for the model names the plots use). The labeling app runs at
 `http://127.0.0.1:8767`, proposes masks from the current checkpoint and the
 classical pipeline, refines them with pipeline elements, and saves edited
 labels back into the store. Details and keyboard shortcuts are in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
+
+A targeted round (coils, self-contact, holes, fragments, camera-edge frames
+across 13 recordings, with some animals held out for validation or test only)
+is queued in `docs/labeling_round_2/manifest.json`, built by
+`scripts/build_labeling_manifest.py` from the clip-candidate scans. Open it
+with:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app \
+  --queue docs/labeling_round_2/manifest.json
+```
+
+The "Queue (manifest)" next mode walks the frames in order; each save
+pledges the recording's split.
 
 ## Fit poses over a recording
 
@@ -157,6 +175,43 @@ images (mask the tube misses in blue, tube outside the mask in red) for its
 stored run without refitting, and `scripts/compare_pose_runs.py` puts
 several runs side by side on the same frames.
 
+The pose viewer is the interactive way to look at a run:
+
+```bash
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.pose_viewer
+# every run under /temp_data4/alex/external_artifacts/poses/; --run <dir> adds
+# others, --only-runs serves just those; then open http://127.0.0.1:8768/
+```
+
+It scrubs through a run's frames (arrow keys, play, click or drag on the
+timeline, wheel to zoom the timeline range; the image, tube and statistics
+follow the cursor at once and the mask layers arrive once it rests) and
+composites every layer the pipeline produced on the flat-fielded frame,
+each with its own toggle and opacity: the segmenter's probability heat map, the thresholded mask, the
+pixels a hole fill adds and the pixels the largest-component rule drops,
+the mask the fit was scored against, the fitted tube's outline and
+centerline with head and tail markers, the residual (mask the tube misses
+in blue, tube outside the mask in red), the independent fit that
+propagation replaced (runs fit after 2026-09-07 store it), the pose of a
+second run of the same recording, the fitter's skeleton and moment starts,
+and the crop window. The right panel lists every per-frame statistic the
+run tracks, the nine ambiguity flags with the value each tested against its
+threshold, a classification of the frame (clean, watch, or ambiguous;
+coil, camera edge, fragmented mask, or suspected fit failure; propagated
+forward or backward), the width profile along the body against the
+symmetric template and the recording prior's shape, the body's curvature,
+and the mask statistics recomputed on the spot next to the stored ones.
+The timeline shows IoU (with the independent fit's), body length with the
+prior's two-sigma band, mask and visible tube area, the ambiguity score, a
+selectable extra series (pose jump, self-contact, width, energy, ...), the
+flag raster, and a class/source strip, with propagation stretches shaded.
+"Jump to" walks flagged or low-IoU frames, stretches, jumps and edge
+frames; review notes (tags and a comment per frame) are appended to the
+file named by `--notes`, `docs/pose_review/notes.json` by default. The
+three panels around the frame resize by dragging their splitters and
+collapse from the splitter buttons (double-click resets); the layout is
+remembered by the browser.
+
 By default the run first bootstraps a recording prior: frames spread over
 the whole recording are fit with the hard bounds opened, whole worms (mask
 clear of the image border) are kept, and robust medians of body length,
@@ -174,6 +229,12 @@ missed body by area, self-contact, enclosed holes, fragments, length far
 from the prior, a jump since the previous frame); a score of 2 or more marks
 a frame whose single-frame answer should not be trusted without its
 neighbours. `scripts/ambiguity_report.py` recomputes it for stored runs.
+Stretches of such frames are then refit by temporal propagation: the good
+pose before the stretch is carried forward through it and the good pose
+after it backward, each frame warm-started from its neighbour, all
+stretches in lockstep, and per frame the lowest total energy among
+independent, forward and backward wins (`source` in `poses.npz`;
+`--no-propagate` skips it).
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
 fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;

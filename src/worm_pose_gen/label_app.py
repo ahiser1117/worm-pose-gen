@@ -38,7 +38,7 @@ from .classical import ClassicalConfig, _dilate, _erode, _largest_component, seg
 from .flat_field import FlatField, apply_flat_field, estimate_flat_field
 from .heuristic_tuner import encode_png
 from .mask_fit import MaskFitConfig, fill_narrow_holes, fit_mask, standard_initializations
-from .segmentation_dataset import DEFAULT_DATASET_ROOT, SegmentationStore, make_sample_id
+from .segmentation_dataset import DEFAULT_DATASET_ROOT, SPLITS, SegmentationStore, make_sample_id
 from .segmenter import IGNORE_LABEL, SegmentationModule, load_segmenter
 
 
@@ -137,9 +137,18 @@ class RecordingSource:
                 )
             return self._field
         indices = np.linspace(0, self.frame_count - 1, min(FLAT_FIELD_SAMPLE_COUNT, self.frame_count), dtype=np.int64)
+        frames = []
         with self._lock:
             dataset = self._dataset()
-            calibration = np.stack([np.asarray(dataset[int(i)], dtype=np.uint8) for i in indices])
+            for i in indices:
+                try:
+                    frames.append(np.asarray(dataset[int(i)], dtype=np.uint8))
+                except OSError:
+                    # Some recordings hold chunks compressed with an HDF5 filter plugin that is not installed.
+                    continue
+        if len(frames) < min(8, len(indices)):
+            raise OSError(f"only {len(frames)} of {len(indices)} calibration frames of {self.name} are readable")
+        calibration = np.stack(frames)
         field = estimate_flat_field(
             calibration, temporal_quantile=0.8, spatial_radius=31, smoothing_passes=2, min_gain=0.5, max_gain=2.5
         )
@@ -231,10 +240,69 @@ class Proposer:
         return out, info
 
 
+class LabelQueue:
+    """Targeted frames to label, from a manifest written by ``scripts/build_labeling_manifest.py``.
+
+    The manifest lists recordings (path and the split their new labels are
+    pledged to, or ``auto`` for the balanced assignment) and frames (recording
+    name, frame index, reasons).  The queue walks the frames in order,
+    skipping those already labeled.
+    """
+
+    def __init__(self, path: Path) -> None:
+        data = json.loads(Path(path).read_text())
+        self.path = Path(path)
+        self.name = str(data.get("name", self.path.stem))
+        self.recordings: dict[str, dict[str, Any]] = {str(k): dict(v) for k, v in data["recordings"].items()}
+        self.entries: list[dict[str, Any]] = [dict(e) for e in data["frames"]]
+        self.position: dict[tuple[str, int], int] = {
+            (str(e["recording"]), int(e["frame_index"])): k for k, e in enumerate(self.entries)
+        }
+        for entry in self.entries:
+            if entry["recording"] not in self.recordings:
+                raise ValueError(f"queue frame refers to unknown recording {entry['recording']!r}")
+
+    def paths(self) -> list[Path]:
+        return [Path(v["path"]) for v in self.recordings.values()]
+
+    def split_for(self, recording: str) -> str | None:
+        split = str(self.recordings.get(recording, {}).get("split", "auto"))
+        return split if split in SPLITS else None
+
+    def entry(self, recording: str, frame_index: int) -> dict[str, Any] | None:
+        k = self.position.get((recording, int(frame_index)))
+        if k is None:
+            return None
+        return {**self.entries[k], "position": k + 1, "total": len(self.entries), "split": self.split_for(recording) or "auto"}
+
+    def progress(self, store: SegmentationStore) -> dict[str, Any]:
+        labeled = sum(1 for e in self.entries if store.has(e["recording"], int(e["frame_index"])))
+        by_recording: dict[str, dict[str, int]] = {}
+        for e in self.entries:
+            row = by_recording.setdefault(e["recording"], {"frames": 0, "labeled": 0})
+            row["frames"] += 1
+            row["labeled"] += int(store.has(e["recording"], int(e["frame_index"])))
+        return {"name": self.name, "path": str(self.path), "frames": len(self.entries), "labeled": labeled, "remaining": len(self.entries) - labeled, "by_recording": by_recording}
+
+    def next_pending(self, store: SegmentationStore, current: tuple[str, int] | None) -> dict[str, Any] | None:
+        start = 0
+        if current is not None and current in self.position:
+            start = self.position[current] + 1
+        order = list(range(start, len(self.entries))) + list(range(0, start))
+        for k in order:
+            e = self.entries[k]
+            if not store.has(e["recording"], int(e["frame_index"])):
+                return e
+        return None
+
+
 class LabelState:
-    def __init__(self, recordings: list[Path], store: SegmentationStore, proposer: Proposer) -> None:
+    def __init__(
+        self, recordings: list[Path], store: SegmentationStore, proposer: Proposer, queue: LabelQueue | None = None
+    ) -> None:
         self.store = store
         self.proposer = proposer
+        self.queue = queue
         self.sources: dict[str, RecordingSource] = {}
         failures: dict[str, str] = {}
         for path in recordings:
@@ -264,6 +332,7 @@ class LabelState:
             "unreadable_recordings": self.failures,
             "checkpoint": None if self.proposer.module is None else str(self.proposer.checkpoint),
             "device": str(self.proposer.device),
+            "queue": None if self.queue is None else self.queue.progress(self.store),
         }
 
     def frame(self, recording: str, frame_index: int) -> dict[str, Any]:
@@ -304,10 +373,21 @@ class LabelState:
             "proposals": proposals,
             "network_uncertain_fraction": uncertain_fraction,
             "proposal_seconds": time.perf_counter() - started,
+            "queue_entry": None if self.queue is None else self.queue.entry(recording, frame_index),
+            "pledged_split": self.store.pledged_split(recording, frame_index)
+            or (None if self.queue is None else self.queue.split_for(recording)),
         }
 
     def next_frame(self, mode: str, recording: str | None, current_index: int | None, stride: int, candidates: int) -> dict[str, Any]:
         names = list(self.sources)
+        if mode == "queue":
+            if self.queue is None:
+                raise ValueError("no queue loaded; start the app with --queue")
+            current = None if recording is None or current_index is None else (str(recording), int(current_index))
+            entry = self.queue.next_pending(self.store, current)
+            if entry is None:
+                raise ValueError("every queued frame is labeled")
+            return {"recording": entry["recording"], "frame_index": int(entry["frame_index"]), "reasons": entry.get("reasons", [])}
         if mode == "sequential":
             if recording is None or recording not in self.sources:
                 recording = names[0]
@@ -348,8 +428,12 @@ class LabelState:
         record = self.store.save(
             recording, frame_index, image, mask, image_raw=raw, source_path=str(source.path),
             label_source=label_source, flat_fielded=True,
+            split=None if self.queue is None else self.queue.split_for(recording),
         )
-        return {"record": asdict(record), "counts": self.store.counts()}
+        payload = {"record": asdict(record), "counts": self.store.counts()}
+        if self.queue is not None:
+            payload["queue"] = self.queue.progress(self.store)
+        return payload
 
     def refine(self, recording: str, frame_index: int, mask_url: str, method: str) -> dict[str, Any]:
         source = self.sources[recording]
@@ -427,6 +511,8 @@ class LabelRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(state.frame(recording, int(query.get("index", ["0"])[0])))
             elif parsed.path == "/api/samples":
                 self._send_json({"samples": [asdict(r) for r in state.store.records()]})
+            elif parsed.path == "/api/queue":
+                self._send_json({"queue": None if state.queue is None else state.queue.progress(state.store)})
             else:
                 self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except (ValueError, IndexError, KeyError) as error:
@@ -482,6 +568,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default=None)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8767)
+    parser.add_argument(
+        "--queue", type=Path, default=None,
+        help="labeling manifest (scripts/build_labeling_manifest.py); its recordings are opened and 'Queue' walks its frames",
+    )
     return parser.parse_args(argv)
 
 
@@ -489,12 +579,18 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     store = SegmentationStore(args.dataset_root)
     proposer = Proposer(args.checkpoint, args.device)
-    state = LabelState(list(args.recordings or DEFAULT_RECORDINGS), store, proposer)
+    queue = None if args.queue is None else LabelQueue(args.queue)
+    recordings = list(args.recordings or [])
+    if queue is not None:
+        recordings += [p for p in queue.paths() if p not in recordings]
+    state = LabelState(recordings or list(DEFAULT_RECORDINGS), store, proposer, queue)
     server = create_server(state, args.host, args.port)
     summary = state.state()
     print(f"worm labeler at http://{args.host}:{args.port}/")
     print(f"dataset root {summary['dataset_root']} counts {summary['counts']}")
     print(f"network checkpoint: {summary['checkpoint'] or 'none (classical proposals only)'}")
+    if summary["queue"] is not None:
+        print(f"queue {summary['queue']['name']}: {summary['queue']['remaining']} of {summary['queue']['frames']} frames to label")
     for path, error in summary["unreadable_recordings"].items():
         print(f"skipped unreadable recording {path}: {error}")
     try:

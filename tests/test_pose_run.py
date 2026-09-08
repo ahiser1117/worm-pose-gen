@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -11,12 +12,15 @@ from worm_pose_gen.pose_run import (
     MISSED_RGB,
     boundary,
     clean_mask,
+    cleanup_options,
     draw_overlay,
     draw_residual,
+    overlay_caption,
     render_tube,
     residual_rows,
     run_label,
     tube_area_px,
+    write_overlay_video,
 )
 
 
@@ -81,8 +85,60 @@ class PoseRunTests(unittest.TestCase):
         self.assertEqual(stats["components"], 2)
         self.assertEqual(stats["pixels_filled"], 4)
         self.assertEqual(stats["worm_pixels"], 10 * 25)
+        raw, raw_stats = clean_mask(probability, 0.5, 2, "cpu", fill_holes=False, largest_only=False)
+        self.assertFalse(raw[9, 13])
+        self.assertTrue(raw[31, 31])
+        self.assertEqual(raw_stats["pixels_filled"], 4)
+        self.assertEqual(raw_stats["components"], 2)
+        self.assertEqual(raw_stats["worm_pixels"], 10 * 25 - 4 + 9)
+        largest_raw, _ = clean_mask(probability, 0.5, 2, "cpu", fill_holes=False, largest_only=True)
+        self.assertFalse(largest_raw[9, 13])
+        self.assertFalse(largest_raw[31, 31])
+        self.assertEqual(cleanup_options({}), {"hole_radius": 8, "fill_holes": True, "largest_only": True})
+        self.assertEqual(
+            cleanup_options({"mask_cleanup": {"fill_holes": False, "fill_holes_radius_px": 4, "largest_component": False}}),
+            {"hole_radius": 4, "fill_holes": False, "largest_only": False},
+        )
         self.assertEqual(run_label({}), "symmetric template")
         self.assertEqual(run_label({"width_model": {"coefficients": 6}}), "6 width coefficients")
+
+    def test_overlay_video_renders_from_the_final_arrays(self) -> None:
+        import tempfile
+
+        import imageio.v2 as imageio
+
+        curve, profile = _pose()
+        n = 6
+        frames = np.full((n, 120, 160), 180, dtype=np.uint8)
+        arrays = {
+            "frame_index": np.arange(10, 10 + n),
+            "fitted": np.array([True, True, False, True, True, True]),
+            "centerline_xy": np.tile(curve, (n, 1, 1)),
+            "width_profile": np.tile(profile, (n, 1)),
+            "crop": np.tile(np.array([20, 140, 30, 90]), (n, 1)),
+            "iou": np.full(n, 0.95),
+            "body_length_px": np.full(n, 100.0),
+            "width_px": np.full(n, 10.0),
+            "points_in_fov": np.full(n, 100),
+            "taper_asymmetry": np.full(n, -0.2),
+            "orientation_gap": np.full(n, np.nan),
+            "source": np.array([0, 1, 0, 2, 0, 0], dtype=np.int8),
+            "ambiguity_score": np.array([0, 2, 0, 1, 0, 0]),
+        }
+        caption = overlay_caption("rec", arrays, 1)
+        self.assertIn("forward", caption)
+        self.assertIn("score 2", caption)
+        self.assertNotIn("gap", caption)
+        self.assertEqual(overlay_caption("rec", arrays, 2), "rec frame 12  no fit")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay.mp4"
+            # A dataset indexed by absolute frame number: pad the front so frame 10 is the first stored frame.
+            dataset = np.concatenate((np.zeros((10, 120, 160), dtype=np.uint8), frames))
+            write_overlay_video(path, dataset, None, arrays, caption_prefix="rec", scale=0.5, slab=4, device="cpu")
+            reader = imageio.get_reader(str(path))
+            count = sum(1 for _ in reader)
+            reader.close()
+        self.assertEqual(count, n)
 
 
 if __name__ == "__main__":
