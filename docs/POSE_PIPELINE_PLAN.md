@@ -1108,6 +1108,94 @@ stretch, and the propagation time is unchanged within 10%. Next is 6b/6c:
 keep the candidates the chains now store, add their mirrors and the
 independent fit, and choose one path per stretch.
 
+**Result of 6c (2026-09-08).** Alex's decisions for the step: the second
+pass refits the frames, the app will launch fits (next), and the API must
+mirror the app for pipelines. Landed in `propagation.py`: each direction of
+a stretch keeps up to three distinct chain states (`beam`; states ranked by
+the fit's full energy, temporal prior included, distinct at a quarter width);
+the stored independent pose of every stretch frame is refit under the chain
+schedule with the stretch anchors' length prior (`refit_independent`); and
+`select_path` chooses one candidate per frame along the stretch by dynamic
+programming over all candidates and their exact mirrors, anchored on the
+fitted frames outside the stretch: node cost is the comparable energy over
+a temperature of 0.01, edge cost the squared oriented pose distance in
+widths plus 2 times the change of the in-view fraction plus the squared
+log length change in units of 2%. `slow_schedule` runs a preset's steps on
+the fit's rasters for the refit (`--propagate-preset`). Every candidate is
+stored with the path's choice (`hypotheses_*`, `path_*`, `prediction_xy` in
+`poses.npz`); the viewer draws the hypotheses by source with the chosen one
+wide under the centerline, lists them ranked by energy with the chosen,
+mirrored and override marks, tags a frame where the path overrode the
+lowest energy, and reports the path's counts in the run summary.
+
+Three things were learned on the way, each from the viewer's hypotheses
+table on the frames that regressed:
+
+*Beam states must be ranked by the full energy.* The first version ranked
+a chain's states by the mask energy alone and the forward chain of the raw
+spiral fell from a median overlap of 0.941 to 0.916 inside its stretch: the
+state consistent with the chain's own motion lost to a state the mask
+liked marginally better, and every later frame inherited the drift. Ranking
+by the energy the fit minimized (temporal prior included) restored it.
+
+*The slower refit schedule hurt.* With the `balanced` steps (100 and 200
+against 42 and 70) the chains wandered further from their predictions
+under the same prior: raw spiral 4 frames below 0.9 against 0, `edge_0618`
+3 pose jumps against 1, at twice the time. The refit pass keeps the fast
+schedule; `--propagate-preset balanced` stays as an option.
+
+*Switching to a refit independent pose stepped the length* (raw spiral: 6
+length jumps in the stretches against 1) until the refit took the stretch
+anchors' length prior and the path cost gained the length term; both
+minutes then have no length jump inside a stretch.
+
+Final configuration against the step 6a runs (same masks and priors; the
+edge minute's 135 failures are the plate streak on independent frames,
+untouched by any stretch):
+
+| Minute | Pipeline | Frames < 0.9 | Pose jumps > width | Length jumps > 3% (in stretches) | In-view changes | Orientation flips | Stretch median IoU | Propagation s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `spiral_0131` raw | 6a | 0 | 0 | 1 (1) | 7 | 2 | 0.952 | 193 |
+| | **6c** | 0 | 0 | 0 (0) | 5 | 2 | 0.955 | 206 |
+| `coil_0201` (held out) | 6a | 0 | 3 | 30 (7) | 27 | 102 | 0.947 | 270 |
+| | **6c** | 0 | 3 | 23 (0) | 25 | 97 | 0.946 | 300 |
+| `edge_0618` (held out) | 6a | 134 | 23 | 47 (22) | 36 | 96 | 0.557 | 206 |
+| | **6c** | 135 | 1 | 25 (0) | 26 | 68 | 0.550 | 291 |
+
+The 22 pose jumps removed on `edge_0618` were all switches between the
+forward, backward and independent candidates; the path replaces them by
+one track per stretch, mirroring 34 frames to keep the anchors'
+orientation and overriding the lowest-energy candidate on 36. The coil
+minute's three remaining jumps (about 50 px each) are inside its long coil
+stretches, where the path still switches from the forward to the backward
+chain: the two chains hold different windings there and the energy gain
+outweighed a jump of one width at the current temperature and distance
+weight (0.01 and 1). Whether to trade a little overlap for continuity there
+is a tuning question for the review loop. Length jumps outside stretches
+are the clipped bodies of 6b.
+
+![Coil minute, frame 17975 in the viewer: the five hypotheses of the frame (forward and backward chain states, the independent refit) with the path's choice wide under the centerline, and the ranked table on the right](pose_pipeline_step6/coil_0201_hypotheses_frame_17975.jpg)
+
+Sequence set (`pose_pipeline_step6/sequence_eval_6c.json` against
+`sequence_eval_6a.json`):
+
+| Clip | Median IoU 6a -> 6c | P10 6a -> 6c | Frames < 0.9 6a -> 6c | Pose jumps > width 6a -> 6c | Stretch median IoU 6a -> 6c | Propagation s 6a -> 6c |
+|---|---|---|---:|---:|---|---|
+| `spiral_0131` | 0.958 -> 0.958 | 0.938 -> 0.937 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.951 | 173 -> 178 |
+| `loop_0131` | 0.967 -> 0.966 | 0.927 -> 0.929 | 0 -> 0 | 0 -> 0 | 0.948 -> 0.948 | 51 -> 63 |
+| `omega_0822` | 0.965 -> 0.965 | 0.948 -> 0.948 | 0 -> 0 | 0 -> 0 | 0.949 -> 0.949 | 60 -> 69 |
+| `coil_0822` | 0.965 -> 0.965 | 0.957 -> 0.956 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 134 -> 149 |
+| `spiral_0528` | 0.965 -> 0.970 | 0.946 -> 0.950 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.970 | 134 -> 144 |
+| `edge_0528` | 0.961 -> 0.960 | 0.934 -> 0.932 | 3 -> 5 | 4 -> 0 | 0.946 -> 0.947 | 63 -> 107 |
+| `tail_reentry_0623` | 0.968 -> 0.968 | 0.959 -> 0.959 | 5 -> 2 | 0 -> 0 | 0.960 -> 0.957 | 21 -> 29 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 8 -> 7 and the four
+pose jumps of `edge_0528` go to zero; the propagation pass costs 5--70%
+more (the beam multiplies the chain rows). The path's remaining cost is a
+few seconds per run. What 6c does not touch: frames outside stretches
+(length jumps at the camera edge, the score-1 edge fits; 6b) and the
+`2024-06-18-12` streak (labels).
+
 ## 4. Further ideas (after step 6)
 
 - **Intensity for overlaps.** Where the body crosses itself the NIR image is
@@ -1162,4 +1250,5 @@ independent fit, and choose one path per stretch.
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
 | viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
 | 6a | done (2026-09-08) | first-order autoregressive starts and a temporal prior (weight 0.01, sigma half a width) inside propagation chains; chain candidates and predictions stored and drawn by the viewer; raw spiral 14 -> 0 frames below 0.9, held-out minutes unchanged; single-state chains shown fragile, motivating 6b/6c |
-| 6b--6d | planned (2026-09-07) | track length prior and jump-seeded stretches; per-stretch Viterbi over stored candidates and their mirrors (orientation consistency as a by-product, head-near-centre as the absolute cue); jump/flip counts as the measure, head truth set, raw-mask default |
+| 6c | done (2026-09-08) | beam of three chain states per direction, independent refit under the chain schedule, one path per stretch by dynamic programming over candidates and mirrors; edge minute pose jumps 23 -> 1, flips 96 -> 68, in-stretch length jumps 0 on every run; sequence set 8 -> 7 below 0.9, edge clip jumps 4 -> 0; the balanced refit schedule was worse and is not the default |
+| 6b, 6d | planned (2026-09-07) | track length prior and jump-seeded stretches (the remaining length jumps at the camera edge and the coil minute's boundary jumps); jump/flip counts as the measure, head truth set, raw-mask default |

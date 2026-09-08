@@ -92,18 +92,35 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
     arrays["source"][-1] = 1
     arrays["best_start"][-1] = "warm_forward"
     if independent:
-        # Step 6a chain candidates on the last frame: a forward chain with a prediction.
-        arrays["chain_centerline_xy"] = np.full((count, 2, n_points, 2), np.nan)
-        arrays["chain_prediction_xy"] = np.full((count, 2, n_points, 2), np.nan)
-        arrays["chain_energy"] = np.full((count, 2), np.nan)
-        arrays["chain_iou"] = np.full((count, 2), np.nan)
-        arrays["chain_start"] = np.full((count, 2), "", dtype="<U32")
+        # Step 6c hypotheses on the last frame: an independent refit and a forward chain state; the path took the chain.
+        H = 3
+        arrays["hypotheses_centerline_xy"] = np.full((count, H, n_points, 2), np.nan)
+        arrays["hypotheses_energy"] = np.full((count, H), np.nan)
+        arrays["hypotheses_iou"] = np.full((count, H), np.nan)
+        arrays["hypotheses_source"] = np.full((count, H), "", dtype="<U12")
+        arrays["hypotheses_start"] = np.full((count, H), "", dtype="<U32")
+        arrays["hypotheses_beam"] = np.full((count, H), -1, dtype=np.int8)
+        arrays["hypotheses_count"] = np.zeros(count, dtype=np.int64)
+        arrays["path_index"] = np.full(count, -1)
+        arrays["path_mirrored"] = np.zeros(count, dtype=bool)
+        arrays["path_override"] = np.zeros(count, dtype=bool)
+        arrays["path_energy_gap"] = np.full(count, np.nan)
+        arrays["path_cost"] = np.full(count, np.nan)
+        arrays["prediction_xy"] = np.full((count, n_points, 2), np.nan)
         arrays["prediction_distance_px"] = np.full(count, np.nan)
-        arrays["chain_centerline_xy"][-1, 0] = curve
-        arrays["chain_prediction_xy"][-1, 0] = curve + (1.0, 0.0)
-        arrays["chain_energy"][-1, 0] = 0.09
-        arrays["chain_iou"][-1, 0] = 0.85
-        arrays["chain_start"][-1, 0] = "predicted_forward"
+        arrays["hypotheses_centerline_xy"][-1, 0] = curve + (0.0, 3.0)
+        arrays["hypotheses_centerline_xy"][-1, 1] = curve
+        arrays["hypotheses_energy"][-1, :2] = [0.08, 0.09]
+        arrays["hypotheses_iou"][-1, :2] = [0.80, 0.85]
+        arrays["hypotheses_source"][-1, :2] = ["independent", "forward"]
+        arrays["hypotheses_start"][-1, :2] = ["independent_refit", "predicted_forward"]
+        arrays["hypotheses_beam"][-1, :2] = [0, 0]
+        arrays["hypotheses_count"][-1] = 2
+        arrays["path_index"][-1] = 1
+        arrays["path_override"][-1] = True
+        arrays["path_energy_gap"][-1] = 0.01
+        arrays["path_cost"][-1] = 12.5
+        arrays["prediction_xy"][-1] = curve + (1.0, 0.0)
         arrays["prediction_distance_px"][-1] = 1.0
         arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
         arrays["centerline_xy_independent"][-1, :, 1] += 8.0
@@ -238,12 +255,15 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertEqual(len(pose["curvature"]), 100)
                 self.assertEqual(len(pose["width_prior_profile"]), 100)
                 self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
-                self.assertEqual(list(pose["chains"]), ["forward"])
-                self.assertEqual(pose["chains"]["forward"]["start"], "predicted_forward")
-                self.assertEqual(len(pose["chains"]["forward"]["prediction_xy"]), 100)
+                self.assertEqual([h["source"] for h in pose["hypotheses"]], ["independent", "forward"])
+                self.assertEqual([h["chosen"] for h in pose["hypotheses"]], [False, True])
+                self.assertEqual(pose["path"], {"index": 1, "mirrored": False, "override": True, "energy_gap": 0.01, "cost": 12.5})
+                self.assertEqual(len(pose["prediction_xy"]), 100)
                 self.assertEqual(pose["prediction_distance_px"], 1.0)
-                self.assertTrue(run["has_chain_candidates"])
+                self.assertTrue(run["has_hypotheses"])
                 self.assertEqual(series["prediction_distance_px"][-1], 1.0)
+                self.assertEqual(series["path_override"][-1], 1)
+                self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
 
                 light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
                 self.assertEqual(light["detail"], "light")

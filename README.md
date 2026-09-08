@@ -238,9 +238,20 @@ independent, forward and backward wins (`source` in `poses.npz`;
 a first-order prediction of the pose (the last change of shape, rotation
 and centroid carried on with damping 0.6, `--prediction-damping`) and the
 fit is pulled toward that prediction by a temporal prior
-(`--temporal-prior-weight`, default 0.01, sigma half a width); both chain
-candidates, their predictions and energies are stored (`chain_*` arrays)
-and the viewer draws them.
+(`--temporal-prior-weight`, default 0.01, sigma half a width). The
+propagation pass is the second pass over the ambiguous stretches: it
+keeps up to three distinct chain states per direction (`--beam`), refits
+each stretch frame's independent pose under the chain schedule with the
+stretch's anchor length, and chooses one candidate per frame along the
+stretch by dynamic programming over all candidates and their mirrors
+(energy over `--path-temperature` plus the squared pose distance in
+widths times `--path-distance-weight`, the in-view change times
+`--path-inview-weight`, and the squared log length change times
+`--path-length-weight`; `--no-path` restores the lowest energy per frame).
+`--propagate-preset balanced` runs that preset's steps in the pass; it
+was slower and worse on the raw spiral, so the default stays `fast`. Every candidate is stored (`hypotheses_*`
+arrays, `path_*`, `prediction_xy`) and the viewer draws them, ranked by
+energy, with the path's choice and where it overrode the lowest energy.
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
 fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;

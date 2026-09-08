@@ -69,6 +69,7 @@ from worm_pose_gen.mask_fit import (
     extend_start_to_length,
     orient_tail_last,
     orientation_pair,
+    reverse_result,
     standard_initializations,
     taper_asymmetry,
 )
@@ -82,7 +83,7 @@ from worm_pose_gen.pose_run import (
     touches_border,
     write_overlay_video,
 )
-from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, continuity_summary, propagate, select_candidates
+from worm_pose_gen.propagation import PathChoice, PropagationConfig, ambiguous_stretches, continuity_summary, propagate, select_candidates, select_path, slow_schedule
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -160,6 +161,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prediction-damping", type=float, default=0.6, help="step 6a: damping of the first-order pose prediction inside chains (0 = copy the neighbour, as before)")
     parser.add_argument("--temporal-prior-weight", type=float, default=0.01, help="step 6a: weight of the pull toward the predicted pose inside chains (0 = off)")
     parser.add_argument("--temporal-prior-sigma", type=float, default=0.5, help="step 6a: sigma of that pull, in body widths")
+    parser.add_argument("--propagate-preset", default="fast", choices=tuple(PRESETS), help="step 6c: schedule of the stretch refit pass ('fast' = 70%% of the fit's steps; 'balanced' runs that preset's steps on the fit's rasters, which on the raw spiral let the chains wander: 4 failures against 0)")
+    parser.add_argument("--path-length-weight", type=float, default=1.0, help="step 6c: weight of the squared log length change (in 2%% units) between consecutive frames")
+    parser.add_argument("--beam", type=int, default=3, help="step 6c: distinct chain states kept per direction")
+    parser.add_argument("--no-refit-independent", action="store_true", help="step 6c: do not refit the stored independent pose under the chain schedule")
+    parser.add_argument("--no-path", action="store_true", help="step 6c: pick the lowest energy per frame instead of one path per stretch")
+    parser.add_argument("--path-temperature", type=float, default=0.01, help="step 6c: energy scale of the path's node cost")
+    parser.add_argument("--path-distance-weight", type=float, default=1.0, help="step 6c: weight of the squared pose distance (in widths) between consecutive frames")
+    parser.add_argument("--path-inview-weight", type=float, default=2.0, help="step 6c: weight of the change of the in-view fraction between consecutive frames")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -540,6 +549,14 @@ def main() -> int:
                 chain_length_sigma=None if args.chain_length_sigma <= 0 else args.chain_length_sigma,
                 prediction_damping=args.prediction_damping, temporal_prior_weight=args.temporal_prior_weight,
                 temporal_prior_sigma_widths=args.temporal_prior_sigma,
+                beam=args.beam, refit_independent=not args.no_refit_independent, path=not args.no_path,
+                path_temperature=args.path_temperature, path_distance_weight=args.path_distance_weight,
+                path_inview_weight=args.path_inview_weight, path_length_weight=args.path_length_weight,
+            )
+            # The refit pass runs the chosen preset's steps on the fit's own
+            # rasters, so every candidate's energy is comparable (step 6c).
+            refit_config = None if args.propagate_preset == "fast" else slow_schedule(
+                config, PRESETS[args.propagate_preset], propagation_config.chain_length_sigma
             )
             stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
             stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
@@ -555,42 +572,86 @@ def main() -> int:
                     if stats["worm_pixels"] >= args.min_worm_pixels:
                         stretch_masks[r] = mask
             candidates, propagation_info = propagate(
-                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config
+                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config,
+                warm_config=refit_config,
             )
-            chosen = select_candidates(candidates, arrays, config, propagation_config)
+            t_path = time.perf_counter()
+            if propagation_config.path:
+                chosen = select_path(candidates, arrays, stretches, config, propagation_config, image_shape)
+            else:
+                chosen = {
+                    row: PathChoice(candidate, False, False, 0.0, float("nan"))
+                    for row, candidate in select_candidates(candidates, arrays, config, propagation_config).items()
+                }
+            path_seconds = time.perf_counter() - t_path
             before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
-            # Every chain candidate is kept (step 6a), with its prediction,
-            # so the viewer can show what the chains proposed and chose.
-            chain_arrays = {
-                "chain_centerline_xy": _nan((n, 2, config.n_points, 2)),
-                "chain_prediction_xy": _nan((n, 2, config.n_points, 2)),
-                "chain_energy": _nan((n, 2)),
-                "chain_iou": _nan((n, 2)),
-                "chain_start": np.full((n, 2), "", dtype="<U32"),
+            # Every candidate of every stretch frame is kept (step 6c), with
+            # the path's choice, so the viewer can show what the path chose
+            # between and where it overrode the lowest energy.
+            hypotheses = 1 + 2 * max(1, propagation_config.beam)
+            hyp_arrays = {
+                "hypotheses_centerline_xy": _nan((n, hypotheses, config.n_points, 2)),
+                "hypotheses_energy": _nan((n, hypotheses)),
+                "hypotheses_iou": _nan((n, hypotheses)),
+                "hypotheses_source": np.full((n, hypotheses), "", dtype="<U12"),
+                "hypotheses_start": np.full((n, hypotheses), "", dtype="<U32"),
+                "hypotheses_beam": np.full((n, hypotheses), -1, dtype=np.int8),
+                "hypotheses_count": np.zeros(n, dtype=np.int64),
+                "path_index": np.full(n, -1, dtype=np.int64),
+                "path_mirrored": np.zeros(n, dtype=bool),
+                "path_override": np.zeros(n, dtype=bool),
+                "path_energy_gap": _nan((n,)),
+                "path_cost": _nan((n,)),
+                "prediction_xy": _nan((n, config.n_points, 2)),
                 "prediction_distance_px": _nan((n,)),
             }
+            order = {"independent": 0, "forward": 1, "backward": 2}
             for row, options in candidates.items():
-                for candidate in options:
-                    j = 0 if candidate.source == "forward" else 1
-                    chain_arrays["chain_centerline_xy"][row, j] = candidate.result.centerline_xy
-                    if candidate.prediction_xy is not None:
-                        chain_arrays["chain_prediction_xy"][row, j] = candidate.prediction_xy
-                    chain_arrays["chain_energy"][row, j] = candidate.total_energy
-                    chain_arrays["chain_iou"][row, j] = float(candidate.result.records[candidate.result.best_index]["final_iou"])
-                    chain_arrays["chain_start"][row, j] = candidate.start_name
-            for row, candidate in chosen.items():
-                store_result(arrays, best_start, row, candidate.result)
-                arrays["source"][row] = SOURCE_CODES[candidate.source]
+                ranked = sorted(options, key=lambda c: (order.get(c.source, 3), c.beam))[:hypotheses]
+                hyp_arrays["hypotheses_count"][row] = len(ranked)
+                for j, candidate in enumerate(ranked):
+                    hyp_arrays["hypotheses_centerline_xy"][row, j] = candidate.result.centerline_xy
+                    hyp_arrays["hypotheses_energy"][row, j] = candidate.total_energy
+                    hyp_arrays["hypotheses_iou"][row, j] = float(candidate.result.records[candidate.result.best_index]["final_iou"])
+                    hyp_arrays["hypotheses_source"][row, j] = candidate.source
+                    hyp_arrays["hypotheses_start"][row, j] = candidate.start_name
+                    hyp_arrays["hypotheses_beam"][row, j] = candidate.beam
+                    if row in chosen and chosen[row].candidate is candidate:
+                        hyp_arrays["path_index"][row] = j
+            for row, choice in chosen.items():
+                result = reverse_result(choice.candidate.result, config=config) if choice.mirrored else choice.candidate.result
+                store_result(arrays, best_start, row, result)
+                arrays["source"][row] = SOURCE_CODES[choice.candidate.source]
                 arrays["orientation_gap"][row] = np.nan
                 arrays["reversed"][row] = False
-                chain_arrays["prediction_distance_px"][row] = candidate.distance_to_prediction_px
-            arrays.update(chain_arrays)
+                hyp_arrays["path_mirrored"][row] = choice.mirrored
+                hyp_arrays["path_override"][row] = choice.override
+                hyp_arrays["path_energy_gap"][row] = choice.energy_gap
+                hyp_arrays["path_cost"][row] = choice.cost
+                hyp_arrays["prediction_distance_px"][row] = choice.candidate.distance_to_prediction_px
+                if choice.candidate.prediction_xy is not None:
+                    hyp_arrays["prediction_xy"][row] = choice.candidate.prediction_xy[::-1] if choice.mirrored else choice.candidate.prediction_xy
+            arrays.update(hyp_arrays)
             arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
             timing["propagate"] = time.perf_counter() - t_prop
             propagation_info.update(
                 {
                     "frames_replaced": len(chosen),
-                    "replaced_by_source": {name: int(sum(c.source == name for c in chosen.values())) for name in ("forward", "backward")},
+                    "replaced_by_source": {name: int(sum(c.candidate.source == name for c in chosen.values())) for name in ("independent", "forward", "backward")},
+                    "refit_preset": args.propagate_preset,
+                    "path": {
+                        "enabled": propagation_config.path,
+                        "temperature": propagation_config.path_temperature,
+                        "distance_weight": propagation_config.path_distance_weight,
+                        "inview_weight": propagation_config.path_inview_weight,
+                        "length_weight": propagation_config.path_length_weight,
+                        "mirrors": propagation_config.path_mirrors,
+                        "frames_overriding_lowest_energy": int(sum(c.override for c in chosen.values())),
+                        "frames_mirrored": int(sum(c.mirrored for c in chosen.values())),
+                        "energy_gap_p50_p90_max": [float(v) for v in np.percentile([c.energy_gap for c in chosen.values() if c.override], [50, 90, 100])]
+                        if any(c.override for c in chosen.values()) else None,
+                        "seconds": path_seconds,
+                    },
                     "stretch_iou_median_before": before_iou,
                     "stretch_iou_median_after": float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None,
                     "stretch_frames_score_at_least_2_before": int(np.sum(arrays["score_independent"][stretch_rows] >= 2)) if stretch_rows else 0,

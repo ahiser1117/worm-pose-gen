@@ -16,6 +16,7 @@ from worm_pose_gen.mask_fit import (
     init_from_moments,
     render_tube_segments,
 )
+from worm_pose_gen.batch_fit import PRESETS
 from worm_pose_gen.propagation import (
     Candidate,
     PropagationConfig,
@@ -26,6 +27,8 @@ from worm_pose_gen.propagation import (
     prior_penalty,
     propagate,
     select_candidates,
+    select_path,
+    slow_schedule,
     warm_schedule,
 )
 
@@ -197,29 +200,100 @@ class PropagationTests(unittest.TestCase):
         stretches = ambiguous_stretches(score, arrays["fitted"], PropagationConfig(pad=0))
         self.assertEqual(stretches, [(1, 4)])
         arrays["energy"] = np.array([r.records[r.best_index]["final_soft_dice_energy"] for r in results])
-        candidates, info = propagate(arrays, stretches, {k: masks[k] for k in range(n)}, config=SMALL, device="cpu")
+        arrays["centerline_xy"] = np.stack([r.centerline_xy for r in results])
+        arrays["points_in_fov"] = np.array([r.points_in_fov for r in results])
+        propagation = PropagationConfig(pad=0, beam=2)
+        candidates, info = propagate(arrays, stretches, {k: masks[k] for k in range(n)}, config=SMALL, device="cpu", propagation=propagation)
         self.assertEqual(info["chains"], 2)
         self.assertEqual(info["lockstep_steps"], 4)
+        self.assertEqual(info["beam"], 2)
+        self.assertEqual(info["independent_refits"], 4)
         self.assertEqual(sorted(candidates), [1, 2, 3, 4])
-        self.assertEqual({c.source for c in candidates[2]}, {"forward", "backward"})
+        self.assertEqual({c.source for c in candidates[2]}, {"independent", "forward", "backward"})
         # Step 6a bookkeeping: the first chain frame has no velocity (the
         # anchor's own neighbour is inside the stretch), later frames carry a
         # prediction and a distance to it; the winning start is named.
-        by_source = {c.source: c for c in candidates[3]}
-        self.assertIsNotNone(by_source["forward"].prediction_xy)
-        self.assertEqual(by_source["forward"].prediction_xy.shape, (100, 2))
-        self.assertTrue(np.isfinite(by_source["forward"].distance_to_prediction_px))
-        self.assertIn(by_source["forward"].start_name, ("warm_forward", "predicted_forward"))
-        first = {c.source: c for c in candidates[1]}["forward"]
+        forward = [c for c in candidates[3] if c.source == "forward"]
+        self.assertLessEqual(len(forward), 2)
+        self.assertEqual(sorted(c.beam for c in forward), list(range(len(forward))))
+        self.assertIsNotNone(forward[0].prediction_xy)
+        self.assertEqual(forward[0].prediction_xy.shape, (100, 2))
+        self.assertTrue(np.isfinite(forward[0].distance_to_prediction_px))
+        self.assertIn(forward[0].start_name, ("warm_forward", "predicted_forward"))
+        first = [c for c in candidates[1] if c.source == "forward"][0]
         self.assertIsNone(first.prediction_xy)
-        self.assertEqual(info["predicted_starts_offered"] >= 1, True)
+        self.assertGreaterEqual(info["predicted_starts_offered"], 1)
         self.assertLessEqual(info["predicted_starts_won"], info["predicted_starts_offered"])
+        # Beam states of one direction are distinct poses.
+        for row in (2, 3, 4):
+            states = [c for c in candidates[row] if c.source == "forward"]
+            for i in range(len(states)):
+                for j in range(i + 1, len(states)):
+                    self.assertGreater(pose_distance_px(states[i].result.centerline_xy, states[j].result.centerline_xy, None), 0.5 * 12.0 * 0.5)
         chosen = select_candidates(candidates, arrays, SMALL)
         self.assertEqual(sorted(chosen), [1, 2, 3, 4])
         for row, candidate in chosen.items():
             r = candidate.result
             iou = hard_iou(r.rendered_hard_mask, masks[row][r.crop.y0 : r.crop.y1, r.crop.x0 : r.crop.x1])
             self.assertGreater(iou, 0.9, f"row {row} via {candidate.source}: {iou:.3f}")
+        # The path (step 6c) also covers every stretch frame and keeps the good fits.
+        path = select_path(candidates, arrays, stretches, SMALL, propagation, image_shape=masks[0].shape)
+        self.assertEqual(sorted(path), [1, 2, 3, 4])
+        anchor = arrays["centerline_xy"][0]
+        for row, choice in path.items():
+            r = choice.candidate.result
+            iou = hard_iou(r.rendered_hard_mask, masks[row][r.crop.y0 : r.crop.y1, r.crop.x0 : r.crop.x1])
+            self.assertGreater(iou, 0.9, f"row {row} via path: {iou:.3f}")
+            # Whatever orientation the candidate was fit in, the path presents it the anchors' way round.
+            oriented = r.centerline_xy[::-1] if choice.mirrored else r.centerline_xy
+            self.assertLess(pose_distance_px(oriented, anchor, None), pose_distance_px(oriented[::-1], anchor, None))
+            self.assertTrue(np.isfinite(choice.cost))
+
+    def test_slow_schedule_takes_steps_from_the_preset_and_keeps_rasters(self) -> None:
+        slow = slow_schedule(SMALL, replace(SMALL, stage_steps=(100, 200), within_stage_decay=0.03), length_sigma=0.02)
+        self.assertEqual(slow.stage_steps, (100, 200))
+        self.assertEqual(slow.stage_downsample, SMALL.stage_downsample)
+        self.assertAlmostEqual(slow.within_stage_decay, 0.03)
+        self.assertAlmostEqual(slow.length_prior_log_sigma, 0.02)
+        with self.assertRaisesRegex(ValueError, "rasters"):
+            slow_schedule(SMALL, PRESETS["reference"])
+
+    def test_path_prefers_the_continuous_candidate_and_follows_the_anchors_orientation(self) -> None:
+        curves, masks, latents = _sequence(5)
+        # Fits of frames 1..3 (the stretch) and their anchors 0 and 4.
+        fits = [fit_masks([masks[k]], [[Initialization("s", latents[k], 12.0)]], config=SMALL, device="cpu")[0] for k in range(5)]
+        n = 5
+        arrays = {
+            "fitted": np.ones(n, dtype=bool),
+            "centerline_xy": np.stack([f.centerline_xy for f in fits]),
+            "points_in_fov": np.array([f.points_in_fov for f in fits]),
+            "width_px": np.array([f.width_px for f in fits]),
+            "body_length_px": np.array([f.body_length_px for f in fits]),
+            "total_energy": np.array([f.records[0]["final_energy"] for f in fits]),
+        }
+        # Per stretch frame two candidates: the true fit at a slightly higher
+        # energy and a "jumping" candidate, the same body 40 px away, at a lower one.
+        candidates = {}
+        for row in (1, 2, 3):
+            jumping = replace(fits[row], centerline_xy=fits[row].centerline_xy + (40.0, 0.0))
+            candidates[row] = [Candidate("forward", fits[row], 0.10 + 0.002 * row), Candidate("backward", jumping, 0.09)]
+        propagation = PropagationConfig(path_temperature=0.01, path_distance_weight=1.0, path_inview_weight=10.0)
+        chosen = select_path(candidates, arrays, [(1, 3)], SMALL, propagation, image_shape=masks[0].shape)
+        self.assertEqual(sorted(chosen), [1, 2, 3])
+        for row, choice in chosen.items():
+            self.assertIs(choice.candidate.result, fits[row], f"row {row} took the jumping candidate")
+            self.assertTrue(choice.override)  # the gap (0.012 to 0.016) is well above OVERRIDE_ENERGY
+            self.assertAlmostEqual(choice.energy_gap, 0.01 + 0.002 * row)
+            self.assertFalse(choice.mirrored)
+        # Lowest energy per frame would have taken the jumping candidate.
+        self.assertEqual({c.source for c in select_candidates(candidates, arrays).values()}, {"backward"})
+        # With the anchors reversed, the path chooses the mirrored candidates.
+        reversed_arrays = dict(arrays)
+        reversed_arrays["centerline_xy"] = arrays["centerline_xy"][:, ::-1].copy()
+        chosen = select_path(candidates, reversed_arrays, [(1, 3)], SMALL, propagation, image_shape=masks[0].shape)
+        for row, choice in chosen.items():
+            self.assertIs(choice.candidate.result, fits[row])
+            self.assertTrue(choice.mirrored, f"row {row} kept the anchors' opposite orientation")
 
     def test_selection_keeps_the_independent_fit_when_it_is_better(self) -> None:
         curves, masks, latents = _sequence(3)

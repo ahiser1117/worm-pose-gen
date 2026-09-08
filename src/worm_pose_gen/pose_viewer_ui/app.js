@@ -20,8 +20,9 @@ const LAYERS = [
   { id: "final_outline", name: "Final mask outline", kind: "pixel", on: false, alpha: 0.9, color: [255, 255, 255] },
   { id: "tube_fill", name: "Tube fill", kind: "pixel", on: false, alpha: 0.3, color: [90, 220, 140] },
   { id: "width_ticks", name: "Width ticks along the body", kind: "vector", on: false, alpha: 0.9, color: [255, 80, 165] },
-  { id: "chain_forward", name: "Forward chain candidate", kind: "vector", on: true, alpha: 0.9, color: [255, 211, 77] },
-  { id: "chain_backward", name: "Backward chain candidate", kind: "vector", on: true, alpha: 0.9, color: [192, 128, 255] },
+  { id: "hyp_forward", name: "Hypotheses: forward chain", kind: "vector", on: true, alpha: 0.9, color: [255, 211, 77] },
+  { id: "hyp_backward", name: "Hypotheses: backward chain", kind: "vector", on: true, alpha: 0.9, color: [192, 128, 255] },
+  { id: "hyp_independent", name: "Hypotheses: independent refit", kind: "vector", on: true, alpha: 0.9, color: [120, 200, 255] },
   { id: "prediction", name: "Chain prediction (autoregressive)", kind: "vector", on: true, alpha: 0.9, color: [255, 255, 255] },
   { id: "compare", name: "Compare run pose", kind: "vector", on: true, alpha: 1.0, color: [255, 170, 60] },
   { id: "starts", name: "Fitter starts (press Starts)", kind: "vector", on: true, alpha: 0.9, color: [120, 255, 255] },
@@ -39,7 +40,10 @@ const EXTRA_SERIES = [
   ["taper_asymmetry", "Taper asymmetry"], ["orientation_gap", "Orientation gap"], ["length_deviation", "Length deviation (log)"],
   ["n_starts", "Starts tried"],
   ["prediction_distance_px", "Distance to chain prediction px"],
+  ["path_energy_gap", "Path energy gap (chosen − lowest)"],
+  ["hypotheses_count", "Hypotheses per frame"],
 ];
+const HYP_COLORS = { forward: [255, 211, 77], backward: [192, 128, 255], independent: [120, 200, 255] };
 
 const state = {
   info: null,
@@ -176,6 +180,7 @@ function runSummaryText(run) {
   if (a.frames_with_score_at_least_2 !== undefined) lines.push(`score ≥ 2: ${a.frames_with_score_at_least_2} frames · score ≥ 1: ${a.frames_with_score_at_least_1}`);
   if (p) lines.push(`propagation: ${p.stretches.length} stretches, ${p.frames_in_stretches} frames, ${p.frames_replaced} replaced (fwd ${p.replaced_by_source.forward}, bwd ${p.replaced_by_source.backward}); stretch IoU ${fmt(p.stretch_iou_median_before)} → ${fmt(p.stretch_iou_median_after)}`);
   if (p && p.prediction_damping !== undefined) lines.push(`6a: damping ${p.prediction_damping}, temporal prior ${p.temporal_prior_weight} at ${p.temporal_prior_sigma_widths} widths; predicted starts won ${p.predicted_starts_won} of ${p.predicted_starts_offered}`);
+  if (p && p.path) lines.push(`6c: refit ${p.refit_preset}, beam ${p.beam}, path ${p.path.enabled ? `T ${p.path.temperature}, distance ${p.path.distance_weight}, in-view ${p.path.inview_weight}` : "off"}; overrode lowest energy on ${p.path.frames_overriding_lowest_energy} frames, mirrored ${p.path.frames_mirrored}; replaced by ${JSON.stringify(p.replaced_by_source)}`);
   const c = run.continuity;
   if (c) lines.push(`continuity: length jumps > ${Math.round(100 * c.length_jump_fraction)}%: ${c.length_jumps_over_fraction} · pose jumps > width: ${c.pose_jumps_over_width} · in-view changes: ${c.in_view_changes}` + (c.prediction_distance_px_p50_p90_max ? ` · distance to prediction p50/p90 ${fmt(c.prediction_distance_px_p50_p90_max[0], 1)} / ${fmt(c.prediction_distance_px_p50_p90_max[1], 1)} px` : ""));
   lines.push(`cleanup: fill holes ${run.cleanup.fill_holes} (r ${run.cleanup.hole_radius}) · largest only ${run.cleanup.largest_only}`);
@@ -535,8 +540,8 @@ function renderLegend() {
     if (l.id === "independent" && !(state.decoded && state.decoded.tube_independent) && !(state.frame && state.frame.pose && state.frame.pose.independent)) continue;
     if (l.id === "compare" && !state.comparePose) continue;
     if (l.id === "starts" && !state.starts) continue;
-    if (l.id.startsWith("chain_") && !(state.frame && state.frame.pose && state.frame.pose.chains && state.frame.pose.chains[l.id.slice(6)])) continue;
-    if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.chains)) continue;
+    if (l.id.startsWith("hyp_") && !(state.frame && state.frame.pose && state.frame.pose.hypotheses && state.frame.pose.hypotheses.some((h) => h.source === l.id.slice(4)))) continue;
+    if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.prediction_xy)) continue;
     if (l.id === "residual") { parts.push(`<span><span class="swatch" style="background:rgb(40,80,255)"></span>mask missed</span><span><span class="swatch" style="background:rgb(255,50,50)"></span>tube extra</span>`); continue; }
     parts.push(`<span><span class="swatch" style="background:rgb(${l.color.join(",")})"></span>${l.name.replace(/ \(.*\)$/, "")}</span>`);
   }
@@ -644,20 +649,19 @@ function draw() {
     if (indep.on && pose.independent) {
       drawCurve(pose.independent.centerline_xy, `rgb(${indep.color.join(",")})`, 2, [8, 5], indep.alpha);
     }
-    if (pose.chains) {
-      const chosen = state.frame.stats.source_name;
-      for (const name of ["forward", "backward"]) {
-        const chain = pose.chains[name];
-        const l = layer(`chain_${name}`);
-        if (!chain || !l.on) continue;
-        // The chosen chain coincides with the centerline; draw it a little wider underneath.
-        drawCurve(chain.centerline_xy, `rgb(${l.color.join(",")})`, name === chosen ? 5 : 1.5, name === chosen ? null : [6, 4], name === chosen ? 0.35 * l.alpha : l.alpha);
+    if (pose.hypotheses) {
+      // Every candidate of the frame, by source; the path's choice wide underneath the centerline.
+      for (const h of pose.hypotheses) {
+        const l = layer(`hyp_${h.source}`);
+        if (!l || !l.on) continue;
+        const color = `rgb(${(HYP_COLORS[h.source] || [200, 200, 200]).join(",")})`;
+        if (h.chosen) drawCurve(h.centerline_xy, color, 6, null, 0.35 * l.alpha);
+        else drawCurve(h.centerline_xy, color, 1.2, h.source === "independent" ? [2, 3] : [6, 4], 0.8 * l.alpha);
       }
       const pred = layer("prediction");
-      const predicted = pose.chains[chosen] && pose.chains[chosen].prediction_xy;
-      if (pred.on && predicted) {
-        drawCurve(predicted, `rgb(${pred.color.join(",")})`, 1.5, [2, 4], pred.alpha);
-        const [x, y] = predicted[0];
+      if (pred.on && pose.prediction_xy) {
+        drawCurve(pose.prediction_xy, `rgb(${pred.color.join(",")})`, 1.5, [2, 4], pred.alpha);
+        const [x, y] = pose.prediction_xy[0];
         ctx.save(); ctx.fillStyle = `rgba(255,255,255,${pred.alpha})`; ctx.beginPath(); ctx.arc(x, y, 3 / v.scale, 0, Math.PI * 2); ctx.fill(); ctx.restore();
       }
     }
@@ -729,14 +733,15 @@ function renderDetails() {
   rows.push(row("source", s.source_name || "independent"), row("best start", s.best_start || "–"), row("starts tried", fmt(s.n_starts)));
   rows.push(row("soft-Dice energy", fmt(s.energy, 4)), row("total energy", fmt(s.total_energy, 4)));
   if (s.stretch) rows.push(row("stretch", `#${s.stretch.index + 1} frames ${s.stretch.frames[0]}–${s.stretch.frames[1]} (${s.stretch.length})`));
-  if (f.pose && f.pose.chains) {
-    rows.push(section("propagation chains (6a)"));
-    for (const name of ["forward", "backward"]) {
-      const chain = f.pose.chains[name];
-      if (!chain) { rows.push(row(name, "no chain reached this frame")); continue; }
-      const chosen = s.source_name === name;
-      rows.push(row(`${name}${chosen ? " ✓" : ""}`, `E ${fmt(chain.energy, 4)} · IoU ${fmt(chain.iou)} · ${chain.start.replace(/_(forward|backward)$/, "")}${chain.prediction_xy ? "" : " · no prediction"}`, chosen ? "" : "dim"));
+  if (f.pose && f.pose.hypotheses) {
+    const path = f.pose.path;
+    rows.push(section(`hypotheses (6c) · ${f.pose.hypotheses.length} candidates${path.mirrored ? " · chosen mirrored" : ""}`));
+    const ranked = f.pose.hypotheses.slice().sort((a, b) => a.energy - b.energy);
+    for (const h of ranked) {
+      const label = `${h.chosen ? "✓ " : ""}${h.source}${h.source === "independent" ? "" : " #" + (h.beam + 1)}`;
+      rows.push(row(label, `E ${fmt(h.energy, 4)} · IoU ${fmt(h.iou)} · ${h.start.replace(/_(forward|backward)$/, "").replace("independent_refit", "refit")}`, h.chosen ? "" : "dim"));
     }
+    rows.push(row("path", path.override ? `overrode lowest energy by ${fmt(path.energy_gap, 4)}` : "lowest energy", path.override ? "diff" : ""));
     rows.push(row("distance to prediction", f.pose.prediction_distance_px === null || f.pose.prediction_distance_px === undefined ? "–" : `${fmt(f.pose.prediction_distance_px, 1)} px`));
   }
   rows.push(section("body"));
@@ -1135,7 +1140,8 @@ function renderLayerAvailability() {
   const d = state.decoded || {};
   const pose = state.frame && state.frame.pose;
   if (state.frame && state.frame.detail === "light") {
-    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, chain_forward: pose && pose.chains && pose.chains.forward, chain_backward: pose && pose.chains && pose.chains.backward, prediction: pose && pose.chains };
+    const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);
+    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy };
     for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
@@ -1144,8 +1150,10 @@ function renderLayerAvailability() {
     residual: !!(d.mask_final && d.tube), tube: !!d.tube, tube_fill: !!d.tube, final_outline: !!d.mask_final,
     centerline: !!pose, width_ticks: !!pose, crop: !!pose,
     independent: !!(pose && pose.independent), compare: !!state.comparePose, starts: !!state.starts, image: true,
-    chain_forward: !!(pose && pose.chains && pose.chains.forward), chain_backward: !!(pose && pose.chains && pose.chains.backward),
-    prediction: !!(pose && pose.chains && state.frame.stats.source_name && pose.chains[state.frame.stats.source_name] && pose.chains[state.frame.stats.source_name].prediction_xy),
+    hyp_forward: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "forward")),
+    hyp_backward: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "backward")),
+    hyp_independent: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "independent")),
+    prediction: !!(pose && pose.prediction_xy),
   };
   for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", available[node.dataset.layer] === false);
 }

@@ -65,8 +65,8 @@ SERIES_KEYS = (
     "taper_asymmetry", "orientation_gap", "worm_pixels", "raw_worm_pixels", "pixels_filled", "components",
     "pixels_outside_largest", "area_ratio", "self_contact_px", "pose_jump_px", "length_deviation",
     "ambiguity_score", "score_independent", "source", "n_starts", "mask_on_border", "reversed", "prediction_distance_px",
+    "hypotheses_count", "path_override", "path_mirrored", "path_energy_gap",
 )
-CHAIN_NAMES = ("forward", "backward")
 
 # Flag semantics after propagation (plan step 5b): some flags describe a
 # well-fit coil or a body leaving the camera, others a fit that went wrong.
@@ -173,6 +173,7 @@ def classify_frame(
     n_points: int,
     mask_on_border: bool,
     source: int = 0,
+    path_override: bool = False,
 ) -> dict[str, Any]:
     """Name what a frame's flags say about it.
 
@@ -196,6 +197,8 @@ def classify_frame(
         tags.append("fit failure suspected")
     if source in (1, 2):
         tags.append(f"propagated {SOURCE_NAMES[source]}")
+    if path_override:
+        tags.append("path overrode lowest energy")
     kind = "clean" if score == 0 else ("watch" if score == 1 else "ambiguous")
     descriptive = [t for t in tags if not t.startswith("propagated")]
     label = kind if not descriptive else f"{kind}: " + ", ".join(descriptive)
@@ -346,6 +349,7 @@ class LoadedRun:
             points_in_fov=int(arrays["points_in_fov"][row]), n_points=self.n_points,
             mask_on_border=bool(arrays["mask_on_border"][row]) if "mask_on_border" in arrays else False,
             source=int(arrays["source"][row]) if "source" in arrays else 0,
+            path_override=bool(arrays["path_override"][row]) if "path_override" in arrays else False,
         )
 
     def flag_details(self, row: int) -> list[dict[str, Any]]:
@@ -427,23 +431,32 @@ class LoadedRun:
             out["width_template_profile"] = _round(np.round(width * np.asarray(template, dtype=np.float64), 2), 2)
             if self.prior is not None and self.prior.get("width_shape") is not None:
                 out["width_prior_profile"] = _round(np.round(prior_width_profile(width, template, self.prior["width_shape"]), 2), 2)
-        if "chain_centerline_xy" in arrays:
-            chains: dict[str, Any] = {}
-            for j, name in enumerate(CHAIN_NAMES):
-                curve = arrays["chain_centerline_xy"][row, j]
-                if not np.isfinite(curve).all():
-                    continue
-                prediction = arrays["chain_prediction_xy"][row, j]
-                chains[name] = {
-                    "centerline_xy": _round(np.round(curve, 2), 2),
-                    "prediction_xy": _round(np.round(prediction, 2), 2) if np.isfinite(prediction).all() else None,
-                    "energy": _round(arrays["chain_energy"][row, j], 5),
-                    "iou": _round(arrays["chain_iou"][row, j]),
-                    "start": str(arrays["chain_start"][row, j]),
+        if "hypotheses_centerline_xy" in arrays and int(arrays["hypotheses_count"][row]) > 0:
+            count = int(arrays["hypotheses_count"][row])
+            chosen = int(arrays["path_index"][row])
+            out["hypotheses"] = [
+                {
+                    "index": j,
+                    "centerline_xy": _round(np.round(arrays["hypotheses_centerline_xy"][row, j], 2), 2),
+                    "energy": _round(arrays["hypotheses_energy"][row, j], 5),
+                    "iou": _round(arrays["hypotheses_iou"][row, j]),
+                    "source": str(arrays["hypotheses_source"][row, j]),
+                    "start": str(arrays["hypotheses_start"][row, j]),
+                    "beam": int(arrays["hypotheses_beam"][row, j]),
+                    "chosen": j == chosen,
                 }
-            if chains:
-                out["chains"] = chains
-                out["prediction_distance_px"] = _round(arrays["prediction_distance_px"][row], 2) if "prediction_distance_px" in arrays else None
+                for j in range(count)
+            ]
+            out["path"] = {
+                "index": chosen,
+                "mirrored": bool(arrays["path_mirrored"][row]),
+                "override": bool(arrays["path_override"][row]),
+                "energy_gap": _round(arrays["path_energy_gap"][row], 5),
+                "cost": _round(arrays["path_cost"][row], 3),
+            }
+            prediction = arrays["prediction_xy"][row]
+            out["prediction_xy"] = _round(np.round(prediction, 2), 2) if np.isfinite(prediction).all() else None
+            out["prediction_distance_px"] = _round(arrays["prediction_distance_px"][row], 2)
         if "centerline_xy_independent" in arrays and "source" in arrays and int(arrays["source"][row]) != 0:
             out["independent"] = {
                 "centerline_xy": _round(np.round(arrays["centerline_xy_independent"][row], 2), 2),
@@ -700,7 +713,7 @@ class ViewerState:
             "summary_iou": summary.get("iou"),
             "summary_length": summary.get("body_length_px"),
             "has_independent_pose": "centerline_xy_independent" in run.arrays,
-            "has_chain_candidates": "chain_centerline_xy" in run.arrays,
+            "has_hypotheses": "hypotheses_centerline_xy" in run.arrays,
             "continuity": summary.get("continuity"),
             "series": run.series(),
             "compatible_runs": self.compatible_runs(name),
