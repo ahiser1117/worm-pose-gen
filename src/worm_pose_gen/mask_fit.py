@@ -96,6 +96,14 @@ class MaskFitConfig:
     shape_smoothness: float = 0.0
     bound_weight: float = 1e-4
     crop_escape_weight: float = 1e-3
+    # Temporal prior (plan step 6a): a Gaussian on the mean distance between
+    # the in-view centerline points and a reference pose given per frame to
+    # ``batch_fit.fit_masks`` (the propagation chain's prediction of this
+    # frame).  Zero weight disables it; the sigma is in pixels, about half a
+    # body width when set by the chain.  The weight is on the scale of
+    # ``prior_weight``: a deviation of two sigmas costs 0.01.
+    temporal_prior_weight: float = 0.0
+    temporal_prior_sigma_px: float = 20.0
     default_length_px: float = 600.0
     default_width_px: float = 45.0
     # Constant-curvature arcs (rad/px) used by the moment-based starts.

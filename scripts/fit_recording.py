@@ -82,7 +82,7 @@ from worm_pose_gen.pose_run import (
     touches_border,
     write_overlay_video,
 )
-from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
+from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, continuity_summary, propagate, select_candidates
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -157,6 +157,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--propagate-pad", type=int, default=2, help="frames added on each side of a seed")
     parser.add_argument("--propagate-max-gap", type=int, default=3, help="seeds closer than this are one stretch")
     parser.add_argument("--chain-length-sigma", type=float, default=0.02, help="log-sigma of the length prior inside propagation chains (0 = the fit's own)")
+    parser.add_argument("--prediction-damping", type=float, default=0.6, help="step 6a: damping of the first-order pose prediction inside chains (0 = copy the neighbour, as before)")
+    parser.add_argument("--temporal-prior-weight", type=float, default=0.01, help="step 6a: weight of the pull toward the predicted pose inside chains (0 = off)")
+    parser.add_argument("--temporal-prior-sigma", type=float, default=0.5, help="step 6a: sigma of that pull, in body widths")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -535,6 +538,8 @@ def main() -> int:
             propagation_config = PropagationConfig(
                 min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap,
                 chain_length_sigma=None if args.chain_length_sigma <= 0 else args.chain_length_sigma,
+                prediction_damping=args.prediction_damping, temporal_prior_weight=args.temporal_prior_weight,
+                temporal_prior_sigma_widths=args.temporal_prior_sigma,
             )
             stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
             stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
@@ -554,11 +559,32 @@ def main() -> int:
             )
             chosen = select_candidates(candidates, arrays, config, propagation_config)
             before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
+            # Every chain candidate is kept (step 6a), with its prediction,
+            # so the viewer can show what the chains proposed and chose.
+            chain_arrays = {
+                "chain_centerline_xy": _nan((n, 2, config.n_points, 2)),
+                "chain_prediction_xy": _nan((n, 2, config.n_points, 2)),
+                "chain_energy": _nan((n, 2)),
+                "chain_iou": _nan((n, 2)),
+                "chain_start": np.full((n, 2), "", dtype="<U32"),
+                "prediction_distance_px": _nan((n,)),
+            }
+            for row, options in candidates.items():
+                for candidate in options:
+                    j = 0 if candidate.source == "forward" else 1
+                    chain_arrays["chain_centerline_xy"][row, j] = candidate.result.centerline_xy
+                    if candidate.prediction_xy is not None:
+                        chain_arrays["chain_prediction_xy"][row, j] = candidate.prediction_xy
+                    chain_arrays["chain_energy"][row, j] = candidate.total_energy
+                    chain_arrays["chain_iou"][row, j] = float(candidate.result.records[candidate.result.best_index]["final_iou"])
+                    chain_arrays["chain_start"][row, j] = candidate.start_name
             for row, candidate in chosen.items():
                 store_result(arrays, best_start, row, candidate.result)
                 arrays["source"][row] = SOURCE_CODES[candidate.source]
                 arrays["orientation_gap"][row] = np.nan
                 arrays["reversed"][row] = False
+                chain_arrays["prediction_distance_px"][row] = candidate.distance_to_prediction_px
+            arrays.update(chain_arrays)
             arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
             timing["propagate"] = time.perf_counter() - t_prop
             propagation_info.update(
@@ -677,6 +703,7 @@ def main() -> int:
             "orientation_consistency": orientation_consistency(arrays),
         },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
+        "continuity": continuity_summary(arrays),
         "ambiguity": summarize_ambiguity(arrays) if fitted.any() else None,
         "propagation": propagation_info,
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},

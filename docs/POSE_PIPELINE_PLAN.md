@@ -1012,6 +1012,102 @@ Intensity cues for overlaps and a body-coordinate segmenter head stay in
 section 4; they become worthwhile only where continuity cannot decide (a
 coil held for seconds with no unambiguous frame nearby, as in `coil_0201`).
 
+**Result of 6a (2026-09-08).** Landed in `propagation.py` (`predict_latent`,
+`pose_distance_px`, `continuity_summary`) and `batch_fit.fit_masks`
+(`references` per frame and the `temporal_prior_weight` /
+`temporal_prior_sigma_px` fields of `MaskFitConfig`), run by
+`fit_recording.py --prediction-damping 0.6 --temporal-prior-weight 0.01
+--temporal-prior-sigma 0.5`. Inside a chain each frame now offers the
+copied pose and the first-order prediction as starts and is pulled toward
+the prediction; every chain candidate is stored with its prediction, energy,
+overlap and winning start (`chain_*` and `prediction_distance_px` in
+`poses.npz`), and the viewer draws the forward and backward candidates and
+the chosen chain's prediction and lists them in the statistics panel. Each
+run's summary carries a `continuity` block (length jumps over 3%, pose
+jumps over a width, in-view changes, distance to prediction).
+
+The weight was swept on the three minutes (baseline = damping 0 and weight
+0, the step 5c chain; masks as in step 5c, the spiral raw):
+
+| Minute | Variant | Median IoU | P10 | Frames < 0.9 | Pose jumps > width | Length jumps > 3% | Stretch median IoU | Predicted start won / offered |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `spiral_0131` raw | baseline | 0.969 | 0.947 | 14 | 2 | 2 | 0.941 | |
+| | prediction only | 0.969 | 0.939 | 11 | 1 | 2 | 0.937 | 232 / 428 |
+| | weight 0.0025 | 0.969 | 0.941 | 24 | 0 | 2 | 0.939 | 239 / 411 |
+| | **weight 0.01** | 0.969 | 0.951 | **0** | 0 | 1 | 0.952 | 245 / 413 |
+| | weight 0.025 | 0.969 | 0.954 | 2 | 0 | 1 | 0.955 | 221 / 393 |
+| `coil_0201` (held out) | baseline | 0.959 | 0.937 | 0 | 3 | 28 | 0.943 | |
+| | prediction only | 0.959 | 0.938 | 27 | 3 | 34 | 0.945 | 345 / 718 |
+| | weight 0.0025 | 0.960 | 0.939 | 0 | 3 | 31 | 0.945 | 321 / 694 |
+| | **weight 0.01** | 0.960 | 0.939 | **0** | 3 | 30 | 0.947 | 360 / 682 |
+| | weight 0.025 | 0.960 | 0.939 | 23 | 10 | 29 | 0.945 | 375 / 666 |
+| `edge_0618` (held out) | baseline | 0.970 | 0.589 | 134 | 26 | 45 | 0.563 | |
+| | prediction only | 0.970 | 0.599 | 135 | 19 | 49 | 0.552 | 268 / 437 |
+| | weight 0.0025 | 0.970 | 0.599 | 136 | 22 | 50 | 0.527 | 282 / 436 |
+| | **weight 0.01** | 0.970 | 0.599 | 134 | 23 | 47 | 0.557 | 291 / 436 |
+| | weight 0.025 | 0.969 | 0.600 | 134 | 20 | 44 | 0.568 | 306 / 436 |
+
+Three findings.
+
+*The prediction and the prior work where they were aimed.* On the raw
+spiral the 14 frames where the tube crossed the real gap between turns
+(3753--3766) are fixed by every variant that offers the prediction, and
+with the prior at 0.01 nothing is lost elsewhere: 0 frames below 0.9, p10
+0.947 -> 0.951, stretch median 0.941 -> 0.952, no pose jump. Frame 3760
+below: the 6a tube follows the inner turn where the step 5c chain cut across
+the gap (baseline pose dotted orange).
+
+![Spiral frame 3760 in the viewer: 6a fit with the step 5c fit as compare run](pose_pipeline_step6/spiral_6a_vs_base_frame_03760.jpg)
+
+*A single chain state is fragile.* The coil minute's first stretch is 237
+frames long. On frames 17960--17994 its forward chain sits at IoU 0.89 in
+every variant and only the backward chain, arriving from the anchor at
+frame 18004, reaches 0.94; in two of the four variants (prediction only,
+weight 0.025) the backward chain also lands on the 0.88 configuration, and
+27 or 23 frames fall below 0.9 where the baseline has none. Nothing in
+those variants is wrong per frame; the chain simply carried a different
+local optimum in, and every later frame inherits it. The same happened on
+the spiral at weight 0.0025: the chain that fixed the tight turns carried a
+fold forward and lost frames 3790--3815 at 0.89--0.90 (frame 3800 below, the
+prediction 17 px from the fit). This is the case for keeping several
+hypotheses per frame and choosing a path per stretch (6b/6c), rather than
+for tuning the prior further.
+
+![Spiral frame 3800 at weight 0.0025: the chain has carried a fold forward](pose_pipeline_step6/spiral_6a_vs_base_frame_03800.jpg)
+
+*A strong prior is sticky.* At weight 0.025 a 20 px correction costs 0.025
+in energy, more than the mask can pay back, so on the coil's long stretch
+both chains stay within 1--3 px of their predictions while the overlap
+slides from 0.90 to 0.87 (frames 17968--17990) and the forward and backward
+chains alternate frame by frame (pose jumps 3 -> 10). At 0.0025 the prior
+is inert (a 2-sigma deviation costs 0.01, typical deviations are 2--8 px).
+0.01 is the default.
+
+The length jumps outside stretches, as predicted, do not move (they are
+6b's track prior), and `edge_0618`'s 134 failures are the dark streak on the
+plate segmented as worm on independent frames, which no chain reaches. The
+predicted start wins 55--65% of the chain frames it is offered on.
+Propagation costs 10--20% more (one extra start per chain frame).
+
+Sequence set with the new defaults (`pose_pipeline_step6/sequence_eval_6a.json`
+against the step 5c cleaned baseline; same masks, priors and preset):
+
+| Clip | Median IoU 5c -> 6a | P10 5c -> 6a | Frames < 0.9 5c -> 6a | Pose jumps > width 5c -> 6a | Stretch median IoU 5c -> 6a | Predicted starts won / offered |
+|---|---|---|---:|---:|---|---:|
+| `spiral_0131` | 0.957 -> 0.958 | 0.934 -> 0.938 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.951 | 160 / 315 |
+| `loop_0131` | 0.967 -> 0.967 | 0.927 -> 0.927 | 0 -> 0 | 0 -> 0 | 0.947 -> 0.948 | 108 / 168 |
+| `omega_0822` | 0.965 -> 0.965 | 0.950 -> 0.948 | 0 -> 0 | 0 -> 0 | 0.950 -> 0.949 | 72 / 128 |
+| `coil_0822` | 0.965 -> 0.965 | 0.947 -> 0.957 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 148 / 240 |
+| `spiral_0528` | 0.954 -> 0.965 | 0.940 -> 0.946 | 0 -> 0 | 0 -> 0 | 0.947 -> 0.963 | 133 / 266 |
+| `edge_0528` | 0.961 -> 0.961 | 0.930 -> 0.934 | 7 -> 3 | 8 -> 4 | 0.945 -> 0.946 | 149 / 234 |
+| `tail_reentry_0623` | 0.968 -> 0.968 | 0.959 -> 0.959 | 5 -> 5 | 1 -> 0 | 0.960 -> 0.960 | 30 / 54 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 12 -> 8, nothing
+regresses beyond noise, `spiral_0528` gains 0.011 of median overlap in its
+stretch, and the propagation time is unchanged within 10%. Next is 6b/6c:
+keep the candidates the chains now store, add their mirrors and the
+independent fit, and choose one path per stretch.
+
 ## 4. Further ideas (after step 6)
 
 - **Intensity for overlaps.** Where the body crosses itself the NIR image is
@@ -1065,4 +1161,5 @@ coil held for seconds with no unambiguous frame nearby, as in `coil_0201`).
 | 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
 | viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
-| 6 | planned (2026-09-07) | revised after Alex's priorities (edge exits and coils first, head identity consistent not absolute): 6a first-order autoregressive proposals with a temporal prior in the chains, 6b track length prior and jump-seeded stretches (plus a propagate-all variant to measure), 6c per-stretch Viterbi over stored candidates and their mirrors (orientation consistency as a by-product, head-near-centre as the absolute cue), 6d jump/flip counts as the measure, head truth set, raw-mask default |
+| 6a | done (2026-09-08) | first-order autoregressive starts and a temporal prior (weight 0.01, sigma half a width) inside propagation chains; chain candidates and predictions stored and drawn by the viewer; raw spiral 14 -> 0 frames below 0.9, held-out minutes unchanged; single-state chains shown fragile, motivating 6b/6c |
+| 6b--6d | planned (2026-09-07) | track length prior and jump-seeded stretches; per-stretch Viterbi over stored candidates and their mirrors (orientation consistency as a by-product, head-near-centre as the absolute cue); jump/flip counts as the measure, head truth set, raw-mask default |

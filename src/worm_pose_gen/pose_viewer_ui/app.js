@@ -20,6 +20,9 @@ const LAYERS = [
   { id: "final_outline", name: "Final mask outline", kind: "pixel", on: false, alpha: 0.9, color: [255, 255, 255] },
   { id: "tube_fill", name: "Tube fill", kind: "pixel", on: false, alpha: 0.3, color: [90, 220, 140] },
   { id: "width_ticks", name: "Width ticks along the body", kind: "vector", on: false, alpha: 0.9, color: [255, 80, 165] },
+  { id: "chain_forward", name: "Forward chain candidate", kind: "vector", on: true, alpha: 0.9, color: [255, 211, 77] },
+  { id: "chain_backward", name: "Backward chain candidate", kind: "vector", on: true, alpha: 0.9, color: [192, 128, 255] },
+  { id: "prediction", name: "Chain prediction (autoregressive)", kind: "vector", on: true, alpha: 0.9, color: [255, 255, 255] },
   { id: "compare", name: "Compare run pose", kind: "vector", on: true, alpha: 1.0, color: [255, 170, 60] },
   { id: "starts", name: "Fitter starts (press Starts)", kind: "vector", on: true, alpha: 0.9, color: [120, 255, 255] },
   { id: "crop", name: "Crop window", kind: "vector", on: false, alpha: 0.8, color: [150, 150, 150] },
@@ -35,6 +38,7 @@ const EXTRA_SERIES = [
   ["pixels_filled", "Hole-fill px"], ["pixels_outside_largest", "Outside largest px"], ["components", "Components"],
   ["taper_asymmetry", "Taper asymmetry"], ["orientation_gap", "Orientation gap"], ["length_deviation", "Length deviation (log)"],
   ["n_starts", "Starts tried"],
+  ["prediction_distance_px", "Distance to chain prediction px"],
 ];
 
 const state = {
@@ -171,6 +175,9 @@ function runSummaryText(run) {
   if (a.flag_counts) lines.push("flags: " + Object.entries(a.flag_counts).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(", "));
   if (a.frames_with_score_at_least_2 !== undefined) lines.push(`score ≥ 2: ${a.frames_with_score_at_least_2} frames · score ≥ 1: ${a.frames_with_score_at_least_1}`);
   if (p) lines.push(`propagation: ${p.stretches.length} stretches, ${p.frames_in_stretches} frames, ${p.frames_replaced} replaced (fwd ${p.replaced_by_source.forward}, bwd ${p.replaced_by_source.backward}); stretch IoU ${fmt(p.stretch_iou_median_before)} → ${fmt(p.stretch_iou_median_after)}`);
+  if (p && p.prediction_damping !== undefined) lines.push(`6a: damping ${p.prediction_damping}, temporal prior ${p.temporal_prior_weight} at ${p.temporal_prior_sigma_widths} widths; predicted starts won ${p.predicted_starts_won} of ${p.predicted_starts_offered}`);
+  const c = run.continuity;
+  if (c) lines.push(`continuity: length jumps > ${Math.round(100 * c.length_jump_fraction)}%: ${c.length_jumps_over_fraction} · pose jumps > width: ${c.pose_jumps_over_width} · in-view changes: ${c.in_view_changes}` + (c.prediction_distance_px_p50_p90_max ? ` · distance to prediction p50/p90 ${fmt(c.prediction_distance_px_p50_p90_max[0], 1)} / ${fmt(c.prediction_distance_px_p50_p90_max[1], 1)} px` : ""));
   lines.push(`cleanup: fill holes ${run.cleanup.fill_holes} (r ${run.cleanup.hole_radius}) · largest only ${run.cleanup.largest_only}`);
   if (!run.has_independent_pose) lines.push("independent pose not stored in this run (older fitter); only its IoU/score are shown");
   return lines.join("\n");
@@ -528,6 +535,8 @@ function renderLegend() {
     if (l.id === "independent" && !(state.decoded && state.decoded.tube_independent) && !(state.frame && state.frame.pose && state.frame.pose.independent)) continue;
     if (l.id === "compare" && !state.comparePose) continue;
     if (l.id === "starts" && !state.starts) continue;
+    if (l.id.startsWith("chain_") && !(state.frame && state.frame.pose && state.frame.pose.chains && state.frame.pose.chains[l.id.slice(6)])) continue;
+    if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.chains)) continue;
     if (l.id === "residual") { parts.push(`<span><span class="swatch" style="background:rgb(40,80,255)"></span>mask missed</span><span><span class="swatch" style="background:rgb(255,50,50)"></span>tube extra</span>`); continue; }
     parts.push(`<span><span class="swatch" style="background:rgb(${l.color.join(",")})"></span>${l.name.replace(/ \(.*\)$/, "")}</span>`);
   }
@@ -635,6 +644,23 @@ function draw() {
     if (indep.on && pose.independent) {
       drawCurve(pose.independent.centerline_xy, `rgb(${indep.color.join(",")})`, 2, [8, 5], indep.alpha);
     }
+    if (pose.chains) {
+      const chosen = state.frame.stats.source_name;
+      for (const name of ["forward", "backward"]) {
+        const chain = pose.chains[name];
+        const l = layer(`chain_${name}`);
+        if (!chain || !l.on) continue;
+        // The chosen chain coincides with the centerline; draw it a little wider underneath.
+        drawCurve(chain.centerline_xy, `rgb(${l.color.join(",")})`, name === chosen ? 5 : 1.5, name === chosen ? null : [6, 4], name === chosen ? 0.35 * l.alpha : l.alpha);
+      }
+      const pred = layer("prediction");
+      const predicted = pose.chains[chosen] && pose.chains[chosen].prediction_xy;
+      if (pred.on && predicted) {
+        drawCurve(predicted, `rgb(${pred.color.join(",")})`, 1.5, [2, 4], pred.alpha);
+        const [x, y] = predicted[0];
+        ctx.save(); ctx.fillStyle = `rgba(255,255,255,${pred.alpha})`; ctx.beginPath(); ctx.arc(x, y, 3 / v.scale, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+      }
+    }
     const cmp = layer("compare");
     if (cmp.on && state.comparePose && state.comparePose.pose) {
       drawCurve(state.comparePose.pose.centerline_xy, `rgb(${cmp.color.join(",")})`, 2, [3, 4], cmp.alpha);
@@ -703,6 +729,16 @@ function renderDetails() {
   rows.push(row("source", s.source_name || "independent"), row("best start", s.best_start || "–"), row("starts tried", fmt(s.n_starts)));
   rows.push(row("soft-Dice energy", fmt(s.energy, 4)), row("total energy", fmt(s.total_energy, 4)));
   if (s.stretch) rows.push(row("stretch", `#${s.stretch.index + 1} frames ${s.stretch.frames[0]}–${s.stretch.frames[1]} (${s.stretch.length})`));
+  if (f.pose && f.pose.chains) {
+    rows.push(section("propagation chains (6a)"));
+    for (const name of ["forward", "backward"]) {
+      const chain = f.pose.chains[name];
+      if (!chain) { rows.push(row(name, "no chain reached this frame")); continue; }
+      const chosen = s.source_name === name;
+      rows.push(row(`${name}${chosen ? " ✓" : ""}`, `E ${fmt(chain.energy, 4)} · IoU ${fmt(chain.iou)} · ${chain.start.replace(/_(forward|backward)$/, "")}${chain.prediction_xy ? "" : " · no prediction"}`, chosen ? "" : "dim"));
+    }
+    rows.push(row("distance to prediction", f.pose.prediction_distance_px === null || f.pose.prediction_distance_px === undefined ? "–" : `${fmt(f.pose.prediction_distance_px, 1)} px`));
+  }
   rows.push(section("body"));
   rows.push(row("length px", both("body_length_px", 1)));
   if (s.length_vs_prior_sigmas !== undefined) rows.push(row("length vs prior", `${fmt(s.length_vs_prior_sigmas, 2)} σ`, Math.abs(s.length_vs_prior_sigmas) > 2 ? "diff" : ""));
@@ -1099,7 +1135,8 @@ function renderLayerAvailability() {
   const d = state.decoded || {};
   const pose = state.frame && state.frame.pose;
   if (state.frame && state.frame.detail === "light") {
-    for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", ["independent", "compare", "starts"].includes(node.dataset.layer) && !{ independent: pose && pose.independent, compare: state.comparePose, starts: state.starts }[node.dataset.layer]);
+    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, chain_forward: pose && pose.chains && pose.chains.forward, chain_backward: pose && pose.chains && pose.chains.backward, prediction: pose && pose.chains };
+    for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
   const available = {
@@ -1107,6 +1144,8 @@ function renderLayerAvailability() {
     residual: !!(d.mask_final && d.tube), tube: !!d.tube, tube_fill: !!d.tube, final_outline: !!d.mask_final,
     centerline: !!pose, width_ticks: !!pose, crop: !!pose,
     independent: !!(pose && pose.independent), compare: !!state.comparePose, starts: !!state.starts, image: true,
+    chain_forward: !!(pose && pose.chains && pose.chains.forward), chain_backward: !!(pose && pose.chains && pose.chains.backward),
+    prediction: !!(pose && pose.chains && state.frame.stats.source_name && pose.chains[state.frame.stats.source_name] && pose.chains[state.frame.stats.source_name].prediction_xy),
   };
   for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", available[node.dataset.layer] === false);
 }
@@ -1272,6 +1311,14 @@ function initSplitters() {
 function bindEvents() {
   $("#run").addEventListener("change", (e) => selectRun(e.target.value));
   $("#run-filter").addEventListener("input", renderRunList);
+  $("#rescan").addEventListener("click", async () => {
+    try {
+      state.info = await api("/api/state?rescan=1");
+      state.runs = state.info.runs;
+      renderRunList();
+      setStatus(`${state.info.added} new run${state.info.added === 1 ? "" : "s"} found`, "ok");
+    } catch (error) { setStatus(error.message, "error"); }
+  });
   $("#compare").addEventListener("change", (e) => selectCompare(e.target.value));
   $("#go").addEventListener("click", () => { const r = state.run.series.frame_index.indexOf(parseInt($("#frame-index").value, 10)); if (r >= 0) showRow(r, { keepView: true }); else setStatus("frame not in this run", "error"); });
   $("#frame-index").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#go").click(); });

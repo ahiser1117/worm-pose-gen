@@ -92,6 +92,19 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
     arrays["source"][-1] = 1
     arrays["best_start"][-1] = "warm_forward"
     if independent:
+        # Step 6a chain candidates on the last frame: a forward chain with a prediction.
+        arrays["chain_centerline_xy"] = np.full((count, 2, n_points, 2), np.nan)
+        arrays["chain_prediction_xy"] = np.full((count, 2, n_points, 2), np.nan)
+        arrays["chain_energy"] = np.full((count, 2), np.nan)
+        arrays["chain_iou"] = np.full((count, 2), np.nan)
+        arrays["chain_start"] = np.full((count, 2), "", dtype="<U32")
+        arrays["prediction_distance_px"] = np.full(count, np.nan)
+        arrays["chain_centerline_xy"][-1, 0] = curve
+        arrays["chain_prediction_xy"][-1, 0] = curve + (1.0, 0.0)
+        arrays["chain_energy"][-1, 0] = 0.09
+        arrays["chain_iou"][-1, 0] = 0.85
+        arrays["chain_start"][-1, 0] = "predicted_forward"
+        arrays["prediction_distance_px"][-1] = 1.0
         arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
         arrays["centerline_xy_independent"][-1, :, 1] += 8.0
         arrays["width_profile_independent"] = arrays["width_profile"].copy()
@@ -167,7 +180,7 @@ class PoseViewerServerTests(unittest.TestCase):
             entry = run_entry(runs[0])
             self.assertEqual(entry["mask_cleanup"], "fill + largest")
             self.assertEqual(entry["frames_below_0.9"], 3)
-            state = ViewerState(runs, dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json")
+            state = ViewerState(runs, dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json", runs_root=root / "runs")
             server = create_server(state, "127.0.0.1", 0)
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -177,6 +190,10 @@ class PoseViewerServerTests(unittest.TestCase):
                 info = json.loads(urlopen(f"{base}/api/state").read())
                 self.assertEqual([r["name"] for r in info["runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T10-00-00Z_demo"])
                 self.assertEqual(info["flag_groups"]["coil"], ["self_contact", "holes", "area_deficit"])
+                _write_run(root / "runs" / "2026-09-06T13-00-00Z_late", recording, first=3, count=2, independent=False)
+                rescanned = json.loads(urlopen(f"{base}/api/state?rescan=1").read())
+                self.assertEqual(rescanned["added"], 1)
+                self.assertEqual(rescanned["runs"][0]["name"], "2026-09-06T13-00-00Z_late")
                 page = urlopen(f"{base}/").read().decode()
                 self.assertIn("Pose viewer", page)
                 self.assertIn("Width along the body", page)
@@ -188,8 +205,9 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertTrue(run["recording_readable"])
                 self.assertEqual(run["image_shape"], [HEIGHT, WIDTH])
                 self.assertTrue(run["has_independent_pose"])
-                self.assertEqual([r["name"] for r in run["compatible_runs"]], ["2026-09-06T11-00-00Z_other"])
-                self.assertEqual(run["compatible_runs"][0]["overlap"], 3)
+                # Overlapping runs first: "other" covers frames 2-4 (overlap 3), "late" 3-4 (overlap 2).
+                self.assertEqual([r["name"] for r in run["compatible_runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T13-00-00Z_late"])
+                self.assertEqual([r["overlap"] for r in run["compatible_runs"]], [3, 2])
                 series = run["series"]
                 self.assertEqual(series["frame_index"], list(range(FRAMES)))
                 self.assertEqual(series["classification"], ["clean"] * (FRAMES - 1) + ["ambiguous"])
@@ -220,6 +238,12 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertEqual(len(pose["curvature"]), 100)
                 self.assertEqual(len(pose["width_prior_profile"]), 100)
                 self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
+                self.assertEqual(list(pose["chains"]), ["forward"])
+                self.assertEqual(pose["chains"]["forward"]["start"], "predicted_forward")
+                self.assertEqual(len(pose["chains"]["forward"]["prediction_xy"]), 100)
+                self.assertEqual(pose["prediction_distance_px"], 1.0)
+                self.assertTrue(run["has_chain_candidates"])
+                self.assertEqual(series["prediction_distance_px"][-1], 1.0)
 
                 light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
                 self.assertEqual(light["detail"], "light")

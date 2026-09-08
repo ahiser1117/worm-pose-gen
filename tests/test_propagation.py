@@ -20,6 +20,9 @@ from worm_pose_gen.propagation import (
     Candidate,
     PropagationConfig,
     ambiguous_stretches,
+    continuity_summary,
+    pose_distance_px,
+    predict_latent,
     prior_penalty,
     propagate,
     select_candidates,
@@ -130,6 +133,43 @@ class PropagationTests(unittest.TestCase):
         whole[60:100, 40:180] = True
         self.assertIsNone(redirect_start_through_exit(folded, whole, config=SMALL))
 
+    def test_prediction_extrapolates_with_damping_and_holds_length(self) -> None:
+        previous = np.concatenate((np.zeros(16), [0.1, 150.0], [100.0, 80.0]))
+        current = np.concatenate((np.full(16, 0.2), [0.3, 152.0], [104.0, 80.0]))
+        predicted = predict_latent(current, previous, 0.5)
+        np.testing.assert_allclose(predicted[:16], 0.3)          # shape moves on by half the step
+        self.assertAlmostEqual(predicted[16], 0.4)              # rotation too
+        self.assertAlmostEqual(predicted[17], 152.0)            # length held
+        np.testing.assert_allclose(predicted[18:], [106.0, 80.0])  # centroid velocity
+        np.testing.assert_array_equal(predict_latent(current, previous, 0.0), current)
+        np.testing.assert_array_equal(predict_latent(current, None, 0.5), current)
+        # A rotation on the other branch of 2 pi is not a full turn of velocity.
+        wrapped = previous.copy(); wrapped[16] = 0.1 + 2 * np.pi
+        self.assertAlmostEqual(predict_latent(current, wrapped, 0.5)[16], 0.4)
+
+    def test_pose_distance_uses_points_inside_the_camera(self) -> None:
+        curve = np.stack((np.linspace(-20, 80, 100), np.full(100, 10.0)), axis=1)
+        shifted = curve + (0.0, 3.0)
+        self.assertAlmostEqual(pose_distance_px(curve, shifted, None), 3.0)
+        self.assertAlmostEqual(pose_distance_px(curve, shifted, (50, 60)), 3.0)
+        self.assertTrue(np.isnan(pose_distance_px(curve, shifted, (5, 5))))
+
+    def test_continuity_summary_counts_jumps(self) -> None:
+        n = 6
+        arrays = {
+            "fitted": np.ones(n, dtype=bool), "body_length_px": np.array([100.0, 101.0, 110.0, 101.0, 100.0, 100.0]),
+            "width_px": np.full(n, 10.0), "pose_jump_px": np.array([np.nan, 2.0, 15.0, 2.0, 2.0, 2.0]),
+            "centerline_xy": np.zeros((n, 100, 2)), "points_in_fov": np.array([100, 100, 90, 100, 100, 100]),
+            "prediction_distance_px": np.array([np.nan, np.nan, 4.0, 6.0, np.nan, np.nan]),
+        }
+        out = continuity_summary(arrays)
+        self.assertEqual(out["consecutive_pairs"], 5)
+        self.assertEqual(out["length_jumps_over_fraction"], 2)
+        self.assertEqual(out["pose_jumps_over_width"], 1)
+        self.assertEqual(out["in_view_changes"], 2)
+        self.assertEqual(out["frames_with_prediction"], 2)
+        self.assertAlmostEqual(out["prediction_distance_px_p50_p90_max"][0], 5.0)
+
     def test_propagation_recovers_frames_a_cold_start_misses(self) -> None:
         curves, masks, latents = _sequence()
         n = len(masks)
@@ -162,6 +202,18 @@ class PropagationTests(unittest.TestCase):
         self.assertEqual(info["lockstep_steps"], 4)
         self.assertEqual(sorted(candidates), [1, 2, 3, 4])
         self.assertEqual({c.source for c in candidates[2]}, {"forward", "backward"})
+        # Step 6a bookkeeping: the first chain frame has no velocity (the
+        # anchor's own neighbour is inside the stretch), later frames carry a
+        # prediction and a distance to it; the winning start is named.
+        by_source = {c.source: c for c in candidates[3]}
+        self.assertIsNotNone(by_source["forward"].prediction_xy)
+        self.assertEqual(by_source["forward"].prediction_xy.shape, (100, 2))
+        self.assertTrue(np.isfinite(by_source["forward"].distance_to_prediction_px))
+        self.assertIn(by_source["forward"].start_name, ("warm_forward", "predicted_forward"))
+        first = {c.source: c for c in candidates[1]}["forward"]
+        self.assertIsNone(first.prediction_xy)
+        self.assertEqual(info["predicted_starts_offered"] >= 1, True)
+        self.assertLessEqual(info["predicted_starts_won"], info["predicted_starts_offered"])
         chosen = select_candidates(candidates, arrays, SMALL)
         self.assertEqual(sorted(chosen), [1, 2, 3, 4])
         for row, candidate in chosen.items():

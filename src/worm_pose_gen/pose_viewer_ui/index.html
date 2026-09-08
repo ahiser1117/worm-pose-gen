@@ -12,7 +12,10 @@
       <h1>Pose viewer</h1>
       <section class="group">
         <h3>Run</h3>
-        <input id="run-filter" type="text" placeholder="filter runs…">
+        <span class="row">
+          <input id="run-filter" type="text" placeholder="filter runs…">
+          <button id="rescan" type="button" title="look for runs written since the server started">↻</button>
+        </span>
         <select id="run" size="6"></select>
         <div id="run-info" class="note"></div>
         <label>Compare run (same recording)

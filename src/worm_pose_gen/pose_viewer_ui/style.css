@@ -108,3 +108,4 @@ button.tag { padding: 2px 7px; font-size: 12px; }
 #charts .label { font-size: 11px; color: var(--muted); text-align: right; padding-top: 2px; line-height: 1.2; }
 #charts canvas { display: block; width: 100%; background: #0b0f12; border: 1px solid var(--border); border-radius: 3px; cursor: crosshair; }
 label input[type="checkbox"] { width: auto; margin-right: 4px; }
+.stats td.dim { color: var(--muted); }

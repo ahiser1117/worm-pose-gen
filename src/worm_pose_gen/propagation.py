@@ -25,8 +25,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .batch_fit import BatchFitConfig, fit_masks
+from .latent import decode_centerline, unwrap_latent_rotation
 from .mask_fit import Initialization, MaskFitConfig, MaskFitResult, redirect_start_through_exit
 from .pose_run import touches_border
+
+
+FloatArray = NDArray[np.float64]
 
 
 SOURCES = ("independent", "forward", "backward")
@@ -74,6 +78,20 @@ class PropagationConfig:
     # on frame 64 (0.943 -> 0.918).  A proper temporal smoothness term is
     # the step 6 answer.
     edge_tolerance: float = 0.0
+    # Plan step 6a.  A chain frame is started not only from a copy of the
+    # neighbour's pose but also from a first-order prediction, the pose
+    # extrapolated with damping from the chain's last two frames (shape
+    # coefficients, rotation and centroid; the length is held), and the
+    # fit is pulled toward that prediction by a Gaussian temporal prior
+    # with a sigma of ``temporal_prior_sigma_widths`` body widths.  Damping
+    # 0 makes the prediction the copy and turns the step off; weight 0
+    # turns the prior off.  Weight: on three minutes (plan step 6a) 0.0025
+    # changed nothing, 0.025 held the chains on stale predictions through a
+    # long coil (23 failures where there were none), 0.01 removed the raw
+    # spiral's 14 failures and regressed nothing.
+    prediction_damping: float = 0.6
+    temporal_prior_weight: float = 0.01
+    temporal_prior_sigma_widths: float = 0.5
 
 
 def warm_schedule(
@@ -157,16 +175,64 @@ class Candidate:
     source: str
     result: MaskFitResult
     total_energy: float
+    # The chain's prediction of this frame (``None`` on a chain's first frame
+    # without velocity), the start that won inside the candidate's fit, and
+    # the mean in-view distance of the result to the prediction.
+    prediction_xy: np.ndarray | None = None
+    start_name: str = ""
+    distance_to_prediction_px: float = float("nan")
+
+
+def predict_latent(
+    current: NDArray[np.generic], previous: NDArray[np.generic] | None, damping: float, coefficients: int = 16
+) -> FloatArray:
+    """First-order prediction of the next latent from the last two.
+
+    Shape coefficients, rotation (on the branch nearest the current frame) and
+    centroid move on by ``damping`` times their last change; the length is
+    held, since the body does not change length between frames.  Without a
+    previous pose, or at damping 0, the prediction is the current pose.
+    """
+
+    now = np.asarray(current, dtype=np.float64).copy()
+    if previous is None or damping <= 0:
+        return now
+    before = unwrap_latent_rotation(np.asarray(previous, dtype=np.float64), now)
+    step = now - before
+    step[coefficients + 1] = 0.0  # length
+    return now + damping * step
+
+
+def pose_distance_px(curve_a: NDArray[np.generic], curve_b: NDArray[np.generic], image_shape: tuple[int, int] | None) -> float:
+    """Mean distance between two oriented centerlines over the points inside the camera on both."""
+
+    a = np.asarray(curve_a, dtype=np.float64)
+    b = np.asarray(curve_b, dtype=np.float64)
+    if image_shape is None:
+        inside = np.ones(len(a), dtype=bool)
+    else:
+        height, width = image_shape
+        inside = (a[:, 0] >= 0) & (a[:, 0] < width) & (a[:, 1] >= 0) & (a[:, 1] < height)
+        inside &= (b[:, 0] >= 0) & (b[:, 0] < width) & (b[:, 1] >= 0) & (b[:, 1] < height)
+    if inside.sum() < 2:
+        return float("nan")
+    return float(np.linalg.norm(a[inside] - b[inside], axis=1).mean())
 
 
 def _pose_of(arrays: dict[str, np.ndarray], row: int) -> tuple[np.ndarray, float, np.ndarray]:
     return arrays["latent"][row], float(arrays["width_px"][row]), arrays["width_shape"][row]
 
 
-def _chain_config(warm: BatchFitConfig, anchor_length: float | None) -> BatchFitConfig:
-    if anchor_length is None or warm.length_prior_px is None:
-        return warm
-    return replace(warm, length_prior_px=float(anchor_length))
+def _chain_config(
+    warm: BatchFitConfig, anchor_length: float | None, temporal_sigma_px: float | None = None, temporal_weight: float = 0.0
+) -> BatchFitConfig:
+    overrides: dict[str, Any] = {}
+    if anchor_length is not None and warm.length_prior_px is not None:
+        overrides["length_prior_px"] = float(anchor_length)
+    if temporal_sigma_px is not None and temporal_weight > 0:
+        overrides["temporal_prior_weight"] = float(temporal_weight)
+        overrides["temporal_prior_sigma_px"] = float(temporal_sigma_px)
+    return replace(warm, **overrides) if overrides else warm
 
 
 def propagate(
@@ -199,15 +265,35 @@ def propagate(
             return None
         return float(arrays["body_length_px"][row])
 
+    # The frame before the anchor (on the anchor's side) gives the chain an
+    # initial velocity when it is a fitted frame outside any stretch.
+    def previous_pose(anchor: int, direction: int) -> np.ndarray | None:
+        before = anchor + direction
+        if 0 <= before < n and fitted[before] and not in_stretch[before]:
+            return arrays["latent"][before]
+        return None
+
     for a, b in stretches:
         if propagation.forward and a - 1 >= 0 and fitted[a - 1] and not in_stretch[a - 1]:
-            chains.append({"source": "forward", "rows": list(range(a, b + 1)), "pose": _pose_of(arrays, a - 1), "anchor": a - 1, "length": anchor_length(a - 1)})
+            chains.append({
+                "source": "forward", "rows": list(range(a, b + 1)), "pose": _pose_of(arrays, a - 1), "previous": previous_pose(a - 1, -1),
+                "anchor": a - 1, "length": anchor_length(a - 1),
+            })
         if propagation.backward and b + 1 < n and fitted[b + 1] and not in_stretch[b + 1]:
-            chains.append({"source": "backward", "rows": list(range(b, a - 1, -1)), "pose": _pose_of(arrays, b + 1), "anchor": b + 1, "length": anchor_length(b + 1)})
+            chains.append({
+                "source": "backward", "rows": list(range(b, a - 1, -1)), "pose": _pose_of(arrays, b + 1), "previous": previous_pose(b + 1, +1),
+                "anchor": b + 1, "length": anchor_length(b + 1),
+            })
+    image_shape: tuple[int, int] | None = None
+    for mask in masks.values():
+        image_shape = (int(np.asarray(mask).shape[0]), int(np.asarray(mask).shape[1]))
+        break
     candidates: dict[int, list[Candidate]] = defaultdict(list)
     steps = 0
     rows_fit = 0
     redirects = 0
+    predictions_offered = 0
+    predictions_won = 0
     longest = max((len(c["rows"]) for c in chains), default=0)
     for k in range(longest):
         # Chains are batched by anchor-length bucket, since the length prior
@@ -226,15 +312,26 @@ def propagate(
             continue
         steps += 1
         for key, members in groups.items():
+            sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([c["pose"][1] for c, _ in members]))
             group_config = _chain_config(
-                warm, None if key is None else float(np.exp(np.mean([math.log(c["length"]) for c, _ in members])))
+                warm, None if key is None else float(np.exp(np.mean([math.log(c["length"]) for c, _ in members]))),
+                sigma_px, propagation.temporal_prior_weight,
             )
             batch_masks = []
             batch_starts = []
+            batch_references: list[np.ndarray | None] = []
+            batch_predictions: list[np.ndarray | None] = []
             for chain, row in members:
                 latent, width_px, shape = chain["pose"]
                 binary = np.asarray(masks[row], dtype=bool)
                 starts = [warm_initialization(latent, width_px, shape, f"warm_{chain['source']}")]
+                prediction_xy: np.ndarray | None = None
+                if chain["previous"] is not None and propagation.prediction_damping > 0:
+                    predicted = predict_latent(latent, chain["previous"], propagation.prediction_damping, config.coefficients)
+                    prediction_xy = decode_centerline(predicted, config.coefficients)
+                    if pose_distance_px(prediction_xy, decode_centerline(latent, config.coefficients), None) > 0.5:
+                        starts.append(warm_initialization(predicted, width_px, shape, f"predicted_{chain['source']}"))
+                        predictions_offered += 1
                 if propagation.redirect_at_border and touches_border(binary, 2):
                     redirected = redirect_start_through_exit(starts[0], binary, config=group_config)
                     if redirected is not None:
@@ -242,13 +339,25 @@ def propagate(
                         redirects += 1
                 batch_masks.append(binary)
                 batch_starts.append(starts)
-            results = fit_masks(batch_masks, batch_starts, width_template=width_template, config=group_config, device=device)
-            for (chain, row), result in zip(members, results, strict=True):
+                # The temporal prior pulls toward the prediction, or toward
+                # the copied pose when the chain has no velocity yet.
+                reference = prediction_xy if prediction_xy is not None else decode_centerline(latent, config.coefficients)
+                batch_references.append(reference if propagation.temporal_prior_weight > 0 else None)
+                batch_predictions.append(prediction_xy)
+            results = fit_masks(
+                batch_masks, batch_starts, width_template=width_template, config=group_config, device=device, references=batch_references
+            )
+            for (chain, row), result, prediction_xy in zip(members, results, batch_predictions, strict=True):
                 # Energy under the fit's own prior, so a tighter chain prior
                 # shapes the optimization but not the comparison with the
                 # independent fit.
                 total = comparable_energy(config, result)
-                candidates[row].append(Candidate(chain["source"], result, total))
+                start_name = str(result.initializations[result.best_index].name)
+                if start_name.startswith("predicted_"):
+                    predictions_won += 1
+                distance = float("nan") if prediction_xy is None else pose_distance_px(result.centerline_xy, prediction_xy, image_shape)
+                candidates[row].append(Candidate(chain["source"], result, total, prediction_xy, start_name, distance))
+                chain["previous"] = chain["pose"][0]
                 chain["pose"] = (result.latent, result.width_px, result.width_shape)
                 rows_fit += 1
     info = {
@@ -264,8 +373,52 @@ def propagate(
         "chain_length_sigma": warm.length_prior_log_sigma if warm.length_prior_px is not None else None,
         "chain_length_from_anchor": bool(propagation.chain_length_from_anchor and warm.length_prior_px is not None),
         "anchor_lengths_px": sorted(round(c["length"]) for c in chains if c["length"] is not None),
+        "prediction_damping": propagation.prediction_damping,
+        "temporal_prior_weight": propagation.temporal_prior_weight,
+        "temporal_prior_sigma_widths": propagation.temporal_prior_sigma_widths,
+        "predicted_starts_offered": predictions_offered,
+        "predicted_starts_won": predictions_won,
     }
     return candidates, info
+
+
+def continuity_summary(arrays: dict[str, np.ndarray], *, length_jump_fraction: float = 0.03) -> dict[str, Any]:
+    """How continuous the stored track is: length jumps, pose jumps, in-view changes, prediction distances.
+
+    Counts are over consecutive fitted frames.  A length jump is a change of
+    more than ``length_jump_fraction`` of the recording prior's length (the
+    frame's own length when no prior is stored); a pose jump is the stored
+    ``pose_jump_px`` above the fitted width; an in-view change is the body
+    entering or leaving the camera (points in view crossing the full count).
+    """
+
+    fitted = np.asarray(arrays["fitted"], dtype=bool)
+    rows = np.nonzero(fitted)[0]
+    pairs = [(a, b) for a, b in zip(rows[:-1], rows[1:], strict=False) if b == a + 1]
+    length = np.asarray(arrays["body_length_px"], dtype=np.float64)
+    width = np.asarray(arrays["width_px"], dtype=np.float64)
+    reference = float(np.nanmedian(length[fitted])) if fitted.any() else float("nan")
+    length_jumps = sum(abs(length[b] - length[a]) > length_jump_fraction * reference for a, b in pairs)
+    jump = np.asarray(arrays.get("pose_jump_px", np.full(len(fitted), np.nan)), dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        pose_jumps = int(np.sum(fitted & (jump > width)))
+    n_points = arrays["centerline_xy"].shape[1]
+    in_view = np.asarray(arrays["points_in_fov"])
+    in_view_changes = sum((in_view[a] >= n_points) != (in_view[b] >= n_points) for a, b in pairs)
+    out: dict[str, Any] = {
+        "consecutive_pairs": len(pairs),
+        "length_jumps_over_fraction": int(length_jumps),
+        "length_jump_fraction": length_jump_fraction,
+        "length_reference_px": reference,
+        "pose_jumps_over_width": pose_jumps,
+        "in_view_changes": int(in_view_changes),
+    }
+    if "prediction_distance_px" in arrays:
+        distance = np.asarray(arrays["prediction_distance_px"], dtype=np.float64)
+        finite = distance[np.isfinite(distance)]
+        out["prediction_distance_px_p50_p90_max"] = [float(v) for v in np.percentile(finite, [50, 90, 100])] if len(finite) else None
+        out["frames_with_prediction"] = int(len(finite))
+    return out
 
 
 def comparable_energy(config: MaskFitConfig, result: MaskFitResult) -> float:

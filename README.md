@@ -234,7 +234,13 @@ pose before the stretch is carried forward through it and the good pose
 after it backward, each frame warm-started from its neighbour, all
 stretches in lockstep, and per frame the lowest total energy among
 independent, forward and backward wins (`source` in `poses.npz`;
-`--no-propagate` skips it).
+`--no-propagate` skips it). Inside a chain each frame is also started from
+a first-order prediction of the pose (the last change of shape, rotation
+and centroid carried on with damping 0.6, `--prediction-damping`) and the
+fit is pulled toward that prediction by a temporal prior
+(`--temporal-prior-weight`, default 0.01, sigma half a width); both chain
+candidates, their predictions and energies are stored (`chain_*` arrays)
+and the viewer draws them.
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
 fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;

@@ -64,8 +64,9 @@ SERIES_KEYS = (
     "iou", "iou_independent", "energy", "total_energy", "body_length_px", "width_px", "points_in_fov",
     "taper_asymmetry", "orientation_gap", "worm_pixels", "raw_worm_pixels", "pixels_filled", "components",
     "pixels_outside_largest", "area_ratio", "self_contact_px", "pose_jump_px", "length_deviation",
-    "ambiguity_score", "score_independent", "source", "n_starts", "mask_on_border", "reversed",
+    "ambiguity_score", "score_independent", "source", "n_starts", "mask_on_border", "reversed", "prediction_distance_px",
 )
+CHAIN_NAMES = ("forward", "backward")
 
 # Flag semantics after propagation (plan step 5b): some flags describe a
 # well-fit coil or a body leaving the camera, others a fit that went wrong.
@@ -426,6 +427,23 @@ class LoadedRun:
             out["width_template_profile"] = _round(np.round(width * np.asarray(template, dtype=np.float64), 2), 2)
             if self.prior is not None and self.prior.get("width_shape") is not None:
                 out["width_prior_profile"] = _round(np.round(prior_width_profile(width, template, self.prior["width_shape"]), 2), 2)
+        if "chain_centerline_xy" in arrays:
+            chains: dict[str, Any] = {}
+            for j, name in enumerate(CHAIN_NAMES):
+                curve = arrays["chain_centerline_xy"][row, j]
+                if not np.isfinite(curve).all():
+                    continue
+                prediction = arrays["chain_prediction_xy"][row, j]
+                chains[name] = {
+                    "centerline_xy": _round(np.round(curve, 2), 2),
+                    "prediction_xy": _round(np.round(prediction, 2), 2) if np.isfinite(prediction).all() else None,
+                    "energy": _round(arrays["chain_energy"][row, j], 5),
+                    "iou": _round(arrays["chain_iou"][row, j]),
+                    "start": str(arrays["chain_start"][row, j]),
+                }
+            if chains:
+                out["chains"] = chains
+                out["prediction_distance_px"] = _round(arrays["prediction_distance_px"][row], 2) if "prediction_distance_px" in arrays else None
         if "centerline_xy_independent" in arrays and "source" in arrays and int(arrays["source"][row]) != 0:
             out["independent"] = {
                 "centerline_xy": _round(np.round(arrays["centerline_xy_independent"][row], 2), 2),
@@ -584,23 +602,41 @@ class ViewerState:
         checkpoint: Path | None = DEFAULT_CHECKPOINT,
         device: str | None = None,
         notes: Path = DEFAULT_NOTES,
+        runs_root: Path | None = None,
     ) -> None:
         self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
         self.dataset_root = Path(dataset_root)
         self.segmenters = Segmenters(self.device, checkpoint)
         self.notes = Notes(notes)
+        self.runs_root = None if runs_root is None else Path(runs_root)
         self.catalog: dict[str, dict[str, Any]] = {}
         self.catalog_errors: dict[str, str] = {}
+        self._runs: dict[str, LoadedRun] = {}
+        self._sources: dict[str, tuple[RecordingSource | None, str | None]] = {}
+        self._lock = threading.Lock()
+        self._add_runs(runs)
+
+    def _add_runs(self, runs: list[Path]) -> int:
+        added = 0
         for path in runs:
+            if path.name in self.catalog:
+                continue
             try:
                 entry = run_entry(path)
             except (OSError, ValueError, KeyError) as error:
                 self.catalog_errors[str(path)] = f"{type(error).__name__}: {error}"
                 continue
             self.catalog[entry["name"]] = entry
-        self._runs: dict[str, LoadedRun] = {}
-        self._sources: dict[str, tuple[RecordingSource | None, str | None]] = {}
-        self._lock = threading.Lock()
+            added += 1
+        return added
+
+    def rescan(self) -> int:
+        """Pick up run directories written since the server started; returns how many were added."""
+
+        if self.runs_root is None:
+            return 0
+        with self._lock:
+            return self._add_runs(self.discover(self.runs_root))
 
     @staticmethod
     def discover(root: Path) -> list[Path]:
@@ -664,6 +700,8 @@ class ViewerState:
             "summary_iou": summary.get("iou"),
             "summary_length": summary.get("body_length_px"),
             "has_independent_pose": "centerline_xy_independent" in run.arrays,
+            "has_chain_candidates": "chain_centerline_xy" in run.arrays,
+            "continuity": summary.get("continuity"),
             "series": run.series(),
             "compatible_runs": self.compatible_runs(name),
         }
@@ -787,7 +825,8 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/style.css":
                 self._send_static("style.css", "text/css; charset=utf-8")
             elif parsed.path == "/api/state":
-                self._send_json(state.state())
+                added = state.rescan() if query.get("rescan", "0") == "1" else 0
+                self._send_json({**state.state(), "added": added})
             elif parsed.path == "/api/run":
                 self._send_json(state.run_payload(query["name"]))
             elif parsed.path == "/api/frame":
@@ -851,7 +890,10 @@ def main(argv: list[str] | None = None) -> None:
     runs = list(args.runs or [])
     if not args.only_runs:
         runs += [p for p in ViewerState.discover(args.runs_root) if p not in runs]
-    state = ViewerState(runs, dataset_root=args.dataset_root, checkpoint=args.checkpoint, device=args.device, notes=args.notes)
+    state = ViewerState(
+        runs, dataset_root=args.dataset_root, checkpoint=args.checkpoint, device=args.device, notes=args.notes,
+        runs_root=None if args.only_runs else args.runs_root,
+    )
     server = create_server(state, args.host, args.port)
     print(f"pose viewer at http://{args.host}:{args.port}/", flush=True)
     print(f"{len(state.catalog)} runs, device {state.device}, notes in {state.notes.path}", flush=True)
