@@ -114,6 +114,13 @@ class PropagationConfig:
     path_length_weight: float = 1.0
     path_length_sigma: float = 0.02
     path_mirrors: bool = True
+    # Anchor diversity (plan step 6b): besides the anchor's stored pose, each
+    # chain starts from the anchor refit by the chain itself from the frame
+    # beyond it, so two trajectories enter the stretch and the beam keeps
+    # both while they differ.  A stretch's outcome flipped between a 0.97
+    # and a 0.88 winding on one-frame changes of its anchor; two starts make
+    # the good winding reachable from either.
+    anchor_diversity: bool = True
 
 
 def warm_schedule(
@@ -137,15 +144,85 @@ def warm_schedule(
     return warm
 
 
+def track_length(
+    arrays: dict[str, np.ndarray], *, window: int = 50, min_iou: float = 0.9, fallback_px: float | None = None
+) -> NDArray[np.float64]:
+    """Per-frame body length of the track: the median fitted length of the whole bodies within ``window`` rows.
+
+    A whole body is a fitted frame whose mask does not reach the image border
+    (a clipped body's length is not observable) and whose overlap is at least
+    ``min_iou``.  Frames with no whole body within the window take the median
+    over the run, or ``fallback_px`` when there is none (plan step 6b).
+    """
+
+    fitted = np.asarray(arrays["fitted"], dtype=bool)
+    length = np.asarray(arrays["body_length_px"], dtype=np.float64)
+    border = np.asarray(arrays.get("mask_on_border", np.zeros(len(fitted), dtype=bool)), dtype=bool)
+    iou = np.asarray(arrays["iou"], dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        whole = fitted & ~border & (iou >= min_iou)
+    n = len(fitted)
+    out = np.full(n, np.nan)
+    rows = np.nonzero(whole)[0]
+    if len(rows):
+        overall = float(np.median(length[rows]))
+        for r in range(n):
+            lo, hi = np.searchsorted(rows, r - window), np.searchsorted(rows, r + window, side="right")
+            out[r] = float(np.median(length[rows[lo:hi]])) if hi > lo else overall
+    elif fallback_px is not None:
+        out[:] = fallback_px
+    return out
+
+
+def jump_seeds(
+    arrays: dict[str, np.ndarray],
+    *,
+    length_fraction: float = 0.03,
+    jump_widths: float = 1.0,
+) -> NDArray[np.bool_]:
+    """Frames whose track jumps: length change, pose jump, or in-view change with the mask on the border (plan step 6b).
+
+    These frames enter propagation even when their ambiguity score is below
+    the seed threshold, so the chains reach the squished edge fits and the
+    frames where the independent answer changed abruptly.
+    """
+
+    fitted = np.asarray(arrays["fitted"], dtype=bool)
+    n = len(fitted)
+    length = np.asarray(arrays["body_length_px"], dtype=np.float64)
+    reference = np.asarray(arrays["track_length_px"], dtype=np.float64) if "track_length_px" in arrays else np.full(n, np.nanmedian(length[fitted]) if fitted.any() else np.nan)
+    width = np.asarray(arrays["width_px"], dtype=np.float64)
+    jump = np.asarray(arrays.get("pose_jump_px", np.full(n, np.nan)), dtype=np.float64)
+    border = np.asarray(arrays.get("mask_on_border", np.zeros(n, dtype=bool)), dtype=bool)
+    n_points = arrays["centerline_xy"].shape[1]
+    in_view = np.asarray(arrays["points_in_fov"]) >= n_points
+    seeds = np.zeros(n, dtype=bool)
+    with np.errstate(invalid="ignore"):
+        seeds |= fitted & (jump > jump_widths * width)
+        if length_fraction > 0:
+            seeds |= fitted & (np.abs(length - reference) > length_fraction * reference)
+    for r in range(1, n):
+        if fitted[r] and fitted[r - 1] and in_view[r] != in_view[r - 1] and (border[r] or border[r - 1]):
+            seeds[r] = True
+            seeds[r - 1] = True
+    return seeds
+
+
 def ambiguous_stretches(
-    score: NDArray[np.generic], fitted: NDArray[np.generic], config: PropagationConfig = PropagationConfig()
+    score: NDArray[np.generic],
+    fitted: NDArray[np.generic],
+    config: PropagationConfig = PropagationConfig(),
+    extra_seeds: NDArray[np.generic] | None = None,
 ) -> list[tuple[int, int]]:
-    """Inclusive row ranges around frames whose score reaches ``min_score``."""
+    """Inclusive row ranges around frames whose score reaches ``min_score`` (or that ``extra_seeds`` marks)."""
 
     score = np.asarray(score)
     fitted = np.asarray(fitted, dtype=bool)
     n = len(score)
-    seeds = np.nonzero(fitted & (score >= config.min_score))[0]
+    marked_seeds = fitted & (score >= config.min_score)
+    if extra_seeds is not None:
+        marked_seeds |= fitted & np.asarray(extra_seeds, dtype=bool)
+    seeds = np.nonzero(marked_seeds)[0]
     if not len(seeds):
         return []
     marked = np.zeros(n, dtype=bool)
@@ -361,6 +438,43 @@ def propagate(
     predictions_offered = 0
     predictions_won = 0
     independent_refits = 0
+    anchor_refits = 0
+    second_starts = 0
+
+    # Anchor diversity: refit each anchor from the frame beyond it (one
+    # batch), and add the result as a second starting state when it differs.
+    if propagation.anchor_diversity and beam > 1:
+        jobs = []
+        for chain in chains:
+            direction = -1 if chain["source"] == "forward" else +1
+            anchor = chain["anchor"]
+            beyond = anchor + direction
+            further = beyond + direction
+            if not (0 <= beyond < n and fitted[beyond] and not in_stretch[beyond]) or anchor not in masks or not np.asarray(masks[anchor]).any():
+                continue
+            latent, width_px, shape = _pose_of(arrays, beyond)
+            previous = arrays["latent"][further] if 0 <= further < n and fitted[further] and not in_stretch[further] else None
+            starts = [warm_initialization(latent, width_px, shape, f"anchor_{chain['source']}")]
+            reference = decode_centerline(latent, config.coefficients)
+            if previous is not None and propagation.prediction_damping > 0:
+                predicted = predict_latent(latent, previous, propagation.prediction_damping, config.coefficients)
+                starts.append(warm_initialization(predicted, width_px, shape, f"anchor_predicted_{chain['source']}"))
+                reference = decode_centerline(predicted, config.coefficients)
+            jobs.append((chain, anchor, starts, reference))
+        if jobs:
+            sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([j[0]["states"][0]["pose"][1] for j in jobs]))
+            anchor_config = _chain_config(warm, None, sigma_px, propagation.temporal_prior_weight)
+            results = fit_masks(
+                [np.asarray(masks[anchor], dtype=bool) for _, anchor, _, _ in jobs], [starts for _, _, starts, _ in jobs],
+                width_template=width_template, config=anchor_config, device=device,
+                references=[reference if propagation.temporal_prior_weight > 0 else None for _, _, _, reference in jobs],
+            )
+            for (chain, anchor, _, _), result in zip(jobs, results, strict=True):
+                anchor_refits += 1
+                own = chain["states"][0]["pose"]
+                if pose_distance_px(result.centerline_xy, decode_centerline(own[0], config.coefficients), None) > propagation.beam_distinct_widths * own[1]:
+                    second_starts += 1
+                    chain["states"].append({"pose": (result.latent, result.width_px, result.width_shape), "previous": arrays["latent"][anchor - (-1 if chain["source"] == "forward" else 1)]})
 
     # The independent poses of the stretch frames, refit under the chain
     # schedule with the stretch's anchor length prior (the anchors know the
@@ -488,6 +602,8 @@ def propagate(
         "predicted_starts_won": predictions_won,
         "beam": beam,
         "schedule_steps": list(warm.stage_steps),
+        "anchor_refits": anchor_refits,
+        "chains_with_second_start": second_starts,
     }
     return candidates, info
 

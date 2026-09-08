@@ -22,6 +22,7 @@ from worm_pose_gen.propagation import (
     PropagationConfig,
     ambiguous_stretches,
     continuity_summary,
+    jump_seeds,
     pose_distance_px,
     predict_latent,
     prior_penalty,
@@ -29,6 +30,7 @@ from worm_pose_gen.propagation import (
     select_candidates,
     select_path,
     slow_schedule,
+    track_length,
     warm_schedule,
 )
 
@@ -156,6 +158,32 @@ class PropagationTests(unittest.TestCase):
         self.assertAlmostEqual(pose_distance_px(curve, shifted, None), 3.0)
         self.assertAlmostEqual(pose_distance_px(curve, shifted, (50, 60)), 3.0)
         self.assertTrue(np.isnan(pose_distance_px(curve, shifted, (5, 5))))
+
+    def test_track_length_and_jump_seeds(self) -> None:
+        n = 8
+        length = np.array([100.0, 101.0, 130.0, 99.0, 100.0, 70.0, 101.0, 100.0])
+        arrays = {
+            "fitted": np.ones(n, dtype=bool), "body_length_px": length, "width_px": np.full(n, 10.0),
+            "mask_on_border": np.array([False, False, True, False, False, True, False, False]),
+            "iou": np.full(n, 0.95), "pose_jump_px": np.array([np.nan, 2.0, 3.0, 2.0, 25.0, 2.0, 2.0, 2.0]),
+            "centerline_xy": np.zeros((n, 100, 2)), "points_in_fov": np.array([100, 100, 80, 100, 100, 90, 100, 100]),
+        }
+        track = track_length(arrays, window=2)
+        # Clipped frames (2 and 5) do not vote; every frame's track sits near 100.
+        self.assertTrue(np.all(np.abs(track - 100.0) <= 1.0))
+        arrays["track_length_px"] = track
+        seeds = jump_seeds(arrays)
+        # Frame 2 and 5: length far off the track (and in-view changes at the border); frame 4: pose jump.
+        self.assertTrue(seeds[2] and seeds[5] and seeds[4])
+        self.assertTrue(seeds[1] and seeds[3])  # the frames on either side of the in-view change at frame 2
+        self.assertFalse(seeds[7])
+        stretches = ambiguous_stretches(np.zeros(n, dtype=int), arrays["fitted"], PropagationConfig(pad=0, max_gap=0), seeds)
+        self.assertEqual(stretches, [(1, 6)])
+        self.assertEqual(ambiguous_stretches(np.zeros(n, dtype=int), arrays["fitted"], PropagationConfig(pad=0)), [])
+        # No whole body at all: the fallback length.
+        empty = dict(arrays); empty["mask_on_border"] = np.ones(n, dtype=bool)
+        self.assertTrue(np.all(track_length(empty, fallback_px=123.0) == 123.0))
+        self.assertTrue(np.all(np.isnan(track_length(empty))))
 
     def test_continuity_summary_counts_jumps(self) -> None:
         n = 6

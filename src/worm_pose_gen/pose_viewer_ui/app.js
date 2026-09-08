@@ -42,6 +42,8 @@ const EXTRA_SERIES = [
   ["prediction_distance_px", "Distance to chain prediction px"],
   ["path_energy_gap", "Path energy gap (chosen − lowest)"],
   ["hypotheses_count", "Hypotheses per frame"],
+  ["tube_coverage", "Tube coverage by mask"],
+  ["max_bend_widths", "Tightest bend (width / radius)"],
 ];
 const HYP_COLORS = { forward: [255, 211, 77], backward: [192, 128, 255], independent: [120, 200, 255] };
 
@@ -181,6 +183,8 @@ function runSummaryText(run) {
   if (p) lines.push(`propagation: ${p.stretches.length} stretches, ${p.frames_in_stretches} frames, ${p.frames_replaced} replaced (fwd ${p.replaced_by_source.forward}, bwd ${p.replaced_by_source.backward}); stretch IoU ${fmt(p.stretch_iou_median_before)} → ${fmt(p.stretch_iou_median_after)}`);
   if (p && p.prediction_damping !== undefined) lines.push(`6a: damping ${p.prediction_damping}, temporal prior ${p.temporal_prior_weight} at ${p.temporal_prior_sigma_widths} widths; predicted starts won ${p.predicted_starts_won} of ${p.predicted_starts_offered}`);
   if (p && p.path) lines.push(`6c: refit ${p.refit_preset}, beam ${p.beam}, path ${p.path.enabled ? `T ${p.path.temperature}, distance ${p.path.distance_weight}, in-view ${p.path.inview_weight}` : "off"}; overrode lowest energy on ${p.path.frames_overriding_lowest_energy} frames, mirrored ${p.path.frames_mirrored}; replaced by ${JSON.stringify(p.replaced_by_source)}`);
+  const t = run.track_length;
+  if (t) lines.push(`6b: track length p50 ${fmt(t.track_length_p10_p50_p90 && t.track_length_p10_p50_p90[1], 0)} px (window ±${t.window}); ${t.frames_refit} frames refit (${t.frames_clipped} clipped, ${t.frames_deviating} off track) in ${fmt(t.seconds, 0)} s${p && p.jump_seeds !== undefined && p.jump_seeds !== null ? `; jump seeds ${p.jump_seeds} (${p.jump_seeds_below_score} below the score threshold)` : ""}`);
   const c = run.continuity;
   if (c) lines.push(`continuity: length jumps > ${Math.round(100 * c.length_jump_fraction)}%: ${c.length_jumps_over_fraction} · pose jumps > width: ${c.pose_jumps_over_width} · in-view changes: ${c.in_view_changes}` + (c.prediction_distance_px_p50_p90_max ? ` · distance to prediction p50/p90 ${fmt(c.prediction_distance_px_p50_p90_max[0], 1)} / ${fmt(c.prediction_distance_px_p50_p90_max[1], 1)} px` : ""));
   lines.push(`cleanup: fill holes ${run.cleanup.fill_holes} (r ${run.cleanup.hole_radius}) · largest only ${run.cleanup.largest_only}`);
@@ -729,6 +733,7 @@ function renderDetails() {
   rows.push(section("fit" + (cmp ? " (this / compare)" : "")));
   rows.push(row("fitted", s.fitted ? "yes" : "no"));
   rows.push(row("IoU", both("iou")));
+  if (s.tube_coverage !== undefined) rows.push(row("tube covered by mask", fmt(s.tube_coverage), s.iou !== null && s.iou < 0.9 && s.tube_coverage >= 0.9 ? "diff" : ""));
   if (s.iou_independent !== undefined) rows.push(row("IoU independent", fmt(s.iou_independent)));
   rows.push(row("source", s.source_name || "independent"), row("best start", s.best_start || "–"), row("starts tried", fmt(s.n_starts)));
   rows.push(row("soft-Dice energy", fmt(s.energy, 4)), row("total energy", fmt(s.total_energy, 4)));
@@ -751,6 +756,8 @@ function renderDetails() {
   if (s.width_vs_prior_sigmas !== undefined) rows.push(row("width vs prior", `${fmt(s.width_vs_prior_sigmas, 2)} σ`));
   rows.push(row("in view", `${fmt(s.points_in_fov)}/${state.run.n_points} (${fmt(s.in_view_fraction, 2)})`));
   rows.push(row("taper asymmetry", fmt(s.taper_asymmetry, 3)), row("orientation gap", fmt(s.orientation_gap, 4)), row("reversed start won", s.reversed ? "yes" : "no"));
+  if (s.max_bend_widths !== undefined) rows.push(row("tightest bend (width/radius)", fmt(s.max_bend_widths, 2), s.max_bend_widths > 2 ? "diff" : ""));
+  if (s.track_length_px !== undefined && s.track_length_px !== null) rows.push(row("track length px", `${fmt(s.track_length_px, 1)}${s.length_refit ? " · refit" : ""}`));
   rows.push(row("tube area px", fmt(s.tube_area_px, 0)));
   if (s.crop) rows.push(row("crop x0 x1 y0 y1", s.crop.join(" ")));
   rows.push(section("mask (stored)"));
@@ -862,7 +869,7 @@ function drawCurvatureChart() {
   const pose = state.frame && state.frame.pose;
   if (!pose) return;
   const k = pose.curvature;
-  const limit = 1 / Math.max(pose.width_px, 1);
+  const limit = 2 / Math.max(pose.width_px, 1);  // the fitter's bend limit: radius of half a width
   const max = Math.max(limit * 1.5, ...k.map(Math.abs)) * 1.05;
   const pad = { l: 40, r: 6, t: 4, b: 4 };
   const n = k.length;
@@ -873,7 +880,7 @@ function drawCurvatureChart() {
   c.fillRect(pad.l, Y(-limit), w - pad.l - pad.r, h - pad.b - Y(-limit));
   c.strokeStyle = "#2a343c"; c.beginPath(); c.moveTo(pad.l, Y(0)); c.lineTo(w - pad.r, Y(0)); c.stroke();
   c.fillStyle = "#9aa6b0"; c.font = "10px system-ui";
-  c.fillText(`+${max.toFixed(3)}`, 2, pad.t + 9); c.fillText(`−${max.toFixed(3)}`, 2, h - pad.b - 2); c.fillText("1/width", 2, Y(limit) + 3);
+  c.fillText(`+${max.toFixed(3)}`, 2, pad.t + 9); c.fillText(`−${max.toFixed(3)}`, 2, h - pad.b - 2); c.fillText("limit", 2, Y(limit) + 3);
   const xs = Array.from({ length: n }, (_, i) => X(i));
   polyline(c, xs, k.map(Y), "#57d68d", null, 1.5);
   if (state.comparePose && state.comparePose.pose) polyline(c, xs, state.comparePose.pose.curvature.map(Y), "#ffaa3c", [3, 4], 1);
@@ -885,8 +892,8 @@ function chartSpecs() {
   const run = state.run;
   const prior = run.prior;
   const specs = [
-    { id: "iou", label: "IoU", height: 56, lines: [{ key: "iou", color: "#57d68d" }, { key: "iou_independent", color: "#9aa6b0", dash: [3, 3], opt: "independent" }], compare: "iou", hline: () => parseFloat($("#jump-iou").value), ymin: 0, ymax: 1 },
-    { id: "length", label: "Body length px", height: 56, lines: [{ key: "body_length_px", color: "#57d68d" }], compare: "body_length_px", band: prior ? [prior.length_px * Math.exp(-2 * prior.log_length_sigma), prior.length_px * Math.exp(2 * prior.log_length_sigma)] : null },
+    { id: "iou", label: "IoU · coverage", height: 56, lines: [{ key: "iou", color: "#57d68d" }, { key: "tube_coverage", color: "#50beff", dash: [2, 3] }, { key: "iou_independent", color: "#9aa6b0", dash: [3, 3], opt: "independent" }], compare: "iou", hline: () => parseFloat($("#jump-iou").value), ymin: 0, ymax: 1 },
+    { id: "length", label: "Body length px", height: 56, lines: [{ key: "body_length_px", color: "#57d68d" }, { key: "track_length_px", color: "#9aa6b0", dash: [6, 4] }], compare: "body_length_px", band: prior ? [prior.length_px * Math.exp(-2 * prior.log_length_sigma), prior.length_px * Math.exp(2 * prior.log_length_sigma)] : null },
     { id: "area", label: "Area px (mask, tube in view, raw)", height: 56, lines: [{ key: "worm_pixels", color: "#50beff" }, { key: "tube_area_visible_px", color: "#57d68d" }, { key: "raw_worm_pixels", color: "#9aa6b0", dash: [2, 3] }] },
     { id: "score", label: "Ambiguity score", height: 44, bars: "ambiguity_score", dots: { key: "score_independent", color: "#9aa6b0", opt: "independent" }, ymin: 0, ymax: 9 },
     { id: "extra", label: "", height: 50, lines: [{ key: null, color: "#e0b04d" }], compare: null },

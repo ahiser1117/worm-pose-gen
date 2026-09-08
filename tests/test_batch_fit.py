@@ -184,6 +184,8 @@ class BatchFitTests(unittest.TestCase):
         self.assertLess(abs(offset_free), 1.0)
         self.assertGreater(offset_pulled, 2.5)
         self.assertGreater(pulled.records[0]["final_energy"], pulled.records[0]["final_soft_dice_energy"])
+        self.assertGreater(free.records[0]["final_coverage"], 0.9)
+        self.assertLessEqual(free.records[0]["final_coverage"], 1.0)
         with self.assertRaisesRegex(ValueError, "references"):
             fit_masks([mask], [start], config=SMALL, device="cpu", references=[])
 

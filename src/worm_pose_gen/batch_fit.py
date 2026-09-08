@@ -38,8 +38,10 @@ from .mask_fit import (
     MaskFitConfig,
     MaskFitResult,
     _MaskFitState,
+    bend_penalty,
     crop_window,
     default_width_template,
+    hard_coverage,
     hard_iou,
     render_tube_segments,
     signed_edge_distance,
@@ -342,6 +344,7 @@ def _fit_group(
         inside_camera = ((centerline >= 0) & (centerline < camera_size[:, None, :])).all(-1).to(centerline.dtype)
         escape = ((below + above) * inside_camera).mean(1)
         total = smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
+        total = total + bend_penalty(centerline, state.log_length.exp(), state.log_width.exp(), c)
         if use_temporal:
             squared = ((centerline - reference_t).square().sum(-1) * reference_mask_t).sum(1) / reference_mask_t.sum(1).clamp_min(1.0)
             total = total + temporal_scale * squared
@@ -445,6 +448,7 @@ def _fit_group(
         rendered_hard = hard_np[f, iy0 - w.y0 : iy1 - w.y0, ix0 - w.x0 : ix1 - w.x0]
         target_np = mask[iy0:iy1, ix0:ix1]
         iou = hard_iou(rendered_hard, target_np)
+        coverage = hard_coverage(rendered_hard, target_np)
         records: list[dict[str, float | str | int]] = []
         for k, start in enumerate(starts):
             row = row_start + k
@@ -455,6 +459,7 @@ def _fit_group(
                     "final_soft_dice_energy": float(final_np[row]),
                     "final_energy": float(loss_np[row]),
                     "final_iou": iou if row == best_row else float("nan"),
+                    "final_coverage": coverage if row == best_row else float("nan"),
                 }
             )
         curve = centerline_np[best_row]

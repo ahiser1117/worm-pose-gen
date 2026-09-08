@@ -249,7 +249,21 @@ widths times `--path-distance-weight`, the in-view change times
 `--path-inview-weight`, and the squared log length change times
 `--path-length-weight`; `--no-path` restores the lowest energy per frame).
 `--propagate-preset balanced` runs that preset's steps in the pass; it
-was slower and worse on the raw spiral, so the default stays `fast`. Every candidate is stored (`hypotheses_*`
+was slower and worse on the raw spiral, so the default stays `fast`.
+Stretches are also seeded by jumps of the track (a pose jump of more
+than a width, or the body entering or leaving the camera at the border;
+`--no-jump-seeds`, `--seed-length-fraction` adds length jumps). After
+propagation a track length pass refits the frames outside the stretches
+whose mask reaches the border and whose length departs from the track
+(the median length of the whole bodies within `--track-window` frames)
+with that length as their prior (`--track-refit`, `--track-sigma`,
+`--track-tolerance`, `--no-track-length`); run before propagation it
+disturbed the stretch anchors. The fitter's energy penalises bends tighter than a
+radius of `--min-bend-radius` body widths (default 0.5; 0 disables). Each
+frame also stores the fraction of the tube covered by mask
+(`tube_coverage`), which stays high when a low IoU comes from mask the
+tube does not claim, such as a plate streak segmented as worm; the viewer
+tags such frames "mask has extra body (segmentation)". Every candidate is stored (`hypotheses_*`
 arrays, `path_*`, `prediction_xy`) and the viewer draws them, ranked by
 energy, with the path's choice and where it overrode the lowest energy.
 

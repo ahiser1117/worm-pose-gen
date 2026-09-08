@@ -82,6 +82,10 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         "iou_independent": np.linspace(0.95, 0.85, count),
         "score_independent": np.zeros(count, dtype=np.int64),
         "best_start": np.array(["skeleton_longest_path"] * count),
+        "tube_coverage": np.full(count, 0.97),
+        "max_bend_widths": np.full(count, 0.8),
+        "track_length_px": np.full(count, 100.0),
+        "length_refit": np.zeros(count, dtype=bool),
     }
     for name in FLAG_NAMES:
         arrays[f"flag_{name}"] = np.zeros(count, dtype=bool)
@@ -165,6 +169,15 @@ class PoseViewerHelperTests(unittest.TestCase):
         failure = classify_frame(True, {"low_iou": True, "pose_jump": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False)
         self.assertEqual(failure["label"], "ambiguous: fit failure suspected")
         self.assertEqual(classify_frame(False, {}, 0, points_in_fov=0, n_points=100, mask_on_border=False)["kind"], "unfitted")
+        # The plate streak of 2024-06-18-12 merges with the body: one component, mask 1.5 times the tube, tube on mask.
+        streak = classify_frame(True, {"low_iou": True, "area_excess": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.54, coverage=0.87, area_ratio=1.5)
+        self.assertEqual(streak["tags"], ["fit failure suspected", "mask has extra body (segmentation)"])
+        separate = classify_frame(True, {"low_iou": True, "fragments": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.6, coverage=0.95, components=2, pixels_outside_largest=12000, area_ratio=1.0)
+        self.assertEqual(separate["tags"], ["fragmented mask", "fit failure suspected", "mask has extra body (segmentation)"])
+        short = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.88, coverage=0.97, area_ratio=0.95)
+        self.assertEqual(short["tags"], ["fit failure suspected", "tube on mask, mask not covered"])
+        poor = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.5, coverage=0.6)
+        self.assertEqual(poor["tags"], ["fit failure suspected"])
 
     def test_curvature_of_a_circle_is_its_inverse_radius(self) -> None:
         angle = np.linspace(0, np.pi, 100)
@@ -263,6 +276,8 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertTrue(run["has_hypotheses"])
                 self.assertEqual(series["prediction_distance_px"][-1], 1.0)
                 self.assertEqual(series["path_override"][-1], 1)
+                self.assertEqual(series["tube_coverage"][-1], 0.97)
+                self.assertEqual(stats["max_bend_widths"], 0.8)
                 self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
 
                 light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())

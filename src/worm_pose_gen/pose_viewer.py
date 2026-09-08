@@ -66,6 +66,7 @@ SERIES_KEYS = (
     "pixels_outside_largest", "area_ratio", "self_contact_px", "pose_jump_px", "length_deviation",
     "ambiguity_score", "score_independent", "source", "n_starts", "mask_on_border", "reversed", "prediction_distance_px",
     "hypotheses_count", "path_override", "path_mirrored", "path_energy_gap",
+    "tube_coverage", "max_bend_widths", "track_length_px", "length_refit",
 )
 
 # Flag semantics after propagation (plan step 5b): some flags describe a
@@ -174,6 +175,11 @@ def classify_frame(
     mask_on_border: bool,
     source: int = 0,
     path_override: bool = False,
+    iou: float | None = None,
+    coverage: float | None = None,
+    components: int = 1,
+    pixels_outside_largest: int = 0,
+    area_ratio: float | None = None,
 ) -> dict[str, Any]:
     """Name what a frame's flags say about it.
 
@@ -199,6 +205,15 @@ def classify_frame(
         tags.append(f"propagated {SOURCE_NAMES[source]}")
     if path_override:
         tags.append("path overrode lowest energy")
+    # Two readings of a low overlap with the tube (almost) entirely on mask.
+    # Mask far larger than the tube: the segmenter painted something else as
+    # worm, attached (a plate streak merging with the body) or separate, and
+    # the IoU says little about the pose.  Mask about the tube's size: the
+    # tube fits where it is but leaves body uncovered (a short tube inside a
+    # coil).
+    if iou is not None and coverage is not None and iou < 0.9 and coverage >= 0.85:
+        extra_mask = (area_ratio is not None and area_ratio > 1.2) or (components > 1 and pixels_outside_largest > 500)
+        tags.append("mask has extra body (segmentation)" if extra_mask else "tube on mask, mask not covered")
     kind = "clean" if score == 0 else ("watch" if score == 1 else "ambiguous")
     descriptive = [t for t in tags if not t.startswith("propagated")]
     label = kind if not descriptive else f"{kind}: " + ", ".join(descriptive)
@@ -350,6 +365,11 @@ class LoadedRun:
             mask_on_border=bool(arrays["mask_on_border"][row]) if "mask_on_border" in arrays else False,
             source=int(arrays["source"][row]) if "source" in arrays else 0,
             path_override=bool(arrays["path_override"][row]) if "path_override" in arrays else False,
+            iou=float(arrays["iou"][row]) if bool(arrays["fitted"][row]) else None,
+            coverage=float(arrays["tube_coverage"][row]) if "tube_coverage" in arrays and bool(arrays["fitted"][row]) else None,
+            components=int(arrays["components"][row]) if "components" in arrays else 1,
+            pixels_outside_largest=int(arrays["pixels_outside_largest"][row]) if "pixels_outside_largest" in arrays else 0,
+            area_ratio=float(arrays["area_ratio"][row]) if "area_ratio" in arrays and bool(arrays["fitted"][row]) else None,
         )
 
     def flag_details(self, row: int) -> list[dict[str, Any]]:
@@ -715,6 +735,7 @@ class ViewerState:
             "has_independent_pose": "centerline_xy_independent" in run.arrays,
             "has_hypotheses": "hypotheses_centerline_xy" in run.arrays,
             "continuity": summary.get("continuity"),
+            "track_length": summary.get("track_length"),
             "series": run.series(),
             "compatible_runs": self.compatible_runs(name),
         }

@@ -1,0 +1,1127 @@
+{
+ "clips": {
+  "spiral_0131": {
+   "name": "spiral_0131",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
+   "start": 3650,
+   "frames": 300,
+   "reasons": [
+    "coil",
+    "spiral",
+    "holes"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-31-29Z_seq_spiral_0131",
+   "seconds": 509.836607048288,
+   "frames_fitted": 300,
+   "iou_median": 0.9568101816622374,
+   "iou_p10": 0.9348431922652082,
+   "iou_min": 0.9033868212120197,
+   "frames_iou_below_0.9": 0,
+   "in_view_below_1": 0,
+   "flag_counts": {
+    "low_iou": 0,
+    "area_deficit": 0,
+    "area_excess": 0,
+    "self_contact": 167,
+    "holes": 95,
+    "fragments": 0,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 2
+   },
+   "frames_score_at_least_1": 169,
+   "frames_score_at_least_2": 95,
+   "iou_by_score": {
+    "0": {
+     "frames": 131,
+     "iou_median": 0.9727591352326752
+    },
+    "1": {
+     "frames": 74,
+     "iou_median": 0.9512326113788147
+    },
+    "2": {
+     "frames": 95,
+     "iou_median": 0.944413774066662
+    }
+   },
+   "orientation": {
+    "gap_median": 0.00159425288438797,
+    "gap_p10": 0.0010053470730781555,
+    "frames_gap_below_0.002": 104,
+    "frames_gap_below_0.01": 115,
+    "reversed_start_won": 99
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 0.9933110367892977,
+    "flips": 2
+   },
+   "prior": {
+    "length_px": 727.977786808269,
+    "width_px": 40.31174548315829,
+    "frames_used": 16
+   },
+   "propagation": {
+    "stretches": [
+     [
+      46,
+      221
+     ],
+     [
+      282,
+      290
+     ]
+    ],
+    "frames_in_stretches": 185,
+    "chains": 4,
+    "chains_forward": 2,
+    "chains_backward": 2,
+    "lockstep_steps": 176,
+    "warm_fits": 701,
+    "independent_refits": 185,
+    "redirected_starts": 4,
+    "longest_stretch": 176,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     708,
+     711,
+     719,
+     730
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 327,
+    "predicted_starts_won": 183,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 4,
+    "chains_with_second_start": 0,
+    "jump_seeds": 31,
+    "jump_seeds_below_score": 6,
+    "frames_replaced": 185,
+    "replaced_by_source": {
+     "independent": 14,
+     "forward": 123,
+     "backward": 48
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 5,
+     "frames_mirrored": 0,
+     "energy_gap_p50_p90_max": [
+      0.0016209968453202717,
+      0.008709124118885074,
+      0.010718043286744264
+     ],
+     "seconds": 0.1895574862137437
+    },
+    "stretch_iou_median_before": 0.31716383018515054,
+    "stretch_iou_median_after": 0.9498977150584238,
+    "stretch_frames_score_at_least_2_before": 161,
+    "stretch_frames_score_at_least_2_after": 95,
+    "seconds": 425.30893931910396
+   },
+   "iou_independent_median": 0.5315836250453071,
+   "frames_iou_independent_below_0.9": 157,
+   "fit_ms_per_frame": 138.65519900806248,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-31-29Z_seq_spiral_0131/overlay.mp4"
+  },
+  "loop_0131": {
+   "name": "loop_0131",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
+   "start": 14700,
+   "frames": 300,
+   "reasons": [
+    "self_contact",
+    "holes"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-39-59Z_seq_loop_0131",
+   "seconds": 368.3485846342519,
+   "frames_fitted": 300,
+   "iou_median": 0.9681001131410818,
+   "iou_p10": 0.936345863243482,
+   "iou_min": 0.9049818137234868,
+   "frames_iou_below_0.9": 0,
+   "in_view_below_1": 88,
+   "flag_counts": {
+    "low_iou": 0,
+    "area_deficit": 6,
+    "area_excess": 0,
+    "self_contact": 57,
+    "holes": 36,
+    "fragments": 16,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 51
+   },
+   "frames_score_at_least_1": 123,
+   "frames_score_at_least_2": 43,
+   "iou_by_score": {
+    "0": {
+     "frames": 177,
+     "iou_median": 0.9707516115759155
+    },
+    "1": {
+     "frames": 80,
+     "iou_median": 0.95522395759134
+    },
+    "2": {
+     "frames": 43,
+     "iou_median": 0.9491977683057837
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0020280256867408752,
+    "gap_p10": 0.001415903866291046,
+    "frames_gap_below_0.002": 75,
+    "frames_gap_below_0.01": 157,
+    "reversed_start_won": 61
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 1.0,
+    "flips": 0
+   },
+   "prior": {
+    "length_px": 727.977786808269,
+    "width_px": 40.31174548315829,
+    "frames_used": 16
+   },
+   "propagation": {
+    "stretches": [
+     [
+      14,
+      23
+     ],
+     [
+      32,
+      55
+     ],
+     [
+      84,
+      92
+     ],
+     [
+      103,
+      160
+     ],
+     [
+      165,
+      170
+     ],
+     [
+      205,
+      212
+     ],
+     [
+      261,
+      288
+     ]
+    ],
+    "frames_in_stretches": 143,
+    "chains": 14,
+    "chains_forward": 7,
+    "chains_backward": 7,
+    "lockstep_steps": 58,
+    "warm_fits": 951,
+    "independent_refits": 143,
+    "redirected_starts": 150,
+    "longest_stretch": 58,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     699,
+     717,
+     719,
+     723,
+     724,
+     727,
+     729,
+     729,
+     729,
+     733,
+     741,
+     753,
+     755,
+     757
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 400,
+    "predicted_starts_won": 249,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 14,
+    "chains_with_second_start": 1,
+    "jump_seeds": 52,
+    "jump_seeds_below_score": 37,
+    "frames_replaced": 143,
+    "replaced_by_source": {
+     "independent": 29,
+     "forward": 50,
+     "backward": 64
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 7,
+     "frames_mirrored": 0,
+     "energy_gap_p50_p90_max": [
+      0.0014567789730328268,
+      0.004929266957776986,
+      0.007389337479324298
+     ],
+     "seconds": 0.26184663735330105
+    },
+    "stretch_iou_median_before": 0.924190056591591,
+    "stretch_iou_median_after": 0.9535568331370783,
+    "stretch_frames_score_at_least_2_before": 63,
+    "stretch_frames_score_at_least_2_after": 42,
+    "seconds": 177.10993792582303
+   },
+   "iou_independent_median": 0.9658611073071661,
+   "frames_iou_independent_below_0.9": 52,
+   "fit_ms_per_frame": 367.888289730375,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-39-59Z_seq_loop_0131/overlay.mp4"
+  },
+  "coil_0822": {
+   "name": "coil_0822",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2023-08-22/2023-08-22-01.h5",
+   "start": 10400,
+   "frames": 300,
+   "reasons": [
+    "coil",
+    "holes"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-46-07Z_seq_coil_0822",
+   "seconds": 276.34452894330025,
+   "frames_fitted": 300,
+   "iou_median": 0.9638781943276331,
+   "iou_p10": 0.9464000705210871,
+   "iou_min": 0.9189812558879902,
+   "frames_iou_below_0.9": 0,
+   "in_view_below_1": 114,
+   "flag_counts": {
+    "low_iou": 0,
+    "area_deficit": 0,
+    "area_excess": 0,
+    "self_contact": 94,
+    "holes": 85,
+    "fragments": 0,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 3
+   },
+   "frames_score_at_least_1": 122,
+   "frames_score_at_least_2": 60,
+   "iou_by_score": {
+    "0": {
+     "frames": 178,
+     "iou_median": 0.96505338161918
+    },
+    "1": {
+     "frames": 62,
+     "iou_median": 0.9524668351518901
+    },
+    "2": {
+     "frames": 60,
+     "iou_median": 0.9635777301885827
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0018396899104118347,
+    "gap_p10": 0.0013335943222045898,
+    "frames_gap_below_0.002": 81,
+    "frames_gap_below_0.01": 133,
+    "reversed_start_won": 0
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 1.0,
+    "flips": 0
+   },
+   "prior": {
+    "length_px": 782.1727292717059,
+    "width_px": 43.451026916503906,
+    "frames_used": 23
+   },
+   "propagation": {
+    "stretches": [
+     [
+      44,
+      49
+     ],
+     [
+      72,
+      204
+     ],
+     [
+      231,
+      246
+     ],
+     [
+      288,
+      299
+     ]
+    ],
+    "frames_in_stretches": 167,
+    "chains": 7,
+    "chains_forward": 4,
+    "chains_backward": 3,
+    "lockstep_steps": 133,
+    "warm_fits": 604,
+    "independent_refits": 167,
+    "redirected_starts": 9,
+    "longest_stretch": 133,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     766,
+     767,
+     768,
+     773,
+     775,
+     781,
+     802
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 273,
+    "predicted_starts_won": 134,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 7,
+    "chains_with_second_start": 0,
+    "jump_seeds": 24,
+    "jump_seeds_below_score": 15,
+    "frames_replaced": 167,
+    "replaced_by_source": {
+     "independent": 15,
+     "forward": 50,
+     "backward": 102
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 5,
+     "frames_mirrored": 0,
+     "energy_gap_p50_p90_max": [
+      0.0020083141543338623,
+      0.009985732396261524,
+      0.012301000241466034
+     ],
+     "seconds": 0.16651874594390392
+    },
+    "stretch_iou_median_before": 0.42761329628046174,
+    "stretch_iou_median_after": 0.9628565504576286,
+    "stretch_frames_score_at_least_2_before": 127,
+    "stretch_frames_score_at_least_2_after": 60,
+    "seconds": 186.0670309709385
+   },
+   "iou_independent_median": 0.9592865429141979,
+   "frames_iou_independent_below_0.9": 127,
+   "fit_ms_per_frame": 164.09814478208622,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-46-07Z_seq_coil_0822/overlay.mp4"
+  },
+  "omega_0822": {
+   "name": "omega_0822",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2023-08-22/2023-08-22-01.h5",
+   "start": 1950,
+   "frames": 300,
+   "reasons": [
+    "omega",
+    "self_contact",
+    "holes"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-47-11Z_seq_omega_0822",
+   "seconds": 212.362921169959,
+   "frames_fitted": 300,
+   "iou_median": 0.9648361754762249,
+   "iou_p10": 0.9440135826386074,
+   "iou_min": 0.9160005813108559,
+   "frames_iou_below_0.9": 0,
+   "in_view_below_1": 128,
+   "flag_counts": {
+    "low_iou": 0,
+    "area_deficit": 0,
+    "area_excess": 0,
+    "self_contact": 64,
+    "holes": 48,
+    "fragments": 6,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 10
+   },
+   "frames_score_at_least_1": 80,
+   "frames_score_at_least_2": 48,
+   "iou_by_score": {
+    "0": {
+     "frames": 220,
+     "iou_median": 0.9675035832059066
+    },
+    "1": {
+     "frames": 32,
+     "iou_median": 0.9540669094017462
+    },
+    "2": {
+     "frames": 48,
+     "iou_median": 0.9400999579226044
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0010437741875648499,
+    "gap_p10": 0.0006928190588951111,
+    "frames_gap_below_0.002": 203,
+    "frames_gap_below_0.01": 207,
+    "reversed_start_won": 88
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 1.0,
+    "flips": 0
+   },
+   "prior": {
+    "length_px": 782.1727292717059,
+    "width_px": 43.451026916503906,
+    "frames_used": 23
+   },
+   "propagation": {
+    "stretches": [
+     [
+      0,
+      4
+     ],
+     [
+      68,
+      137
+     ],
+     [
+      231,
+      236
+     ],
+     [
+      281,
+      286
+     ],
+     [
+      291,
+      296
+     ]
+    ],
+    "frames_in_stretches": 93,
+    "chains": 9,
+    "chains_forward": 4,
+    "chains_backward": 5,
+    "lockstep_steps": 70,
+    "warm_fits": 391,
+    "independent_refits": 93,
+    "redirected_starts": 13,
+    "longest_stretch": 70,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     769,
+     770,
+     778,
+     781,
+     795,
+     796,
+     800,
+     805,
+     811
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 189,
+    "predicted_starts_won": 120,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 9,
+    "chains_with_second_start": 1,
+    "jump_seeds": 13,
+    "jump_seeds_below_score": 11,
+    "frames_replaced": 93,
+    "replaced_by_source": {
+     "independent": 25,
+     "forward": 15,
+     "backward": 53
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 2,
+     "frames_mirrored": 0,
+     "energy_gap_p50_p90_max": [
+      0.0020050129656290286,
+      0.002451529049907415,
+      0.002563158070977012
+     ],
+     "seconds": 0.09756717830896378
+    },
+    "stretch_iou_median_before": 0.4230162540292161,
+    "stretch_iou_median_after": 0.9555089321526642,
+    "stretch_frames_score_at_least_2_before": 60,
+    "stretch_frames_score_at_least_2_after": 48,
+    "seconds": 113.92347155325115
+   },
+   "iou_independent_median": 0.9651354596261512,
+   "frames_iou_independent_below_0.9": 60,
+   "fit_ms_per_frame": 186.20559102234742,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-47-11Z_seq_omega_0822/overlay.mp4"
+  },
+  "tail_reentry_0623": {
+   "name": "tail_reentry_0623",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2023-06-23/2023-06-23-01.h5",
+   "start": 8850,
+   "frames": 300,
+   "reasons": [
+    "camera_exit",
+    "tail_reentry",
+    "fragments"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-50-44Z_seq_tail_reentry_0623",
+   "seconds": 141.0480740526691,
+   "frames_fitted": 300,
+   "iou_median": 0.9671637085831628,
+   "iou_p10": 0.9558719378068709,
+   "iou_min": 0.8836824159766196,
+   "frames_iou_below_0.9": 3,
+   "in_view_below_1": 166,
+   "flag_counts": {
+    "low_iou": 3,
+    "area_deficit": 4,
+    "area_excess": 0,
+    "self_contact": 0,
+    "holes": 0,
+    "fragments": 28,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 28
+   },
+   "frames_score_at_least_1": 56,
+   "frames_score_at_least_2": 5,
+   "iou_by_score": {
+    "0": {
+     "frames": 244,
+     "iou_median": 0.969204994942094
+    },
+    "1": {
+     "frames": 51,
+     "iou_median": 0.9614471949611836
+    },
+    "2": {
+     "frames": 3,
+     "iou_median": 0.9089543770650469
+    },
+    "3": {
+     "frames": 2,
+     "iou_median": 0.8885396751545154
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0011163651943206787,
+    "gap_p10": 0.0002641752362251282,
+    "frames_gap_below_0.002": 265,
+    "frames_gap_below_0.01": 265,
+    "reversed_start_won": 2
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 0.939799331103679,
+    "flips": 18
+   },
+   "prior": {
+    "length_px": 760.6396685418622,
+    "width_px": 44.587453629804884,
+    "frames_used": 18
+   },
+   "propagation": {
+    "stretches": [
+     [
+      0,
+      5
+     ],
+     [
+      129,
+      139
+     ],
+     [
+      147,
+      152
+     ],
+     [
+      254,
+      265
+     ]
+    ],
+    "frames_in_stretches": 35,
+    "chains": 7,
+    "chains_forward": 3,
+    "chains_backward": 4,
+    "lockstep_steps": 12,
+    "warm_fits": 361,
+    "independent_refits": 35,
+    "redirected_starts": 67,
+    "longest_stretch": 12,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     700,
+     734,
+     745,
+     767,
+     776,
+     781,
+     785
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 147,
+    "predicted_starts_won": 89,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 7,
+    "chains_with_second_start": 4,
+    "jump_seeds": 7,
+    "jump_seeds_below_score": 5,
+    "frames_replaced": 35,
+    "replaced_by_source": {
+     "independent": 17,
+     "forward": 14,
+     "backward": 4
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 5,
+     "frames_mirrored": 4,
+     "energy_gap_p50_p90_max": [
+      0.004221498383868788,
+      0.013991974549821012,
+      0.019356251017512732
+     ],
+     "seconds": 0.1154106231406331
+    },
+    "stretch_iou_median_before": 0.9599452362564067,
+    "stretch_iou_median_after": 0.9645031739862676,
+    "stretch_frames_score_at_least_2_before": 10,
+    "stretch_frames_score_at_least_2_after": 5,
+    "seconds": 45.35152758657932
+   },
+   "iou_independent_median": 0.9674857404571744,
+   "frames_iou_independent_below_0.9": 13,
+   "fit_ms_per_frame": 182.52439447989067,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-50-44Z_seq_tail_reentry_0623/overlay.mp4"
+  },
+  "spiral_0528": {
+   "name": "spiral_0528",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+   "start": 8900,
+   "frames": 300,
+   "reasons": [
+    "coil",
+    "spiral",
+    "holes"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-41-33Z_seq_spiral_0528",
+   "seconds": 294.0667690113187,
+   "frames_fitted": 300,
+   "iou_median": 0.9569539606495996,
+   "iou_p10": 0.9416289194555953,
+   "iou_min": 0.9159626500666963,
+   "frames_iou_below_0.9": 0,
+   "in_view_below_1": 25,
+   "flag_counts": {
+    "low_iou": 0,
+    "area_deficit": 7,
+    "area_excess": 0,
+    "self_contact": 154,
+    "holes": 138,
+    "fragments": 0,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 17
+   },
+   "frames_score_at_least_1": 172,
+   "frames_score_at_least_2": 137,
+   "iou_by_score": {
+    "0": {
+     "frames": 128,
+     "iou_median": 0.9717507646406829
+    },
+    "1": {
+     "frames": 35,
+     "iou_median": 0.9509889514405274
+    },
+    "2": {
+     "frames": 130,
+     "iou_median": 0.9507911358069914
+    },
+    "3": {
+     "frames": 7,
+     "iou_median": 0.9275616770092326
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0008516460657119751,
+    "gap_p10": 0.0002093426883220673,
+    "frames_gap_below_0.002": 117,
+    "frames_gap_below_0.01": 124,
+    "reversed_start_won": 100
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 0.9732441471571907,
+    "flips": 8
+   },
+   "prior": {
+    "length_px": 777.0881367531089,
+    "width_px": 43.57400633879849,
+    "frames_used": 12
+   },
+   "propagation": {
+    "stretches": [
+     [
+      29,
+      34
+     ],
+     [
+      49,
+      191
+     ],
+     [
+      226,
+      246
+     ],
+     [
+      274,
+      279
+     ]
+    ],
+    "frames_in_stretches": 176,
+    "chains": 8,
+    "chains_forward": 4,
+    "chains_backward": 4,
+    "lockstep_steps": 143,
+    "warm_fits": 816,
+    "independent_refits": 176,
+    "redirected_starts": 63,
+    "longest_stretch": 143,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     764,
+     766,
+     767,
+     768,
+     770,
+     780,
+     782,
+     793
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 353,
+    "predicted_starts_won": 170,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 8,
+    "chains_with_second_start": 2,
+    "jump_seeds": 47,
+    "jump_seeds_below_score": 14,
+    "frames_replaced": 176,
+    "replaced_by_source": {
+     "independent": 9,
+     "forward": 131,
+     "backward": 36
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 3,
+     "frames_mirrored": 0,
+     "energy_gap_p50_p90_max": [
+      0.0026016781411172807,
+      0.005345111570665606,
+      0.006030969928052687
+     ],
+     "seconds": 0.22232587821781635
+    },
+    "stretch_iou_median_before": 0.35310645928704554,
+    "stretch_iou_median_after": 0.9515690285230245,
+    "stretch_frames_score_at_least_2_before": 140,
+    "stretch_frames_score_at_least_2_after": 137,
+    "seconds": 208.95225859805942
+   },
+   "iou_independent_median": 0.9473551111674329,
+   "frames_iou_independent_below_0.9": 139,
+   "fit_ms_per_frame": 159.508640114218,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-41-33Z_seq_spiral_0528/overlay.mp4"
+  },
+  "edge_0528": {
+   "name": "edge_0528",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+   "start": 6850,
+   "frames": 300,
+   "reasons": [
+    "camera_exit",
+    "fragments"
+   ],
+   "run": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-46-27Z_seq_edge_0528",
+   "seconds": 255.9996000127867,
+   "frames_fitted": 300,
+   "iou_median": 0.9595622101450902,
+   "iou_p10": 0.9388035475977821,
+   "iou_min": 0.8705622045660264,
+   "frames_iou_below_0.9": 2,
+   "in_view_below_1": 239,
+   "flag_counts": {
+    "low_iou": 2,
+    "area_deficit": 43,
+    "area_excess": 0,
+    "self_contact": 38,
+    "holes": 0,
+    "fragments": 0,
+    "length_deviation": 0,
+    "pose_jump": 0,
+    "edge_inside": 61
+   },
+   "frames_score_at_least_1": 63,
+   "frames_score_at_least_2": 43,
+   "iou_by_score": {
+    "0": {
+     "frames": 237,
+     "iou_median": 0.9659950512548604
+    },
+    "1": {
+     "frames": 20,
+     "iou_median": 0.9436394084865478
+    },
+    "2": {
+     "frames": 5,
+     "iou_median": 0.9081926161551217
+    },
+    "3": {
+     "frames": 38,
+     "iou_median": 0.9481786795256244
+    }
+   },
+   "orientation": {
+    "gap_median": 0.0003235936164855957,
+    "gap_p10": 8.473992347717285e-05,
+    "frames_gap_below_0.002": 141,
+    "frames_gap_below_0.01": 147,
+    "reversed_start_won": 51
+   },
+   "orientation_flips": {
+    "consecutive_pairs": 299,
+    "fraction_consistent": 0.903010033444816,
+    "flips": 29
+   },
+   "prior": {
+    "length_px": 777.0881367531089,
+    "width_px": 43.57400633879849,
+    "frames_used": 12
+   },
+   "propagation": {
+    "stretches": [
+     [
+      0,
+      23
+     ],
+     [
+      81,
+      97
+     ],
+     [
+      121,
+      133
+     ],
+     [
+      143,
+      158
+     ],
+     [
+      171,
+      177
+     ],
+     [
+      182,
+      188
+     ],
+     [
+      200,
+      213
+     ],
+     [
+      229,
+      252
+     ],
+     [
+      262,
+      268
+     ],
+     [
+      273,
+      296
+     ]
+    ],
+    "frames_in_stretches": 153,
+    "chains": 19,
+    "chains_forward": 9,
+    "chains_backward": 10,
+    "lockstep_steps": 24,
+    "warm_fits": 1810,
+    "independent_refits": 153,
+    "redirected_starts": 468,
+    "longest_stretch": 24,
+    "chain_length_sigma": 0.02,
+    "chain_length_from_anchor": true,
+    "anchor_lengths_px": [
+     722,
+     723,
+     728,
+     729,
+     737,
+     742,
+     746,
+     752,
+     752,
+     753,
+     767,
+     769,
+     772,
+     773,
+     774,
+     777,
+     777,
+     792,
+     794
+    ],
+    "prediction_damping": 0.6,
+    "temporal_prior_weight": 0.01,
+    "temporal_prior_sigma_widths": 0.5,
+    "predicted_starts_offered": 671,
+    "predicted_starts_won": 374,
+    "beam": 3,
+    "schedule_steps": [
+     42,
+     70
+    ],
+    "anchor_refits": 19,
+    "chains_with_second_start": 10,
+    "jump_seeds": 76,
+    "jump_seeds_below_score": 40,
+    "frames_replaced": 153,
+    "replaced_by_source": {
+     "independent": 54,
+     "forward": 39,
+     "backward": 60
+    },
+    "refit_preset": "fast",
+    "path": {
+     "enabled": true,
+     "temperature": 0.01,
+     "distance_weight": 1.0,
+     "inview_weight": 2.0,
+     "length_weight": 1.0,
+     "mirrors": true,
+     "frames_overriding_lowest_energy": 27,
+     "frames_mirrored": 63,
+     "energy_gap_p50_p90_max": [
+      0.004596632795528938,
+      0.011256028178696295,
+      0.014402507618436367
+     ],
+     "seconds": 0.5596964815631509
+    },
+    "stretch_iou_median_before": 0.9327449249779347,
+    "stretch_iou_median_after": 0.9511886949293433,
+    "stretch_frames_score_at_least_2_before": 58,
+    "stretch_frames_score_at_least_2_after": 42,
+    "seconds": 156.16454084124416
+   },
+   "iou_independent_median": 0.9583670426962106,
+   "frames_iou_independent_below_0.9": 48,
+   "fit_ms_per_frame": 165.34251874312758,
+   "ambiguous_frames_rendered": [],
+   "video": "/temp_data4/alex/external_artifacts/poses/2026-09-08T20-46-27Z_seq_edge_0528/overlay.mp4"
+  }
+ },
+ "generated_at": "2026-09-08T20:31:26+00:00",
+ "git": {
+  "commit": "cdc8454b73fe298e46d06164a62d85e307abbd4c",
+  "dirty": true
+ },
+ "manifest": "docs/sequence_eval_set.json",
+ "preset": "fast",
+ "prior": "bootstrap",
+ "parts": [
+  "sequence_eval_6b_part1.json",
+  "sequence_eval_6b_part2.json",
+  "sequence_eval_6b_part3.json"
+ ]
+}

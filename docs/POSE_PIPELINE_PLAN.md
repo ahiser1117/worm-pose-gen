@@ -1196,6 +1196,112 @@ few seconds per run. What 6c does not touch: frames outside stretches
 (length jumps at the camera edge, the score-1 edge fits; 6b) and the
 `2024-06-18-12` streak (labels).
 
+**Result of 6b (2026-09-08).** Alex added two requests to the step: a
+maximum bend of the body, since the ends were curling into coils tighter
+than a worm can make, and a note that `edge_0618`'s low-IoU frames are the
+plate streak labelled worm by the segmenter, with poses better than the
+metric says. Landed:
+
+- *Bend limit.* `MaskFitConfig.min_bend_radius_widths` (0.5) and
+  `bend_weight` (0.002): segments bent tighter than a radius of half a body
+  width pay the squared excess, in both fitters (`bend_penalty`); the
+  tightest bend of every stored pose is kept as `max_bend_widths` (width
+  over radius) and charted in the viewer (`--min-bend-radius`, 0 disables).
+- *Coverage.* `tube_coverage`, the fraction of the tube lying on mask, is
+  stored per frame beside the IoU (`hard_coverage`); it ignores mask the tube
+  does not claim. The viewer charts it with the IoU and, on a low-IoU frame
+  whose tube sits on mask, tags "mask has extra body (segmentation)" when
+  the mask is far larger than the tube or has a second large component (on
+  `edge_0618` the streak merges with the body into one 45,000-pixel
+  component, IoU 0.54, coverage 0.87), and "tube on mask, mask not covered"
+  otherwise (a short tube inside a coil).
+- *Track length pass.* After propagation, frames outside the stretches whose
+  mask reaches the border and whose length departs from the track (the
+  median length of the whole bodies within 50 frames, `track_length`) are
+  refit with that length as their prior at 2% (`--track-refit`,
+  `--track-window`, `--track-sigma`, `--track-tolerance`, `--no-track-length`;
+  arrays `track_length_px`, `length_refit`).
+- *Jump-seeded stretches.* A pose jump over a width or the body entering or
+  leaving the camera at the border seeds a stretch at any score
+  (`jump_seeds`, `--no-jump-seeds`; `--seed-length-fraction` adds length jumps,
+  off by default).
+- *Anchor diversity.* Each chain starts from two states, the anchor's stored
+  pose and the anchor refit by the chain from the frame beyond it
+  (`anchor_diversity`, `--no-anchor-diversity`); the fitter segments the
+  anchor frames for it.
+
+The last item was not planned; it came out of the tuning, which took most of
+the step. Three findings.
+
+*The track pass must run after propagation, outside the stretches.* Run
+before it, on every clipped frame (967 of the coil minute's 1200), it
+perturbed the anchors of the coil's 237-frame stretch and the minute went
+from 0 to 26 frames below 0.9; restricting it to clipped frames off the
+track (280 frames) still gave 28; only removing it gave 3. The pass now
+runs after propagation on frames outside stretches, which are the frames
+whose length jumps it was meant for; the stretches hold their length
+through the chains' anchor prior and the path's length term.
+
+*Two coil clips are bistable, and one frame decides them.* `coil_0201`'s
+first stretch and `spiral_0528`'s stretch land on a 0.97 or a 0.88 winding
+depending on perturbations as small as a stretch boundary moving by one
+frame (the jump seeds moved `spiral_0528`'s from 9090 to 9091 and the clip
+went from 0 to 29 failures; without seeds, 0 again; with the bend limit
+loosened to 0.35 widths, 30). The beam, the path and the prior could not
+help because no chain state ever reached the good winding. Starting each
+chain from two anchor states (the stored pose and the anchor refit from
+the frame beyond) made the good winding reachable: `spiral_0528` 29 -> 0,
+`coil_0201` 34 -> 6 (median unchanged).
+
+*The bend limit does what it should, at a price on one spiral.* The
+tightest bend across the three minutes falls from 14--17 to 3--5 widths per
+radius, and frames bent tighter than a third of a width from 117, 183 and
+156 to 14, 25 and 19. `spiral_0528`'s median overlap drops 0.970 -> 0.957
+with its tight inner turn pressed against the limit (bend 2.2--2.3 on the
+affected frames against a cap of 2); loosening the radius to 0.35 did not
+recover it in the runs made, so whether that worm bends tighter than half
+its width is a question for the viewer, and the radius is a flag.
+
+![edge_0618, frame 9933 in the viewer: IoU 0.55 against a mask that includes the plate streak, 95% of the tube on mask, tagged "mask has extra body (segmentation)"](pose_pipeline_step6/edge_0618_streak_coverage_frame_9933.jpg)
+
+Final configuration against step 6c (same masks and priors; the edge
+minute's low-IoU frames are the streak, and on them the coverage stays
+high):
+
+| Minute | Pipeline | Frames < 0.9 | Length jumps > 3% (outside stretches) | Pose jumps > width | In-view changes | Orientation flips | Tightest bend, max | Total s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `spiral_0131` raw | 6c | 0 | 0 (0) | 0 | 5 | 2 | 14.5 | 445 |
+| | **6b** | 0 | 0 (0) | 0 | 5 | 2 | 3.1 | 597 |
+| `coil_0201` (held out) | 6c | 0 | 23 (23) | 3 | 25 | 97 | 16.1 | 555 |
+| | **6b** | 6 | 5 (5) | 3 | 23 | 85 | 4.1 | 759 |
+| `edge_0618` (held out) | 6c | 135 | 25 (25) | 1 | 26 | 68 | 17.4 | 560 |
+| | **6b** | 142 | 14 (12) | 3 | 32 | 54 | 4.7 | 935 |
+
+Sequence set (`pose_pipeline_step6/sequence_eval_6b.json` against
+`sequence_eval_6c.json`):
+
+| Clip | Median IoU 6c -> 6b | P10 6c -> 6b | Frames < 0.9 6c -> 6b | Pose jumps > width 6c -> 6b | Stretch median IoU 6c -> 6b | Propagation s 6c -> 6b |
+|---|---|---|---:|---:|---|---|
+| `spiral_0131` | 0.958 -> 0.957 | 0.937 -> 0.935 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.950 | 178 -> 425 |
+| `loop_0131` | 0.966 -> 0.968 | 0.929 -> 0.936 | 0 -> 0 | 0 -> 0 | 0.948 -> 0.954 | 63 -> 177 |
+| `omega_0822` | 0.965 -> 0.965 | 0.948 -> 0.944 | 0 -> 0 | 0 -> 0 | 0.949 -> 0.956 | 69 -> 114 |
+| `coil_0822` | 0.965 -> 0.964 | 0.956 -> 0.946 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 149 -> 186 |
+| `spiral_0528` | 0.970 -> 0.957 | 0.950 -> 0.942 | 0 -> 0 | 0 -> 0 | 0.970 -> 0.952 | 144 -> 209 |
+| `edge_0528` | 0.960 -> 0.960 | 0.932 -> 0.939 | 5 -> 2 | 0 -> 0 | 0.947 -> 0.951 | 107 -> 156 |
+| `tail_reentry_0623` | 0.968 -> 0.967 | 0.959 -> 0.956 | 2 -> 3 | 0 -> 0 | 0.957 -> 0.965 | 29 -> 45 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 7 -> 5; four of the
+seven stretch medians rise, `spiral_0528`'s falls with the bend limit. The
+length jumps at the camera edge are halved rather than removed (the pass
+refits only frames off the track by more than 2% and outside stretches);
+the coil minute's six new failures are its inner turn at 0.89--0.90 with the
+tube fully on mask. Propagation costs roughly twice 6c (anchor refits, more
+seeds, larger stretches). What remains for the coils is the fragility
+itself: a stretch of 200 frames still hangs on which winding its chains
+find first, and the systematic answer is more diverse starts inside the
+stretch (section 4's intensity cue would decide the winding from evidence
+rather than continuity).
+
 ## 4. Further ideas (after step 6)
 
 - **Intensity for overlaps.** Where the body crosses itself the NIR image is
@@ -1251,4 +1357,5 @@ few seconds per run. What 6c does not touch: frames outside stretches
 | viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
 | 6a | done (2026-09-08) | first-order autoregressive starts and a temporal prior (weight 0.01, sigma half a width) inside propagation chains; chain candidates and predictions stored and drawn by the viewer; raw spiral 14 -> 0 frames below 0.9, held-out minutes unchanged; single-state chains shown fragile, motivating 6b/6c |
 | 6c | done (2026-09-08) | beam of three chain states per direction, independent refit under the chain schedule, one path per stretch by dynamic programming over candidates and mirrors; edge minute pose jumps 23 -> 1, flips 96 -> 68, in-stretch length jumps 0 on every run; sequence set 8 -> 7 below 0.9, edge clip jumps 4 -> 0; the balanced refit schedule was worse and is not the default |
-| 6b, 6d | planned (2026-09-07) | track length prior and jump-seeded stretches (the remaining length jumps at the camera edge and the coil minute's boundary jumps); jump/flip counts as the measure, head truth set, raw-mask default |
+| 6b | done (2026-09-08) | bend limit (radius half a width; tightest bends 14--17 -> 3--5), tube coverage beside IoU with segmentation tags, track length pass after propagation on clipped frames outside stretches (edge length jumps halved), jump-seeded stretches, anchor diversity for the chains (two bistable coil clips 29 and 34 failures -> 0 and 6); sequence set 7 -> 5 below 0.9, spiral_0528 median -0.013 under the bend limit, propagation about twice 6c |
+| 6d | planned (2026-09-07) | jump/flip counts as the measure, head truth set, raw-mask default |
