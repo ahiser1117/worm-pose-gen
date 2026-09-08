@@ -20,6 +20,10 @@ const LAYERS = [
   { id: "final_outline", name: "Final mask outline", kind: "pixel", on: false, alpha: 0.9, color: [255, 255, 255] },
   { id: "tube_fill", name: "Tube fill", kind: "pixel", on: false, alpha: 0.3, color: [90, 220, 140] },
   { id: "width_ticks", name: "Width ticks along the body", kind: "vector", on: false, alpha: 0.9, color: [255, 80, 165] },
+  { id: "hyp_forward", name: "Hypotheses: forward chain", kind: "vector", on: true, alpha: 0.9, color: [255, 211, 77] },
+  { id: "hyp_backward", name: "Hypotheses: backward chain", kind: "vector", on: true, alpha: 0.9, color: [192, 128, 255] },
+  { id: "hyp_independent", name: "Hypotheses: independent refit", kind: "vector", on: true, alpha: 0.9, color: [120, 200, 255] },
+  { id: "prediction", name: "Chain prediction (autoregressive)", kind: "vector", on: true, alpha: 0.9, color: [255, 255, 255] },
   { id: "compare", name: "Compare run pose", kind: "vector", on: true, alpha: 1.0, color: [255, 170, 60] },
   { id: "starts", name: "Fitter starts (press Starts)", kind: "vector", on: true, alpha: 0.9, color: [120, 255, 255] },
   { id: "crop", name: "Crop window", kind: "vector", on: false, alpha: 0.8, color: [150, 150, 150] },
@@ -35,7 +39,13 @@ const EXTRA_SERIES = [
   ["pixels_filled", "Hole-fill px"], ["pixels_outside_largest", "Outside largest px"], ["components", "Components"],
   ["taper_asymmetry", "Taper asymmetry"], ["orientation_gap", "Orientation gap"], ["length_deviation", "Length deviation (log)"],
   ["n_starts", "Starts tried"],
+  ["prediction_distance_px", "Distance to chain prediction px"],
+  ["path_energy_gap", "Path energy gap (chosen − lowest)"],
+  ["hypotheses_count", "Hypotheses per frame"],
+  ["tube_coverage", "Tube coverage by mask"],
+  ["max_bend_widths", "Tightest bend (width / radius)"],
 ];
+const HYP_COLORS = { forward: [255, 211, 77], backward: [192, 128, 255], independent: [120, 200, 255] };
 
 const state = {
   info: null,
@@ -171,6 +181,12 @@ function runSummaryText(run) {
   if (a.flag_counts) lines.push("flags: " + Object.entries(a.flag_counts).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(", "));
   if (a.frames_with_score_at_least_2 !== undefined) lines.push(`score ≥ 2: ${a.frames_with_score_at_least_2} frames · score ≥ 1: ${a.frames_with_score_at_least_1}`);
   if (p) lines.push(`propagation: ${p.stretches.length} stretches, ${p.frames_in_stretches} frames, ${p.frames_replaced} replaced (fwd ${p.replaced_by_source.forward}, bwd ${p.replaced_by_source.backward}); stretch IoU ${fmt(p.stretch_iou_median_before)} → ${fmt(p.stretch_iou_median_after)}`);
+  if (p && p.prediction_damping !== undefined) lines.push(`6a: damping ${p.prediction_damping}, temporal prior ${p.temporal_prior_weight} at ${p.temporal_prior_sigma_widths} widths; predicted starts won ${p.predicted_starts_won} of ${p.predicted_starts_offered}`);
+  if (p && p.path) lines.push(`6c: refit ${p.refit_preset}, beam ${p.beam}, path ${p.path.enabled ? `T ${p.path.temperature}, distance ${p.path.distance_weight}, in-view ${p.path.inview_weight}` : "off"}; overrode lowest energy on ${p.path.frames_overriding_lowest_energy} frames, mirrored ${p.path.frames_mirrored}; replaced by ${JSON.stringify(p.replaced_by_source)}`);
+  const t = run.track_length;
+  if (t) lines.push(`6b: track length p50 ${fmt(t.track_length_p10_p50_p90 && t.track_length_p10_p50_p90[1], 0)} px (window ±${t.window}); ${t.frames_refit} frames refit (${t.frames_clipped} clipped, ${t.frames_deviating} off track) in ${fmt(t.seconds, 0)} s${p && p.jump_seeds !== undefined && p.jump_seeds !== null ? `; jump seeds ${p.jump_seeds} (${p.jump_seeds_below_score} below the score threshold)` : ""}`);
+  const c = run.continuity;
+  if (c) lines.push(`continuity: length jumps > ${Math.round(100 * c.length_jump_fraction)}%: ${c.length_jumps_over_fraction} · pose jumps > width: ${c.pose_jumps_over_width} · in-view changes: ${c.in_view_changes}` + (c.prediction_distance_px_p50_p90_max ? ` · distance to prediction p50/p90 ${fmt(c.prediction_distance_px_p50_p90_max[0], 1)} / ${fmt(c.prediction_distance_px_p50_p90_max[1], 1)} px` : ""));
   lines.push(`cleanup: fill holes ${run.cleanup.fill_holes} (r ${run.cleanup.hole_radius}) · largest only ${run.cleanup.largest_only}`);
   if (!run.has_independent_pose) lines.push("independent pose not stored in this run (older fitter); only its IoU/score are shown");
   return lines.join("\n");
@@ -528,6 +544,8 @@ function renderLegend() {
     if (l.id === "independent" && !(state.decoded && state.decoded.tube_independent) && !(state.frame && state.frame.pose && state.frame.pose.independent)) continue;
     if (l.id === "compare" && !state.comparePose) continue;
     if (l.id === "starts" && !state.starts) continue;
+    if (l.id.startsWith("hyp_") && !(state.frame && state.frame.pose && state.frame.pose.hypotheses && state.frame.pose.hypotheses.some((h) => h.source === l.id.slice(4)))) continue;
+    if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.prediction_xy)) continue;
     if (l.id === "residual") { parts.push(`<span><span class="swatch" style="background:rgb(40,80,255)"></span>mask missed</span><span><span class="swatch" style="background:rgb(255,50,50)"></span>tube extra</span>`); continue; }
     parts.push(`<span><span class="swatch" style="background:rgb(${l.color.join(",")})"></span>${l.name.replace(/ \(.*\)$/, "")}</span>`);
   }
@@ -635,6 +653,22 @@ function draw() {
     if (indep.on && pose.independent) {
       drawCurve(pose.independent.centerline_xy, `rgb(${indep.color.join(",")})`, 2, [8, 5], indep.alpha);
     }
+    if (pose.hypotheses) {
+      // Every candidate of the frame, by source; the path's choice wide underneath the centerline.
+      for (const h of pose.hypotheses) {
+        const l = layer(`hyp_${h.source}`);
+        if (!l || !l.on) continue;
+        const color = `rgb(${(HYP_COLORS[h.source] || [200, 200, 200]).join(",")})`;
+        if (h.chosen) drawCurve(h.centerline_xy, color, 6, null, 0.35 * l.alpha);
+        else drawCurve(h.centerline_xy, color, 1.2, h.source === "independent" ? [2, 3] : [6, 4], 0.8 * l.alpha);
+      }
+      const pred = layer("prediction");
+      if (pred.on && pose.prediction_xy) {
+        drawCurve(pose.prediction_xy, `rgb(${pred.color.join(",")})`, 1.5, [2, 4], pred.alpha);
+        const [x, y] = pose.prediction_xy[0];
+        ctx.save(); ctx.fillStyle = `rgba(255,255,255,${pred.alpha})`; ctx.beginPath(); ctx.arc(x, y, 3 / v.scale, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+      }
+    }
     const cmp = layer("compare");
     if (cmp.on && state.comparePose && state.comparePose.pose) {
       drawCurve(state.comparePose.pose.centerline_xy, `rgb(${cmp.color.join(",")})`, 2, [3, 4], cmp.alpha);
@@ -699,10 +733,22 @@ function renderDetails() {
   rows.push(section("fit" + (cmp ? " (this / compare)" : "")));
   rows.push(row("fitted", s.fitted ? "yes" : "no"));
   rows.push(row("IoU", both("iou")));
+  if (s.tube_coverage !== undefined) rows.push(row("tube covered by mask", fmt(s.tube_coverage), s.iou !== null && s.iou < 0.9 && s.tube_coverage >= 0.9 ? "diff" : ""));
   if (s.iou_independent !== undefined) rows.push(row("IoU independent", fmt(s.iou_independent)));
   rows.push(row("source", s.source_name || "independent"), row("best start", s.best_start || "–"), row("starts tried", fmt(s.n_starts)));
   rows.push(row("soft-Dice energy", fmt(s.energy, 4)), row("total energy", fmt(s.total_energy, 4)));
   if (s.stretch) rows.push(row("stretch", `#${s.stretch.index + 1} frames ${s.stretch.frames[0]}–${s.stretch.frames[1]} (${s.stretch.length})`));
+  if (f.pose && f.pose.hypotheses) {
+    const path = f.pose.path;
+    rows.push(section(`hypotheses (6c) · ${f.pose.hypotheses.length} candidates${path.mirrored ? " · chosen mirrored" : ""}`));
+    const ranked = f.pose.hypotheses.slice().sort((a, b) => a.energy - b.energy);
+    for (const h of ranked) {
+      const label = `${h.chosen ? "✓ " : ""}${h.source}${h.source === "independent" ? "" : " #" + (h.beam + 1)}`;
+      rows.push(row(label, `E ${fmt(h.energy, 4)} · IoU ${fmt(h.iou)} · ${h.start.replace(/_(forward|backward)$/, "").replace("independent_refit", "refit")}`, h.chosen ? "" : "dim"));
+    }
+    rows.push(row("path", path.override ? `overrode lowest energy by ${fmt(path.energy_gap, 4)}` : "lowest energy", path.override ? "diff" : ""));
+    rows.push(row("distance to prediction", f.pose.prediction_distance_px === null || f.pose.prediction_distance_px === undefined ? "–" : `${fmt(f.pose.prediction_distance_px, 1)} px`));
+  }
   rows.push(section("body"));
   rows.push(row("length px", both("body_length_px", 1)));
   if (s.length_vs_prior_sigmas !== undefined) rows.push(row("length vs prior", `${fmt(s.length_vs_prior_sigmas, 2)} σ`, Math.abs(s.length_vs_prior_sigmas) > 2 ? "diff" : ""));
@@ -710,6 +756,8 @@ function renderDetails() {
   if (s.width_vs_prior_sigmas !== undefined) rows.push(row("width vs prior", `${fmt(s.width_vs_prior_sigmas, 2)} σ`));
   rows.push(row("in view", `${fmt(s.points_in_fov)}/${state.run.n_points} (${fmt(s.in_view_fraction, 2)})`));
   rows.push(row("taper asymmetry", fmt(s.taper_asymmetry, 3)), row("orientation gap", fmt(s.orientation_gap, 4)), row("reversed start won", s.reversed ? "yes" : "no"));
+  if (s.max_bend_widths !== undefined) rows.push(row("tightest bend (width/radius)", fmt(s.max_bend_widths, 2), s.max_bend_widths > 2 ? "diff" : ""));
+  if (s.track_length_px !== undefined && s.track_length_px !== null) rows.push(row("track length px", `${fmt(s.track_length_px, 1)}${s.length_refit ? " · refit" : ""}`));
   rows.push(row("tube area px", fmt(s.tube_area_px, 0)));
   if (s.crop) rows.push(row("crop x0 x1 y0 y1", s.crop.join(" ")));
   rows.push(section("mask (stored)"));
@@ -821,7 +869,7 @@ function drawCurvatureChart() {
   const pose = state.frame && state.frame.pose;
   if (!pose) return;
   const k = pose.curvature;
-  const limit = 1 / Math.max(pose.width_px, 1);
+  const limit = 2 / Math.max(pose.width_px, 1);  // the fitter's bend limit: radius of half a width
   const max = Math.max(limit * 1.5, ...k.map(Math.abs)) * 1.05;
   const pad = { l: 40, r: 6, t: 4, b: 4 };
   const n = k.length;
@@ -832,7 +880,7 @@ function drawCurvatureChart() {
   c.fillRect(pad.l, Y(-limit), w - pad.l - pad.r, h - pad.b - Y(-limit));
   c.strokeStyle = "#2a343c"; c.beginPath(); c.moveTo(pad.l, Y(0)); c.lineTo(w - pad.r, Y(0)); c.stroke();
   c.fillStyle = "#9aa6b0"; c.font = "10px system-ui";
-  c.fillText(`+${max.toFixed(3)}`, 2, pad.t + 9); c.fillText(`−${max.toFixed(3)}`, 2, h - pad.b - 2); c.fillText("1/width", 2, Y(limit) + 3);
+  c.fillText(`+${max.toFixed(3)}`, 2, pad.t + 9); c.fillText(`−${max.toFixed(3)}`, 2, h - pad.b - 2); c.fillText("limit", 2, Y(limit) + 3);
   const xs = Array.from({ length: n }, (_, i) => X(i));
   polyline(c, xs, k.map(Y), "#57d68d", null, 1.5);
   if (state.comparePose && state.comparePose.pose) polyline(c, xs, state.comparePose.pose.curvature.map(Y), "#ffaa3c", [3, 4], 1);
@@ -844,8 +892,8 @@ function chartSpecs() {
   const run = state.run;
   const prior = run.prior;
   const specs = [
-    { id: "iou", label: "IoU", height: 56, lines: [{ key: "iou", color: "#57d68d" }, { key: "iou_independent", color: "#9aa6b0", dash: [3, 3], opt: "independent" }], compare: "iou", hline: () => parseFloat($("#jump-iou").value), ymin: 0, ymax: 1 },
-    { id: "length", label: "Body length px", height: 56, lines: [{ key: "body_length_px", color: "#57d68d" }], compare: "body_length_px", band: prior ? [prior.length_px * Math.exp(-2 * prior.log_length_sigma), prior.length_px * Math.exp(2 * prior.log_length_sigma)] : null },
+    { id: "iou", label: "IoU · coverage", height: 56, lines: [{ key: "iou", color: "#57d68d" }, { key: "tube_coverage", color: "#50beff", dash: [2, 3] }, { key: "iou_independent", color: "#9aa6b0", dash: [3, 3], opt: "independent" }], compare: "iou", hline: () => parseFloat($("#jump-iou").value), ymin: 0, ymax: 1 },
+    { id: "length", label: "Body length px", height: 56, lines: [{ key: "body_length_px", color: "#57d68d" }, { key: "track_length_px", color: "#9aa6b0", dash: [6, 4] }], compare: "body_length_px", band: prior ? [prior.length_px * Math.exp(-2 * prior.log_length_sigma), prior.length_px * Math.exp(2 * prior.log_length_sigma)] : null },
     { id: "area", label: "Area px (mask, tube in view, raw)", height: 56, lines: [{ key: "worm_pixels", color: "#50beff" }, { key: "tube_area_visible_px", color: "#57d68d" }, { key: "raw_worm_pixels", color: "#9aa6b0", dash: [2, 3] }] },
     { id: "score", label: "Ambiguity score", height: 44, bars: "ambiguity_score", dots: { key: "score_independent", color: "#9aa6b0", opt: "independent" }, ymin: 0, ymax: 9 },
     { id: "extra", label: "", height: 50, lines: [{ key: null, color: "#e0b04d" }], compare: null },
@@ -1099,7 +1147,9 @@ function renderLayerAvailability() {
   const d = state.decoded || {};
   const pose = state.frame && state.frame.pose;
   if (state.frame && state.frame.detail === "light") {
-    for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", ["independent", "compare", "starts"].includes(node.dataset.layer) && !{ independent: pose && pose.independent, compare: state.comparePose, starts: state.starts }[node.dataset.layer]);
+    const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);
+    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy };
+    for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
   const available = {
@@ -1107,6 +1157,10 @@ function renderLayerAvailability() {
     residual: !!(d.mask_final && d.tube), tube: !!d.tube, tube_fill: !!d.tube, final_outline: !!d.mask_final,
     centerline: !!pose, width_ticks: !!pose, crop: !!pose,
     independent: !!(pose && pose.independent), compare: !!state.comparePose, starts: !!state.starts, image: true,
+    hyp_forward: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "forward")),
+    hyp_backward: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "backward")),
+    hyp_independent: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "independent")),
+    prediction: !!(pose && pose.prediction_xy),
   };
   for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", available[node.dataset.layer] === false);
 }
@@ -1272,6 +1326,14 @@ function initSplitters() {
 function bindEvents() {
   $("#run").addEventListener("change", (e) => selectRun(e.target.value));
   $("#run-filter").addEventListener("input", renderRunList);
+  $("#rescan").addEventListener("click", async () => {
+    try {
+      state.info = await api("/api/state?rescan=1");
+      state.runs = state.info.runs;
+      renderRunList();
+      setStatus(`${state.info.added} new run${state.info.added === 1 ? "" : "s"} found`, "ok");
+    } catch (error) { setStatus(error.message, "error"); }
+  });
   $("#compare").addEventListener("change", (e) => selectCompare(e.target.value));
   $("#go").addEventListener("click", () => { const r = state.run.series.frame_index.indexOf(parseInt($("#frame-index").value, 10)); if (r >= 0) showRow(r, { keepView: true }); else setStatus("frame not in this run", "error"); });
   $("#frame-index").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#go").click(); });

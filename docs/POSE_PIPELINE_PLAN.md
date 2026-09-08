@@ -869,14 +869,438 @@ tube model can use a gap (step 6, or a self-overlap-aware renderer), and
 remaining 328 manifest frames, the held-out animals first, `2024-06-18-12`
 first of all.
 
-### Step 6. Hypothesis linking across ambiguous stretches
+### Step 6. Autoregressive proposals and hypothesis linking across ambiguous stretches
 
-- Keep the top few distinct local optima per ambiguous frame instead of one.
-- Viterbi over the recording: nodes are per-frame hypotheses, node cost is
-  fit energy, edge cost is pose change between neighbors plus an
-  orientation-flip penalty. The minimum-cost path resolves each ambiguous
-  stretch from the unambiguous frames on both sides and fixes head/tail
-  orientation across the track.
+**Plan (drafted 2026-09-07, revised the same day after Alex's answers).**
+Alex's priorities for the step: the body leaving the camera and tight
+coils or self-contacts are the frames to perfect; head identity only has to
+be consistent along a track, not right in the absolute (the tracking
+microscope keeps the head near the centre of the view, which also gives a
+cheap absolute cue when one is wanted). His observation from the viewer:
+at self-contacts and tight coils the fitted length and the pose jump from
+one frame to the next. Steps 1--5c leave a pipeline that fits nearly every
+frame of the sequence set to the mask (12 of 2100 frames below IoU 0.9) but
+answers every frame on its own; where the mask does not decide, the answer
+is whatever the energy preferred on that frame.
+
+**What the stored runs say about the jumps.** On the five minute runs of
+step 5c, counting consecutive frames whose fitted length changes by more
+than 3% of the prior and frames whose pose jump exceeds a body width, and
+placing each against the propagation stretches (inside, within two frames
+of a boundary, or outside) and against the frame's source:
+
+| Minute (pipeline) | Length jumps > 3%: total / inside / boundary / outside | of which independent fits | Pose jumps > width: total / inside / boundary / outside | of which propagated |
+|---|---|---:|---|---:|
+| `spiral_0131` (r2 raw) | 3 / 2 / 1 / 0 | 2 | 3 / 3 / 0 / 0 | 3 |
+| `coil_0822` (r2 raw) | 25 / 3 / 6 / 16 | 22 | 1 / 1 / 0 / 0 | 1 |
+| `edge_0528` (r1 clean) | 104 / 29 / 20 / 55 | 77 | 12 / 11 / 1 / 0 | 8 |
+| `coil_0201` (r2 raw, held out) | 44 / 13 / 7 / 24 | 32 | 12 / 10 / 1 / 1 | 11 |
+| `edge_0618` (r2 raw, held out) | 54 / 28 / 3 / 23 | 40 | 38 / 37 / 1 / 0 | 28 |
+
+Two different mechanisms. The *length* jumps are mostly independent fits,
+many of them outside any stretch: a frame fit alone has nothing but the
+recording prior at 5% (about 37 px) to hold its length, and where the body
+is clipped by the camera or folded the visible pixels constrain the length
+weakly, so it wanders by 20--40 px between neighbours. The *pose* jumps are
+almost all inside stretches and mostly on propagated frames: each frame
+picks independently among its forward, backward and independent candidates
+on energy, so where the chains disagree the choice flips between them
+(step 5's "chain disagreement"). At the spiral's stretch entry (frame 3697)
+the two combine: an independent fit at score 1 wins the frame with a length
+of 740 px between neighbours at 720, and the chains start from it.
+
+A third fact matters for the design: the chain today is zeroth order. A
+stretch frame is warm-started from a copy of the neighbour's pose
+(`warm_initialization`), and nothing in the energy prefers a pose near
+that start; the length prior centred on the anchor (step 5b) is the only
+temporal term. So the answer to Alex's question is yes: an autoregressive
+proposal, and a prior that holds the fit near it, are both missing and
+both cheap.
+
+The step keeps the principles: independent fits where the frame is
+unambiguous, batching on the GPU, and discrete choices resolved by dynamic
+programming rather than a serial refit of the whole recording. Four parts,
+each measured on its own, in priority order.
+
+**6a. Autoregressive proposals and a temporal prior in the chains.**
+Replace the zeroth-order warm start by a first-order prediction: with the
+chain's poses at the previous two frames, predict the next latent as
+`x_t + a (x_t - x_{t-1})` on the shape coefficients, the unwrapped
+rotation and the centroid (the centroid term is the velocity Alex asks
+for), with the length held at the chain's running value and the width
+scale and shape copied; damping `a` about 0.6 at 20 fps, tuned on the set
+(a body wave moves the coefficients smoothly; `a = 0` is today's chain).
+Both the prediction and the plain copy are offered as starts, so a
+prediction that overshoots at a sharp reversal costs nothing. Add a
+temporal prior to the chain's energy: a Gaussian on the mean distance
+between the fit's in-view centerline points and the predicted pose, with a
+sigma of about half a width and a weight on the scale of `prior_weight`,
+so the mask still wins where it is clear and the prediction decides where
+it is not; the candidates keep being compared under the fit's own prior
+(`comparable_energy`), so the temporal term shapes the chain and not the
+choice against the independent fit. This is the first thing to try on
+`coil_0201` and `edge_0618`, where the pose jumps are, and on the raw
+spiral's frames 3753--3766, where the tube crosses the gap between turns
+that a continuous pose would not.
+
+At the camera edge the same prediction is what resolves the stop-or-leave
+tie of step 5b: the predicted pose continues the body's motion off camera,
+the temporal prior makes the continuation cheaper than the fold, and the
+in-view count follows the prediction instead of flickering (60 frames on
+the `2024-05-28-02` minute, 22 in-view jumps on `edge_0528`).
+
+**6b. A track prior on length, and stretches seeded by jumps.** The length
+jumps outside stretches need two things. First, a per-frame *track* length
+prior: after the independent pass, take the median fitted length over
+score-0 frames in a sliding window of about five seconds, and refit (one
+batched pass, the `fast` stages at 70%) every frame whose length departs
+from the track by more than 2% with the prior recentred on the track value
+at 2% sigma; the recording prior at 5% stays for the first pass, since the
+track has to be measured before it can be used. Second, seed stretches by
+the jumps themselves: a frame whose length changes by more than 3% or
+whose pose jump exceeds a width, or whose in-view count changes while the
+mask stays on the border, enters a stretch even at ambiguity score 1, so
+the chains of 6a reach the squished edge fits of step 5c (`edge_0528`
+6577 and 6939, `coil_0822` 11161) and the spiral's frame 3697. Whether to
+propagate through *every* frame in chunks of 64 in lockstep, as step 5
+first proposed, is measured as a variant (`--propagate-all`) on the
+sequence set: it answers whether the remaining jumps outside stretches are
+worth the cost, at the price of lockstep batches of one row per chunk.
+
+**6c. Per-stretch selection by Viterbi over the candidates.** Instead of
+the lowest energy per frame, choose one candidate per frame along the
+stretch by dynamic programming over {independent, forward, backward, and
+their exact mirrors}: node cost is the comparable energy over a
+temperature, edge cost is the oriented pose distance between consecutive
+choices in widths (in-view points only) plus a term for the change in
+in-view count. The unambiguous frames on both sides anchor the path, so a
+stretch becomes one continuous track and forward and backward chains no
+longer alternate. The mirrors in the candidate set make orientation
+consistency a by-product of the same path: a flip costs half a body length
+of pose distance, so it is never chosen unless the poses demand it. Outside
+stretches only the mirror choice remains, and the same two-state Viterbi
+over the whole run gives one orientation per contiguous segment; the
+absolute label per segment is the end that sits nearer the image centre
+on average (the tracking microscope's cue), with the segment's motion
+direction as the fallback. Two parameters (temperature, distance weight)
+are tuned so that frames below IoU 0.9 do not rise (12 today) while pose
+jumps, flips and in-view jumps fall. Cost is negligible (a few candidates
+per frame). The candidates are stored in `poses.npz` (`hypotheses_latent`
+[n, K, 20], `hypotheses_width`, `hypotheses_width_shape`,
+`hypotheses_energy`, `hypotheses_source`, and the chosen index) and the
+viewer gets a "hypotheses" layer drawing all of them with their energies,
+which is the tool for judging what the path had to choose between.
+
+**6d. Truth, and the raw-mask default.** IoU cannot see continuity or
+orientation, so the step is judged by the counts above (length jumps, pose
+jumps, in-view jumps, flips) with frames below IoU 0.9 as the guard, on
+the sequence set (`pose_pipeline_step5c/sequence_eval_r2_clean.json` is
+the baseline) and the five minutes. A small head truth set through the
+viewer's notes (a "head at square / circle" tag on about 40 frames where
+the head is unmistakable) reports head consistency per segment; it is not
+a target of the step. Once the tube follows continuity through a coil,
+re-run the set without the hole fill (`--no-fill-holes`, keeping the
+largest-component rule that guards unseen plates) and flip the default if
+the raw spiral's 14 failures go and nothing else regresses.
+
+**Order.** 6a and 6b on the sequence set and the two held-out minutes
+first, since they attack the jumps Alex sees directly; 6c once the
+candidates are stored; 6d closes. Numbers per run: frames below IoU 0.9,
+length jumps > 3%, pose jumps > width, in-view jumps, orientation flips,
+frames where the path overrode the lowest energy (and their IoU), seconds.
+Intensity cues for overlaps and a body-coordinate segmenter head stay in
+section 4; they become worthwhile only where continuity cannot decide (a
+coil held for seconds with no unambiguous frame nearby, as in `coil_0201`).
+
+**Result of 6a (2026-09-08).** Landed in `propagation.py` (`predict_latent`,
+`pose_distance_px`, `continuity_summary`) and `batch_fit.fit_masks`
+(`references` per frame and the `temporal_prior_weight` /
+`temporal_prior_sigma_px` fields of `MaskFitConfig`), run by
+`fit_recording.py --prediction-damping 0.6 --temporal-prior-weight 0.01
+--temporal-prior-sigma 0.5`. Inside a chain each frame now offers the
+copied pose and the first-order prediction as starts and is pulled toward
+the prediction; every chain candidate is stored with its prediction, energy,
+overlap and winning start (`chain_*` and `prediction_distance_px` in
+`poses.npz`), and the viewer draws the forward and backward candidates and
+the chosen chain's prediction and lists them in the statistics panel. Each
+run's summary carries a `continuity` block (length jumps over 3%, pose
+jumps over a width, in-view changes, distance to prediction).
+
+The weight was swept on the three minutes (baseline = damping 0 and weight
+0, the step 5c chain; masks as in step 5c, the spiral raw):
+
+| Minute | Variant | Median IoU | P10 | Frames < 0.9 | Pose jumps > width | Length jumps > 3% | Stretch median IoU | Predicted start won / offered |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `spiral_0131` raw | baseline | 0.969 | 0.947 | 14 | 2 | 2 | 0.941 | |
+| | prediction only | 0.969 | 0.939 | 11 | 1 | 2 | 0.937 | 232 / 428 |
+| | weight 0.0025 | 0.969 | 0.941 | 24 | 0 | 2 | 0.939 | 239 / 411 |
+| | **weight 0.01** | 0.969 | 0.951 | **0** | 0 | 1 | 0.952 | 245 / 413 |
+| | weight 0.025 | 0.969 | 0.954 | 2 | 0 | 1 | 0.955 | 221 / 393 |
+| `coil_0201` (held out) | baseline | 0.959 | 0.937 | 0 | 3 | 28 | 0.943 | |
+| | prediction only | 0.959 | 0.938 | 27 | 3 | 34 | 0.945 | 345 / 718 |
+| | weight 0.0025 | 0.960 | 0.939 | 0 | 3 | 31 | 0.945 | 321 / 694 |
+| | **weight 0.01** | 0.960 | 0.939 | **0** | 3 | 30 | 0.947 | 360 / 682 |
+| | weight 0.025 | 0.960 | 0.939 | 23 | 10 | 29 | 0.945 | 375 / 666 |
+| `edge_0618` (held out) | baseline | 0.970 | 0.589 | 134 | 26 | 45 | 0.563 | |
+| | prediction only | 0.970 | 0.599 | 135 | 19 | 49 | 0.552 | 268 / 437 |
+| | weight 0.0025 | 0.970 | 0.599 | 136 | 22 | 50 | 0.527 | 282 / 436 |
+| | **weight 0.01** | 0.970 | 0.599 | 134 | 23 | 47 | 0.557 | 291 / 436 |
+| | weight 0.025 | 0.969 | 0.600 | 134 | 20 | 44 | 0.568 | 306 / 436 |
+
+Three findings.
+
+*The prediction and the prior work where they were aimed.* On the raw
+spiral the 14 frames where the tube crossed the real gap between turns
+(3753--3766) are fixed by every variant that offers the prediction, and
+with the prior at 0.01 nothing is lost elsewhere: 0 frames below 0.9, p10
+0.947 -> 0.951, stretch median 0.941 -> 0.952, no pose jump. Frame 3760
+below: the 6a tube follows the inner turn where the step 5c chain cut across
+the gap (baseline pose dotted orange).
+
+![Spiral frame 3760 in the viewer: 6a fit with the step 5c fit as compare run](pose_pipeline_step6/spiral_6a_vs_base_frame_03760.jpg)
+
+*A single chain state is fragile.* The coil minute's first stretch is 237
+frames long. On frames 17960--17994 its forward chain sits at IoU 0.89 in
+every variant and only the backward chain, arriving from the anchor at
+frame 18004, reaches 0.94; in two of the four variants (prediction only,
+weight 0.025) the backward chain also lands on the 0.88 configuration, and
+27 or 23 frames fall below 0.9 where the baseline has none. Nothing in
+those variants is wrong per frame; the chain simply carried a different
+local optimum in, and every later frame inherits it. The same happened on
+the spiral at weight 0.0025: the chain that fixed the tight turns carried a
+fold forward and lost frames 3790--3815 at 0.89--0.90 (frame 3800 below, the
+prediction 17 px from the fit). This is the case for keeping several
+hypotheses per frame and choosing a path per stretch (6b/6c), rather than
+for tuning the prior further.
+
+![Spiral frame 3800 at weight 0.0025: the chain has carried a fold forward](pose_pipeline_step6/spiral_6a_vs_base_frame_03800.jpg)
+
+*A strong prior is sticky.* At weight 0.025 a 20 px correction costs 0.025
+in energy, more than the mask can pay back, so on the coil's long stretch
+both chains stay within 1--3 px of their predictions while the overlap
+slides from 0.90 to 0.87 (frames 17968--17990) and the forward and backward
+chains alternate frame by frame (pose jumps 3 -> 10). At 0.0025 the prior
+is inert (a 2-sigma deviation costs 0.01, typical deviations are 2--8 px).
+0.01 is the default.
+
+The length jumps outside stretches, as predicted, do not move (they are
+6b's track prior), and `edge_0618`'s 134 failures are the dark streak on the
+plate segmented as worm on independent frames, which no chain reaches. The
+predicted start wins 55--65% of the chain frames it is offered on.
+Propagation costs 10--20% more (one extra start per chain frame).
+
+Sequence set with the new defaults (`pose_pipeline_step6/sequence_eval_6a.json`
+against the step 5c cleaned baseline; same masks, priors and preset):
+
+| Clip | Median IoU 5c -> 6a | P10 5c -> 6a | Frames < 0.9 5c -> 6a | Pose jumps > width 5c -> 6a | Stretch median IoU 5c -> 6a | Predicted starts won / offered |
+|---|---|---|---:|---:|---|---:|
+| `spiral_0131` | 0.957 -> 0.958 | 0.934 -> 0.938 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.951 | 160 / 315 |
+| `loop_0131` | 0.967 -> 0.967 | 0.927 -> 0.927 | 0 -> 0 | 0 -> 0 | 0.947 -> 0.948 | 108 / 168 |
+| `omega_0822` | 0.965 -> 0.965 | 0.950 -> 0.948 | 0 -> 0 | 0 -> 0 | 0.950 -> 0.949 | 72 / 128 |
+| `coil_0822` | 0.965 -> 0.965 | 0.947 -> 0.957 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 148 / 240 |
+| `spiral_0528` | 0.954 -> 0.965 | 0.940 -> 0.946 | 0 -> 0 | 0 -> 0 | 0.947 -> 0.963 | 133 / 266 |
+| `edge_0528` | 0.961 -> 0.961 | 0.930 -> 0.934 | 7 -> 3 | 8 -> 4 | 0.945 -> 0.946 | 149 / 234 |
+| `tail_reentry_0623` | 0.968 -> 0.968 | 0.959 -> 0.959 | 5 -> 5 | 1 -> 0 | 0.960 -> 0.960 | 30 / 54 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 12 -> 8, nothing
+regresses beyond noise, `spiral_0528` gains 0.011 of median overlap in its
+stretch, and the propagation time is unchanged within 10%. Next is 6b/6c:
+keep the candidates the chains now store, add their mirrors and the
+independent fit, and choose one path per stretch.
+
+**Result of 6c (2026-09-08).** Alex's decisions for the step: the second
+pass refits the frames, the app will launch fits (next), and the API must
+mirror the app for pipelines. Landed in `propagation.py`: each direction of
+a stretch keeps up to three distinct chain states (`beam`; states ranked by
+the fit's full energy, temporal prior included, distinct at a quarter width);
+the stored independent pose of every stretch frame is refit under the chain
+schedule with the stretch anchors' length prior (`refit_independent`); and
+`select_path` chooses one candidate per frame along the stretch by dynamic
+programming over all candidates and their exact mirrors, anchored on the
+fitted frames outside the stretch: node cost is the comparable energy over
+a temperature of 0.01, edge cost the squared oriented pose distance in
+widths plus 2 times the change of the in-view fraction plus the squared
+log length change in units of 2%. `slow_schedule` runs a preset's steps on
+the fit's rasters for the refit (`--propagate-preset`). Every candidate is
+stored with the path's choice (`hypotheses_*`, `path_*`, `prediction_xy` in
+`poses.npz`); the viewer draws the hypotheses by source with the chosen one
+wide under the centerline, lists them ranked by energy with the chosen,
+mirrored and override marks, tags a frame where the path overrode the
+lowest energy, and reports the path's counts in the run summary.
+
+Three things were learned on the way, each from the viewer's hypotheses
+table on the frames that regressed:
+
+*Beam states must be ranked by the full energy.* The first version ranked
+a chain's states by the mask energy alone and the forward chain of the raw
+spiral fell from a median overlap of 0.941 to 0.916 inside its stretch: the
+state consistent with the chain's own motion lost to a state the mask
+liked marginally better, and every later frame inherited the drift. Ranking
+by the energy the fit minimized (temporal prior included) restored it.
+
+*The slower refit schedule hurt.* With the `balanced` steps (100 and 200
+against 42 and 70) the chains wandered further from their predictions
+under the same prior: raw spiral 4 frames below 0.9 against 0, `edge_0618`
+3 pose jumps against 1, at twice the time. The refit pass keeps the fast
+schedule; `--propagate-preset balanced` stays as an option.
+
+*Switching to a refit independent pose stepped the length* (raw spiral: 6
+length jumps in the stretches against 1) until the refit took the stretch
+anchors' length prior and the path cost gained the length term; both
+minutes then have no length jump inside a stretch.
+
+Final configuration against the step 6a runs (same masks and priors; the
+edge minute's 135 failures are the plate streak on independent frames,
+untouched by any stretch):
+
+| Minute | Pipeline | Frames < 0.9 | Pose jumps > width | Length jumps > 3% (in stretches) | In-view changes | Orientation flips | Stretch median IoU | Propagation s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `spiral_0131` raw | 6a | 0 | 0 | 1 (1) | 7 | 2 | 0.952 | 193 |
+| | **6c** | 0 | 0 | 0 (0) | 5 | 2 | 0.955 | 206 |
+| `coil_0201` (held out) | 6a | 0 | 3 | 30 (7) | 27 | 102 | 0.947 | 270 |
+| | **6c** | 0 | 3 | 23 (0) | 25 | 97 | 0.946 | 300 |
+| `edge_0618` (held out) | 6a | 134 | 23 | 47 (22) | 36 | 96 | 0.557 | 206 |
+| | **6c** | 135 | 1 | 25 (0) | 26 | 68 | 0.550 | 291 |
+
+The 22 pose jumps removed on `edge_0618` were all switches between the
+forward, backward and independent candidates; the path replaces them by
+one track per stretch, mirroring 34 frames to keep the anchors'
+orientation and overriding the lowest-energy candidate on 36. The coil
+minute's three remaining jumps (about 50 px each) are inside its long coil
+stretches, where the path still switches from the forward to the backward
+chain: the two chains hold different windings there and the energy gain
+outweighed a jump of one width at the current temperature and distance
+weight (0.01 and 1). Whether to trade a little overlap for continuity there
+is a tuning question for the review loop. Length jumps outside stretches
+are the clipped bodies of 6b.
+
+![Coil minute, frame 17975 in the viewer: the five hypotheses of the frame (forward and backward chain states, the independent refit) with the path's choice wide under the centerline, and the ranked table on the right](pose_pipeline_step6/coil_0201_hypotheses_frame_17975.jpg)
+
+Sequence set (`pose_pipeline_step6/sequence_eval_6c.json` against
+`sequence_eval_6a.json`):
+
+| Clip | Median IoU 6a -> 6c | P10 6a -> 6c | Frames < 0.9 6a -> 6c | Pose jumps > width 6a -> 6c | Stretch median IoU 6a -> 6c | Propagation s 6a -> 6c |
+|---|---|---|---:|---:|---|---|
+| `spiral_0131` | 0.958 -> 0.958 | 0.938 -> 0.937 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.951 | 173 -> 178 |
+| `loop_0131` | 0.967 -> 0.966 | 0.927 -> 0.929 | 0 -> 0 | 0 -> 0 | 0.948 -> 0.948 | 51 -> 63 |
+| `omega_0822` | 0.965 -> 0.965 | 0.948 -> 0.948 | 0 -> 0 | 0 -> 0 | 0.949 -> 0.949 | 60 -> 69 |
+| `coil_0822` | 0.965 -> 0.965 | 0.957 -> 0.956 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 134 -> 149 |
+| `spiral_0528` | 0.965 -> 0.970 | 0.946 -> 0.950 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.970 | 134 -> 144 |
+| `edge_0528` | 0.961 -> 0.960 | 0.934 -> 0.932 | 3 -> 5 | 4 -> 0 | 0.946 -> 0.947 | 63 -> 107 |
+| `tail_reentry_0623` | 0.968 -> 0.968 | 0.959 -> 0.959 | 5 -> 2 | 0 -> 0 | 0.960 -> 0.957 | 21 -> 29 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 8 -> 7 and the four
+pose jumps of `edge_0528` go to zero; the propagation pass costs 5--70%
+more (the beam multiplies the chain rows). The path's remaining cost is a
+few seconds per run. What 6c does not touch: frames outside stretches
+(length jumps at the camera edge, the score-1 edge fits; 6b) and the
+`2024-06-18-12` streak (labels).
+
+**Result of 6b (2026-09-08).** Alex added two requests to the step: a
+maximum bend of the body, since the ends were curling into coils tighter
+than a worm can make, and a note that `edge_0618`'s low-IoU frames are the
+plate streak labelled worm by the segmenter, with poses better than the
+metric says. Landed:
+
+- *Bend limit.* `MaskFitConfig.min_bend_radius_widths` (0.5) and
+  `bend_weight` (0.002): segments bent tighter than a radius of half a body
+  width pay the squared excess, in both fitters (`bend_penalty`); the
+  tightest bend of every stored pose is kept as `max_bend_widths` (width
+  over radius) and charted in the viewer (`--min-bend-radius`, 0 disables).
+- *Coverage.* `tube_coverage`, the fraction of the tube lying on mask, is
+  stored per frame beside the IoU (`hard_coverage`); it ignores mask the tube
+  does not claim. The viewer charts it with the IoU and, on a low-IoU frame
+  whose tube sits on mask, tags "mask has extra body (segmentation)" when
+  the mask is far larger than the tube or has a second large component (on
+  `edge_0618` the streak merges with the body into one 45,000-pixel
+  component, IoU 0.54, coverage 0.87), and "tube on mask, mask not covered"
+  otherwise (a short tube inside a coil).
+- *Track length pass.* After propagation, frames outside the stretches whose
+  mask reaches the border and whose length departs from the track (the
+  median length of the whole bodies within 50 frames, `track_length`) are
+  refit with that length as their prior at 2% (`--track-refit`,
+  `--track-window`, `--track-sigma`, `--track-tolerance`, `--no-track-length`;
+  arrays `track_length_px`, `length_refit`).
+- *Jump-seeded stretches.* A pose jump over a width or the body entering or
+  leaving the camera at the border seeds a stretch at any score
+  (`jump_seeds`, `--no-jump-seeds`; `--seed-length-fraction` adds length jumps,
+  off by default).
+- *Anchor diversity.* Each chain starts from two states, the anchor's stored
+  pose and the anchor refit by the chain from the frame beyond it
+  (`anchor_diversity`, `--no-anchor-diversity`); the fitter segments the
+  anchor frames for it.
+
+The last item was not planned; it came out of the tuning, which took most of
+the step. Three findings.
+
+*The track pass must run after propagation, outside the stretches.* Run
+before it, on every clipped frame (967 of the coil minute's 1200), it
+perturbed the anchors of the coil's 237-frame stretch and the minute went
+from 0 to 26 frames below 0.9; restricting it to clipped frames off the
+track (280 frames) still gave 28; only removing it gave 3. The pass now
+runs after propagation on frames outside stretches, which are the frames
+whose length jumps it was meant for; the stretches hold their length
+through the chains' anchor prior and the path's length term.
+
+*Two coil clips are bistable, and one frame decides them.* `coil_0201`'s
+first stretch and `spiral_0528`'s stretch land on a 0.97 or a 0.88 winding
+depending on perturbations as small as a stretch boundary moving by one
+frame (the jump seeds moved `spiral_0528`'s from 9090 to 9091 and the clip
+went from 0 to 29 failures; without seeds, 0 again; with the bend limit
+loosened to 0.35 widths, 30). The beam, the path and the prior could not
+help because no chain state ever reached the good winding. Starting each
+chain from two anchor states (the stored pose and the anchor refit from
+the frame beyond) made the good winding reachable: `spiral_0528` 29 -> 0,
+`coil_0201` 34 -> 6 (median unchanged).
+
+*The bend limit does what it should, at a price on one spiral.* The
+tightest bend across the three minutes falls from 14--17 to 3--5 widths per
+radius, and frames bent tighter than a third of a width from 117, 183 and
+156 to 14, 25 and 19. `spiral_0528`'s median overlap drops 0.970 -> 0.957
+with its tight inner turn pressed against the limit (bend 2.2--2.3 on the
+affected frames against a cap of 2); loosening the radius to 0.35 did not
+recover it in the runs made, so whether that worm bends tighter than half
+its width is a question for the viewer, and the radius is a flag.
+
+![edge_0618, frame 9933 in the viewer: IoU 0.55 against a mask that includes the plate streak, 95% of the tube on mask, tagged "mask has extra body (segmentation)"](pose_pipeline_step6/edge_0618_streak_coverage_frame_9933.jpg)
+
+Final configuration against step 6c (same masks and priors; the edge
+minute's low-IoU frames are the streak, and on them the coverage stays
+high):
+
+| Minute | Pipeline | Frames < 0.9 | Length jumps > 3% (outside stretches) | Pose jumps > width | In-view changes | Orientation flips | Tightest bend, max | Total s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `spiral_0131` raw | 6c | 0 | 0 (0) | 0 | 5 | 2 | 14.5 | 445 |
+| | **6b** | 0 | 0 (0) | 0 | 5 | 2 | 3.1 | 597 |
+| `coil_0201` (held out) | 6c | 0 | 23 (23) | 3 | 25 | 97 | 16.1 | 555 |
+| | **6b** | 6 | 5 (5) | 3 | 23 | 85 | 4.1 | 759 |
+| `edge_0618` (held out) | 6c | 135 | 25 (25) | 1 | 26 | 68 | 17.4 | 560 |
+| | **6b** | 142 | 14 (12) | 3 | 32 | 54 | 4.7 | 935 |
+
+Sequence set (`pose_pipeline_step6/sequence_eval_6b.json` against
+`sequence_eval_6c.json`):
+
+| Clip | Median IoU 6c -> 6b | P10 6c -> 6b | Frames < 0.9 6c -> 6b | Pose jumps > width 6c -> 6b | Stretch median IoU 6c -> 6b | Propagation s 6c -> 6b |
+|---|---|---|---:|---:|---|---|
+| `spiral_0131` | 0.958 -> 0.957 | 0.937 -> 0.935 | 0 -> 0 | 0 -> 0 | 0.951 -> 0.950 | 178 -> 425 |
+| `loop_0131` | 0.966 -> 0.968 | 0.929 -> 0.936 | 0 -> 0 | 0 -> 0 | 0.948 -> 0.954 | 63 -> 177 |
+| `omega_0822` | 0.965 -> 0.965 | 0.948 -> 0.944 | 0 -> 0 | 0 -> 0 | 0.949 -> 0.956 | 69 -> 114 |
+| `coil_0822` | 0.965 -> 0.964 | 0.956 -> 0.946 | 0 -> 0 | 0 -> 0 | 0.963 -> 0.963 | 149 -> 186 |
+| `spiral_0528` | 0.970 -> 0.957 | 0.950 -> 0.942 | 0 -> 0 | 0 -> 0 | 0.970 -> 0.952 | 144 -> 209 |
+| `edge_0528` | 0.960 -> 0.960 | 0.932 -> 0.939 | 5 -> 2 | 0 -> 0 | 0.947 -> 0.951 | 107 -> 156 |
+| `tail_reentry_0623` | 0.968 -> 0.967 | 0.959 -> 0.956 | 2 -> 3 | 0 -> 0 | 0.957 -> 0.965 | 29 -> 45 |
+
+Over the 2100 clip frames the count below IoU 0.9 goes 7 -> 5; four of the
+seven stretch medians rise, `spiral_0528`'s falls with the bend limit. The
+length jumps at the camera edge are halved rather than removed (the pass
+refits only frames off the track by more than 2% and outside stretches);
+the coil minute's six new failures are its inner turn at 0.89--0.90 with the
+tube fully on mask. Propagation costs roughly twice 6c (anchor refits, more
+seeds, larger stretches). What remains for the coils is the fragility
+itself: a stretch of 200 frames still hangs on which winding its chains
+find first, and the systematic answer is more diverse starts inside the
+stretch (section 4's intensity cue would decide the winding from evidence
+rather than continuity).
 
 ## 4. Further ideas (after step 6)
 
@@ -931,4 +1355,7 @@ first of all.
 | 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
 | viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
-| 6 | not started | |
+| 6a | done (2026-09-08) | first-order autoregressive starts and a temporal prior (weight 0.01, sigma half a width) inside propagation chains; chain candidates and predictions stored and drawn by the viewer; raw spiral 14 -> 0 frames below 0.9, held-out minutes unchanged; single-state chains shown fragile, motivating 6b/6c |
+| 6c | done (2026-09-08) | beam of three chain states per direction, independent refit under the chain schedule, one path per stretch by dynamic programming over candidates and mirrors; edge minute pose jumps 23 -> 1, flips 96 -> 68, in-stretch length jumps 0 on every run; sequence set 8 -> 7 below 0.9, edge clip jumps 4 -> 0; the balanced refit schedule was worse and is not the default |
+| 6b | done (2026-09-08) | bend limit (radius half a width; tightest bends 14--17 -> 3--5), tube coverage beside IoU with segmentation tags, track length pass after propagation on clipped frames outside stretches (edge length jumps halved), jump-seeded stretches, anchor diversity for the chains (two bistable coil clips 29 and 34 failures -> 0 and 6); sequence set 7 -> 5 below 0.9, spiral_0528 median -0.013 under the bend limit, propagation about twice 6c |
+| 6d | planned (2026-09-07) | jump/flip counts as the measure, head truth set, raw-mask default |

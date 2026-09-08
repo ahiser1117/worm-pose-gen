@@ -82,6 +82,10 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         "iou_independent": np.linspace(0.95, 0.85, count),
         "score_independent": np.zeros(count, dtype=np.int64),
         "best_start": np.array(["skeleton_longest_path"] * count),
+        "tube_coverage": np.full(count, 0.97),
+        "max_bend_widths": np.full(count, 0.8),
+        "track_length_px": np.full(count, 100.0),
+        "length_refit": np.zeros(count, dtype=bool),
     }
     for name in FLAG_NAMES:
         arrays[f"flag_{name}"] = np.zeros(count, dtype=bool)
@@ -92,6 +96,36 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
     arrays["source"][-1] = 1
     arrays["best_start"][-1] = "warm_forward"
     if independent:
+        # Step 6c hypotheses on the last frame: an independent refit and a forward chain state; the path took the chain.
+        H = 3
+        arrays["hypotheses_centerline_xy"] = np.full((count, H, n_points, 2), np.nan)
+        arrays["hypotheses_energy"] = np.full((count, H), np.nan)
+        arrays["hypotheses_iou"] = np.full((count, H), np.nan)
+        arrays["hypotheses_source"] = np.full((count, H), "", dtype="<U12")
+        arrays["hypotheses_start"] = np.full((count, H), "", dtype="<U32")
+        arrays["hypotheses_beam"] = np.full((count, H), -1, dtype=np.int8)
+        arrays["hypotheses_count"] = np.zeros(count, dtype=np.int64)
+        arrays["path_index"] = np.full(count, -1)
+        arrays["path_mirrored"] = np.zeros(count, dtype=bool)
+        arrays["path_override"] = np.zeros(count, dtype=bool)
+        arrays["path_energy_gap"] = np.full(count, np.nan)
+        arrays["path_cost"] = np.full(count, np.nan)
+        arrays["prediction_xy"] = np.full((count, n_points, 2), np.nan)
+        arrays["prediction_distance_px"] = np.full(count, np.nan)
+        arrays["hypotheses_centerline_xy"][-1, 0] = curve + (0.0, 3.0)
+        arrays["hypotheses_centerline_xy"][-1, 1] = curve
+        arrays["hypotheses_energy"][-1, :2] = [0.08, 0.09]
+        arrays["hypotheses_iou"][-1, :2] = [0.80, 0.85]
+        arrays["hypotheses_source"][-1, :2] = ["independent", "forward"]
+        arrays["hypotheses_start"][-1, :2] = ["independent_refit", "predicted_forward"]
+        arrays["hypotheses_beam"][-1, :2] = [0, 0]
+        arrays["hypotheses_count"][-1] = 2
+        arrays["path_index"][-1] = 1
+        arrays["path_override"][-1] = True
+        arrays["path_energy_gap"][-1] = 0.01
+        arrays["path_cost"][-1] = 12.5
+        arrays["prediction_xy"][-1] = curve + (1.0, 0.0)
+        arrays["prediction_distance_px"][-1] = 1.0
         arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
         arrays["centerline_xy_independent"][-1, :, 1] += 8.0
         arrays["width_profile_independent"] = arrays["width_profile"].copy()
@@ -135,6 +169,15 @@ class PoseViewerHelperTests(unittest.TestCase):
         failure = classify_frame(True, {"low_iou": True, "pose_jump": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False)
         self.assertEqual(failure["label"], "ambiguous: fit failure suspected")
         self.assertEqual(classify_frame(False, {}, 0, points_in_fov=0, n_points=100, mask_on_border=False)["kind"], "unfitted")
+        # The plate streak of 2024-06-18-12 merges with the body: one component, mask 1.5 times the tube, tube on mask.
+        streak = classify_frame(True, {"low_iou": True, "area_excess": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.54, coverage=0.87, area_ratio=1.5)
+        self.assertEqual(streak["tags"], ["fit failure suspected", "mask has extra body (segmentation)"])
+        separate = classify_frame(True, {"low_iou": True, "fragments": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.6, coverage=0.95, components=2, pixels_outside_largest=12000, area_ratio=1.0)
+        self.assertEqual(separate["tags"], ["fragmented mask", "fit failure suspected", "mask has extra body (segmentation)"])
+        short = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.88, coverage=0.97, area_ratio=0.95)
+        self.assertEqual(short["tags"], ["fit failure suspected", "tube on mask, mask not covered"])
+        poor = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.5, coverage=0.6)
+        self.assertEqual(poor["tags"], ["fit failure suspected"])
 
     def test_curvature_of_a_circle_is_its_inverse_radius(self) -> None:
         angle = np.linspace(0, np.pi, 100)
@@ -167,7 +210,7 @@ class PoseViewerServerTests(unittest.TestCase):
             entry = run_entry(runs[0])
             self.assertEqual(entry["mask_cleanup"], "fill + largest")
             self.assertEqual(entry["frames_below_0.9"], 3)
-            state = ViewerState(runs, dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json")
+            state = ViewerState(runs, dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json", runs_root=root / "runs")
             server = create_server(state, "127.0.0.1", 0)
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -177,6 +220,10 @@ class PoseViewerServerTests(unittest.TestCase):
                 info = json.loads(urlopen(f"{base}/api/state").read())
                 self.assertEqual([r["name"] for r in info["runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T10-00-00Z_demo"])
                 self.assertEqual(info["flag_groups"]["coil"], ["self_contact", "holes", "area_deficit"])
+                _write_run(root / "runs" / "2026-09-06T13-00-00Z_late", recording, first=3, count=2, independent=False)
+                rescanned = json.loads(urlopen(f"{base}/api/state?rescan=1").read())
+                self.assertEqual(rescanned["added"], 1)
+                self.assertEqual(rescanned["runs"][0]["name"], "2026-09-06T13-00-00Z_late")
                 page = urlopen(f"{base}/").read().decode()
                 self.assertIn("Pose viewer", page)
                 self.assertIn("Width along the body", page)
@@ -188,8 +235,9 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertTrue(run["recording_readable"])
                 self.assertEqual(run["image_shape"], [HEIGHT, WIDTH])
                 self.assertTrue(run["has_independent_pose"])
-                self.assertEqual([r["name"] for r in run["compatible_runs"]], ["2026-09-06T11-00-00Z_other"])
-                self.assertEqual(run["compatible_runs"][0]["overlap"], 3)
+                # Overlapping runs first: "other" covers frames 2-4 (overlap 3), "late" 3-4 (overlap 2).
+                self.assertEqual([r["name"] for r in run["compatible_runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T13-00-00Z_late"])
+                self.assertEqual([r["overlap"] for r in run["compatible_runs"]], [3, 2])
                 series = run["series"]
                 self.assertEqual(series["frame_index"], list(range(FRAMES)))
                 self.assertEqual(series["classification"], ["clean"] * (FRAMES - 1) + ["ambiguous"])
@@ -220,6 +268,17 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertEqual(len(pose["curvature"]), 100)
                 self.assertEqual(len(pose["width_prior_profile"]), 100)
                 self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
+                self.assertEqual([h["source"] for h in pose["hypotheses"]], ["independent", "forward"])
+                self.assertEqual([h["chosen"] for h in pose["hypotheses"]], [False, True])
+                self.assertEqual(pose["path"], {"index": 1, "mirrored": False, "override": True, "energy_gap": 0.01, "cost": 12.5})
+                self.assertEqual(len(pose["prediction_xy"]), 100)
+                self.assertEqual(pose["prediction_distance_px"], 1.0)
+                self.assertTrue(run["has_hypotheses"])
+                self.assertEqual(series["prediction_distance_px"][-1], 1.0)
+                self.assertEqual(series["path_override"][-1], 1)
+                self.assertEqual(series["tube_coverage"][-1], 0.97)
+                self.assertEqual(stats["max_bend_widths"], 0.8)
+                self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
 
                 light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
                 self.assertEqual(light["detail"], "light")

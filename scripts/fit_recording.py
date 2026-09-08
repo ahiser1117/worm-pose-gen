@@ -46,6 +46,8 @@ Example (one minute at 20 fps of an unseen recording, with video):
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
+import math
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 import json
@@ -67,8 +69,10 @@ from worm_pose_gen.mask_fit import (
     MaskFitResult,
     default_width_template,
     extend_start_to_length,
+    max_bend_widths,
     orient_tail_last,
     orientation_pair,
+    reverse_result,
     standard_initializations,
     taper_asymmetry,
 )
@@ -82,7 +86,20 @@ from worm_pose_gen.pose_run import (
     touches_border,
     write_overlay_video,
 )
-from worm_pose_gen.propagation import PropagationConfig, ambiguous_stretches, propagate, select_candidates
+from worm_pose_gen.propagation import (
+    PathChoice,
+    PropagationConfig,
+    ambiguous_stretches,
+    continuity_summary,
+    jump_seeds,
+    propagate,
+    select_candidates,
+    select_path,
+    slow_schedule,
+    track_length,
+    warm_initialization,
+    warm_schedule,
+)
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter
@@ -157,6 +174,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--propagate-pad", type=int, default=2, help="frames added on each side of a seed")
     parser.add_argument("--propagate-max-gap", type=int, default=3, help="seeds closer than this are one stretch")
     parser.add_argument("--chain-length-sigma", type=float, default=0.02, help="log-sigma of the length prior inside propagation chains (0 = the fit's own)")
+    parser.add_argument("--prediction-damping", type=float, default=0.6, help="step 6a: damping of the first-order pose prediction inside chains (0 = copy the neighbour, as before)")
+    parser.add_argument("--temporal-prior-weight", type=float, default=0.01, help="step 6a: weight of the pull toward the predicted pose inside chains (0 = off)")
+    parser.add_argument("--temporal-prior-sigma", type=float, default=0.5, help="step 6a: sigma of that pull, in body widths")
+    parser.add_argument("--propagate-preset", default="fast", choices=tuple(PRESETS), help="step 6c: schedule of the stretch refit pass ('fast' = 70%% of the fit's steps; 'balanced' runs that preset's steps on the fit's rasters, which on the raw spiral let the chains wander: 4 failures against 0)")
+    parser.add_argument("--no-track-length", action="store_true", help="step 6b: skip the track length pass (refit of clipped and length-deviating frames with the track's length prior)")
+    parser.add_argument("--track-window", type=int, default=50, help="step 6b: half-window in frames of the track length median")
+    parser.add_argument("--track-sigma", type=float, default=0.02, help="step 6b: log-sigma of the track length prior in the refit")
+    parser.add_argument("--track-tolerance", type=float, default=0.02, help="step 6b: log deviation from the track length that triggers a refit")
+    parser.add_argument("--no-jump-seeds", action="store_true", help="step 6b: seed stretches by ambiguity score only, not by length, pose or in-view jumps")
+    parser.add_argument("--seed-length-fraction", type=float, default=0.0, help="step 6b: length deviation from the recording's median length that seeds a stretch (0 = do not seed by length; pose and in-view jumps always seed)")
+    parser.add_argument(
+        "--track-refit", default="clipped-deviating", choices=("clipped-deviating", "clipped", "deviating", "all"),
+        help="step 6b: which frames the track pass refits: clipped frames off the track (default), every clipped frame, every frame off the track, or both",
+    )
+    parser.add_argument("--min-bend-radius", type=float, default=None, help="minimum bend radius in body widths (preset default 0.5; 0 disables the bend penalty)")
+    parser.add_argument("--path-length-weight", type=float, default=1.0, help="step 6c: weight of the squared log length change (in 2%% units) between consecutive frames")
+    parser.add_argument("--beam", type=int, default=3, help="step 6c: distinct chain states kept per direction")
+    parser.add_argument("--no-anchor-diversity", action="store_true", help="step 6b: start each chain from the anchor's pose only, not also from the anchor refit from the frame beyond")
+    parser.add_argument("--no-refit-independent", action="store_true", help="step 6c: do not refit the stored independent pose under the chain schedule")
+    parser.add_argument("--no-path", action="store_true", help="step 6c: pick the lowest energy per frame instead of one path per stretch")
+    parser.add_argument("--path-temperature", type=float, default=0.01, help="step 6c: energy scale of the path's node cost")
+    parser.add_argument("--path-distance-weight", type=float, default=1.0, help="step 6c: weight of the squared pose distance (in widths) between consecutive frames")
+    parser.add_argument("--path-inview-weight", type=float, default=2.0, help="step 6c: weight of the change of the in-view fraction between consecutive frames")
     parser.add_argument("--row-pixel-budget", type=int, default=BatchFitConfig.row_pixel_budget)
     parser.add_argument("--video", action="store_true", help="write an overlay MP4")
     parser.add_argument("--residual-frames", type=int, default=5, help="write residual images for this many lowest-IoU frames")
@@ -182,6 +222,10 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
         overrides["width_coefficients"] = args.width_coefficients
     if args.width_prior is not None:
         overrides["width_shape_prior"] = args.width_prior
+    if args.min_bend_radius is not None:
+        overrides["min_bend_radius_widths"] = args.min_bend_radius
+        if args.min_bend_radius <= 0:
+            overrides["bend_weight"] = 0.0
     return replace(config, **overrides)
 
 
@@ -314,6 +358,10 @@ def store_result(arrays: dict[str, np.ndarray], best_start: list[str], row: int,
     arrays["points_in_fov"][row] = result.points_in_fov
     arrays["body_length_px"][row] = result.body_length_px
     arrays["crop"][row] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
+    if "tube_coverage" in arrays:
+        arrays["tube_coverage"][row] = float(best.get("final_coverage", float("nan")))
+    if "max_bend_widths" in arrays:
+        arrays["max_bend_widths"][row] = max_bend_widths(result.centerline_xy, result.width_px)
     best_start[row] = str(result.initializations[result.best_index].name)
 
 
@@ -421,6 +469,8 @@ def main() -> int:
             "components": np.zeros(n, dtype=np.int64),
             "pixels_outside_largest": np.zeros(n, dtype=np.int64),
             "n_starts": np.zeros(n, dtype=np.int64),
+            "tube_coverage": _nan((n,)),
+            "max_bend_widths": _nan((n,)),
             "width_template": template,
         }
         best_start = ["" for _ in range(n)]
@@ -517,6 +567,22 @@ def main() -> int:
         finally:
             if pool is not None:
                 pool.shutdown()
+        def segment_rows(rows: list[int]) -> dict[int, np.ndarray]:
+            """Re-segment and clean the masks of these rows (masks are not kept from the first pass)."""
+
+            out: dict[int, np.ndarray] = {}
+            for chunk_start in range(0, len(rows), args.batch_size):
+                chunk = rows[chunk_start : chunk_start + args.batch_size]
+                corrected = np.stack(
+                    [flat_fielded(np.asarray(dataset[int(arrays["frame_index"][r])], dtype=np.uint8), field) for r in chunk]
+                )
+                probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
+                for r, prob in zip(chunk, probability, strict=True):
+                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
+                    if stats["worm_pixels"] >= args.min_worm_pixels:
+                        out[int(r)] = mask
+            return out
+
         # Per-frame ambiguity signals (plan step 4) from the stored arrays.
         image_shape = (int(dataset.shape[1]), int(dataset.shape[2]))
         prior_dict = None if prior is None else prior.to_dict()
@@ -535,36 +601,110 @@ def main() -> int:
             propagation_config = PropagationConfig(
                 min_score=args.propagate_min_score, pad=args.propagate_pad, max_gap=args.propagate_max_gap,
                 chain_length_sigma=None if args.chain_length_sigma <= 0 else args.chain_length_sigma,
+                prediction_damping=args.prediction_damping, temporal_prior_weight=args.temporal_prior_weight,
+                temporal_prior_sigma_widths=args.temporal_prior_sigma,
+                beam=args.beam, refit_independent=not args.no_refit_independent, path=not args.no_path,
+                path_temperature=args.path_temperature, path_distance_weight=args.path_distance_weight,
+                path_inview_weight=args.path_inview_weight, path_length_weight=args.path_length_weight,
+                anchor_diversity=not args.no_anchor_diversity,
             )
-            stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config)
+            # The refit pass runs the chosen preset's steps on the fit's own
+            # rasters, so every candidate's energy is comparable (step 6c).
+            refit_config = None if args.propagate_preset == "fast" else slow_schedule(
+                config, PRESETS[args.propagate_preset], propagation_config.chain_length_sigma
+            )
+            # Stretches are seeded by the ambiguity score and (step 6b) by the
+            # track's jumps: length, pose, or the body entering or leaving the
+            # camera while the mask is on the border.
+            seeds = None if args.no_jump_seeds else jump_seeds(arrays, length_fraction=args.seed_length_fraction)
+            stretches = ambiguous_stretches(arrays["ambiguity_score"], arrays["fitted"], propagation_config, seeds)
             stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
-            stretch_masks: dict[int, np.ndarray] = {}
-            for chunk_start in range(0, len(stretch_rows), args.batch_size):
-                chunk = stretch_rows[chunk_start : chunk_start + args.batch_size]
-                corrected = np.stack(
-                    [flat_fielded(np.asarray(dataset[int(arrays["frame_index"][r])], dtype=np.uint8), field) for r in chunk]
-                )
-                probability = module.predict_probability_batch(corrected, batch_size=args.batch_size)
-                for r, prob in zip(chunk, probability, strict=True):
-                    mask, stats = clean_mask(prob, args.threshold, args.hole_radius, device, **cleanup)
-                    if stats["worm_pixels"] >= args.min_worm_pixels:
-                        stretch_masks[r] = mask
+            # The anchors' masks too, for the chains' second starting state (anchor diversity).
+            anchor_rows = [r for a, b in stretches for r in (a - 1, b + 1) if 0 <= r < n and arrays["fitted"][r]]
+            stretch_masks = segment_rows(sorted(set(stretch_rows + anchor_rows)))
             candidates, propagation_info = propagate(
-                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config
+                arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation_config,
+                warm_config=refit_config,
             )
-            chosen = select_candidates(candidates, arrays, config, propagation_config)
+            t_path = time.perf_counter()
+            if propagation_config.path:
+                chosen = select_path(candidates, arrays, stretches, config, propagation_config, image_shape)
+            else:
+                chosen = {
+                    row: PathChoice(candidate, False, False, 0.0, float("nan"))
+                    for row, candidate in select_candidates(candidates, arrays, config, propagation_config).items()
+                }
+            path_seconds = time.perf_counter() - t_path
             before_iou = float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None
-            for row, candidate in chosen.items():
-                store_result(arrays, best_start, row, candidate.result)
-                arrays["source"][row] = SOURCE_CODES[candidate.source]
+            # Every candidate of every stretch frame is kept (step 6c), with
+            # the path's choice, so the viewer can show what the path chose
+            # between and where it overrode the lowest energy.
+            hypotheses = 1 + 2 * max(1, propagation_config.beam)
+            hyp_arrays = {
+                "hypotheses_centerline_xy": _nan((n, hypotheses, config.n_points, 2)),
+                "hypotheses_energy": _nan((n, hypotheses)),
+                "hypotheses_iou": _nan((n, hypotheses)),
+                "hypotheses_source": np.full((n, hypotheses), "", dtype="<U12"),
+                "hypotheses_start": np.full((n, hypotheses), "", dtype="<U32"),
+                "hypotheses_beam": np.full((n, hypotheses), -1, dtype=np.int8),
+                "hypotheses_count": np.zeros(n, dtype=np.int64),
+                "path_index": np.full(n, -1, dtype=np.int64),
+                "path_mirrored": np.zeros(n, dtype=bool),
+                "path_override": np.zeros(n, dtype=bool),
+                "path_energy_gap": _nan((n,)),
+                "path_cost": _nan((n,)),
+                "prediction_xy": _nan((n, config.n_points, 2)),
+                "prediction_distance_px": _nan((n,)),
+            }
+            order = {"independent": 0, "forward": 1, "backward": 2}
+            for row, options in candidates.items():
+                ranked = sorted(options, key=lambda c: (order.get(c.source, 3), c.beam))[:hypotheses]
+                hyp_arrays["hypotheses_count"][row] = len(ranked)
+                for j, candidate in enumerate(ranked):
+                    hyp_arrays["hypotheses_centerline_xy"][row, j] = candidate.result.centerline_xy
+                    hyp_arrays["hypotheses_energy"][row, j] = candidate.total_energy
+                    hyp_arrays["hypotheses_iou"][row, j] = float(candidate.result.records[candidate.result.best_index]["final_iou"])
+                    hyp_arrays["hypotheses_source"][row, j] = candidate.source
+                    hyp_arrays["hypotheses_start"][row, j] = candidate.start_name
+                    hyp_arrays["hypotheses_beam"][row, j] = candidate.beam
+                    if row in chosen and chosen[row].candidate is candidate:
+                        hyp_arrays["path_index"][row] = j
+            for row, choice in chosen.items():
+                result = reverse_result(choice.candidate.result, config=config) if choice.mirrored else choice.candidate.result
+                store_result(arrays, best_start, row, result)
+                arrays["source"][row] = SOURCE_CODES[choice.candidate.source]
                 arrays["orientation_gap"][row] = np.nan
                 arrays["reversed"][row] = False
+                hyp_arrays["path_mirrored"][row] = choice.mirrored
+                hyp_arrays["path_override"][row] = choice.override
+                hyp_arrays["path_energy_gap"][row] = choice.energy_gap
+                hyp_arrays["path_cost"][row] = choice.cost
+                hyp_arrays["prediction_distance_px"][row] = choice.candidate.distance_to_prediction_px
+                if choice.candidate.prediction_xy is not None:
+                    hyp_arrays["prediction_xy"][row] = choice.candidate.prediction_xy[::-1] if choice.mirrored else choice.candidate.prediction_xy
+            arrays.update(hyp_arrays)
             arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
             timing["propagate"] = time.perf_counter() - t_prop
             propagation_info.update(
                 {
+                    "jump_seeds": None if seeds is None else int(np.sum(seeds & arrays["fitted"])),
+                    "jump_seeds_below_score": None if seeds is None else int(np.sum(seeds & arrays["fitted"] & (arrays["score_independent"] < propagation_config.min_score))),
                     "frames_replaced": len(chosen),
-                    "replaced_by_source": {name: int(sum(c.source == name for c in chosen.values())) for name in ("forward", "backward")},
+                    "replaced_by_source": {name: int(sum(c.candidate.source == name for c in chosen.values())) for name in ("independent", "forward", "backward")},
+                    "refit_preset": args.propagate_preset,
+                    "path": {
+                        "enabled": propagation_config.path,
+                        "temperature": propagation_config.path_temperature,
+                        "distance_weight": propagation_config.path_distance_weight,
+                        "inview_weight": propagation_config.path_inview_weight,
+                        "length_weight": propagation_config.path_length_weight,
+                        "mirrors": propagation_config.path_mirrors,
+                        "frames_overriding_lowest_energy": int(sum(c.override for c in chosen.values())),
+                        "frames_mirrored": int(sum(c.mirrored for c in chosen.values())),
+                        "energy_gap_p50_p90_max": [float(v) for v in np.percentile([c.energy_gap for c in chosen.values() if c.override], [50, 90, 100])]
+                        if any(c.override for c in chosen.values()) else None,
+                        "seconds": path_seconds,
+                    },
                     "stretch_iou_median_before": before_iou,
                     "stretch_iou_median_after": float(np.nanmedian(arrays["iou"][stretch_rows])) if stretch_rows else None,
                     "stretch_frames_score_at_least_2_before": int(np.sum(arrays["score_independent"][stretch_rows] >= 2)) if stretch_rows else 0,
@@ -579,6 +719,62 @@ def main() -> int:
                 f" {timing['propagate']:.0f} s",
                 flush=True,
             )
+        # Track length pass (plan step 6b), after propagation: a clipped body's
+        # length is not observable in one frame, so clipped frames outside the
+        # stretches whose length departs from the track are refit with the
+        # track's length prior.  Run before propagation it perturbed the
+        # stretch anchors (coil_0201: 0 -> 26 frames below 0.9); the stretches
+        # themselves hold their length through the chains' anchor prior and
+        # the path's length term.
+        track_info: dict[str, Any] | None = None
+        if not args.no_track_length:
+            in_stretch_rows = np.zeros(n, dtype=bool)
+            if propagation_info is not None:
+                for a, b in propagation_info["stretches"]:
+                    in_stretch_rows[a : b + 1] = True
+            t_track = time.perf_counter()
+            track = track_length(arrays, window=args.track_window, min_iou=0.9, fallback_px=None if prior is None else prior.length_px)
+            arrays["track_length_px"] = track
+            arrays["length_refit"] = np.zeros(n, dtype=bool)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                deviates = np.abs(np.log(arrays["body_length_px"] / track)) > args.track_tolerance
+            clipped = np.asarray(arrays["mask_on_border"], dtype=bool)
+            select = {
+                "clipped-deviating": clipped & np.nan_to_num(deviates),
+                "clipped": clipped,
+                "deviating": np.nan_to_num(deviates),
+                "all": clipped | np.nan_to_num(deviates),
+            }[args.track_refit]
+            refit_rows = [int(r) for r in np.nonzero(arrays["fitted"] & select & ~in_stretch_rows)[0] if np.isfinite(track[r])]
+            track_masks = segment_rows(refit_rows)
+            groups: dict[int, list[int]] = defaultdict(list)
+            for r in refit_rows:
+                if r in track_masks:
+                    groups[int(round(math.log(track[r]) / 0.02))].append(r)
+            warm = warm_schedule(config)
+            refit_count = 0
+            for rows in groups.values():
+                group_config = replace(warm, length_prior_px=float(np.exp(np.mean(np.log(track[rows])))), length_prior_log_sigma=args.track_sigma)
+                for chunk_start in range(0, len(rows), config.max_rows):
+                    chunk = rows[chunk_start : chunk_start + config.max_rows]
+                    starts = [[warm_initialization(arrays["latent"][r], float(arrays["width_px"][r]), arrays["width_shape"][r], "track_length")] for r in chunk]
+                    results = fit_masks([track_masks[r] for r in chunk], starts, width_template=template, config=group_config, device=device)
+                    for r, result in zip(chunk, results, strict=True):
+                        store_result(arrays, best_start, r, result)
+                        arrays["length_refit"][r] = True
+                        refit_count += 1
+            timing["track"] = time.perf_counter() - t_track
+            track_info = {
+                "window": args.track_window, "sigma": args.track_sigma, "tolerance": args.track_tolerance, "refit": args.track_refit,
+                "frames_clipped": int(np.sum(arrays["fitted"] & arrays["mask_on_border"])),
+                "frames_deviating": int(np.sum(arrays["fitted"] & np.nan_to_num(deviates))),
+                "frames_refit": refit_count, "seconds": timing["track"],
+                "track_length_p10_p50_p90": [float(v) for v in np.nanpercentile(track, [10, 50, 90])] if np.isfinite(track).any() else None,
+            }
+            if refit_count:
+                arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
+            print(f"track length: {refit_count} frames refit with the track prior, {timing['track']:.0f} s", flush=True)
+
         arrays["best_start"] = np.asarray(best_start)
         # The overlay video is rendered from the final arrays, after
         # propagation, so it shows the poses as stored.
@@ -677,6 +873,8 @@ def main() -> int:
             "orientation_consistency": orientation_consistency(arrays),
         },
         "in_view_fraction": None if not fitted.any() else {"median": float(np.median(in_view)), "frames_below_1": int(np.sum(in_view < 1.0))},
+        "track_length": track_info,
+        "continuity": continuity_summary(arrays),
         "ambiguity": summarize_ambiguity(arrays) if fitted.any() else None,
         "propagation": propagation_info,
         "best_start_counts": {name: int(count) for name, count in zip(*np.unique([b for b in best_start if b], return_counts=True))},

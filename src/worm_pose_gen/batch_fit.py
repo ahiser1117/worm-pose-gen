@@ -38,8 +38,10 @@ from .mask_fit import (
     MaskFitConfig,
     MaskFitResult,
     _MaskFitState,
+    bend_penalty,
     crop_window,
     default_width_template,
+    hard_coverage,
     hard_iou,
     render_tube_segments,
     signed_edge_distance,
@@ -203,11 +205,19 @@ def fit_masks(
     width_template: NDArray[np.generic] | None = None,
     config: BatchFitConfig = BatchFitConfig(),
     device: torch.device | str | None = None,
+    references: Sequence[NDArray[np.generic] | None] | None = None,
 ) -> list[MaskFitResult]:
-    """Fit every mask from its own starts; results follow the input order."""
+    """Fit every mask from its own starts; results follow the input order.
+
+    ``references`` gives, per mask, a centerline ``[n_points, 2]`` the fit is
+    pulled toward by the temporal prior (``config.temporal_prior_weight``),
+    or ``None`` for no pull on that frame.
+    """
 
     if len(masks) != len(initializations):
         raise ValueError("masks and initializations must align")
+    if references is not None and len(references) != len(masks):
+        raise ValueError("references must align with masks")
     if not masks:
         return []
     if not (
@@ -249,6 +259,7 @@ def fit_masks(
             template_t,
             config,
             resolved_device,
+            references=None if references is None else [references[i] for i in group],
         )
         for index, result in zip(group, fitted, strict=True):
             results[index] = result
@@ -262,6 +273,7 @@ def _fit_group(
     template: Tensor,
     config: BatchFitConfig,
     device: torch.device,
+    references: Sequence[NDArray[np.generic] | None] | None = None,
 ) -> list[MaskFitResult]:
     renderer = get_renderer(config.compile_renderer)
     windows, height, width = batch_windows(crops)
@@ -285,6 +297,30 @@ def _fit_group(
     camera_size = torch.as_tensor(
         [[w.image_width, w.image_height] for w in row_windows], dtype=torch.float32, device=device
     )
+    # Temporal prior: per row, the reference centerline of its frame and a
+    # mask of the reference points inside the camera (off-camera body is
+    # unconstrained and must not pull); rows without a reference get zero.
+    use_temporal = config.temporal_prior_weight > 0 and references is not None and any(r is not None for r in references)
+    if use_temporal:
+        reference_rows = []
+        reference_masks = []
+        for f, starts in enumerate(initializations):
+            ref = references[f]
+            w = windows[f]
+            for _ in starts:
+                if ref is None:
+                    reference_rows.append(np.zeros((config.n_points, 2), dtype=np.float32))
+                    reference_masks.append(np.zeros(config.n_points, dtype=np.float32))
+                else:
+                    points = np.asarray(ref, dtype=np.float32)
+                    if points.shape != (config.n_points, 2):
+                        raise ValueError("reference centerlines must have shape [n_points, 2]")
+                    inside = (points[:, 0] >= 0) & (points[:, 0] < w.image_width) & (points[:, 1] >= 0) & (points[:, 1] < w.image_height)
+                    reference_rows.append(points)
+                    reference_masks.append(inside.astype(np.float32))
+        reference_t = torch.as_tensor(np.stack(reference_rows), device=device)
+        reference_mask_t = torch.as_tensor(np.stack(reference_masks), device=device)
+        temporal_scale = config.temporal_prior_weight / float(config.temporal_prior_sigma_px) ** 2
 
     state = _MaskFitState(starts_flat, config, device)
     optimizer = state.optimizer()
@@ -307,7 +343,12 @@ def _fit_group(
         # Points past the camera edge are censored: no data, no escape penalty.
         inside_camera = ((centerline >= 0) & (centerline < camera_size[:, None, :])).all(-1).to(centerline.dtype)
         escape = ((below + above) * inside_camera).mean(1)
-        return smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
+        total = smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
+        total = total + bend_penalty(centerline, state.log_length.exp(), state.log_width.exp(), c)
+        if use_temporal:
+            squared = ((centerline - reference_t).square().sum(-1) * reference_mask_t).sum(1) / reference_mask_t.sum(1).clamp_min(1.0)
+            total = total + temporal_scale * squared
+        return total
 
     def render_rows(centerline: Tensor, diameter: Tensor, factor: int, stride: int, fn: Renderer) -> Tensor:
         index = _point_index(centerline.shape[1], stride, device)
@@ -407,6 +448,7 @@ def _fit_group(
         rendered_hard = hard_np[f, iy0 - w.y0 : iy1 - w.y0, ix0 - w.x0 : ix1 - w.x0]
         target_np = mask[iy0:iy1, ix0:ix1]
         iou = hard_iou(rendered_hard, target_np)
+        coverage = hard_coverage(rendered_hard, target_np)
         records: list[dict[str, float | str | int]] = []
         for k, start in enumerate(starts):
             row = row_start + k
@@ -417,6 +459,7 @@ def _fit_group(
                     "final_soft_dice_energy": float(final_np[row]),
                     "final_energy": float(loss_np[row]),
                     "final_iou": iou if row == best_row else float("nan"),
+                    "final_coverage": coverage if row == best_row else float("nan"),
                 }
             )
         curve = centerline_np[best_row]

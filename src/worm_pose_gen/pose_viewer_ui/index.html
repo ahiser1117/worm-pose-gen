@@ -12,7 +12,10 @@
       <h1>Pose viewer</h1>
       <section class="group">
         <h3>Run</h3>
-        <input id="run-filter" type="text" placeholder="filter runs…">
+        <span class="row">
+          <input id="run-filter" type="text" placeholder="filter runs…">
+          <button id="rescan" type="button" title="look for runs written since the server started">↻</button>
+        </span>
         <select id="run" size="6"></select>
         <div id="run-info" class="note"></div>
         <label>Compare run (same recording)
@@ -112,7 +115,7 @@
         <div class="note">solid: fitted · dotted: symmetric template × width · dashed: prior shape × width · grey: independent fit · orange: compare run</div>
       </section>
       <section class="group">
-        <h3>Curvature along the body <small>1/px · shaded where |κ| exceeds 1/width</small></h3>
+        <h3>Curvature along the body <small>1/px · shaded beyond the bend limit (radius half a width)</small></h3>
         <canvas id="curvature-chart" class="chart" data-height="110"></canvas>
       </section>
       <section class="group">

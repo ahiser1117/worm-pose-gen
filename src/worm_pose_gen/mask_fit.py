@@ -96,6 +96,20 @@ class MaskFitConfig:
     shape_smoothness: float = 0.0
     bound_weight: float = 1e-4
     crop_escape_weight: float = 1e-3
+    # Temporal prior (plan step 6a): a Gaussian on the mean distance between
+    # the in-view centerline points and a reference pose given per frame to
+    # ``batch_fit.fit_masks`` (the propagation chain's prediction of this
+    # frame).  Zero weight disables it; the sigma is in pixels, about half a
+    # body width when set by the chain.  The weight is on the scale of
+    # ``prior_weight``: a deviation of two sigmas costs 0.01.
+    temporal_prior_weight: float = 0.0
+    temporal_prior_sigma_px: float = 20.0
+    # Bend limit (plan step 6b): the body cannot bend tighter than a radius
+    # of this many body widths; segments whose curvature exceeds the limit
+    # pay ``bend_weight`` times their squared excess (in units of the limit),
+    # summed over the body.  Zero weight disables it.
+    min_bend_radius_widths: float = 0.5
+    bend_weight: float = 0.002
     default_length_px: float = 600.0
     default_width_px: float = 45.0
     # Constant-curvature arcs (rad/px) used by the moment-based starts.
@@ -773,7 +787,8 @@ class _MaskFitState(nn.Module):
             escape = escape + (y - (crop.y1 - 1)).clamp_min(0).square()
         inside_camera = ((x >= 0) & (x < crop.image_width) & (y >= 0) & (y < crop.image_height)).to(x.dtype)
         escape = (escape * inside_camera).mean(1)
-        return smooth + self.size_regularization() + c.crop_escape_weight * escape + self.width_prior()
+        bend = bend_penalty(centerline, self.log_length.exp(), self.log_width.exp(), c)
+        return smooth + self.size_regularization() + c.crop_escape_weight * escape + self.width_prior() + bend
 
 
 def render_tube_segments(
@@ -836,6 +851,52 @@ def _render_in_crop(
         crop.width // factor,
         edge_softness=softness,
     )
+
+
+def bend_penalty(centerline: Tensor, length: Tensor, width: Tensor, config: MaskFitConfig) -> Tensor:
+    """Penalty for bending tighter than ``config.min_bend_radius_widths`` body widths, per row.
+
+    ``centerline`` is ``[B, N, 2]``, ``length`` and ``width`` are ``[B]``.  The
+    curvature of segment i is the turning angle between segments i and i+1
+    over the segment length; the excess over the limit 1 / (radius) is
+    squared and summed.
+    """
+
+    if config.bend_weight <= 0 or config.min_bend_radius_widths <= 0:
+        return torch.zeros(centerline.shape[0], dtype=centerline.dtype, device=centerline.device)
+    step = centerline[:, 1:] - centerline[:, :-1]
+    angle = torch.atan2(step[..., 1], step[..., 0])
+    turn = angle[:, 1:] - angle[:, :-1]
+    turn = torch.atan2(torch.sin(turn), torch.cos(turn))  # wrap to (-pi, pi]
+    segment = length / (centerline.shape[1] - 1)
+    curvature = turn.abs() / segment[:, None].clamp_min(1e-6)
+    limit = 1.0 / (config.min_bend_radius_widths * width.clamp_min(1e-6))
+    excess = (curvature / limit[:, None] - 1.0).clamp_min(0.0)
+    return config.bend_weight * excess.square().sum(1)
+
+
+def max_bend_widths(centerline_xy: NDArray[np.generic], width_px: float) -> float:
+    """Tightest bend of a stored centerline as width over radius of curvature (1 = radius of one width)."""
+
+    points = np.asarray(centerline_xy, dtype=np.float64)
+    if len(points) < 3:
+        return 0.0
+    step = np.diff(points, axis=0)
+    angle = np.arctan2(step[:, 1], step[:, 0])
+    turn = np.angle(np.exp(1j * np.diff(angle)))
+    segment = np.linalg.norm(step, axis=1)
+    curvature = np.abs(turn) / np.maximum(0.5 * (segment[1:] + segment[:-1]), 1e-6)
+    return float(curvature.max() * width_px)
+
+
+def hard_coverage(prediction: NDArray[np.generic], target: NDArray[np.generic]) -> float:
+    """Fraction of the rendered tube that lies on the mask; unlike IoU it ignores mask the tube does not claim."""
+
+    predicted = np.asarray(prediction, dtype=bool)
+    area = int(predicted.sum())
+    if area == 0:
+        return 0.0
+    return float(np.logical_and(predicted, np.asarray(target, dtype=bool)).sum()) / area
 
 
 def hard_iou(prediction: NDArray[np.generic], target: NDArray[np.generic]) -> float:
@@ -965,6 +1026,7 @@ def fit_mask(
                 "final_energy": float(final_loss[index]),
                 "initial_iou": hard_iou(start_hard[index], target_np),
                 "final_iou": hard_iou(hard[index], target_np),
+                "final_coverage": hard_coverage(hard[index], target_np),
             }
         )
     # Winner by total energy: overlap plus priors.

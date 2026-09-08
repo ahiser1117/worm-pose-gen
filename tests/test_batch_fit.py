@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 import numpy as np
@@ -9,6 +10,7 @@ from worm_pose_gen.batch_fit import BatchFitConfig, batch_windows, fit_masks, pl
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import (
     CropWindow,
+    Initialization,
     MaskFitConfig,
     crop_window,
     default_width_template,
@@ -161,6 +163,31 @@ class BatchFitTests(unittest.TestCase):
         self.assertLess(results[1].body_length_px, results[0].body_length_px)
         self.assertLess(results[1].body_length_px, results[2].body_length_px)
         self.assertEqual(crop_window(small, SMALL.crop_padding, 8).height, results[1].crop.height)
+
+    def test_temporal_prior_pulls_the_fit_toward_the_reference(self) -> None:
+        height, width = 120, 200
+        latent = np.concatenate((np.zeros(16), [0.0, 140.0], [width / 2, height / 2]))
+        curve = decode_centerline(latent)
+        template = default_width_template()
+        rendered = render_tube_segments(
+            torch.as_tensor(curve, dtype=torch.float32)[None], torch.as_tensor(12.0 * template, dtype=torch.float32)[None], height, width
+        )[0]
+        mask = (rendered >= 0.5).numpy()
+        reference = curve + (0.0, 6.0)
+        start = [Initialization("s", latent, 12.0)]
+        free = fit_masks([mask], [start], config=SMALL, device="cpu", references=[reference])[0]
+        # Measured pull toward a reference 6 px away: 1.2 px at weight 0.05, 3.9 at 0.2, 5.6 at 1.0.
+        pulled_config = replace(SMALL, temporal_prior_weight=0.2, temporal_prior_sigma_px=4.0)
+        pulled = fit_masks([mask], [start], config=pulled_config, device="cpu", references=[reference])[0]
+        offset_free = float(np.mean(free.centerline_xy[:, 1] - curve[:, 1]))
+        offset_pulled = float(np.mean(pulled.centerline_xy[:, 1] - curve[:, 1]))
+        self.assertLess(abs(offset_free), 1.0)
+        self.assertGreater(offset_pulled, 2.5)
+        self.assertGreater(pulled.records[0]["final_energy"], pulled.records[0]["final_soft_dice_energy"])
+        self.assertGreater(free.records[0]["final_coverage"], 0.9)
+        self.assertLessEqual(free.records[0]["final_coverage"], 1.0)
+        with self.assertRaisesRegex(ValueError, "references"):
+            fit_masks([mask], [start], config=SMALL, device="cpu", references=[])
 
     def test_rejects_misaligned_inputs(self) -> None:
         mask = np.zeros((32, 32), dtype=bool)

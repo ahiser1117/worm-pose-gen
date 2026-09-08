@@ -51,6 +51,36 @@ SMALL = MaskFitConfig(
 
 
 class MaskFitTests(unittest.TestCase):
+    def test_bend_penalty_fires_only_beyond_the_limit(self) -> None:
+        from worm_pose_gen.mask_fit import MaskFitConfig, bend_penalty, hard_coverage, max_bend_widths
+
+        config = MaskFitConfig(min_bend_radius_widths=0.5, bend_weight=0.002)
+        width = 20.0
+        straight = np.stack((np.linspace(0, 200, 100), np.zeros(100)), axis=1)
+        # A hairpin of radius 4 px (0.2 widths) in the middle of the body, resampled at uniform arc length as the fitter's curves are.
+        angle = np.linspace(0, np.pi, 200)
+        dense = np.concatenate((
+            np.stack((np.linspace(-80, 0, 400, endpoint=False), np.zeros(400)), axis=1),
+            np.stack((4 * np.sin(angle), 4 - 4 * np.cos(angle)), axis=1),
+            np.stack((np.linspace(0, -80, 400), np.full(400, 8.0)), axis=1),
+        ))
+        arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(dense, axis=0), axis=1))))
+        samples = np.linspace(0, arc[-1], 100)
+        hairpin = np.stack((np.interp(samples, arc, dense[:, 0]), np.interp(samples, arc, dense[:, 1])), axis=1)
+        curves = torch.as_tensor(np.stack((straight, hairpin)), dtype=torch.float32)
+        lengths = torch.as_tensor([200.0, float(np.linalg.norm(np.diff(hairpin, axis=0), axis=1).sum())])
+        widths = torch.full((2,), width)
+        penalty = bend_penalty(curves, lengths, widths, config)
+        self.assertAlmostEqual(float(penalty[0]), 0.0)
+        self.assertGreater(float(penalty[1]), 0.01)
+        self.assertEqual(float(bend_penalty(curves, lengths, widths, MaskFitConfig(bend_weight=0.0))[1]), 0.0)
+        self.assertLess(max_bend_widths(straight, width), 1e-6)
+        self.assertGreater(max_bend_widths(hairpin, width), 2.0)  # radius 0.2 widths -> width / radius = 5
+        prediction = np.zeros((10, 10), dtype=bool); prediction[2:6, 2:8] = True
+        target = np.zeros((10, 10), dtype=bool); target[2:6, 2:5] = True; target[8:, :] = True
+        self.assertAlmostEqual(hard_coverage(prediction, target), 0.5)
+        self.assertEqual(hard_coverage(np.zeros((4, 4), dtype=bool), target), 0.0)
+
     def test_default_width_template_is_unit_peak_and_tapered(self) -> None:
         template = default_width_template(100)
         self.assertEqual(template.shape, (100,))

@@ -234,7 +234,38 @@ pose before the stretch is carried forward through it and the good pose
 after it backward, each frame warm-started from its neighbour, all
 stretches in lockstep, and per frame the lowest total energy among
 independent, forward and backward wins (`source` in `poses.npz`;
-`--no-propagate` skips it).
+`--no-propagate` skips it). Inside a chain each frame is also started from
+a first-order prediction of the pose (the last change of shape, rotation
+and centroid carried on with damping 0.6, `--prediction-damping`) and the
+fit is pulled toward that prediction by a temporal prior
+(`--temporal-prior-weight`, default 0.01, sigma half a width). The
+propagation pass is the second pass over the ambiguous stretches: it
+keeps up to three distinct chain states per direction (`--beam`), refits
+each stretch frame's independent pose under the chain schedule with the
+stretch's anchor length, and chooses one candidate per frame along the
+stretch by dynamic programming over all candidates and their mirrors
+(energy over `--path-temperature` plus the squared pose distance in
+widths times `--path-distance-weight`, the in-view change times
+`--path-inview-weight`, and the squared log length change times
+`--path-length-weight`; `--no-path` restores the lowest energy per frame).
+`--propagate-preset balanced` runs that preset's steps in the pass; it
+was slower and worse on the raw spiral, so the default stays `fast`.
+Stretches are also seeded by jumps of the track (a pose jump of more
+than a width, or the body entering or leaving the camera at the border;
+`--no-jump-seeds`, `--seed-length-fraction` adds length jumps). After
+propagation a track length pass refits the frames outside the stretches
+whose mask reaches the border and whose length departs from the track
+(the median length of the whole bodies within `--track-window` frames)
+with that length as their prior (`--track-refit`, `--track-sigma`,
+`--track-tolerance`, `--no-track-length`); run before propagation it
+disturbed the stretch anchors. The fitter's energy penalises bends tighter than a
+radius of `--min-bend-radius` body widths (default 0.5; 0 disables). Each
+frame also stores the fraction of the tube covered by mask
+(`tube_coverage`), which stays high when a low IoU comes from mask the
+tube does not claim, such as a plate streak segmented as worm; the viewer
+tags such frames "mask has extra body (segmentation)". Every candidate is stored (`hypotheses_*`
+arrays, `path_*`, `prediction_xy`) and the viewer draws them, ranked by
+energy, with the path's choice and where it overrode the lowest energy.
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
 fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;
