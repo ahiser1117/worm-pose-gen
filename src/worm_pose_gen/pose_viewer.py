@@ -813,6 +813,7 @@ class ViewerState:
     def state(self) -> dict[str, Any]:
         runs = sorted(self.catalog.values(), key=lambda e: e["started_at"] or "", reverse=True)
         return {
+            "server": "viewer",  # the read-only run viewer; the app reports "app"
             "runs": runs,
             "errors": self.catalog_errors,
             "device": str(self.device),

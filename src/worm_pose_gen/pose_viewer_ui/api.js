@@ -99,17 +99,38 @@ const state = {
   chain: null,           // {workspace, queue: [stage], current: jobId | null}
 };
 
+let toastTimer = null;
+
+// Errors also appear as a toast over the stage: the status line sits at the
+// bottom of a sidebar tab and is easy to miss.
+function showToast(text, kind) {
+  const node = document.querySelector("#toast");
+  if (!node) return;
+  node.textContent = text;
+  node.className = "toast" + (kind ? " " + kind : "");
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { node.hidden = true; }, kind === "error" ? 9000 : 3500);
+}
+
 function setStatus(text, kind) {
   const node = $("#status");
   node.textContent = text;
   node.className = "status" + (kind ? " " + kind : "");
+  if (kind === "error") showToast(text, "error");
+}
+
+function describeHttpError(path, response, payload) {
+  const message = (payload && payload.error) || response.statusText || `HTTP ${response.status}`;
+  if (response.status === 404 && message === "not found") return `${path.split("?")[0]} is not served by this server (${message})`;
+  return message;
 }
 
 async function api(path, options) {
   const response = await fetch(path, options);
   let payload;
   try { payload = await response.json(); } catch (error) { payload = { error: response.statusText || "invalid response" }; }
-  if (!response.ok || (payload && payload.error)) throw new Error((payload && payload.error) || response.statusText);
+  if (!response.ok || (payload && payload.error)) throw new Error(describeHttpError(path, response, payload));
   return payload;
 }
 

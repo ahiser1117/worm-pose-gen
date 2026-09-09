@@ -204,12 +204,12 @@ class AppState:
 
     # ----------------------------------------------------------------- file explorer
 
-    def browse(self, path: str | None) -> dict[str, Any]:
+    def browse(self, path: str | None, all_files: bool = False) -> dict[str, Any]:
         """Directories and HDF5 files under ``path`` (the first recording root when none is given), with the roots as shortcuts."""
 
         start = Path(path).expanduser() if path else (self.config.recording_roots[0] if self.config.recording_roots else Path.home())
         try:
-            listing = list_directory(start)
+            listing = list_directory(start, all_files=all_files)
         except FileNotFoundError as error:
             raise NotFound(str(error)) from error
         except (NotADirectoryError, PermissionError) as error:
@@ -296,6 +296,7 @@ class AppState:
         added = self.viewer.rescan() if rescan else 0
         return {
             **self.viewer.state(),
+            "server": "app",  # the viewer's state() says "viewer"; the UI shows which one it reached
             "added": added,
             "workspaces": self.workspace_rows(),
             "workspaces_root": str(self.config.workspaces_root),

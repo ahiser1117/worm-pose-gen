@@ -106,12 +106,38 @@ function initTabs() {
 async function refreshCatalog(rescan = false) {
   const info = await api(rescan ? "/api/state?rescan=1" : "/api/state");
   state.info = info;
+  renderServerNotice(info);
   state.runs = info.runs || [];
   state.workspaces = (info.workspaces || []).map((w) => (w.summary ? w : { ...w, summary: w.summary || {} }));
   renderRunList();
   renderJobsBadge();
   if (state.recording) renderRecordingDetail();
   return info;
+}
+
+// ---------------------------------------------------------------- which server
+
+// The same UI is served by the read-only run viewer (worm-pose-viewer) and by
+// the app (worm-pose-app), on the same default port.  Only the app has
+// recordings, workspaces and jobs; against the viewer those panels would
+// fail with 404s, so say so up front and disable what cannot work.
+const VIEWER_ONLY_NOTE = "This server is the read-only run viewer (worm-pose-viewer). Recordings, workspaces, the file explorer and jobs need the app: stop this server and start `worm-pose-app` (python -m worm_pose_gen.app) on this port, then reload.";
+
+function serverIsApp() { return !!(state.info && (state.info.server === "app" || state.info.workspaces !== undefined)); }
+
+function renderServerNotice(info) {
+  const isApp = !!(info && (info.server === "app" || info.workspaces !== undefined));
+  for (const id of ["server-note-data", "server-note-pipeline"]) {
+    const node = $(`#${id}`);
+    if (!node) continue;
+    node.hidden = isApp;
+    node.textContent = isApp ? "" : VIEWER_ONLY_NOTE;
+  }
+  for (const id of ["explorer-toggle", "recordings-rescan", "import-run", "ws-create"]) {
+    const node = $(`#${id}`);
+    if (node) { node.disabled = !isApp; node.title = isApp ? node.dataset.title || node.title : "needs worm-pose-app"; }
+  }
+  if (!isApp) setStatus("connected to the read-only viewer; start worm-pose-app for recordings, workspaces and jobs", "error");
 }
 
 // ---------------------------------------------------------------- recordings
@@ -321,9 +347,17 @@ function toggleExplorer(open) {
   if (show && explorer.path === null) browseTo(null);
 }
 
+function explorerError(message) {
+  const list = $("#explorer-entries");
+  list.innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
+  $("#explorer-file").hidden = true;
+}
+
 async function browseTo(path) {
+  if (!serverIsApp()) { explorerError(VIEWER_ONLY_NOTE); return; }
+  const all = $("#explorer-all").checked ? "&all=1" : "";
   try {
-    const listing = await api(`/api/files${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+    const listing = await api(`/api/files?${path ? `path=${encodeURIComponent(path)}` : ""}${all}`);
     explorer.path = listing.path;
     explorer.file = null; explorer.datasets = []; explorer.dataset = null;
     $("#explorer-path").value = listing.path;
@@ -339,17 +373,21 @@ async function browseTo(path) {
     }
     const list = $("#explorer-entries");
     list.innerHTML = "";
-    if (!listing.entries.length) list.innerHTML = '<div class="empty">no directories or HDF5 files here</div>';
+    if (!listing.entries.length) {
+      list.innerHTML = `<div class="empty">no directories${listing.all_files ? " or files" : " or HDF5 files (" + (listing.suffixes || [".h5", ".hdf5"]).join(", ") + "; tick \"show all files\" for others)"} in ${escapeHtml(listing.path)}</div>`;
+    }
+    const dirs = listing.entries.filter((e) => e.kind === "dir").length;
     for (const entry of listing.entries) {
       const item = document.createElement("div");
       item.className = `item ${entry.kind}${entry.registered ? " registered" : ""}${entry.readable ? "" : " unreadable"}`;
-      item.title = entry.path + (entry.readable ? "" : " (not readable)");
-      item.innerHTML = `<span>${escapeHtml(entry.name)}</span><span class="meta">${entry.kind === "h5" ? fmtBytes(entry.size_bytes) : ""}</span>`;
+      item.title = entry.path + (entry.readable ? "" : " (not readable)") + (entry.kind === "file" ? " · click to check whether it is an HDF5 file" : "");
+      item.innerHTML = `<span>${escapeHtml(entry.name)}</span><span class="meta">${entry.kind === "dir" ? "" : fmtBytes(entry.size_bytes)}</span>`;
       item.addEventListener("click", () => { if (entry.kind === "dir") browseTo(entry.path); else inspectFile(entry.path); });
       list.appendChild(item);
     }
     $("#explorer-file").hidden = true;
-  } catch (error) { setStatus(error.message, "error"); }
+    setStatus(`${listing.path}: ${dirs} directories, ${listing.entries.length - dirs} files shown`, "ok");
+  } catch (error) { explorerError(`cannot list ${path || "the default directory"}: ${error.message}`); setStatus(error.message, "error"); }
 }
 
 async function inspectFile(path) {
@@ -852,6 +890,7 @@ function initPanels() {
   $("#explorer-path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); browseTo($("#explorer-path").value.trim() || null); } });
   $("#explorer-up").addEventListener("click", () => { const parent = $("#explorer-up").dataset.parent; if (parent) browseTo(parent); });
   $("#explorer-register").addEventListener("click", registerRecording);
+  $("#explorer-all").addEventListener("change", () => browseTo(explorer.path));
   $("#thumb-frame").addEventListener("change", () => { if (state.recording) setThumbnail(state.recording, thumbFrame()); });
   $("#ws-first").addEventListener("input", syncWorkspaceName);
   $("#ws-last").addEventListener("input", syncWorkspaceName);

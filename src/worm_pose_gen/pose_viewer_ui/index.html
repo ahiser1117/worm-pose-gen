@@ -104,6 +104,7 @@
             <button id="recordings-rescan" type="button" title="rescan the recording roots">↻</button>
           </span>
           <div id="recording-roots" class="note"></div>
+          <div id="server-note-data" class="server-note" hidden></div>
           <span class="row">
             <button id="explorer-toggle" type="button" title="browse the file system for an HDF5 video to add">Add recording…</button>
           </span>
@@ -114,6 +115,7 @@
               <button id="explorer-up" type="button" title="parent directory">↑</button>
             </span>
             <div id="explorer-shortcuts" class="row wrap"></div>
+            <label class="inline"><input id="explorer-all" type="checkbox"> show all files (not only .h5 / .hdf5)</label>
             <div id="explorer-entries" class="list explorer-entries"></div>
             <div id="explorer-file" hidden>
               <div id="explorer-file-name" class="note"></div>
@@ -160,6 +162,7 @@
       </div>
 
       <div id="tab-pipeline" class="tab" hidden>
+        <div id="server-note-pipeline" class="server-note" hidden></div>
         <section class="group">
           <h3>Stages <small id="stages-target"></small></h3>
           <div id="stages"></div>
@@ -198,6 +201,7 @@
       <div id="caption"></div>
       <div id="legend"></div>
       <div id="loading" hidden>Working…</div>
+      <div id="toast" class="toast" hidden></div>
     </main>
 
     <div id="split-right" class="splitter v" title="drag to resize · double-click to reset"><button type="button">▸</button></div>

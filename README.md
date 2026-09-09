@@ -329,8 +329,15 @@ video dataset, and "Add to recordings" registers the file
 marked ♦ in the table, can be removed again from its detail card, and a
 workspace made from it remembers the dataset name so every stage reads the
 right frames. The same endpoints serve scripts: `GET /api/files?path=`
-lists directories and HDF5 files, `GET /api/recordings/datasets?path=`
+lists directories and HDF5 files (`&all=1` lists every file, and any file
+can be opened to see whether it is HDF5), `GET /api/recordings/datasets?path=`
 lists a file's datasets.
+
+The read-only viewer (`worm-pose-viewer`) serves the same UI on the same
+default port but has none of these endpoints; the UI says so in the
+Recordings and Pipeline tabs and disables what needs the app, and errors
+from the server appear as a toast over the frame as well as in the status
+line.
 
 A workspace holds a recording range's masks, poses, hypotheses and
 provenance (which algorithm and job produced each frame's pose, and when),

@@ -219,6 +219,7 @@ class PoseViewerServerTests(unittest.TestCase):
             base = f"http://127.0.0.1:{port}"
             try:
                 info = json.loads(urlopen(f"{base}/api/state").read())
+                self.assertEqual(info["server"], "viewer")
                 self.assertEqual([r["name"] for r in info["runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T10-00-00Z_demo"])
                 self.assertEqual(info["flag_groups"]["coil"], ["self_contact", "holes", "area_deficit"])
                 _write_run(root / "runs" / "2026-09-06T13-00-00Z_late", recording, first=3, count=2, independent=False)

@@ -100,10 +100,12 @@ def default_video_dataset(datasets: list[dict[str, Any]]) -> str | None:
     return videos[0] if len(videos) == 1 else None
 
 
-def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5")) -> dict[str, Any]:
+def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5"), all_files: bool = False) -> dict[str, Any]:
     """Directories and HDF5 files directly under ``path``, for the file explorer.
 
-    Hidden entries are skipped; unreadable subdirectories are listed but flagged.
+    Hidden entries are skipped; unreadable subdirectories are listed but
+    flagged.  With ``all_files`` every regular file is listed (kind "file"
+    unless its suffix is an HDF5 one), for videos stored under other names.
     """
 
     directory = Path(path).expanduser()
@@ -123,13 +125,14 @@ def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5")) 
         try:
             if child.is_dir():
                 entries.append({"name": child.name, "path": str(child), "kind": "dir", "size_bytes": None, "modified_at": _iso_utc(child.stat().st_mtime), "readable": os.access(child, os.R_OK | os.X_OK)})
-            elif child.suffix.lower() in suffixes and child.is_file():
+            elif child.is_file() and (all_files or child.suffix.lower() in suffixes):
                 stat = child.stat()
-                entries.append({"name": child.name, "path": str(child), "kind": "h5", "size_bytes": int(stat.st_size), "modified_at": _iso_utc(stat.st_mtime), "readable": os.access(child, os.R_OK)})
+                kind = "h5" if child.suffix.lower() in suffixes else "file"
+                entries.append({"name": child.name, "path": str(child), "kind": kind, "size_bytes": int(stat.st_size), "modified_at": _iso_utc(stat.st_mtime), "readable": os.access(child, os.R_OK)})
         except OSError:
             continue
     parent = None if directory.parent == directory else str(directory.parent)
-    return {"path": str(directory), "parent": parent, "entries": entries}
+    return {"path": str(directory), "parent": parent, "entries": entries, "all_files": all_files, "suffixes": list(suffixes)}
 
 
 class RecordingRegistry:

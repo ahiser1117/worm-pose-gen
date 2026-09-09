@@ -194,3 +194,10 @@ table.recordings .dim { color: #3a4852; }
 #explorer-datasets .item:not(.video) span:first-child { color: var(--muted); }
 #explorer-datasets .item.selected { background: #1f6b44; }
 table.recordings tr.registered td:first-child::after { content: " ♦"; color: var(--warn); }
+
+/* ---- server notice and error toast ---- */
+.server-note { margin: 4px 0 8px; padding: 6px 8px; border: 1px solid var(--warn); border-radius: 4px; background: #2b2410; color: var(--warn); font-size: 12px; white-space: pre-line; }
+.toast { position: absolute; top: 44px; right: 12px; max-width: 46%; padding: 8px 12px; background: #4a1f1f; border: 1px solid #a33; border-radius: 4px; color: #ffd6d6; font-size: 12px; white-space: pre-line; box-shadow: 0 4px 16px rgba(0,0,0,0.5); z-index: 5; }
+.toast.ok { background: #143b28; border-color: #2e9a63; color: #d6ffe6; }
+.explorer-entries .item.file span:first-child::before { content: "· "; color: var(--muted); }
+.explorer-entries .error { padding: 6px; color: var(--danger); white-space: pre-line; }

@@ -312,6 +312,13 @@ class AppTests(unittest.TestCase):
         inside = self.get(f"/api/files?path={self.root / 'recordings'}")
         self.assertEqual([(e["name"], e["kind"], e["registered"]) for e in inside["entries"]], [("rec-a.h5", "h5", False)])
         self.assertEqual(self.get("/api/files")["path"], str((self.root / "recordings").resolve()))
+        (self.root / "recordings" / "notes.txt").write_text("x")
+        self.addCleanup(lambda: (self.root / "recordings" / "notes.txt").unlink())
+        self.assertEqual([e["name"] for e in self.get(f"/api/files?path={self.root / 'recordings'}")["entries"]], ["rec-a.h5"])
+        everything = self.get(f"/api/files?path={self.root / 'recordings'}&all=1")
+        self.assertEqual([(e["name"], e["kind"]) for e in everything["entries"]], [("notes.txt", "file"), ("rec-a.h5", "h5")])
+        self.assertTrue(everything["all_files"])
+        self.assertEqual(self.get("/api/state")["server"], "app")
         self.assertEqual(self.get(f"/api/files?path={self.root}/nope", 404)["error"], f"{self.root}/nope does not exist")
         self.assertIn("not a directory", self.get(f"/api/files?path={self.recording}", 400)["error"])
 

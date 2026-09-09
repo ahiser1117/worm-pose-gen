@@ -239,6 +239,8 @@ class ThumbnailTests(RecordingsFixture):
             self.assertEqual([(e["name"], e["kind"]) for e in listing["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("other.h5", "h5"), ("two.h5", "h5")])
             self.assertEqual(listing["entries"][1]["size_bytes"], conventional.stat().st_size)
             self.assertIsNone(list_directory(Path("/"))["parent"])
+            everything = list_directory(root / "a", all_files=True)
+            self.assertEqual([(e["name"], e["kind"]) for e in everything["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("notes.txt", "file"), ("other.h5", "h5"), ("two.h5", "h5")])
             with self.assertRaises(FileNotFoundError):
                 list_directory(root / "missing")
             with self.assertRaises(NotADirectoryError):
