@@ -150,8 +150,9 @@ function renderRecordings() {
     tr.dataset.path = rec.path;
     if (state.recording && state.recording.path === rec.path) tr.classList.add("current");
     if (!rec.readable) tr.classList.add("unreadable");
+    if (rec.registered) tr.classList.add("registered");
     const dims = rec.height && rec.width ? `${rec.height}×${rec.width}` : "";
-    tr.title = `${rec.path}${dims ? " · " + dims : ""}${rec.error ? "\n" + rec.error : ""}`;
+    tr.title = `${rec.path}${dims ? " · " + dims : ""}${rec.dataset && rec.dataset !== "/img_nir" ? " · dataset " + rec.dataset : ""}${rec.registered ? " · added by hand" : ""}${rec.error ? "\n" + rec.error : ""}`;
     tr.innerHTML = `<td>${escapeHtml(rec.name)}</td><td class="num">${rec.frames === null || rec.frames === undefined ? "–" : rec.frames.toLocaleString()}</td><td class="num">${fmtBytes(rec.size_bytes)}</td>` +
       `<td class="flags"><span class="${rec.readable ? "ok" : "bad"}" title="${rec.readable ? "readable" : escapeHtml(rec.error || "not readable")}">${rec.readable ? "✓" : "✗"}</span>` +
       `<span class="${rec.prior_cached ? "ok" : "dim"}" title="${rec.prior_cached ? "recording prior cached" : "no cached prior"}">P</span></td>` +
@@ -204,10 +205,21 @@ function renderRecordingDetail() {
   setThumbnail(rec, thumbFrame());
   const dims = rec.height && rec.width ? `${rec.height}×${rec.width}` : "?";
   $("#recording-facts").textContent = [
-    rec.path,
+    rec.path + (rec.dataset && rec.dataset !== "/img_nir" ? `  (dataset ${rec.dataset})` : ""),
     `${rec.frames === null ? "?" : rec.frames.toLocaleString()} frames · ${dims} · ${fmtBytes(rec.size_bytes)} · modified ${fmtTime(rec.modified_at)}`,
-    `${rec.readable ? "readable" : "NOT readable: " + (rec.error || "")} · prior ${rec.prior_cached ? "cached" : "not cached"}`,
+    `${rec.readable ? "readable" : "NOT readable: " + (rec.error || "")} · prior ${rec.prior_cached ? "cached" : "not cached"}${rec.registered ? " · added by hand" : ""}`,
   ].join("\n");
+  const actions = $("#recording-actions");
+  actions.innerHTML = "";
+  if (rec.registered) {
+    const remove = document.createElement("button");
+    remove.type = "button"; remove.textContent = "Remove from recordings"; remove.title = "forget this hand-added recording (the file is not touched)";
+    remove.addEventListener("click", async () => {
+      try { await post("/api/recordings/unregister", { path: rec.path }); state.recording = null; await loadRecordings(false); renderRecordingDetail(); setStatus(`${rec.name} removed from the recordings`, "ok"); }
+      catch (error) { setStatus(error.message, "error"); }
+    });
+    actions.appendChild(remove);
+  }
   // Runs of this recording, each importable as a workspace.
   const runs = $("#recording-runs");
   runs.innerHTML = "";
@@ -290,6 +302,92 @@ async function importRun(runName) {
     if (state.recordings.length) await loadRecordings(false);
     await selectSource("workspace", info.name);
     showTab("view");
+  } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
+}
+
+// ---------------------------------------------------------------- file explorer
+//
+// Browse the file system for an HDF5 video that is not under a recording
+// root, pick the dataset holding its frames, and register it so it appears
+// in the recordings table and can back a workspace.
+
+const explorer = { path: null, file: null, datasets: [], dataset: null };
+
+function toggleExplorer(open) {
+  const box = $("#explorer");
+  const show = open === undefined ? box.hidden : open;
+  box.hidden = !show;
+  $("#explorer-toggle").textContent = show ? "Hide explorer" : "Add recording…";
+  if (show && explorer.path === null) browseTo(null);
+}
+
+async function browseTo(path) {
+  try {
+    const listing = await api(`/api/files${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+    explorer.path = listing.path;
+    explorer.file = null; explorer.datasets = []; explorer.dataset = null;
+    $("#explorer-path").value = listing.path;
+    $("#explorer-up").disabled = !listing.parent;
+    $("#explorer-up").dataset.parent = listing.parent || "";
+    const shortcuts = $("#explorer-shortcuts");
+    shortcuts.innerHTML = "";
+    for (const s of listing.shortcuts || []) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = s.name; b.title = s.path;
+      b.addEventListener("click", () => browseTo(s.path));
+      shortcuts.appendChild(b);
+    }
+    const list = $("#explorer-entries");
+    list.innerHTML = "";
+    if (!listing.entries.length) list.innerHTML = '<div class="empty">no directories or HDF5 files here</div>';
+    for (const entry of listing.entries) {
+      const item = document.createElement("div");
+      item.className = `item ${entry.kind}${entry.registered ? " registered" : ""}${entry.readable ? "" : " unreadable"}`;
+      item.title = entry.path + (entry.readable ? "" : " (not readable)");
+      item.innerHTML = `<span>${escapeHtml(entry.name)}</span><span class="meta">${entry.kind === "h5" ? fmtBytes(entry.size_bytes) : ""}</span>`;
+      item.addEventListener("click", () => { if (entry.kind === "dir") browseTo(entry.path); else inspectFile(entry.path); });
+      list.appendChild(item);
+    }
+    $("#explorer-file").hidden = true;
+  } catch (error) { setStatus(error.message, "error"); }
+}
+
+async function inspectFile(path) {
+  try {
+    const info = await api(`/api/recordings/datasets?path=${encodeURIComponent(path)}`);
+    explorer.file = info.path; explorer.datasets = info.datasets; explorer.dataset = info.default;
+    $("#explorer-file").hidden = false;
+    $("#explorer-file-name").textContent = `${info.path}${info.registered ? " · already in the recordings" : ""}`;
+    renderDatasets();
+  } catch (error) { setStatus(error.message, "error"); }
+}
+
+function renderDatasets() {
+  const list = $("#explorer-datasets");
+  list.innerHTML = "";
+  if (!explorer.datasets.length) list.innerHTML = '<div class="empty">no datasets in this file</div>';
+  for (const d of explorer.datasets) {
+    const item = document.createElement("div");
+    item.className = `item${d.video ? " video" : ""}${d.name === explorer.dataset ? " selected" : ""}`;
+    item.title = d.video ? "a [frames, height, width] video dataset" : "not a video dataset";
+    item.innerHTML = `<span>${escapeHtml(d.name)}</span><span class="meta">${d.shape.join("×")} ${escapeHtml(d.dtype)}</span>`;
+    item.addEventListener("click", () => { explorer.dataset = d.name; renderDatasets(); });
+    list.appendChild(item);
+  }
+  const chosen = explorer.datasets.find((d) => d.name === explorer.dataset);
+  $("#explorer-register").disabled = !chosen;
+  $("#explorer-note").textContent = !chosen ? "pick the dataset that holds the frames" : chosen.video ? `frames from ${chosen.name}` : `${chosen.name} does not look like a [T,H,W] video; it will be checked on adding`;
+}
+
+async function registerRecording() {
+  if (!explorer.file || !explorer.dataset) return;
+  setLoading(1);
+  try {
+    const rec = await post("/api/recordings/register", { path: explorer.file, dataset: explorer.dataset });
+    setStatus(`${rec.name} added to the recordings (${rec.frames.toLocaleString()} frames)`, "ok");
+    await loadRecordings(false);
+    selectRecording(rec.path);
+    toggleExplorer(false);
   } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
 }
 
@@ -749,6 +847,11 @@ function initPanels() {
   });
   $("#recording-filter").addEventListener("input", renderRecordings);
   $("#recordings-rescan").addEventListener("click", () => loadRecordings(true));
+  $("#explorer-toggle").addEventListener("click", () => toggleExplorer());
+  $("#explorer-go").addEventListener("click", () => browseTo($("#explorer-path").value.trim() || null));
+  $("#explorer-path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); browseTo($("#explorer-path").value.trim() || null); } });
+  $("#explorer-up").addEventListener("click", () => { const parent = $("#explorer-up").dataset.parent; if (parent) browseTo(parent); });
+  $("#explorer-register").addEventListener("click", registerRecording);
   $("#thumb-frame").addEventListener("change", () => { if (state.recording) setThumbnail(state.recording, thumbFrame()); });
   $("#ws-first").addEventListener("input", syncWorkspaceName);
   $("#ws-last").addEventListener("input", syncWorkspaceName);

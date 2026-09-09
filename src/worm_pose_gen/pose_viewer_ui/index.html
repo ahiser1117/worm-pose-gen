@@ -104,6 +104,26 @@
             <button id="recordings-rescan" type="button" title="rescan the recording roots">↻</button>
           </span>
           <div id="recording-roots" class="note"></div>
+          <span class="row">
+            <button id="explorer-toggle" type="button" title="browse the file system for an HDF5 video to add">Add recording…</button>
+          </span>
+          <div id="explorer" class="explorer" hidden>
+            <span class="row">
+              <input id="explorer-path" type="text" placeholder="/path/to/directory">
+              <button id="explorer-go" type="button" title="open this directory">Go</button>
+              <button id="explorer-up" type="button" title="parent directory">↑</button>
+            </span>
+            <div id="explorer-shortcuts" class="row wrap"></div>
+            <div id="explorer-entries" class="list explorer-entries"></div>
+            <div id="explorer-file" hidden>
+              <div id="explorer-file-name" class="note"></div>
+              <div id="explorer-datasets" class="list"></div>
+              <span class="row">
+                <button id="explorer-register" type="button" class="primary">Add to recordings</button>
+                <span id="explorer-note" class="note"></span>
+              </span>
+            </div>
+          </div>
           <div class="table-wrap">
             <table id="recording-table" class="recordings">
               <thead><tr><th>recording</th><th class="num">frames</th><th class="num">size</th><th title="readable · prior cached">ok · P</th><th class="num" title="existing runs">runs</th><th class="num" title="workspaces">ws</th></tr></thead>
@@ -119,6 +139,7 @@
               </div>
             </div>
             <div id="recording-facts" class="note"></div>
+            <span class="row" id="recording-actions"></span>
             <h4>Runs <small>(read-only; import copies one into a workspace)</small></h4>
             <div id="recording-runs" class="list"></div>
             <h4>Workspaces</h4>

@@ -98,15 +98,18 @@ def probability_to_png(probability: NDArray[np.floating]) -> NDArray[np.uint8]:
 class RecordingSource:
     """One read-only recording with a lazily fitted, disk-cached flat field."""
 
-    def __init__(self, path: Path, cache_dir: Path) -> None:
+    def __init__(self, path: Path, cache_dir: Path, dataset: str = DATASET_PATH) -> None:
         self.path = Path(path)
         self.name = self.path.stem
         self.cache_dir = Path(cache_dir)
+        self.dataset_path = dataset
         self._lock = threading.Lock()
         self._handle: h5py.File | None = None
         self._field: FlatField | None = None
         with h5py.File(self.path, "r") as handle:
-            dataset = handle[DATASET_PATH]
+            if dataset not in handle:
+                raise KeyError(f"{self.path}: no dataset {dataset}")
+            dataset = handle[dataset]
             if dataset.ndim != 3:
                 raise ValueError(f"{self.path}: expected a [T,H,W] dataset")
             self.frame_count = int(dataset.shape[0])
@@ -115,7 +118,7 @@ class RecordingSource:
     def _dataset(self) -> h5py.Dataset:
         if self._handle is None:
             self._handle = h5py.File(self.path, "r")
-        return self._handle[DATASET_PATH]
+        return self._handle[self.dataset_path]
 
     def read(self, frame_index: int) -> NDArray[np.uint8]:
         if not 0 <= frame_index < self.frame_count:

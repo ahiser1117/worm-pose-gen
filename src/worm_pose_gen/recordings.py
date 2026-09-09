@@ -58,9 +58,117 @@ class RecordingInfo:
     prior_cached: bool
     runs: list[str]
     workspaces: list[str]
+    # The HDF5 dataset holding the frames and whether the file was added by hand
+    # (through the file explorer) rather than found under a root.
+    dataset: str = DATASET_PATH
+    registered: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+VIDEO_DTYPES = ("uint8", "uint16")
+
+
+def hdf5_datasets(path: Path) -> list[dict[str, Any]]:
+    """Every dataset in an HDF5 file with shape and dtype; ``video`` marks 3-D unsigned-integer ones."""
+
+    found: list[dict[str, Any]] = []
+
+    def visit(name: str, node: Any) -> None:
+        if isinstance(node, h5py.Dataset):
+            shape = tuple(int(v) for v in node.shape)
+            found.append({
+                "name": "/" + name.lstrip("/"), "shape": list(shape), "dtype": str(node.dtype),
+                "video": len(shape) == 3 and str(node.dtype) in VIDEO_DTYPES and shape[0] >= 1 and min(shape[1:]) >= 8,
+            })
+
+    with h5py.File(path, "r") as handle:
+        handle.visititems(visit)
+    # The conventional name first, then the video candidates, then the rest.
+    found.sort(key=lambda d: (d["name"] != DATASET_PATH, not d["video"], d["name"]))
+    return found
+
+
+def default_video_dataset(datasets: list[dict[str, Any]]) -> str | None:
+    """The dataset a new recording should use: ``/img_nir`` when present, else the single video candidate."""
+
+    names = {d["name"] for d in datasets}
+    if DATASET_PATH in names:
+        return DATASET_PATH
+    videos = [d["name"] for d in datasets if d["video"]]
+    return videos[0] if len(videos) == 1 else None
+
+
+def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5")) -> dict[str, Any]:
+    """Directories and HDF5 files directly under ``path``, for the file explorer.
+
+    Hidden entries are skipped; unreadable subdirectories are listed but flagged.
+    """
+
+    directory = Path(path).expanduser()
+    if not directory.exists():
+        raise FileNotFoundError(f"{directory} does not exist")
+    if not directory.is_dir():
+        raise NotADirectoryError(f"{directory} is not a directory")
+    directory = directory.resolve()
+    entries: list[dict[str, Any]] = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except PermissionError as error:
+        raise PermissionError(f"{directory}: permission denied") from error
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            if child.is_dir():
+                entries.append({"name": child.name, "path": str(child), "kind": "dir", "size_bytes": None, "modified_at": _iso_utc(child.stat().st_mtime), "readable": os.access(child, os.R_OK | os.X_OK)})
+            elif child.suffix.lower() in suffixes and child.is_file():
+                stat = child.stat()
+                entries.append({"name": child.name, "path": str(child), "kind": "h5", "size_bytes": int(stat.st_size), "modified_at": _iso_utc(stat.st_mtime), "readable": os.access(child, os.R_OK)})
+        except OSError:
+            continue
+    parent = None if directory.parent == directory else str(directory.parent)
+    return {"path": str(directory), "parent": parent, "entries": entries}
+
+
+class RecordingRegistry:
+    """Recordings added by hand, with the dataset to read; a JSON file under the workspaces root."""
+
+    def __init__(self, path: Path | None) -> None:
+        self.path = None if path is None else Path(path)
+        self.entries: dict[str, dict[str, Any]] = {}
+        if self.path is not None and self.path.exists():
+            data = _load_json(self.path)
+            if data and isinstance(data.get("recordings"), dict):
+                self.entries = {str(k): dict(v) for k, v in data["recordings"].items()}
+
+    def add(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
+        entry = {"dataset": dataset, "added_at": _iso_utc(datetime.now(tz=timezone.utc).timestamp())}
+        self.entries[str(Path(path).expanduser().resolve())] = entry
+        self.save()
+        return entry
+
+    def remove(self, path: Path) -> bool:
+        removed = self.entries.pop(str(Path(path).expanduser().resolve()), None) is not None
+        if removed:
+            self.save()
+        return removed
+
+    def dataset_of(self, path: Path) -> str | None:
+        entry = self.entries.get(str(Path(path).expanduser().resolve()))
+        return None if entry is None else str(entry.get("dataset") or DATASET_PATH)
+
+    def paths(self) -> list[Path]:
+        return [Path(p) for p in self.entries]
+
+    def save(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=self.path.parent, prefix=self.path.name + ".", suffix=".tmp", delete=False) as handle:
+            json.dump({"version": 1, "recordings": self.entries}, handle, indent=1)
+        os.replace(handle.name, self.path)
 
 
 def _iso_utc(timestamp: float) -> str:
@@ -75,7 +183,7 @@ def probe_frames(frame_count: int) -> tuple[int, ...]:
     return tuple(sorted({0, frame_count // 2, frame_count - 1}))
 
 
-def probe_recording(path: Path) -> dict[str, Any]:
+def probe_recording(path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
     """Shape and readability of one file: open it, read the dataset shape, then a few frames.
 
     Reading frames is what tells an installed-filter recording from one whose
@@ -85,15 +193,15 @@ def probe_recording(path: Path) -> dict[str, Any]:
     facts: dict[str, Any] = {"frames": None, "height": None, "width": None, "readable": False, "error": None}
     try:
         with h5py.File(path, "r") as handle:
-            if DATASET_PATH not in handle:
-                raise KeyError(f"no dataset {DATASET_PATH}")
-            dataset = handle[DATASET_PATH]
-            if dataset.ndim != 3:
-                raise ValueError(f"expected a [T,H,W] dataset, got shape {tuple(dataset.shape)}")
-            facts["frames"], facts["height"], facts["width"] = (int(v) for v in dataset.shape)
+            if dataset not in handle:
+                raise KeyError(f"no dataset {dataset}")
+            data = handle[dataset]
+            if data.ndim != 3:
+                raise ValueError(f"expected a [T,H,W] dataset, got shape {tuple(data.shape)}")
+            facts["frames"], facts["height"], facts["width"] = (int(v) for v in data.shape)
             for frame in probe_frames(facts["frames"]):
                 try:
-                    np.asarray(dataset[frame])
+                    np.asarray(data[frame])
                 except OSError as error:
                     raise OSError(f"frame {frame} not readable: {error}") from error
             facts["readable"] = True
@@ -122,12 +230,13 @@ class RecordingIndex:
             except (OSError, ValueError):
                 self.entries = {}
 
-    def facts(self, path: Path) -> dict[str, Any]:
+    def facts(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
         stamp = _file_stamp(path)
-        entry = self.entries.get(str(path))
+        key = str(path) if dataset == DATASET_PATH else f"{path}#{dataset}"
+        entry = self.entries.get(key)
         if entry is None or entry.get("mtime_ns") != stamp["mtime_ns"] or entry.get("size") != stamp["size"]:
-            entry = {**stamp, **probe_recording(path)}
-            self.entries[str(path)] = entry
+            entry = {**stamp, **probe_recording(path, dataset)}
+            self.entries[key] = entry
             self._dirty = True
         return entry
 
@@ -209,16 +318,26 @@ def list_recordings(
     workspaces_root: Path | None = DEFAULT_WORKSPACES_ROOT,
     prior_cache: Path | None = DEFAULT_PRIOR_CACHE,
     cache: Path | None = None,
+    registry: RecordingRegistry | None = None,
 ) -> list[RecordingInfo]:
-    """Catalog the recordings under ``roots``, reusing ``cache`` for files whose mtime and size are unchanged."""
+    """Catalog the recordings under ``roots`` plus the registered ones, reusing ``cache`` for unchanged files."""
 
     index = RecordingIndex(cache)
     runs = _references(poses_root, "summary.json")
     workspaces = _references(workspaces_root, "workspace.json")
     infos = []
-    for path in find_recordings(roots, pattern):
+    found = find_recordings(roots, pattern)
+    registered: dict[Path, str] = {}
+    if registry is not None:
+        for path in registry.paths():
+            registered[path] = registry.dataset_of(path) or DATASET_PATH
+            if path not in found:
+                found.append(path)
+    found.sort(key=lambda p: (p.stem, str(p)))
+    for path in found:
+        dataset = registered.get(path, DATASET_PATH)
         try:
-            entry = index.facts(path)
+            entry = index.facts(path, dataset)
             stamp = _file_stamp(path)
         except OSError as error:
             # Vanished or unstat-able between listing and probing: report it rather than drop it.
@@ -238,21 +357,30 @@ def list_recordings(
                 prior_cached=prior_is_cached(path, prior_cache),
                 runs=_lookup(runs, path),
                 workspaces=_lookup(workspaces, path),
+                dataset=dataset,
+                registered=path in registered,
             )
         )
     index.save()
     return infos
 
 
-def _read_frame(path: Path, frame: int) -> NDArray[np.uint8]:
+def _read_frame(path: Path, frame: int, dataset: str = DATASET_PATH) -> NDArray[np.uint8]:
     with h5py.File(path, "r") as handle:
-        dataset = handle[DATASET_PATH]
-        if not 0 <= frame < dataset.shape[0]:
-            raise IndexError(f"frame {frame} out of range for {dataset.shape[0]} frames")
-        return np.asarray(dataset[int(frame)], dtype=np.uint8)
+        if dataset not in handle:
+            raise KeyError(f"no dataset {dataset}")
+        data = handle[dataset]
+        if not 0 <= frame < data.shape[0]:
+            raise IndexError(f"frame {frame} out of range for {data.shape[0]} frames")
+        values = np.asarray(data[int(frame)])
+        if values.dtype != np.uint8:
+            # 16-bit cameras: scale by the frame's own range so the thumbnail is visible.
+            low, high = float(values.min()), float(values.max())
+            values = ((values - low) / max(high - low, 1.0) * 255.0).astype(np.uint8)
+        return values
 
 
-def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET_ROOT) -> NDArray[np.uint8]:
+def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET_ROOT, dataset: str = DATASET_PATH) -> NDArray[np.uint8]:
     """The frame flat-fielded through the cached field when one exists, else raw."""
 
     path = Path(path)
@@ -260,21 +388,23 @@ def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET
     if (field_cache / f"{path.stem}.npz").exists():
         from .label_app import RecordingSource  # deferred: label_app imports torch
 
-        source = RecordingSource(path, field_cache)
+        source = RecordingSource(path, field_cache, dataset=dataset)
         try:
             _, corrected = source.corrected(int(frame))
         finally:
             source.close()
         return corrected
-    return _read_frame(path, int(frame))
+    return _read_frame(path, int(frame), dataset)
 
 
-def thumbnail_png(path: Path, frame: int, scale: float = 0.25, dataset_root: Path = DEFAULT_DATASET_ROOT) -> bytes:
+def thumbnail_png(
+    path: Path, frame: int, scale: float = 0.25, dataset_root: Path = DEFAULT_DATASET_ROOT, dataset: str = DATASET_PATH
+) -> bytes:
     """PNG bytes of one frame scaled by ``scale`` (at least 1x1 pixel)."""
 
     if not scale > 0:
         raise ValueError("scale must be positive")
-    image = Image.fromarray(thumbnail_frame(path, frame, dataset_root), mode="L")
+    image = Image.fromarray(thumbnail_frame(path, frame, dataset_root, dataset), mode="L")
     size = (max(1, int(round(image.width * scale))), max(1, int(round(image.height * scale))))
     if size != image.size:
         image = image.resize(size, Image.Resampling.BOX if scale < 1 else Image.Resampling.BILINEAR)

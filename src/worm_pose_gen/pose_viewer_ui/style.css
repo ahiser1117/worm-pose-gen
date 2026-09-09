@@ -179,3 +179,18 @@ table.recordings .dim { color: #3a4852; }
 .job-log { margin: 4px 0 0; max-height: 220px; overflow: auto; background: #05080a; border: 1px solid var(--border); border-radius: 3px; padding: 4px 6px; font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
 /* Author display rules above (.chain, .badge-count, #legend) would otherwise beat the UA's [hidden]. */
 [hidden] { display: none !important; }
+
+/* ---- file explorer (Recordings tab) ---- */
+.explorer { border: 1px solid var(--border); border-radius: 4px; padding: 6px; margin: 4px 0; background: #0b0f12; }
+.explorer-entries { max-height: 220px; }
+.explorer-entries .item { grid-template-columns: 1fr auto; }
+.explorer-entries .item.dir span:first-child::before { content: "▸ "; color: var(--muted); }
+.explorer-entries .item.h5 span:first-child::before { content: "▤ "; color: var(--accent); }
+.explorer-entries .item.registered span:first-child::after { content: " ♦"; color: var(--warn); }
+.explorer-entries .item.unreadable span:first-child { color: var(--muted); }
+#explorer-shortcuts button { padding: 1px 7px; font-size: 11px; }
+#explorer-datasets .item { cursor: pointer; }
+#explorer-datasets .item.video span:first-child { color: var(--text); }
+#explorer-datasets .item:not(.video) span:first-child { color: var(--muted); }
+#explorer-datasets .item.selected { background: #1f6b44; }
+table.recordings tr.registered td:first-child::after { content: " ♦"; color: var(--warn); }

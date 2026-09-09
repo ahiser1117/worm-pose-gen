@@ -317,6 +317,21 @@ The UI is the pose viewer described above with two more tabs:
   each job is `python -m worm_pose_gen.pipeline --workspace ... --stage ...`,
   which also works by hand.
 
+Recordings are found under the recording roots (`--recording-root`,
+repeatable; default `/store1/shared/all_data_raw/prj_aversion`), but any
+HDF5 video can be added by hand: "Add recording…" in the Recordings tab
+opens a file explorer (type a path or use the shortcuts, open a directory,
+pick an `.h5` file), lists the file's datasets with the
+`[frames, height, width]` ones marked, preselects `/img_nir` or the single
+video dataset, and "Add to recordings" registers the file
+(`POST /api/recordings/register {path, dataset}`; the registry lives in
+`<workspaces root>/recordings_registry.json`). A registered recording is
+marked ♦ in the table, can be removed again from its detail card, and a
+workspace made from it remembers the dataset name so every stage reads the
+right frames. The same endpoints serve scripts: `GET /api/files?path=`
+lists directories and HDF5 files, `GET /api/recordings/datasets?path=`
+lists a file's datasets.
+
 A workspace holds a recording range's masks, poses, hypotheses and
 provenance (which algorithm and job produced each frame's pose, and when),
 its snapshots, edit log and Parquet exports (one row per frame with pose,

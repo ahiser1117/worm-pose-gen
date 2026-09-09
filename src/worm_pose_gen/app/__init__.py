@@ -88,6 +88,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     install_error_handlers(app)
     app.include_router(viewer.router)
     app.include_router(recordings.router)
+    app.include_router(recordings.files_router)
     app.include_router(workspaces.router)
     app.include_router(jobs.router)
     app.include_router(static.router)

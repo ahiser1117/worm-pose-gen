@@ -18,6 +18,31 @@ def recordings(rescan: str | None = None, app: AppState = Depends(get_state)) ->
     return [info.to_dict() for info in app.recordings(query_flag(rescan))]
 
 
+@router.get("/datasets")
+def datasets(path: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    return app.datasets(path)
+
+
+@router.post("/register")
+def register(payload: dict[str, Any], app: AppState = Depends(get_state)) -> dict[str, Any]:
+    return app.register_recording(payload).to_dict()
+
+
+@router.post("/unregister")
+def unregister(payload: dict[str, Any], app: AppState = Depends(get_state)) -> dict[str, Any]:
+    return {"removed": app.unregister_recording(payload)}
+
+
 @router.get("/thumbnail")
 def thumbnail(path: str, frame: int = 0, scale: float = 0.25, app: AppState = Depends(get_state)) -> Response:
     return Response(content=app.thumbnail(path, frame, scale), media_type="image/png")
+
+
+files_router = APIRouter(prefix="/api/files")
+
+
+@files_router.get("")
+def browse(path: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The file explorer: directories and HDF5 files under ``path``."""
+
+    return app.browse(path)

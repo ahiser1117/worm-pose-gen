@@ -17,7 +17,8 @@ import torch
 
 from ..jobs import JobRunner, LocalGPUBackend
 from ..pose_viewer import ViewerState
-from ..recordings import RecordingInfo, list_recordings, thumbnail_png
+from ..pipeline import workspace_dataset
+from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
 from ..workspace import Workspace, list_workspaces
 from .config import AppConfig
 from .workspace_view import WorkspaceView
@@ -62,6 +63,7 @@ class AppState:
         self._views: dict[str, WorkspaceView] = {}
         self._lock = threading.Lock()
         self._recordings_lock = threading.Lock()
+        self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -97,7 +99,7 @@ class AppState:
                     self._views.pop(name, None)
                 raise NotFound(f"unknown workspace {name!r}")
             workspace = Workspace.open(path)
-            source, error = self.viewer._source(str(workspace.recording))
+            source, error = self.viewer._source(str(workspace.recording), workspace_dataset(workspace))
             view = WorkspaceView(workspace, source, error)
             with self._lock:
                 view = self._views.setdefault(name, view)
@@ -139,9 +141,14 @@ class AppState:
         recording = self.recording_path(str(payload["recording"]))
         if not recording.is_file():
             raise ValueError(f"recording {recording} does not exist")
+        settings = dict(payload.get("settings") or {})
+        # A registered recording brings its dataset name; /img_nir needs no setting.
+        dataset = settings.get("dataset") or self.registry.dataset_of(recording) or DATASET_PATH
+        if dataset != DATASET_PATH:
+            settings["dataset"] = dataset
         Workspace.create(
             self.config.workspaces_root, name, recording, _integer(payload, "first"), _integer(payload, "last"), _integer(payload, "step", 1),
-            settings=payload.get("settings") or None,
+            settings=settings or None,
         )
         return self.view(name)
 
@@ -175,20 +182,78 @@ class AppState:
                 cache.unlink()
             return list_recordings(
                 self.config.recording_roots, poses_root=self.config.poses_root, workspaces_root=self.config.workspaces_root,
-                prior_cache=self.config.prior_cache, cache=cache,
+                prior_cache=self.config.prior_cache, cache=cache, registry=self.registry,
             )
 
     def recording_path(self, path: str) -> Path:
-        """``path`` as a recording under one of the configured roots; ``NotFound`` for anything else."""
+        """``path`` as a recording under one of the configured roots or registered by hand; ``NotFound`` for anything else."""
 
-        recording = Path(path)
+        recording = Path(path).expanduser()
         try:
             resolved = recording.resolve()
         except OSError as error:
             raise NotFound(f"no recording at {path}") from error
+        if self.registry.dataset_of(resolved) is not None:
+            return resolved
         if not any(resolved.is_relative_to(root.resolve()) for root in self.config.recording_roots):
-            raise NotFound(f"{path} is not under the configured recording roots")
+            raise NotFound(f"{path} is not under the configured recording roots and is not a registered recording")
         return recording
+
+    def recording_dataset(self, path: Path) -> str:
+        return self.registry.dataset_of(path) or DATASET_PATH
+
+    # ----------------------------------------------------------------- file explorer
+
+    def browse(self, path: str | None) -> dict[str, Any]:
+        """Directories and HDF5 files under ``path`` (the first recording root when none is given), with the roots as shortcuts."""
+
+        start = Path(path).expanduser() if path else (self.config.recording_roots[0] if self.config.recording_roots else Path.home())
+        try:
+            listing = list_directory(start)
+        except FileNotFoundError as error:
+            raise NotFound(str(error)) from error
+        except (NotADirectoryError, PermissionError) as error:
+            raise ValueError(str(error)) from error
+        listing["shortcuts"] = [{"name": p.name or str(p), "path": str(p)} for p in (*self.config.recording_roots, Path.home()) if p.exists()]
+        registered = {str(p) for p in self.registry.paths()}
+        for entry in listing["entries"]:
+            entry["registered"] = entry["path"] in registered
+        return listing
+
+    def datasets(self, path: str) -> dict[str, Any]:
+        """The datasets of one HDF5 file and the one a recording would read by default."""
+
+        file = Path(path).expanduser()
+        if not file.is_file():
+            raise NotFound(f"no file at {path}")
+        try:
+            datasets = hdf5_datasets(file)
+        except OSError as error:
+            raise ValueError(f"{path}: not an HDF5 file ({error})") from error
+        return {"path": str(file.resolve()), "datasets": datasets, "default": default_video_dataset(datasets), "registered": self.registry.dataset_of(file) is not None}
+
+    def register_recording(self, payload: dict[str, Any]) -> RecordingInfo:
+        """Add a recording by path (any readable HDF5 file) with the dataset holding its frames."""
+
+        file = Path(str(payload["path"])).expanduser()
+        if not file.is_file():
+            raise NotFound(f"no file at {file}")
+        dataset = str(payload.get("dataset") or "").strip()
+        if not dataset:
+            dataset = default_video_dataset(hdf5_datasets(file)) or ""
+            if not dataset:
+                raise ValueError("this file has several video-like datasets; name the one to use")
+        facts = probe_recording(file, dataset)
+        if not facts["readable"]:
+            raise ValueError(f"{file} cannot be read as a recording with dataset {dataset}: {facts['error']}")
+        self.registry.add(file, dataset)
+        rec = next((r for r in self.recordings(rescan=False) if Path(r.path).resolve() == file.resolve()), None)
+        if rec is None:
+            raise RuntimeError("the registered recording did not appear in the catalog")
+        return rec
+
+    def unregister_recording(self, payload: dict[str, Any]) -> bool:
+        return self.registry.remove(Path(str(payload["path"])))
 
     def thumbnail(self, path: str, frame: int, scale: float) -> bytes:
         recording = self.recording_path(path)
@@ -196,7 +261,9 @@ class AppState:
             raise NotFound(f"no recording at {path}")
         try:
             # Thumbnails never exceed the frame: ``scale`` above 1 would build a gigapixel image in the server.
-            return thumbnail_png(recording, frame, min(float(scale), 1.0), dataset_root=self.config.dataset_root)
+            return thumbnail_png(
+                recording, frame, min(float(scale), 1.0), dataset_root=self.config.dataset_root, dataset=self.recording_dataset(recording)
+            )
         except OSError as error:
             raise ValueError(f"{recording.name} cannot be read as a recording") from error
 

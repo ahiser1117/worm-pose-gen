@@ -208,6 +208,72 @@ class ListRecordingsTests(RecordingsFixture):
 
 
 class ThumbnailTests(RecordingsFixture):
+    def test_hdf5_datasets_default_and_directory_listing(self) -> None:
+        from worm_pose_gen.recordings import default_video_dataset, hdf5_datasets, list_directory
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            conventional = root / "a" / "conv.h5"
+            _write_recording(conventional)
+            with h5py.File(conventional, "a") as handle:
+                handle.create_dataset("/meta/times", data=np.arange(FRAMES, dtype=np.float64))
+            listed = hdf5_datasets(conventional)
+            self.assertEqual([d["name"] for d in listed], ["/img_nir", "/meta/times"])
+            self.assertTrue(listed[0]["video"] and not listed[1]["video"])
+            self.assertEqual(listed[0]["shape"], [FRAMES, HEIGHT, WIDTH])
+            self.assertEqual(default_video_dataset(listed), "/img_nir")
+            other = root / "a" / "other.h5"
+            with h5py.File(other, "w") as handle:
+                handle.create_dataset("/camera/frames", data=np.zeros((3, 32, 40), dtype=np.uint16))
+            self.assertEqual(default_video_dataset(hdf5_datasets(other)), "/camera/frames")
+            two = root / "a" / "two.h5"
+            with h5py.File(two, "w") as handle:
+                handle.create_dataset("/x", data=np.zeros((3, 32, 40), dtype=np.uint8))
+                handle.create_dataset("/y", data=np.zeros((3, 32, 40), dtype=np.uint8))
+            self.assertIsNone(default_video_dataset(hdf5_datasets(two)))
+            (root / "a" / ".hidden").mkdir()
+            (root / "a" / "notes.txt").write_text("x")
+            (root / "a" / "sub").mkdir()
+            listing = list_directory(root / "a")
+            self.assertEqual(listing["parent"], str(root.resolve()))
+            self.assertEqual([(e["name"], e["kind"]) for e in listing["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("other.h5", "h5"), ("two.h5", "h5")])
+            self.assertEqual(listing["entries"][1]["size_bytes"], conventional.stat().st_size)
+            self.assertIsNone(list_directory(Path("/"))["parent"])
+            with self.assertRaises(FileNotFoundError):
+                list_directory(root / "missing")
+            with self.assertRaises(NotADirectoryError):
+                list_directory(conventional)
+
+    def test_registered_recordings_join_the_catalog_with_their_dataset(self) -> None:
+        from worm_pose_gen.recordings import RecordingRegistry, thumbnail_png
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_recording(root / "roots" / "in.h5")
+            outside = root / "elsewhere" / "cam.h5"
+            outside.parent.mkdir()
+            with h5py.File(root / "roots" / "in.h5", "r") as source, h5py.File(outside, "w") as handle:
+                handle.create_dataset("/camera/frames", data=source["/img_nir"][...])
+            registry = RecordingRegistry(root / "registry.json")
+            self.assertIsNone(registry.dataset_of(outside))
+            registry.add(outside, "/camera/frames")
+            self.assertEqual(RecordingRegistry(root / "registry.json").dataset_of(outside), "/camera/frames")
+            infos = {i.name: i for i in list_recordings([root / "roots"], poses_root=None, workspaces_root=None, prior_cache=None, cache=root / "index.json", registry=registry)}
+            self.assertEqual(sorted(infos), ["cam", "in"])
+            self.assertTrue(infos["cam"].registered and infos["cam"].readable)
+            self.assertEqual((infos["cam"].dataset, infos["cam"].frames), ("/camera/frames", FRAMES))
+            self.assertFalse(infos["in"].registered)
+            self.assertEqual(infos["in"].dataset, "/img_nir")
+            png = thumbnail_png(outside, 1, 0.5, dataset_root=root / "dataset", dataset="/camera/frames")
+            self.assertEqual(Image.open(io.BytesIO(png)).size, (WIDTH // 2, HEIGHT // 2))
+            # Without the registry the same file probes as unreadable under the conventional dataset name.
+            plain = {i.name: i for i in list_recordings([root / "roots", outside], poses_root=None, workspaces_root=None, prior_cache=None, cache=None)}
+            self.assertFalse(plain["cam"].readable)
+            self.assertIn("no dataset /img_nir", plain["cam"].error)
+            self.assertTrue(registry.remove(outside))
+            self.assertFalse(registry.remove(outside))
+            self.assertEqual([i.name for i in list_recordings([root / "roots"], poses_root=None, workspaces_root=None, prior_cache=None, cache=None, registry=registry)], ["in"])
+
     def test_raw_thumbnail_is_a_scaled_png(self) -> None:
         png = thumbnail_png(self.rec_a, 2, scale=0.25, dataset_root=self.root / "no-dataset")
         self.assertTrue(png.startswith(b"\x89PNG"))

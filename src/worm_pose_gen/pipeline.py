@@ -291,22 +291,29 @@ def stage_schema(stage: str) -> list[dict[str, Any]]:
 class Frames:
     """A recording's frames with its flat field: slab reads, corrected on request."""
 
-    def __init__(self, recording: Path, *, dataset_root: Path | str | None = None, flat_field: bool = True) -> None:
+    def __init__(
+        self, recording: Path, *, dataset_root: Path | str | None = None, flat_field: bool = True, dataset: str = DATASET_PATH
+    ) -> None:
         self.path = Path(recording)
+        self.dataset_path = dataset
         self._handle: h5py.File | None = None
-        self._source = RecordingSource(self.path, Path(dataset_root or DEFAULT_DATASET_ROOT) / "flat_fields") if flat_field else None
+        self._source = (
+            RecordingSource(self.path, Path(dataset_root or DEFAULT_DATASET_ROOT) / "flat_fields", dataset=dataset) if flat_field else None
+        )
         self._field: Any = None
         self.field_seconds = 0.0
         with h5py.File(self.path, "r") as handle:
-            dataset = handle[DATASET_PATH]
-            self.total = int(dataset.shape[0])
-            self.shape = (int(dataset.shape[1]), int(dataset.shape[2]))
+            if dataset not in handle:
+                raise KeyError(f"{self.path}: no dataset {dataset}")
+            data = handle[dataset]
+            self.total = int(data.shape[0])
+            self.shape = (int(data.shape[1]), int(data.shape[2]))
 
     @property
     def dataset(self) -> h5py.Dataset:
         if self._handle is None:
             self._handle = h5py.File(self.path, "r")
-        return self._handle[DATASET_PATH]
+        return self._handle[self.dataset_path]
 
     def field(self) -> Any:
         """The flat field (fitted and cached on first use); ``None`` when disabled."""
@@ -1194,7 +1201,16 @@ def workspace_lock(workspace: Any) -> Iterator[None]:
 
 
 def workspace_frames(workspace: Any, params: SegmentParams | PriorParams) -> Frames:
-    return Frames(Path(workspace.info.recording), dataset_root=params.dataset_root, flat_field=params.flat_field)
+    return Frames(
+        Path(workspace.info.recording), dataset_root=params.dataset_root, flat_field=params.flat_field, dataset=workspace_dataset(workspace)
+    )
+
+
+def workspace_dataset(workspace: Any) -> str:
+    """The HDF5 dataset holding the frames: the workspace's ``dataset`` setting, else ``/img_nir``."""
+
+    settings = getattr(getattr(workspace, "info", None), "settings", None) or {}
+    return str(settings.get("dataset") or DATASET_PATH)
 
 
 def workspace_prior(workspace: Any) -> RecordingPrior | None:
@@ -1238,9 +1254,9 @@ def workspace_image_shape(workspace: Any) -> tuple[int, int] | None:
         return (int(shape[0]), int(shape[1]))
     try:
         with h5py.File(workspace.info.recording, "r") as handle:
-            dataset = handle[DATASET_PATH]
+            dataset = handle[workspace_dataset(workspace)]
             return (int(dataset.shape[1]), int(dataset.shape[2]))
-    except OSError:
+    except (OSError, KeyError):
         return None
 
 

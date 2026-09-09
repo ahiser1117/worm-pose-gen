@@ -45,7 +45,7 @@ import torch
 
 from .ambiguity import FLAG_NAMES, AmbiguityThresholds
 from .heuristic_tuner import encode_png
-from .label_app import RecordingSource
+from .label_app import DATASET_PATH, RecordingSource
 from .latent import cubic_bspline_basis, decode_centerline
 from .mask_fit import MaskFitConfig, fill_narrow_holes, standard_initializations
 from .connected_components import largest_component
@@ -787,14 +787,15 @@ class ViewerState:
             return []
         return sorted((p for p in root.iterdir() if (p / "summary.json").exists() and (p / "poses.npz").exists()), key=lambda p: p.name)
 
-    def _source(self, recording: str) -> tuple[RecordingSource | None, str | None]:
+    def _source(self, recording: str, dataset: str = DATASET_PATH) -> tuple[RecordingSource | None, str | None]:
+        key = recording if dataset == DATASET_PATH else f"{recording}#{dataset}"
         with self._lock:
-            if recording not in self._sources:
+            if key not in self._sources:
                 try:
-                    self._sources[recording] = (RecordingSource(Path(recording), self.dataset_root / "flat_fields"), None)
+                    self._sources[key] = (RecordingSource(Path(recording), self.dataset_root / "flat_fields", dataset=dataset), None)
                 except (OSError, ValueError, KeyError) as error:
-                    self._sources[recording] = (None, f"{type(error).__name__}: {error}")
-            return self._sources[recording]
+                    self._sources[key] = (None, f"{type(error).__name__}: {error}")
+            return self._sources[key]
 
     def run(self, name: str) -> LoadedRun:
         if name not in self.catalog:

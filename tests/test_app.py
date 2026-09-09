@@ -17,6 +17,7 @@ import time
 import unittest
 from unittest import mock
 
+import h5py
 import numpy as np
 from PIL import Image
 from fastapi.testclient import TestClient
@@ -302,6 +303,61 @@ class AppTests(unittest.TestCase):
         self.assertTrue(starts["starts"])
         self.assertEqual(len(starts["starts"][0]["centerline_xy"]), 100)
         self.assertGreater(self.get("/api/state")["workspaces"][0]["summary"]["mask_rows"], 0)
+
+    def test_file_explorer_registers_a_recording_with_its_own_dataset(self) -> None:
+        listing = self.get(f"/api/files?path={self.root}")
+        self.assertEqual(listing["path"], str(self.root.resolve()))
+        self.assertIn("recordings", [e["name"] for e in listing["entries"] if e["kind"] == "dir"])
+        self.assertEqual([s["path"] for s in listing["shortcuts"]][0], str(self.root / "recordings"))
+        inside = self.get(f"/api/files?path={self.root / 'recordings'}")
+        self.assertEqual([(e["name"], e["kind"], e["registered"]) for e in inside["entries"]], [("rec-a.h5", "h5", False)])
+        self.assertEqual(self.get("/api/files")["path"], str((self.root / "recordings").resolve()))
+        self.assertEqual(self.get(f"/api/files?path={self.root}/nope", 404)["error"], f"{self.root}/nope does not exist")
+        self.assertIn("not a directory", self.get(f"/api/files?path={self.recording}", 400)["error"])
+
+        # A camera file outside the roots whose frames live under another dataset name.
+        outside = self.root / "elsewhere" / "cam.h5"
+        outside.parent.mkdir(exist_ok=True)
+        with h5py.File(self.recording, "r") as source, h5py.File(outside, "w") as handle:
+            handle.create_dataset("/camera/frames", data=source["/img_nir"][...])
+            handle.create_dataset("/camera/times", data=np.arange(FRAMES, dtype=np.float64))
+        datasets = self.get(f"/api/recordings/datasets?path={outside}")
+        self.assertEqual(datasets["default"], "/camera/frames")
+        self.assertEqual([(d["name"], d["video"]) for d in datasets["datasets"]], [("/camera/frames", True), ("/camera/times", False)])
+        self.assertFalse(datasets["registered"])
+        self.assertEqual(self.get(f"/api/recordings/datasets?path={self.root}/nope.h5", 404)["error"], f"no file at {self.root}/nope.h5")
+        self.assertIn("recording roots", self.client.get(f"/api/recordings/thumbnail?path={outside}&frame=0").json()["error"])
+        self.assertIn("cannot be read", self.post("/api/recordings/register", {"path": str(outside), "dataset": "/camera/times"}, 400)["error"])
+
+        registered = self.post("/api/recordings/register", {"path": str(outside)})
+        # Whatever happens below, the registration must not leak into the other tests of this class.
+        self.addCleanup(lambda: self.client.post("/api/recordings/unregister", json={"path": str(outside)}))
+        self.assertEqual((registered["name"], registered["dataset"], registered["registered"], registered["frames"]), ("cam", "/camera/frames", True, FRAMES))
+        self.assertIn("cam", [r["name"] for r in self.get("/api/recordings")])
+        self.assertTrue(self.get(f"/api/recordings/datasets?path={outside}")["registered"])
+        self.assertTrue(self.get(f"/api/files?path={outside.parent}")["entries"][0]["registered"])
+        thumb = self.client.get(f"/api/recordings/thumbnail?path={outside}&frame=1&scale=0.5")
+        self.assertEqual(thumb.status_code, 200, thumb.text)
+        self.assertEqual(Image.open(io.BytesIO(thumb.content)).size, (WIDTH // 2, HEIGHT // 2))
+
+        # A workspace on it carries the dataset and the segment stage reads it.
+        created = self.post("/api/workspaces", {"name": "cam_ws", "recording": str(outside), "first": 0, "last": 3})
+        self.assertEqual(created["frame_count"], 4)
+        self.assertEqual(Workspace.open(self.root / "workspaces" / "cam_ws").info.settings["dataset"], "/camera/frames")
+        frame = self.get("/api/workspaces/cam_ws/frame?frame=1")
+        self.assertIn("image", frame["layers"])  # read through /camera/frames
+        self.assertEqual((frame["height"], frame["width"]), (HEIGHT, WIDTH))
+        self.assertEqual(frame["errors"], ["no segmenter checkpoint available; mask layers skipped"])  # this fixture has no checkpoint
+        with mock.patch.object(pipeline, "stage_command", _cpu_stage_command):
+            job = self.post("/api/jobs", {"kind": "stage", "workspace": "cam_ws", "stage": "segment", "params": SEGMENT_PARAMS})
+        record = self.wait_for_job(job["id"])
+        self.assertEqual(record["state"], "done", record)
+        self.assertEqual(Workspace.open(self.root / "workspaces" / "cam_ws").mask_rows().tolist(), [0, 1, 2, 3])
+
+        self.assertEqual(self.post("/api/recordings/unregister", {"path": str(outside)}), {"removed": True})
+        self.assertEqual(self.post("/api/recordings/unregister", {"path": str(outside)}), {"removed": False})
+        self.assertNotIn("cam", [r["name"] for r in self.get("/api/recordings")])
+        self.assertEqual(self.client.get(f"/api/recordings/thumbnail?path={outside}&frame=0").status_code, 404)
 
     def test_command_jobs_and_cancel(self) -> None:
         submitted = self.post("/api/jobs", {"kind": "command", "command": _reporting_command("all done", {"answer": 42}), "label": "one-liner"})
