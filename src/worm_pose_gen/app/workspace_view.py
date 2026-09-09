@@ -29,13 +29,13 @@ from .. import algorithms
 from .. import edits as edit_ops
 from ..algorithms import CandidateSet
 from ..batch_fit import BatchFitConfig
-from ..label_app import RecordingSource
+from ..label_app import RecordingSource, data_url, mask_to_png_values
 from ..pipeline import config_from_dict, read_summary, workspace_arrays
 from ..pose_run import cleanup_options
 from ..pose_viewer import LoadedRun, Segmenters, _round, compatible_entries, run_payload
 from ..workspace import Workspace
 
-STAMPED_FILES = ("state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "imported_summary.json", "recording_prior.json", "edits.jsonl")
+STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "imported_summary.json", "recording_prior.json", "edits.jsonl")
 STAMPED_DIRS = ("masks", "overrides/masks", "snapshots")
 # The per-row series an edit can change: the pose's own numbers, the ambiguity
 # signals of the row and its neighbours (a pose jump belongs to a pair of
@@ -88,7 +88,8 @@ def workspace_stamp(path: Path) -> tuple[int, ...]:
 def workspace_run(workspace: Workspace, source: RecordingSource | None, source_error: str | None) -> LoadedRun:
     """The viewer's ``LoadedRun`` over a workspace's current arrays, summary and masks."""
 
-    summary = read_summary(workspace)
+    summary = dict(read_summary(workspace))
+    summary["selected_checkpoint"] = workspace.info.settings.get("checkpoint")
     config = config_from_dict(summary["fit_config"]) if summary.get("fit_config") else BatchFitConfig()
     arrays = workspace_arrays(workspace, config)
     arrays.update(workspace.load_hypotheses())
@@ -297,6 +298,7 @@ class WorkspaceView:
             values = series.get(key)
             if values is not None:
                 patch[key] = {str(r): values[r] for r in rows}
+        patch["mask_stale"] = {str(r): bool(run.arrays["mask_stale"][r]) for r in rows}
         patch["provenance"] = {str(r): provenance["algorithm"][r] for r in rows}
         patch["provenance_index"] = {str(r): provenance["index"][r] for r in rows}
         patch["edited"] = {str(r): provenance["edited"][r] for r in rows}
@@ -320,7 +322,15 @@ class WorkspaceView:
         row = run.row_of(frame)
         payload = run.frame(row, segmenters, threshold, device, raw=raw, detail=detail)
         payload["provenance"] = self.row_provenance(row)
-        payload["has_stored_mask"] = self.workspace.effective_mask(row) is not None
+        payload["has_stored_mask"] = self.workspace.get_mask(row) is not None
+        override = self.workspace.get_override_mask(row)
+        payload["has_override"] = override is not None
+        payload["mask_revision"] = self.workspace.mask_revision(row)
+        payload["mask_stale"] = bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])
+        if override is not None:
+            payload.setdefault("layers", {})["mask_override"] = data_url(mask_to_png_values(override))
+            payload["layers"]["mask_final"] = data_url(np.where(override == 1, 255, 0).astype(np.uint8))
+            payload["mask_final_source"] = "override"
         self._attach_candidate_sets(payload, row)
         return payload
 
@@ -392,6 +402,7 @@ class WorkspaceView:
                 {
                     "id": candidate_set.id,
                     "algorithm": candidate_set.algorithm,
+                    "stale": self.candidate_mask_stale(candidate_set),
                     "index": -1 if choice is None else int(choice[0]),
                     "mirrored": bool(choice[1]) if choice is not None else False,
                     "centerline_xy": None if chosen is None else _round(np.round(chosen.centerline_xy, 2), 2),
@@ -402,6 +413,39 @@ class WorkspaceView:
             )
         return out
 
+    def candidate_mask_stale(self, candidate_set: CandidateSet) -> bool:
+        try:
+            algorithms.validate_candidate_masks(self.workspace, candidate_set)
+            return False
+        except ValueError:
+            return True
+
+    def mask_payload(self, frame: int, segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
+        run = self.run
+        row = run.row_of(frame)
+        if self.source is None:
+            raise ValueError(f"recording not readable: {self.source_error}")
+        raw, image = self.source.corrected(frame)
+        base = self.workspace.get_mask(row)
+        if base is None:
+            checkpoint = run.summary.get("selected_checkpoint") or (run.summary.get("checkpoint") or {}).get("path")
+            probability, _ = segmenters.probability(checkpoint, image)
+            if probability is not None:
+                raw_mask = probability >= run.threshold
+                base = run._cleaned(raw_mask, device)[2] if raw_mask.any() else raw_mask
+        override = self.workspace.get_override_mask(row)
+        labels = override if override is not None else np.zeros(image.shape, dtype=np.uint8) if base is None else base.astype(np.uint8)
+        return {"frame": frame, "row": row, "width": image.shape[1], "height": image.shape[0],
+                "image": data_url(image), "image_raw": data_url(raw), "mask": data_url(mask_to_png_values(labels)),
+                "base_mask": None if base is None else data_url(mask_to_png_values(base.astype(np.uint8))),
+                "has_override": override is not None, "revision": self.workspace.mask_revision(row),
+                "stale": bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])}
+
     def starts(self, frame: int, segmenters: Segmenters, threshold: float | None, device: torch.device) -> dict[str, Any]:
         run = self.run
-        return run.starts(run.row_of(frame), segmenters, threshold, device)
+        row = run.row_of(frame)
+        # Threshold previews affect automatic masks only. Starts must use the
+        # same explicit override that an actual region refit consumes.
+        if self.workspace.get_override_mask(row) is not None:
+            threshold = run.threshold
+        return run.starts(row, segmenters, threshold, device)

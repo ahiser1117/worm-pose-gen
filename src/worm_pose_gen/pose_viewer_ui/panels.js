@@ -79,7 +79,7 @@ function initSplitters() {
 
 // ---------------------------------------------------------------- tabs
 
-const TABS = ["view", "data", "pipeline"];
+const TABS = ["view", "data", "pipeline", "corpus"];
 
 function showTab(name) {
   if (!TABS.includes(name)) name = "view";
@@ -90,6 +90,7 @@ function showTab(name) {
   writeStorage("poseViewer.tab", name);
   // The recordings and pipeline panels want room; widen a narrow sidebar once.
   if ((name === "data" || name === "pipeline") && !layout.collapsed.left && layout.sizes.left < 420) { layout.sizes.left = 460; applyLayout(); saveLayout(); }
+  if (name === "corpus" && typeof corpusUI !== "undefined") corpusUI.refresh();
   if (name === "data" && !state.recordings.length) loadRecordings(false);
 }
 
@@ -734,6 +735,7 @@ async function loadJobs() {
     if (before !== undefined && before !== job.state && !jobActive(job)) finished.push(job);
     state.jobStates.set(job.id, job.state);
   }
+  if (typeof corpusUI !== "undefined") corpusUI.onJobs(finished);
   state.jobs = jobs;
   renderJobs();
   renderJobsBadge();
@@ -878,6 +880,7 @@ async function cancelJob(id) {
 
 // Called by selectSource once a source is loaded.
 function onSourceChanged() {
+  if (typeof corpusUI !== "undefined") corpusUI.sourceChanged();
   renderStages();
   renderJobs();
   if (state.recording) renderRecordingDetail();

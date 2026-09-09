@@ -286,7 +286,7 @@ class AppTests(unittest.TestCase):
         with mock.patch.object(pipeline, "stage_command", _cpu_stage_command):
             submitted = self.post("/api/jobs", {"kind": "stage", "workspace": "fresh", "stage": "segment", "params": SEGMENT_PARAMS, "label": "seg"})
         self.assertEqual(submitted["state"], "queued")
-        self.assertEqual(submitted["spec"], {"kind": "stage", "params": {"stage": "segment", "params": SEGMENT_PARAMS}, "workspace": "fresh", "frames": [0, FRAMES - 1], "gpus": 1, "label": "seg"})
+        self.assertEqual(submitted["spec"], {"kind": "stage", "params": {"stage": "segment", "params": {**SEGMENT_PARAMS, "dataset_root": str(self.root / "dataset")}}, "workspace": "fresh", "frames": [0, FRAMES - 1], "gpus": 1, "label": "seg"})
         self.assertEqual(submitted["command"][0], sys.executable)
         self.assertIn("--stage', 'segment'", submitted["command"][-1])
         record = self.wait_for_job(submitted["id"])

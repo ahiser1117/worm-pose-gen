@@ -86,12 +86,16 @@ function bindEvents() {
   window.addEventListener("resize", relayout);
   initSplitters();
   initPanels();
+  maskEditor.init();
+  corpusUI.init();
 
   window.addEventListener("keydown", (event) => {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") { if (event.key === "Escape") document.activeElement.blur(); return; }
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && (event.key === "z" || event.key === "Z")) {
       event.preventDefault();
+      if (maskEditor.undoStroke()) return;
+      if (maskEditor.isDirty()) { setStatus("Save or discard the mask draft before undoing a saved edit", "error"); return; }
       if (editsSupported()) undoEdit(); else setStatus("undo needs a workspace on the app server", "error");
       return;
     }

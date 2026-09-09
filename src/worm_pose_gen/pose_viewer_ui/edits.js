@@ -258,6 +258,7 @@ function releaseEdit() { editInFlight = false; }
 function editPending() { return editInFlight; }
 
 async function submitEdit(body, describe) {
+  if (typeof maskEditor !== "undefined" && !maskEditor.beforeMutation()) return null;
   if (!editsSupported()) { setStatus("edits need a workspace on the app server", "error"); return null; }
   if (!claimEdit()) return null;
   const name = state.runName;
@@ -342,6 +343,7 @@ async function applyEditResponse(payload) {
       if (change.after && change.after.algorithm !== undefined) setRowProvenance(change.row, change.after.algorithm);
     }
   }
+  if (typeof maskEditor !== "undefined") maskEditor.invalidate();
   state.frameCache.clear();
   state.segments.clear();
   const row = state.row;

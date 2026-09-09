@@ -174,6 +174,7 @@ def set_summary(view: WorkspaceView, entry: dict[str, Any]) -> dict[str, Any]:
 
     first, last = entry.get("rows") or (None, None)
     out = dict(entry)
+    out["stale"] = algorithms.candidate_summary_stale(view.workspace, entry)
     if first is not None and last is not None:
         out["frames"] = frames_of(view, int(first), int(last))
     out["anchors"] = {"before": anchor_payload(view, entry.get("anchor_before")), "after": anchor_payload(view, entry.get("anchor_after"))}

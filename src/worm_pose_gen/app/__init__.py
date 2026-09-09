@@ -8,8 +8,10 @@ pipeline stages over a workspace on the local GPUs; Phase 2: manual
 interventions (hypothesis pick, orientation flip, undo) through the edit
 log with provenance per frame; and Phase 3: the algorithm registry run on a
 region between anchors as a job, the candidate sets it produces (compared,
-accepted or discarded) and the outcome log.  Everything the UI does goes
-through these endpoints, so a script can drive the same work headless.
+accepted or discarded) and the outcome log. Phase 4 adds reversible mask
+painting, a versioned user corpus, fine-tuning jobs on frozen labels and
+explicit checkpoint selection. Everything the UI does goes through these
+endpoints, so a script can drive the same work headless.
 
 Errors come back as ``{"error": ...}`` with 400 for a bad request (unknown
 frame, bad parameter), 404 for a missing run, workspace, job or file
@@ -38,7 +40,7 @@ from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
-from .routers import algorithms, edits, jobs, recordings, static, viewer, workspaces
+from .routers import algorithms, corpus, edits, jobs, masks, recordings, static, viewer, workspaces
 
 __all__ = ["AppConfig", "AppState", "NotFound", "create_app", "main", "parse_args"]
 
@@ -100,6 +102,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(recordings.files_router)
     app.include_router(workspaces.router)
     app.include_router(edits.router)
+    app.include_router(masks.router)
+    app.include_router(corpus.router)
     app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(static.router)
@@ -123,6 +127,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poses-root", type=Path, default=DEFAULT_RUNS_ROOT, help="directory of fit_recording.py run directories")
     parser.add_argument("--run", action="append", type=Path, dest="runs", help="extra run directory to serve (repeatable)")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
+    parser.add_argument("--corpus-root", type=Path, default=None, help="user segmentation labels (default: <workspaces-root>/corpus; may point to an existing segmentation store)")
+    parser.add_argument("--checkpoints-root", type=Path, default=None, help="fine-tuning runs and checkpoints (default: <workspaces-root>/checkpoints)")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="segmenter for on-demand probability maps")
     parser.add_argument("--gpus", default=None, help="comma-separated GPU ids for jobs (default: all visible)")
     parser.add_argument("--max-concurrent", type=int, default=None, help="jobs running at once (default: one per GPU)")
@@ -137,6 +143,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
         host=args.host, port=args.port, workspaces_root=args.workspaces_root,
         recording_roots=tuple(args.recording_roots) if args.recording_roots else tuple(DEFAULT_RECORDING_ROOTS),
         poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, notes=args.notes,
+        corpus_root=args.corpus_root, checkpoints_root=args.checkpoints_root,
         gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent, extra_runs=tuple(args.runs or ()),
     )
 

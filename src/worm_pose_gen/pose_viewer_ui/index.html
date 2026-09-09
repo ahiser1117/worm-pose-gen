@@ -28,6 +28,7 @@
 
       <nav id="tabs">
         <button type="button" data-tab="view" class="active">View</button>
+        <button type="button" data-tab="corpus">Corpus</button>
         <button type="button" data-tab="data">Recordings</button>
         <button type="button" data-tab="pipeline">Pipeline <span id="jobs-badge" class="badge-count" hidden></span></button>
       </nav>
@@ -89,6 +90,22 @@
           <label><input id="threshold-on" type="checkbox"> Use override (server recomputes masks)</label>
         </section>
 
+        <section class="group" id="mask-editor">
+          <h3>Segmentation correction</h3>
+          <button id="mask-corpus-close" hidden>Return to workspace</button>
+          <label><input id="mask-enable" type="checkbox"> Paint mask (Alt or middle drag to pan)</label>
+          <span class="row wrap"><button data-mask-brush="255">Worm</button><button data-mask-brush="0">Background</button><button data-mask-brush="127">Ignore</button></span>
+          <label>Brush diameter <output id="mask-size-value">12 px</output><input id="mask-size" type="range" min="1" max="100" value="12"></label>
+          <label><input id="mask-predicted" type="checkbox"> Original predicted mask · cyan</label>
+          <label><input id="mask-visible" type="checkbox" checked> Editable mask layer · pink worm / yellow ignore</label>
+          <span class="row wrap"><button id="mask-stroke-undo">Undo stroke</button><button id="mask-discard">Discard draft</button></span>
+          <span class="row wrap"><button id="mask-save" class="primary">Save override</button><button id="mask-clear">Clear override</button></span>
+          <label>Corpus split<select id="mask-corpus-split"><option value="">automatic</option><option>train</option><option>val</option><option>test</option></select></label>
+          <button id="mask-to-corpus">Save label to corpus</button>
+          <span class="row wrap"><button id="mask-refit-frame">Refit frame…</button><button id="mask-refit-stretch">Refit stretch…</button></span>
+          <div id="mask-status" class="note">Open a workspace to correct its segmentation.</div>
+          <p class="note">Save override changes segmentation in this workspace. Save label to corpus makes an independent training sample. Refit creates candidates: compare them and explicitly Accept in Pipeline. Saved changes can be undone in Edits.</p>
+        </section>
         <section class="group">
           <h3>Review notes <small id="note-count"></small></h3>
           <span class="row wrap" id="note-tags"></span>
@@ -111,6 +128,31 @@
         </section>
       </div>
 
+      <div id="tab-corpus" class="tab" hidden>
+        <section class="group"><h3>User segmentation corpus</h3>
+          <span class="row"><input id="corpus-filter" placeholder="filter saved labels…"><button id="corpus-refresh" title="Refresh corpus labels" aria-label="Refresh corpus labels">↻</button></span>
+          <div id="corpus-counts" class="note"></div><div id="corpus-list" class="list"></div>
+          <p class="note">Open a label to inspect or repaint its independent copy. Workspace masks and accepted poses stay separate.</p>
+          <button id="corpus-close" hidden>Return to workspace</button>
+        </section>
+        <section class="group"><h3>Fine-tune segmentation</h3>
+          <p class="note">Train from the packaged checkpoint on saved corpus labels. The completed checkpoint can then be selected for this workspace.</p>
+          <div class="form-grid">
+            <label>device<select id="tune-device"><option>auto</option><option>cpu</option><option>cuda</option></select></label>
+            <label>crop size<input id="tune-crop" type="number" min="64" step="32" value="512"></label>
+            <label>patience<input id="tune-patience" type="number" min="1" value="5"></label>
+            <label>workers<input id="tune-workers" type="number" min="0" value="0"></label>
+            <label>seed<input id="tune-seed" type="number" min="0" value="0"></label>
+            <label>epochs<input id="tune-epochs" type="number" min="1" max="1000" value="10"></label>
+            <label>batch size<input id="tune-batch" type="number" min="1" max="256" value="4"></label>
+            <label>learning rate<input id="tune-lr" type="number" min="0.00000001" step="0.00001" value="0.0001"></label>
+          </div>
+          <button id="corpus-train" class="primary">Start fine-tune job</button><div id="corpus-train-status" class="note"></div>
+          <label>Segmentation checkpoint<select id="seg-checkpoint"></select></label>
+          <span class="row"><button id="checkpoint-refresh" title="Refresh segmentation checkpoints" aria-label="Refresh segmentation checkpoints">↻</button><button id="checkpoint-select">Use in workspace</button></span>
+          <div id="checkpoint-status" class="note"></div>
+        </section>
+      </div>
       <div id="tab-data" class="tab" hidden>
         <section class="group">
           <h3>Recordings <small id="recording-count"></small></h3>
@@ -333,6 +375,8 @@
   <script src="/static/edits.js"></script>
   <script src="/static/panels.js"></script>
   <script src="/static/regions.js"></script>
+  <script src="/static/masks.js"></script>
+  <script src="/static/corpus.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

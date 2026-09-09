@@ -198,6 +198,7 @@ class RegionContext:
     device: torch.device
     state: dict[str, np.ndarray] = field(default_factory=dict)
     image_shape: tuple[int, int] | None = None
+    mask_revisions: dict[str, str] = field(default_factory=dict)
 
     @property
     def rows(self) -> list[int]:
@@ -368,6 +369,7 @@ class CandidateSet:
     accepted_rows: list[int] = field(default_factory=list)
     workspace: str = ""
     recording: str = ""
+    mask_revisions: dict[str, str] = field(default_factory=dict)
 
     @property
     def path_by_row(self) -> dict[int, tuple[int, bool]]:
@@ -395,6 +397,7 @@ class CandidateSet:
             "metrics": self.metrics, "metrics_before": self.metrics_before, "created_at": self.created_at, "accepted": self.accepted,
             "accepted_at": self.accepted_at, "accepted_edit": self.accepted_edit, "accepted_rows": [int(r) for r in self.accepted_rows], "job": self.job,
             "candidates": int(sum(len(v) for v in self.candidates.values())), "path_rows": len(self.path), "workspace": self.workspace,
+            "mask_revisions": dict(self.mask_revisions),
         }
 
     # ----- storage
@@ -464,6 +467,7 @@ class CandidateSet:
             "accepted": self.accepted, "accepted_at": self.accepted_at, "accepted_edit": self.accepted_edit,
             "accepted_rows": [int(r) for r in self.accepted_rows],
             "workspace": self.workspace, "recording": self.recording, "candidates": int(sum(counts)),
+            "mask_revisions": self.mask_revisions,
         }
         _write_json_atomic(path.with_suffix(".json"), meta)
         return path
@@ -501,6 +505,7 @@ class CandidateSet:
             accepted=bool(meta.get("accepted", False)), accepted_at=meta.get("accepted_at"), accepted_edit=meta.get("accepted_edit"),
             accepted_rows=[int(r) for r in meta.get("accepted_rows") or []],
             workspace=str(meta.get("workspace") or ""), recording=str(meta.get("recording") or ""),
+            mask_revisions=dict(meta.get("mask_revisions") or {}),
         )
 
 
@@ -597,6 +602,7 @@ def list_candidate_sets(workspace: Any) -> list[dict[str, Any]]:
                 "accepted_edit": meta.get("accepted_edit"), "accepted_rows": [int(r) for r in meta.get("accepted_rows") or []],
                 "job": meta.get("job") or "", "candidates": meta.get("candidates"),
                 "path_rows": len(meta.get("path") or []), "workspace": meta.get("workspace") or workspace.info.name,
+                "mask_revisions": dict(meta.get("mask_revisions") or {}),
             }
         )
     out.sort(key=lambda e: str(e.get("created_at") or ""), reverse=True)
@@ -959,6 +965,11 @@ def _propagate_region(
         row = local.rows[local_row]
         ordered = sorted(options, key=lambda c: (SOURCE_CODES.get(c.source, 3), c.beam))
         candidates[row] = [CandidatePose.from_result(c.result, ctx.config, c.source, c.start_name, c.total_energy) for c in ordered]
+    missing = [r for r in ctx.fit_rows() if not candidates.get(r)]
+    for row in missing:
+        starts = standard_initializations(ctx.masks[row], config=ctx.config)
+        result = fit_masks([ctx.masks[row]], [starts], width_template=ctx.width_template, config=ctx.config, device=ctx.device)[0]
+        candidates[row] = [CandidatePose.from_result(result, ctx.config, "independent", "mask_refit")]
     return candidates, info
 
 
@@ -1034,12 +1045,13 @@ class SlowRefit(_RegionAlgorithm):
         length = ctx.anchor_length()
         if length is not None:
             config = replace(config, length_prior_px=length)
-        rows = [r for r in ctx.fit_rows() if bool(ctx.state["fitted"][r])]
+        rows = ctx.fit_rows()
         candidates: dict[int, list[CandidatePose]] = {r: [] for r in rows}
         chunk_size = max(1, int(config.max_rows))
         for k in range(0, len(rows), chunk_size):
             chunk = rows[k : k + chunk_size]
-            starts = [[warm_initialization(ctx.state["latent"][r], float(ctx.state["width_px"][r]), ctx.state["width_shape"][r], "slow_refit")] for r in chunk]
+            starts = [[warm_initialization(ctx.state["latent"][r], float(ctx.state["width_px"][r]), ctx.state["width_shape"][r], "slow_refit")]
+                      if bool(ctx.state["fitted"][r]) else standard_initializations(ctx.masks[r], config=config) for r in chunk]
             results = fit_masks([ctx.masks[r] for r in chunk], starts, width_template=ctx.width_template, config=config, device=ctx.device)
             for row, result in zip(chunk, results, strict=True):
                 candidates[row].append(CandidatePose.from_result(result, ctx.config, "independent", "slow_refit"))
@@ -1099,7 +1111,7 @@ def _segment_params(workspace: Any) -> SegmentParams:
     summary = read_summary(workspace)
     settings = getattr(workspace.info, "settings", None) or {}
     values: dict[str, Any] = {}
-    fingerprint = summary["checkpoint"] if "checkpoint" in summary else settings.get("checkpoint", "unset")
+    fingerprint = settings.get("checkpoint", summary.get("checkpoint", "unset"))
     if fingerprint is None:
         values["checkpoint"] = None
     elif isinstance(fingerprint, dict) and fingerprint.get("path"):
@@ -1206,16 +1218,34 @@ def build_context(
     min_pixels = int((read_summary(workspace).get("mask_cleanup") or {}).get("min_worm_pixels") or 1)
     masks = workspace_masks_of(workspace, max(1, min_pixels))(wanted)
     missing = [r for r in wanted if r not in masks and r not in set(workspace.mask_rows().tolist())]
+    fresh: dict[int, MaskArray] = {}
     if missing and segment_missing:
         fresh = segment_rows(workspace, missing, resolved)
         masks.update(fresh)
         # Keep them: the next region run on these frames (another algorithm to
         # compare, a wider region) reads them instead of loading the segmenter again.
         store_masks(workspace, fresh)
-    masks = {r: m for r, m in masks.items() if np.asarray(m).any()}
+    # Capture target pixels and their fingerprints under the same writer lock.
+    # A direct client can edit while missing masks are segmented above.
+    with workspace_lock(workspace):
+        if hasattr(workspace, "clear_mask_cache"):
+            workspace.clear_mask_cache()
+        state = workspace_arrays(workspace, setup.config)
+        for anchor in (anchor_before, anchor_after):
+            if anchor is not None and not bool(state["fitted"][anchor]):
+                raise ValueError(f"anchor row {anchor} changed while loading the region; choose anchors again")
+        masks = {}
+        for row in wanted:
+            mask = workspace.effective_mask(row)
+            if mask is None:
+                mask = fresh.get(row)
+            if mask is not None and int(np.asarray(mask).sum()) >= max(1, min_pixels):
+                masks[row] = mask
+        mask_revisions = {str(row): workspace.mask_revision(row) for row in wanted}
     return RegionContext(
         workspace=workspace, first=first, last=last, anchor_before=anchor_before, anchor_after=anchor_after, masks=masks,
         config=setup.config, prior=setup.prior, width_template=setup.template, device=resolved, state=state, image_shape=workspace_image_shape(workspace),
+        mask_revisions=mask_revisions,
     )
 
 
@@ -1393,11 +1423,13 @@ def run_region(
     algorithm.check_anchors(anchor_before, anchor_after)  # type: ignore[attr-defined]
     _report(progress, 0.0, f"{algorithm.id}: loading the region")
     ctx = build_context(workspace, first, last, anchor_before, anchor_after, device)
+    mask_revisions = dict(ctx.mask_revisions)
     before = region_metrics(ctx.state, ctx.rows, ctx.image_shape)
     started = time.perf_counter()
     candidate_set = algorithm.run(ctx, resolved, progress)
     candidate_set.metrics["seconds"] = time.perf_counter() - started
     candidate_set.metrics_before = before
+    candidate_set.mask_revisions = mask_revisions
     candidate_set.job = str(job or "")
     candidate_set.id = str(job) if job else next_candidate_id(workspace)
     candidate_set.workspace = str(workspace.info.name)
@@ -1493,6 +1525,45 @@ def install_into(hyps: dict[str, np.ndarray], n: int, candidate_set: CandidateSe
     return hyps
 
 
+def validate_mask_revisions(workspace: Any, revisions: dict[str, str], rows: Sequence[int],
+                            anchors: Sequence[int | None], set_id: str = "") -> None:
+    """Validate input metadata without reading candidate pose arrays."""
+    # Another workspace instance may have rewritten a chunk since it was cached.
+    if hasattr(workspace, "clear_mask_cache"):
+        workspace.clear_mask_cache()
+    if revisions:
+        changed = [int(row) for row, revision in revisions.items() if workspace.mask_revision(int(row)) != revision]
+        if changed:
+            raise ValueError(f"candidate set {set_id} is stale: masks changed at rows {changed}; rerun the region")
+    else:
+        # Legacy sets have no input fingerprint. Once masks have been edited,
+        # their compatibility cannot be established, even after a later undo.
+        affected = set(rows) | {r for r in anchors if r is not None}
+        if affected.intersection(workspace.override_rows()) or any(
+            e.get("kind") in ("set_mask", "clear_mask") and affected.intersection(e.get("payload", {}).get("rows", []))
+            for e in workspace.edits()
+        ):
+            raise ValueError(f"candidate set {set_id} has unversioned masks; rerun the region before accepting")
+
+
+def validate_candidate_masks(workspace: Any, candidate_set: CandidateSet) -> None:
+    """Reject paths whose masks (including anchors) differ from their recorded inputs."""
+    validate_mask_revisions(workspace, candidate_set.mask_revisions, candidate_set.rows,
+                            [candidate_set.anchor_before, candidate_set.anchor_after], candidate_set.id)
+
+
+def candidate_summary_stale(workspace: Any, entry: dict[str, Any]) -> bool:
+    """Whether list/detail metadata describes obsolete or unversioned mask inputs."""
+    first, last = entry.get("rows") or (None, None)
+    rows = [] if first is None or last is None else list(range(int(first), int(last) + 1))
+    try:
+        validate_mask_revisions(workspace, dict(entry.get("mask_revisions") or {}), rows,
+                                [entry.get("anchor_before"), entry.get("anchor_after")], str(entry.get("id") or ""))
+        return False
+    except ValueError:
+        return True
+
+
 def accept_candidates(workspace: Any, set_id: str, *, rows: Sequence[int] | None = None, use_path: bool = True, note: str = "") -> edits.EditResult:
     """Make the set's path the poses of ``rows`` (default: every row of the path not yet accepted) as one ``accept_path`` edit.
 
@@ -1528,9 +1599,13 @@ def accept_candidates(workspace: Any, set_id: str, *, rows: Sequence[int] | None
     config = workspace_setup(workspace).config
     n = int(workspace.n)
     job = f"candidates:{candidate_set.id}"
+    def install_checked(hyps: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        validate_candidate_masks(workspace, candidate_set)
+        return install_into(hyps, n, candidate_set, chosen_rows, config)
+
     result = edits.accept_path(
         workspace, choices, algorithm=candidate_set.algorithm, job=job, note=note or f"accept {candidate_set.algorithm} {candidate_set.id}",
-        install=lambda hyps: install_into(hyps, n, candidate_set, chosen_rows, config),
+        install=install_checked,
         extra={"candidate_set": candidate_set.id, "complete": complete},
     )
     candidate_set.accepted = complete

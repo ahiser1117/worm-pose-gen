@@ -18,6 +18,7 @@ from fastapi import APIRouter, Body, Depends
 from . import get_state
 from ... import pipeline
 from ...jobs import STATES, JobRecord, JobSpec
+from ...training import fine_tune_job
 from .. import regions
 from ..state import AppState, NotFound
 
@@ -37,6 +38,11 @@ def stage_job(app: AppState, payload: dict[str, Any], stage: str) -> tuple[JobSp
     name = str(payload.get("workspace") or "")
     workspace = app.workspace(name)
     params = dict(payload.get("params") or {})
+    if stage in ("segment", "prior", "fit"):
+        if "checkpoint" not in params:
+            selected = workspace.info.settings.get("checkpoint")
+            params["checkpoint"] = selected if selected is not None else (None if app.config.checkpoint is None else str(app.config.checkpoint))
+        params.setdefault("dataset_root", str(app.config.dataset_root))
     spec = JobSpec(
         kind=str(payload.get("kind") or "stage"), params={"stage": stage, "params": params}, workspace=name,
         frames=[int(v) for v in workspace.info.frames], label=str(payload.get("label") or f"{stage} on {name}"),
@@ -68,10 +74,12 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
         spec, command = stage_job(app, payload, "export")
     elif kind == regions.REGION_JOB_KIND:
         spec, command = regions.region_job(app.view(str(payload.get("workspace") or "")), payload)
+    elif kind == "fine_tune":
+        spec, command = fine_tune_job(app, payload)
     elif kind == "command":
         spec, command = command_job(payload)
     else:
-        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region or command")
+        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region, fine_tune or command")
     return app.runner.submit(spec, command).to_dict()
 
 

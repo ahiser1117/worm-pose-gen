@@ -118,7 +118,8 @@ scripts/project_env.sh uv run --no-sync --frozen python \
 scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
 scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
 scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
+scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.app \
+  --corpus-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1
 ```
 
 Labels are stored under
@@ -128,10 +129,14 @@ git-ignored `checkpoints/segmenter/` directory. The bootstrap step only
 matters for a fresh store: the bootstrapped labels of this one were retired
 on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
 hand-refined, and the promoted model is `r2-hand165` (see
-`docs/segmenter_model_names.json` for the model names the plots use). The labeling app runs at
-`http://127.0.0.1:8767`, proposes masks from the current checkpoint and the
-classical pipeline, refines them with pipeline elements, and saves edited
-labels back into the store. Details and keyboard shortcuts are in
+`docs/segmenter_model_names.json` for the model names the plots use). New
+labeling work uses the pose app at `http://127.0.0.1:8768`: paint masks in
+View, save labels, and browse or fine-tune them in Corpus (see
+[Segmentation corrections and corpus](#segmentation-corrections-and-corpus)).
+The `worm-pose-labeler` command now opens this unified interface while
+preserving its old recording, dataset-root, device and port flags.
+The module `python -m worm_pose_gen.label_app` and the launcher's `--queue`
+mode retain the legacy manifest workflow described in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
 
 A targeted round (coils, self-contact, holes, fragments, camera-edge frames
@@ -300,8 +305,10 @@ lists the runs under `/temp_data4/alex/external_artifacts/poses/`
 probability maps and for the segment stage. The app binds to localhost and
 is meant to be reached through an SSH tunnel; nothing authenticates.
 
-The UI is the pose viewer described above with two more tabs:
+The UI is the pose viewer described above with three more tabs:
 
+- **Corpus** browses and edits saved segmentation labels, starts fine-tuning
+  jobs, and selects completed checkpoints for a workspace.
 - **Recordings** lists every HDF5 file under the roots with its frame count
   and image size, whether it can be read, whether a recording prior is cached
   and which runs and workspaces already refer to it (the per-file facts are
@@ -467,6 +474,72 @@ the generated OpenAPI page. The stdlib viewer,
 `python -m worm_pose_gen.pose_viewer` (`worm-pose-viewer`), remains for
 looking at runs read-only without the job runner; it serves the same UI on
 the same default port, so run only one of the two or pass `--port`.
+
+### Segmentation corrections and corpus
+
+In **View → Segmentation correction**, enable Paint mask and use Worm,
+Background or Ignore with the brush-size control. Alt or middle drag pans;
+stroke undo is separate from undoing a saved edit. The original prediction
+and editable mask have separate layers. Save or discard a draft before
+navigating or changing poses.
+
+**Save override** records a reversible workspace edit. The full label keeps
+ignore pixels, while the geometry fitter uses only pixels explicitly labeled
+worm. A mask change invalidates the old pose, its measurements and hypotheses;
+the viewer says it needs refitting. **Clear override** restores the underlying
+segmentation and is also undoable. Corpus labels are independent copies:
+undoing a workspace edit does not undo a corpus save.
+
+**Refit frame…** prepares an independent multi-start region run; **Refit
+stretch…** prepares a slow refit on the proposed stretch. Review its bounds,
+anchors and parameters, run the job, compare candidates, then explicitly
+Accept. Neither button reruns the whole workspace. Candidate sets record the
+input masks, including anchors, and cannot be accepted after those masks
+change. A segmentation-stage rerun preserves overrides.
+
+**Save label to corpus** copies the saved override and raw/corrected source
+images into `--corpus-root` (default `<workspaces-root>/corpus`). Choose Auto
+for balanced 80/10/10 assignment or explicitly pledge a new label to train,
+validation or test. A frame retains its pledge through edits, deletion and
+relabeling. Recording identity includes the full path and HDF5 dataset;
+same-named files do not collide. Each app save archives an immutable revision.
+Pass an existing segmentation store to `--corpus-root` to continue using it.
+
+In **Corpus**, filter, open, repaint or delete saved labels. Fine-tuning needs
+at least one train and one validation label. **Start fine-tune job** snapshots
+the exact label revisions and configured worm checkpoint before queueing;
+later corpus edits cannot change the training inputs. Progress, logs and
+cancellation use Pipeline's job panel. Outputs live under
+`--checkpoints-root` (default `<workspaces-root>/checkpoints`) in separate run
+directories with the input snapshot, run record, metrics and best/last weights.
+The app does not replace the base checkpoint or automatically promote a run.
+
+After a job finishes, select its checkpoint and click **Use in workspace**.
+This changes future segmentation and on-demand probabilities while retaining
+the checkpoint provenance of stored masks. Run segment when ready to replace
+the automatic masks; manually saved overrides still take precedence. The
+research script `scripts/train_segmenter.py` retains its earlier promotion
+behavior; the app uses `worm_pose_gen.training`.
+
+The same operations are available through the API:
+
+| Operation | Endpoint |
+|---|---|
+| Read/save/clear override | `GET/POST/DELETE /api/workspaces/{name}/mask` (`frame` query or body; POST includes PNG `mask` and optional `revision`) |
+| Undo saved override | `POST /api/workspaces/{name}/edits` with `kind: undo` |
+| Browse/save labels | `GET /api/corpus`, `POST /api/corpus/labels` with `workspace`, `frame`, optional `split` |
+| Read/edit/delete label | `GET/PUT/DELETE /api/corpus/labels/{sample_id}` |
+| Training schema/job | `GET /api/training`, `POST /api/jobs` with `kind: fine_tune` and `params` |
+| List/select checkpoint | `GET /api/checkpoints`, `POST /api/workspaces/{name}/checkpoint` with `checkpoint` ID or path |
+
+The brush regression is `tests/browser/mask_editor.cjs`; the complete workflow
+is `tests/browser/phase4_workflow.cjs`, which starts its own synthetic CPU app,
+trains for one epoch, accepts a regional refit and checks undo. It removes its
+temporary labels/checkpoints on completion. Run either with `node` from the
+repository root; set
+`PLAYWRIGHT_MODULE` and `CHROMIUM_EXECUTABLE` if they are not installed in the
+default locations. Python coverage includes `test_mask_edits`, `test_mask_api`,
+`test_corpus`, `test_corpus_api`, `test_phase4_integration` and `test_label_launcher`.
 
 ## Evaluate the frozen pipeline
 

@@ -566,6 +566,7 @@ def new_arrays(frame_index: np.ndarray, config: BatchFitConfig) -> dict[str, np.
     return {
         "frame_index": np.asarray(frame_index, dtype=np.int64),
         "fitted": np.zeros(n, dtype=bool),
+        "mask_stale": np.zeros(n, dtype=bool),
         "latent": _nan((n, config.coefficients + 4)),
         "width_px": _nan((n,)),
         "centerline_xy": _nan((n, config.n_points, 2)),
@@ -600,6 +601,8 @@ def store_result(arrays: dict[str, np.ndarray], row: int, result: MaskFitResult)
 
     best = result.records[result.best_index]
     arrays["fitted"][row] = True
+    if "mask_stale" in arrays:
+        arrays["mask_stale"][row] = False
     arrays["width_shape"][row] = result.width_shape
     arrays["taper_asymmetry"][row] = taper_asymmetry(result.width_profile)
     arrays["latent"][row] = result.latent
@@ -705,7 +708,7 @@ def independent_copies(arrays: dict[str, np.ndarray], rows: np.ndarray | None = 
             arrays[name][rows] = arrays[source][rows]
 
 
-def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray) -> list[int]:
+def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray, job: np.ndarray | None = None) -> list[int]:
     """Put the independent fit back on the rows a propagation pass replaced (by provenance); returns those rows.
 
     Nothing is restored when the workspace predates the full copies
@@ -713,6 +716,12 @@ def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarra
     """
 
     replaced = np.isin(np.asarray(algorithm).astype(str), PROPAGATION_ALGORITHMS) & np.asarray(arrays["fitted"], dtype=bool)
+    if job is not None:
+        replaced &= ~np.char.startswith(np.asarray(job).astype(str), "candidates:")
+    if "mask_stale" in arrays:
+        replaced &= ~np.asarray(arrays["mask_stale"], dtype=bool)
+    if "latent_independent" in arrays:
+        replaced &= np.isfinite(arrays["latent_independent"]).all(axis=1)
     rows = np.nonzero(replaced)[0]
     if not len(rows) or "latent_independent" not in arrays:
         return []
@@ -1424,6 +1433,7 @@ def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, 
             if progress is not None:
                 progress(segmented / n, f"segmented {segmented}/{n} frames")
         pending.flush()
+        override_statistics(workspace, arrays)
         workspace.save_state(arrays)
         # Provenance describes the pose of a frame, so segmentation leaves it alone.
         worm = np.asarray(arrays["worm_pixels"])
@@ -1545,14 +1555,31 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     return result
 
 
+def effective_mask_statistics(arrays: dict[str, np.ndarray], row: int, mask: np.ndarray | None) -> None:
+    """Refresh geometry statistics for an edited target; raw network counts remain separate."""
+    from .connected_components import label_components
+
+    if mask is None:
+        mask = np.zeros((1, 1), dtype=bool)
+    mask = np.asarray(mask, dtype=bool)
+    components, count = label_components(mask)
+    sizes = np.bincount(components.ravel())[1:]
+    pixels = int(mask.sum())
+    arrays["worm_pixels"][row] = pixels
+    arrays["mask_on_border"][row] = bool(touches_border(mask, 2)) if pixels else False
+    arrays["components"][row] = count
+    arrays["pixels_outside_largest"][row] = pixels - int(sizes.max()) if len(sizes) else 0
+    arrays["pixels_filled"][row] = 0
+
+
 def override_statistics(workspace: Any, arrays: dict[str, np.ndarray]) -> list[int]:
     """``worm_pixels`` of rows with an override mask counts the override, which is what their fit scores against."""
 
     rows = [int(r) for r in workspace.override_rows()]
     for row in rows:
-        mask = workspace.get_override_mask(row)
+        mask = workspace.effective_mask(row)
         if mask is not None:
-            arrays["worm_pixels"][row] = int(np.count_nonzero(mask))
+            effective_mask_statistics(arrays, row, mask)
     return rows
 
 
@@ -1602,11 +1629,12 @@ def run_ambiguity(workspace: Any, params: AmbiguityParams, *, device: torch.devi
     return {"ambiguity": summary}
 
 
-def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray) -> NDArray[np.bool_]:
+def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray, job: np.ndarray | None = None) -> NDArray[np.bool_]:
     """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): manual picks and flips, accepted region runs."""
 
     names = np.asarray(algorithm).astype(str)
-    return np.asarray(arrays["fitted"], dtype=bool) & ~np.isin(names, tuple(PIPELINE_ALGORITHMS))
+    accepted = np.zeros(len(names), dtype=bool) if job is None else np.char.startswith(np.asarray(job).astype(str), "candidates:")
+    return np.asarray(arrays["fitted"], dtype=bool) & (accepted | ~np.isin(names, tuple(PIPELINE_ALGORITHMS)))
 
 
 def keep_hypotheses(fresh: dict[str, np.ndarray], old: dict[str, np.ndarray], rows: Sequence[int]) -> None:
@@ -1635,7 +1663,8 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
     # The pass starts from the independent fit: rows a previous pass replaced
     # go back to it, and the ambiguity of what is stored is recomputed, so a
     # rerun with other parameters is a fresh pass rather than a second layer.
-    restored = restore_independent_rows(arrays, workspace.load_provenance()["algorithm"])
+    provenance = workspace.load_provenance()
+    restored = restore_independent_rows(arrays, provenance["algorithm"], provenance["job"])
     if restored:
         workspace.save_state(arrays)
         workspace.set_provenance(restored, SOURCE_ALGORITHMS[0], job, time.time())
@@ -1645,7 +1674,8 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
         independent_copies(arrays)
     # Rows the user placed (picks, flips, accepted region runs) stay as they
     # are and anchor the chains around them; their hypotheses survive too.
-    fixed = placed_rows(arrays, workspace.load_provenance()["algorithm"])
+    provenance = workspace.load_provenance()
+    fixed = placed_rows(arrays, provenance["algorithm"], provenance["job"])
     old_hypotheses = workspace.load_hypotheses() if fixed.any() else {}
     # The pass writes a fresh set of hypotheses for every stretch frame; older ones are replaced.
     outcome = propagation_pass(

@@ -24,6 +24,7 @@ import importlib.resources
 import io
 import json
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any
@@ -563,8 +564,8 @@ def create_server(state: LabelState, host: str = "127.0.0.1", port: int = 8767) 
     return LabelHTTPServer((host, port), state)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv: list[str] | None = None, *, description: str | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description or __doc__)
     parser.add_argument("--recording", action="append", type=Path, dest="recordings")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
@@ -602,6 +603,40 @@ def main(argv: list[str] | None = None) -> None:
         pass
     finally:
         server.server_close()
+        state.close()
+
+
+def unified_main(argv: list[str] | None = None) -> None:
+    """Compatibility launcher: ordinary labeling now opens the pose app.
+
+    The old ``--dataset-root`` holds both labels and flat-field caches, so
+    map it to both app roots. Queue manifests retain their standalone
+    ordering and split semantics until the unified app supports queues.
+    ``main`` and the module entry point remain available for legacy callers.
+    """
+    args = parse_args(argv, description="Open the unified pose app for mask painting, corpus editing and fine-tuning. Legacy labeling flags remain supported; --queue retains the standalone manifest interface.")
+    if args.queue is not None:
+        print("Deprecated standalone labeler: --queue uses the legacy interface to preserve "
+              "manifest order and split pledges. Ordinary labeling now uses worm-pose-app.", file=sys.stderr)
+        main(argv)
+        return
+
+    import uvicorn
+    from .app import AppConfig, create_app
+
+    config = AppConfig(host=args.host, port=args.port, dataset_root=args.dataset_root,
+                       corpus_root=args.dataset_root, checkpoint=args.checkpoint, device=args.device,
+                       gpus=() if args.device == "cpu" else tuple(range(torch.cuda.device_count())))
+    app = create_app(config)
+    state = app.state.app_state
+    try:
+        for path in args.recordings or []:
+            state.register_recording({"path": str(path), "dataset": DATASET_PATH})
+        print(f"worm-pose-labeler now opens the unified pose app at http://{config.host}:{config.port}/", flush=True)
+        print(f"Corpus: {config.corpus_root}. Open or create a workspace to edit masks; "
+              "saved labels are available in Corpus.", flush=True)
+        uvicorn.run(app, host=config.host, port=config.port, log_level="info")
+    finally:
         state.close()
 
 

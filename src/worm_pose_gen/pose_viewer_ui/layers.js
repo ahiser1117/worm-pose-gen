@@ -95,7 +95,7 @@ function resizeCanvas() {
 }
 
 function fitView() {
-  const d = state.decoded;
+  const d = (typeof maskEditor !== "undefined" && maskEditor.dimensions()) || state.decoded;
   if (!d || !d.width) return;
   const rect = canvas.getBoundingClientRect();
   const scale = Math.min(rect.width / d.width, rect.height / d.height) * 0.98;
@@ -155,6 +155,7 @@ function drawWidthTicks(points, profile, color, every = 4) {
 }
 
 function draw() {
+  if (typeof maskEditor !== "undefined" && maskEditor.drawCorpus()) return;
   const ratio = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -168,6 +169,7 @@ function draw() {
   if (base.on && image) { ctx.globalAlpha = base.alpha; ctx.drawImage(image, 0, 0); ctx.globalAlpha = 1; }
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, d.width, d.height); }
   ctx.drawImage(overlayCanvas, 0, 0);
+  if (typeof maskEditor !== "undefined") maskEditor.draw();
   const pose = state.frame && state.frame.pose;
   if (pose) {
     if (layer("crop").on && pose.crop) {
@@ -228,7 +230,8 @@ function renderCaption() {
   if (!f || !state.run) { $("#caption").textContent = ""; return; }
   const s = f.stats || {};
   const parts = [`${state.run.entry.recording} · frame ${f.frame_index}`];
-  if (s.fitted) {
+  if (f.mask_stale) parts.push("mask changed · needs refit and candidate acceptance");
+  else if (s.fitted) {
     parts.push(`IoU ${fmt(s.iou)}`);
     if (s.iou_independent !== undefined && s.source) parts.push(`(indep ${fmt(s.iou_independent)})`);
     parts.push(`len ${fmt(s.body_length_px, 0)} px`, `width ${fmt(s.width_px, 1)} px`, `in view ${fmt(s.in_view_fraction, 2)}`);
@@ -273,8 +276,8 @@ function renderDetails() {
   const s = f.stats || {};
   const c = s.classification || { label: s.fitted ? "fitted" : "unfitted", kind: s.fitted ? "clean" : "unfitted", tags: [] };
   const badge = $("#classification");
-  badge.textContent = c.label;
-  badge.className = `badge ${c.kind}`;
+  badge.textContent = f.mask_stale ? "Mask changed · needs refit" : c.label;
+  badge.className = `badge ${f.mask_stale ? "watch" : c.kind}`;
   $("#tags").innerHTML = (c.tags || []).map((t) => `<span>${escapeHtml(t)}</span>`).join("");
   const cmp = state.comparePose && state.comparePose.stats;
   const both = (key, digits) => cmp ? `${fmt(s[key], digits)} <span style="color:#ffaa3c">/ ${fmt(cmp[key], digits)}</span>` : fmt(s[key], digits);
@@ -325,13 +328,18 @@ function renderDetails() {
   rows.push(row("length deviation (log)", fmt(s.length_deviation, 4)));
   rows.push(row("score", fmt(s.ambiguity_score)));
   if (s.score_independent !== undefined) rows.push(row("score independent", fmt(s.score_independent)));
-  $("#stats").innerHTML = rows.join("");
+  $("#stats").innerHTML = f.mask_stale
+    ? section("fit invalidated by mask edit") + row("status", "Needs refit", "diff")
+      + row("next step", "Refit this frame or stretch, compare candidates, then Accept.", "wrap")
+      + row("previous measurements", "Length, width, energy and ambiguity values are withheld until a new candidate is accepted.", "wrap")
+      + (prov ? row("previous algorithm", escapeHtml(prov.algorithm || "unknown")) : "")
+    : rows.join("");
 
   const flags = (s.flags || []).map((fl) => {
     const test = fl.threshold === null || fl.threshold === undefined ? fmt(fl.value) : `${fmt(fl.value)} ${fl.test} ${fmt(fl.threshold)}`;
     return `<tr class="${fl.fired ? "fired" : ""} ${fl.group}" title="${escapeHtml(fl.description)}"><td><span class="dot"></span>${fl.name}</td><td class="num">${test}</td><td>${fl.group}</td></tr>`;
   });
-  $("#flags").innerHTML = flags.join("");
+  $("#flags").innerHTML = f.mask_stale ? '<tr><td colspan="3">Needs refit; previous ambiguity flags are stale.</td></tr>' : flags.join("");
 
   const m = f.mask_stats, st = f.mask_stats_stored || {};
   const mrows = [];
@@ -398,7 +406,7 @@ function drawWidthChart() {
   const node = $("#width-chart");
   const { c, w, h } = chartBox(node);
   const pose = state.frame && state.frame.pose;
-  if (!pose || !pose.width_profile) return;
+  if (state.frame.mask_stale || !pose || !pose.width_profile) return;
   const series = [
     { y: pose.width_profile, color: "#57d68d", dash: null, width: 2 },
     { y: pose.width_template_profile, color: "#9aa6b0", dash: [2, 3] },
@@ -430,7 +438,7 @@ function drawCurvatureChart() {
   const node = $("#curvature-chart");
   const { c, w, h } = chartBox(node);
   const pose = state.frame && state.frame.pose;
-  if (!pose || !pose.curvature) return;
+  if (state.frame.mask_stale || !pose || !pose.curvature) return;
   const k = pose.curvature;
   const limit = 2 / Math.max(pose.width_px, 1);  // the fitter's bend limit: radius of half a width
   const max = Math.max(limit * 1.5, ...k.map(Math.abs)) * 1.05;

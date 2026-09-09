@@ -257,12 +257,13 @@ def run_entry(path: Path) -> dict[str, Any]:
 
 
 class Segmenters:
-    """Segmenter modules by checkpoint path, loaded once and shared."""
+    """Shared segmenters, reloaded when the file at a checkpoint path changes."""
 
     def __init__(self, device: torch.device, fallback: Path | None) -> None:
         self.device = device
         self.fallback = fallback
         self._modules: dict[str, Any] = {}
+        self._stamps: dict[str, tuple[int, int, int]] = {}
         self._lock = threading.Lock()
 
     def resolve(self, checkpoint: str | None) -> Path | None:
@@ -274,16 +275,26 @@ class Segmenters:
                 return path
         return None
 
+    def signature(self, checkpoint: str | None) -> tuple[Any, ...]:
+        path = self.resolve(checkpoint)
+        if path is None:
+            return (None,)
+        stat = path.stat()
+        return (str(path.resolve()), stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
     def probability(self, checkpoint: str | None, image: NDArray[np.uint8]) -> tuple[NDArray[np.float32] | None, str | None]:
         path = self.resolve(checkpoint)
         if path is None:
             return None, None
         key = str(path.resolve())
         with self._lock:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
             module = self._modules.get(key)
-            if module is None:
+            if module is None or self._stamps.get(key) != stamp:
                 module = load_segmenter(path, self.device)
                 self._modules[key] = module
+                self._stamps[key] = stamp
             return module.predict_probability_batch(image[None], batch_size=1)[0], key
 
 
@@ -331,12 +342,18 @@ class LoadedRun:
         self._rows = {int(f): r for r, f in enumerate(self.frame_index.tolist())}
         self.n_points = int(self.arrays["centerline_xy"].shape[1])
         self.stretches = [(int(a), int(b)) for a, b in ((self.summary.get("propagation") or {}).get("stretches") or [])]
-        self._cache: OrderedDict[tuple[int, float], dict[str, Any]] = OrderedDict()
+        self._cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._lock = threading.Lock()
 
     @property
     def image_shape(self) -> tuple[int, int] | None:
         return None if self.source is None else self.source.shape
+
+    @property
+    def segmentation_checkpoint(self) -> str | None:
+        """Selected model for previews; the stored mask's checkpoint stays in the summary."""
+
+        return self.summary.get("selected_checkpoint") or (self.summary.get("checkpoint") or {}).get("path")
 
     def row_of(self, frame: int) -> int:
         try:
@@ -522,11 +539,12 @@ class LoadedRun:
 
         threshold = self.threshold if threshold is None else float(threshold)
         light = detail == "light"
-        key = (row, threshold, "full")
+        model_signature = segmenters.signature(self.segmentation_checkpoint)
+        key = (row, threshold, "full", model_signature)
         with self._lock:
             cached = self._cache.get(key)
             if cached is None and light:
-                key = (row, threshold, "light")
+                key = (row, threshold, "light", model_signature)
                 cached = self._cache.get(key)
             if cached is not None:
                 self._cache.move_to_end(key)
@@ -569,7 +587,7 @@ class LoadedRun:
         stored = self.stored_mask(row)
         if stored is not None and threshold == self.threshold:
             return stored
-        probability, _ = segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
+        probability, _ = segmenters.probability(self.segmentation_checkpoint, image)
         if probability is None:
             return stored
         raw_mask = probability >= threshold
@@ -592,7 +610,7 @@ class LoadedRun:
             height, width = image.shape
             payload["layers"]["image"] = jpeg_data_url(image)
             stored_mask = None if light else self.stored_mask(row)
-            probability, checkpoint = (None, None) if light else segmenters.probability((self.summary.get("checkpoint") or {}).get("path"), image)
+            probability, checkpoint = (None, None) if light else segmenters.probability(self.segmentation_checkpoint, image)
             # At another threshold than the run's the recomputed mask is what the user asked to see.
             if threshold != self.threshold and probability is not None:
                 stored_mask = None
@@ -696,6 +714,7 @@ def run_payload(run: LoadedRun, entry: dict[str, Any], compatible: list[dict[str
         "recording_frame_count": None if run.source is None else run.source.frame_count,
         "n_points": run.n_points,
         "threshold": run.threshold,
+        "selected_checkpoint": run.segmentation_checkpoint,
         "cleanup": run.cleanup,
         "prior": run.prior,
         "thresholds": run.thresholds.__dict__,

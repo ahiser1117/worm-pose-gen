@@ -58,12 +58,15 @@ worm_pose_gen.app            FastAPI application (uvicorn), serves the UI and th
   routers/algorithms         registry and parameter schemas, region proposals, candidate sets
                              (list, inspect, accept, discard), the outcome log
   routers/edits              hypothesis pick, orientation flip, undo, the edit log, the segment of a frame
+  routers/masks              reversible label overrides, mask previews and revisions
   routers/corpus             labels into the user's segmentation store, fine-tune job (Phase 4)
   regions                    frames <-> rows for the region endpoints, region job specs, accept responses
 worm_pose_gen.workspace      on-disk workspace: arrays, masks, provenance, edit log, jobs
 worm_pose_gen.edits          the interventions: pick, flip, accept path, set pose, undo; before-snapshots
 worm_pose_gen.jobs           runner with backends: local GPUs (now), Slurm (later)
 worm_pose_gen.algorithms     registry and the existing methods wrapped as region algorithms; candidate sets
+worm_pose_gen.corpus         user labels, immutable revisions, split pledges, training snapshots
+worm_pose_gen.training       fine-tune worker, checkpoint catalog and job specification
 worm_pose_gen.client         Python client over the API; `worm-pose` command line
 worm_pose_gen.pose_viewer_ui the browser UI (grows from the viewer)
 ```
@@ -82,8 +85,9 @@ Phase 3 adds `routers/algorithms` (`GET /api/algorithms`, `GET
 `worm_pose_gen.algorithms`, with region jobs submitted as `kind: region`
 through `POST /api/jobs`. Requests and responses speak frames; rows appear
 beside them in responses. Edits and accepts answer 409 while a job writes
-the workspace (`pipeline.WorkspaceBusy`). `corpus` and the client arrive
-with their phases. The stdlib viewer (`worm-pose-viewer`) is kept for
+the workspace (`pipeline.WorkspaceBusy`). Phase 4 adds `routers/masks` and
+`routers/corpus`, with `kind: fine_tune` jobs through the existing queue.
+The client arrives in Phase 5. The stdlib viewer (`worm-pose-viewer`) is kept for
 read-only runs and serves the same UI with the editing controls disabled.
 
 ## 4. Workspace
@@ -100,7 +104,8 @@ One workspace per recording range, replacing the write-once run directory
   masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk, a few KB per frame
                          (the segment stage writes them; a region run stores the masks
                          it had to segment on the fly)
-  overrides/masks/       sparse: frames whose mask the user edited (NNNNNNN.npz per row; Phase 4)
+  overrides/masks/       sparse full uint8 labels: 0 background, 1 worm, 255 ignore
+                        (NNNNNNN.npz per row; effective geometry mask is labels == 1)
   recording_prior.json   the prior the fit stage uses (bootstrapped, cached or given)
   summary.json           a run-shaped summary kept up to date by the stages, so the
                          viewer's loaders read a workspace like a run
@@ -121,6 +126,13 @@ One workspace per recording range, replacing the write-once run directory
                          parameters, metrics before and after), then accepted / unaccepted lines
 <workspaces>/recordings_index.json   the recording browser's per-file cache
 <workspaces>/recordings_registry.json  HDF5 files added by hand, with their dataset name
+<workspaces>/corpus/        user segmentation store (configurable --corpus-root)
+  samples/, index.json, splits.json   live labels and persistent split pledges
+  revisions/<sample>/<revision>.npz + .json  immutable saved-label revisions
+<workspaces>/checkpoints/   configurable --checkpoints-root
+  runs/<id>/dataset/        frozen corpus bytes and revision/hash manifest
+  runs/<id>/init.ckpt       frozen initialization; packaged checkpoint unchanged
+  runs/<id>/run.json, metrics.csv, best.ckpt, last.ckpt
 ```
 
 Rows are positions in `range(first, last + 1, step)`; every per-frame
@@ -250,7 +262,7 @@ job backend; whole-recording runs; packaging with the bundled checkpoint.
 | 1 | done (2026-09-08) | foundation landed on branch `pose-app`; details below |
 | 2 | done (2026-09-09) | picks, flips, undo, provenance strip and jumps landed; open: whole-state rewrite per edit, no redo, no browser test in `tests/` |
 | 3 | done (2026-09-09) | registry, region jobs, candidate sets, comparison, accept, outcome log landed; open: beam_path takes minutes on a 240-row coil, no warning when a set equals the current track |
-| 4 | not started | |
+| 4 | done (2026-09-09) | reversible brush overrides, stale-result guards, corpus revisions, frozen-input fine-tune jobs and checkpoint selection; legacy manifest queue retained for compatibility |
 | 5 | not started | |
 | 6 | not started | |
 
@@ -328,3 +340,60 @@ accepting a set whose path equals the current track only rewrites
 provenance and the UI does not warn; the region's pose jump count stayed
 at 1 across algorithms on that coil; the track-length refit is not a region
 algorithm.
+
+**Phase 4.** The viewer's `masks.js` brings worm/background/ignore painting,
+transformed brush coordinates, draft protection and stroke undo into View;
+original prediction and editable labels are separate layers. `routers/masks`
+provides `GET/POST/DELETE /api/workspaces/{name}/mask` in frames with optional
+optimistic revisions. `edits.set_mask` logs save/clear operations, persists
+before/after labels before writing, and restores the old override, poses,
+hypotheses and provenance on undo. Ordinary write failures roll back;
+write-ahead snapshots remain available after a process interruption (automatic
+multi-file crash recovery is not implemented). Changing a mask marks its pose
+stale, clears obsolete measurements/independent baselines/hypotheses and updates
+effective-mask statistics. Ignore labels remain in the corpus; fitting uses
+only explicit worm pixels. Workspace shape detection honors custom HDF5 datasets.
+
+Refit frame/stretch controls prepare existing region jobs for explicit review
+and acceptance. Slow refit and propagation candidates can initialize a row
+invalidated by an override. Candidate sets capture mask input fingerprints,
+including anchors, with their input arrays; acceptance rechecks under the
+workspace lock. Legacy sets with unversioned inputs are rejected after relevant
+mask edits. The UI marks stale sets and disables acceptance. Accepted chain
+poses remain fixed when propagation reruns, identified by candidate provenance
+as well as algorithm name. Corpus updates are independent actions and are not
+undone with workspace edits.
+
+`CorpusStore` extends the segmentation store with canonical recording-path /
+HDF5-dataset identity, immutable revisions and a process lock. Existing stores
+are supported through `--corpus-root`; relabeling and deletion preserve split
+pledges. `routers/corpus` exposes label list/save/read/update/delete, training
+schemas and checkpoint list/selection. Corpus's browser supports filtering,
+repainting and deleting saved labels; users may deliberately pledge a new label
+to train, validation or test. `training.fine_tune_job` freezes label bytes and
+initialization before enqueueing, and the worker trains from those inputs,
+reports progress and writes unique best/last checkpoints and a run record.
+Mixed image sizes use padded batches with padding excluded from the loss.
+The app never auto-promotes or overwrites the configured base checkpoint.
+Selecting a completed checkpoint updates future segmentation and previews,
+retaining historical mask provenance and overrides. Model and frame caches
+notice checkpoint replacement. CPU fine-tunes do not reserve a GPU.
+
+The `worm-pose-labeler` launcher now opens the unified app with its legacy flags;
+`--queue` explicitly retains the old manifest interface, and the old Python
+module/helper APIs remain available. Packaging the checkpoint and integrating
+the audit/manifest queue remain Phase 6 work. The existing research training
+script keeps its historical promotion behavior; app jobs use the new worker.
+
+Validation includes focused mask transactions and race checks, imported / fresh /
+custom-dataset API round trips, an actual small refit followed by accept and
+undo with outside-region poses unchanged, corpus revision/split tests, a real
+one-epoch CPU fine-tune, checkpoint-cache checks and browser brush tests.
+The combined app, workspace, edits, jobs, segmentation, corpus, viewer, pipeline
+and algorithm regression run passed all 132 tests on CPU.
+A Chromium app smoke test painted and saved an override, saved/repainted its
+corpus copy, saved a validation label, completed a fine-tune job and selected
+its checkpoint for both preview and segmentation. It then ran a targeted
+refit, accepted its candidate and verified that undo restored the stale pose.
+The training smoke uses synthetic labels to validate the workflow; model quality
+on new lab data still requires held-out evaluation.

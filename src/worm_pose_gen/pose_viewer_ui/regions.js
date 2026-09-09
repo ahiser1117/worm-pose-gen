@@ -501,6 +501,11 @@ async function loadCandidateSets() {
   relayerCandidates();
 }
 
+function candidateSetStale(id, detail) {
+  const entry = candidateSetEntry(id);
+  return !!((entry && entry.stale) || (detail && detail.stale));
+}
+
 function candidateSetEntry(id) { return state.candidateSets.find((s) => s.id === id) || null; }
 
 function candidateSlot(id) { return state.shownSets.indexOf(id); }
@@ -535,7 +540,7 @@ function renderCandidateSets() {
   const count = $("#candidates-count");
   if (!box) return;
   const sets = state.candidateSets || [];
-  const live = sets.filter((s) => !s.accepted).length;
+  const live = sets.filter((s) => !s.accepted && !s.stale).length;
   count.textContent = regionsSupported() && sets.length ? `${live} open · ${sets.length} total` : "";
   box.innerHTML = "";
   if (!regionsSupported()) { box.innerHTML = `<div class="empty">${escapeHtml(regionsWhyNot())}</div>`; return; }
@@ -552,14 +557,14 @@ function renderCandidateSets() {
     const cells = REGION_METRICS.map(([key, , digits, better, help]) => `<td class="num" title="${help} before → after">${metricDelta(s.metrics_before ? s.metrics_before[key] : null, s.metrics[key], digits, better)}</td>`).join("");
     const heads = REGION_METRICS.map(([, label, , , help]) => `<th class="num" title="${help}">${label}</th>`).join("");
     const partial = !s.accepted && s.accepted_rows && s.accepted_rows.length ? `${s.accepted_rows.length}/${s.path_rows || "?"} rows accepted` : "";
-    const stateText = s.accepted ? `accepted${s.accepted_edit ? " · " + escapeHtml(s.accepted_edit) : ""}` : [partial, slot >= 0 ? `shown as ${CANDIDATE_SLOTS[slot]}` : ""].filter(Boolean).join(" · ");
-    const acceptDisabled = s.accepted || acceptPending;
-    const acceptTitle = s.accepted ? "already accepted" : acceptPending ? "an accept is being applied" : partial ? "accept the rest of the path (an undoable edit)" : "install the path's candidates as the poses of these frames (an undoable edit)";
+    const stateText = s.stale ? "mask changed; rerun" : s.accepted ? `accepted${s.accepted_edit ? " · " + escapeHtml(s.accepted_edit) : ""}` : [partial, slot >= 0 ? `shown as ${CANDIDATE_SLOTS[slot]}` : ""].filter(Boolean).join(" · ");
+    const acceptDisabled = s.stale || s.accepted || acceptPending;
+    const acceptTitle = s.stale ? "Mask changed; rerun this region before accepting candidates." : s.accepted ? "already accepted" : acceptPending ? "an accept is being applied" : partial ? "accept the rest of the path (an undoable edit)" : "install the path's candidates as the poses of these frames (an undoable edit)";
     node.innerHTML =
       `<div class="cand-head">${slot >= 0 ? `<span class="slot" style="background:${slotCss(slot)}">${CANDIDATE_SLOTS[slot]}</span>` : ""}<b>${escapeHtml(shortAlgorithm(s.algorithm))}</b><span class="cand-frames">${escapeHtml(frames)}</span><span class="cand-state">${stateText}</span></div>` +
       `<div class="meta">${escapeHtml(s.id)} · ${escapeHtml(fmtTime(s.created_at))} · anchors ${anchor(s.anchor_before)} / ${anchor(s.anchor_after)} · ${fmt(s.candidates)} candidates${s.metrics.seconds ? ` · ${fmtDuration(s.metrics.seconds)}` : ""}<div class="params" title="${escapeHtml(JSON.stringify(s.params || {}))}">${escapeHtml(paramsSummary(s.params))}</div></div>` +
       `<table class="cand-metrics"><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>` +
-      `<div class="row cand-actions"><button type="button" data-show>${slot >= 0 ? "Hide" : "Show"}</button><button type="button" data-goto title="go to the first frame of the region">go to</button><button type="button" data-accept class="primary" ${acceptDisabled ? "disabled" : ""} title="${acceptTitle}">Accept</button><button type="button" data-discard title="delete this candidate set">Discard</button></div>`;
+      `<div class="row cand-actions"><button type="button" data-show>${slot >= 0 ? "Hide" : "Show"}</button><button type="button" data-goto title="go to the first frame of the region">go to</button><button type="button" data-accept class="primary" ${acceptDisabled ? "disabled" : ""} title="${acceptTitle}">${s.stale ? "Mask changed; rerun" : "Accept"}</button><button type="button" data-discard title="delete this candidate set">Discard</button></div>`;
     node.querySelector("[data-show]").addEventListener("click", () => toggleCandidateSet(s.id));
     node.querySelector("[data-goto]").addEventListener("click", () => { if (s.rows[0] >= 0) showRow(s.rows[0], { keepView: true }); });
     node.querySelector("[data-accept]").addEventListener("click", () => acceptCandidateSet(s.id));
@@ -707,7 +712,7 @@ function candidateSetLegendText(layerId) {
   const id = state.shownSets[slot];
   if (!id) return null;
   const entry = candidateSetEntry(id);
-  return `${CANDIDATE_SLOTS[slot]}: ${id}${entry ? " " + shortAlgorithm(entry.algorithm) : ""}`;
+  return `${CANDIDATE_SLOTS[slot]}: ${id}${entry ? " " + shortAlgorithm(entry.algorithm) : ""}${entry && entry.stale ? " · stale mask; rerun" : ""}`;
 }
 
 // The chosen candidate of each shown set solid (head □ / tail ○), the other
@@ -760,8 +765,10 @@ function drawCandidateSetIou(c, xs, Y, start, end) {
 let acceptPending = false;
 
 async function acceptCandidateSet(id) {
+  if (typeof maskEditor !== "undefined" && !maskEditor.beforeMutation()) return;
   if (!regionsSupported()) { setStatus(regionsWhyNot(), "error"); return; }
   const entry = candidateSetEntry(id);
+  if (candidateSetStale(id, state.candidateDetails.get(id))) { setStatus("Mask changed; rerun this region before accepting candidates.", "error"); return; }
   if (entry && entry.accepted) { setStatus(`${id} is already accepted`, "error"); return; }
   if (acceptPending) { setStatus(`accept of ${id}: another accept is still being applied`, "error"); return; }
   if (!claimEdit()) return;
@@ -823,7 +830,7 @@ function renderComparison() {
   details.forEach((d, slot) => {
     if (!d) return;
     if (split) columns.push({ label: `current (${CANDIDATE_SLOTS[slot]} rows)`, metrics: d.current_metrics, cls: "current" });
-    columns.push({ label: CANDIDATE_SLOTS[slot], metrics: d.metrics, cls: `slot-${CANDIDATE_SLOTS[slot].toLowerCase()}`, color: slotCss(slot), title: `${d.id} · ${d.algorithm} · ${paramsSummary(d.params)}` });
+    columns.push({ label: CANDIDATE_SLOTS[slot] + (candidateSetStale(d.id, d) ? " (stale mask)" : ""), metrics: d.metrics, cls: `slot-${CANDIDATE_SLOTS[slot].toLowerCase()}`, color: slotCss(slot), title: `${d.id} · ${d.algorithm} · ${paramsSummary(d.params)}` });
   });
   const head = columns.map((col) => `<th class="num ${col.cls}" ${col.color ? `style="color:${col.color}"` : ""} title="${escapeHtml(col.title || "")}">${escapeHtml(col.label)}</th>`).join("");
   const rows = COMPARE_METRICS.map(([key, label, digits, better]) => {
@@ -836,7 +843,7 @@ function renderComparison() {
   }).join("");
   const region = (d) => (d && d.frames ? `frames ${d.frames[0]}–${d.frames[1]}` : "");
   const caption = both ? (split ? `A ${region(details[0])} · B ${region(details[1])} (different regions: each has its own current column)` : `${region(details[0])} · A ${details[0].id} ${shortAlgorithm(details[0].algorithm)} · B ${details[1].id} ${shortAlgorithm(details[1].algorithm)}`) : `${region(details[0] || details[1])} · ${(details[0] || details[1]).id} ${shortAlgorithm((details[0] || details[1]).algorithm)}`;
-  const accepts = details.map((d, slot) => (d ? `<button type="button" data-accept-slot="${slot}" class="primary" ${d.accepted || acceptPending ? "disabled" : ""} style="border-color:${slotCss(slot)}">Accept ${CANDIDATE_SLOTS[slot]}</button>` : "")).join("");
+  const accepts = details.map((d, slot) => (d ? `<button type="button" data-accept-slot="${slot}" class="primary" ${candidateSetStale(d.id, d) || d.accepted || acceptPending ? "disabled" : ""} title="${candidateSetStale(d.id, d) ? "Mask changed; rerun this region before accepting candidates." : "Accept this candidate path"}" style="border-color:${slotCss(slot)}">${candidateSetStale(d.id, d) ? "Mask changed; rerun" : "Accept " + CANDIDATE_SLOTS[slot]}</button>` : "")).join("");
   box.innerHTML = `<div class="meta">${escapeHtml(caption)}</div><table class="stats comparison-table"><thead><tr><th>metric</th>${head}</tr></thead><tbody>${rows}</tbody></table><div class="row">${accepts}</div>`;
   for (const button of box.querySelectorAll("[data-accept-slot]")) button.addEventListener("click", () => { const id = state.shownSets[parseInt(button.dataset.acceptSlot, 10)]; if (id) acceptCandidateSet(id); });
 }
@@ -854,8 +861,8 @@ function renderFrameCandidateSets() {
   if (!f || !state.run || !isWorkspace()) { section.hidden = true; list.innerHTML = ""; return; }
   const row = f.stats && f.stats.row !== undefined ? f.stats.row : rowOfFrame(f.frame_index);
   const covering = new Map();
-  for (const s of (f.pose && f.pose.candidate_sets) || []) covering.set(String(s.id), { id: String(s.id), algorithm: s.algorithm, index: s.index });
-  for (const s of state.candidateSets) if (!s.accepted && s.rows[0] <= row && row <= s.rows[1] && !covering.has(s.id)) covering.set(s.id, { id: s.id, algorithm: s.algorithm, index: null });
+  for (const s of (f.pose && f.pose.candidate_sets) || []) covering.set(String(s.id), { id: String(s.id), algorithm: s.algorithm, index: s.index, stale: s.stale });
+  for (const s of state.candidateSets) if (!s.accepted && s.rows[0] <= row && row <= s.rows[1] && !covering.has(s.id)) covering.set(s.id, { id: s.id, algorithm: s.algorithm, index: null, stale: s.stale });
   if (!covering.size) { section.hidden = true; list.innerHTML = ""; return; }
   section.hidden = false;
   $("#frame-candidates-head").textContent = `${covering.size} open`;
@@ -867,7 +874,7 @@ function renderFrameCandidateSets() {
     const chosen = entry && entry.chosen !== null ? entry.candidates[entry.chosen] : null;
     const item = document.createElement("div");
     item.className = "item";
-    const facts = chosen ? `chosen ${chosen.source || "#" + chosen.index}${entry.mirrored ? " ↔" : ""} · IoU ${fmt(chosen.iou)} · ${entry.candidates.length} candidates` : s.index !== null && s.index !== undefined ? `chosen #${s.index}` : "";
+    const facts = candidateSetStale(s.id, s) ? "mask changed; rerun before accepting" : chosen ? `chosen ${chosen.source || "#" + chosen.index}${entry.mirrored ? " ↔" : ""} · IoU ${fmt(chosen.iou)} · ${entry.candidates.length} candidates` : s.index !== null && s.index !== undefined ? `chosen #${s.index}` : "";
     item.innerHTML = `<span>${slot >= 0 ? `<span class="slot" style="background:${slotCss(slot)}">${CANDIDATE_SLOTS[slot]}</span> ` : ""}<b>${escapeHtml(s.id)}</b> ${escapeHtml(shortAlgorithm(s.algorithm || ""))}<div class="meta">${escapeHtml(facts)}</div></span><span><button type="button">${slot >= 0 ? "hide" : "show"}</button></span>`;
     item.querySelector("button").addEventListener("click", (event) => { event.stopPropagation(); toggleCandidateSet(s.id); });
     item.addEventListener("click", () => showTab("pipeline"));

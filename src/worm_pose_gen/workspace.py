@@ -29,6 +29,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -104,12 +105,12 @@ def _load_npz(path: Path) -> dict[str, np.ndarray]:
         return {name: archive[name] for name in archive.files}
 
 
-def read_recording_shape(recording: Path) -> tuple[int, int, int] | None:
+def read_recording_shape(recording: Path, dataset: str = RECORDING_DATASET) -> tuple[int, int, int] | None:
     """``(T, H, W)`` of a recording, ``None`` when it cannot be read."""
 
     try:
         with h5py.File(recording, "r") as handle:
-            shape = handle[RECORDING_DATASET].shape
+            shape = handle[dataset].shape
     except (OSError, KeyError):
         return None
     if len(shape) != 3:
@@ -117,10 +118,10 @@ def read_recording_shape(recording: Path) -> tuple[int, int, int] | None:
     return int(shape[0]), int(shape[1]), int(shape[2])
 
 
-def read_image_shape(recording: Path) -> tuple[int, int] | None:
+def read_image_shape(recording: Path, dataset: str = RECORDING_DATASET) -> tuple[int, int] | None:
     """``(H, W)`` of a recording's frames, ``None`` when it cannot be read."""
 
-    shape = read_recording_shape(recording)
+    shape = read_recording_shape(recording, dataset)
     return None if shape is None else (shape[1], shape[2])
 
 
@@ -260,7 +261,7 @@ class Workspace:
         if path.exists():
             raise FileExistsError(f"workspace {path} already exists")
         frame_index = _frame_range(first, last, step)
-        recording_shape = read_recording_shape(Path(recording))
+        recording_shape = read_recording_shape(Path(recording), str((settings or {}).get("dataset") or RECORDING_DATASET))
         if recording_shape is not None and int(frame_index[-1]) >= recording_shape[0]:
             raise ValueError(f"frame {int(frame_index[-1])} is beyond the {recording_shape[0]} frames of {recording}")
         shape = None if recording_shape is None else recording_shape[1:]
@@ -350,7 +351,7 @@ class Workspace:
         """``(H, W)`` of the recording's frames, read once and cached in ``workspace.json``."""
 
         if self.info.image_shape is None:
-            shape = read_image_shape(self.recording)
+            shape = read_image_shape(self.recording, str(self.info.settings.get("dataset") or RECORDING_DATASET))
             if shape is None:
                 return None
             self.info.image_shape = [shape[0], shape[1]]
@@ -444,6 +445,11 @@ class Workspace:
             while len(self._chunk_cache) > _CHUNK_CACHE_SIZE:
                 self._chunk_cache.popitem(last=False)
             return loaded
+
+    def clear_mask_cache(self) -> None:
+        """Refresh chunk reads after another workspace instance may have written masks."""
+        with self._lock:
+            self._chunk_cache.clear()
 
     def has_masks(self) -> bool:
         return len(self.mask_rows()) > 0
@@ -542,19 +548,34 @@ class Workspace:
     def set_override_mask(self, row: int, mask: NDArray[np.generic]) -> None:
         if not 0 <= int(row) < self.n:
             raise ValueError("override row out of range")
-        binary = np.asarray(mask, dtype=bool)
-        if binary.ndim != 2:
-            raise ValueError("an override mask must be an [H, W] array")
+        labels = np.asarray(mask)
+        if labels.ndim != 2 or (self.image_shape is not None and labels.shape != self.image_shape):
+            raise ValueError(f"override mask shape {labels.shape} does not match frame {self.image_shape}")
+        if not np.isin(labels, [0, 1, 255]).all():
+            raise ValueError("override labels must be 0 background, 1 worm, or 255 ignore")
         with self._lock:
             self.overrides_dir.mkdir(parents=True, exist_ok=True)
-            _write_npz_atomic(self._override_path(row), {"packed": pack_mask(binary), "shape": np.array(binary.shape, dtype=np.int64)})
+            _write_npz_atomic(self._override_path(row), {"labels": labels.astype(np.uint8)})
 
-    def get_override_mask(self, row: int) -> BoolArray | None:
+    def get_override_mask(self, row: int) -> NDArray[np.uint8] | None:
+        """Full labels (0 background, 1 worm, 255 ignore), including legacy binary overrides."""
         path = self._override_path(row)
         if not path.exists():
             return None
         stored = _load_npz(path)
-        return unpack_mask(stored["packed"], tuple(stored["shape"]))
+        if "labels" in stored:
+            return np.asarray(stored["labels"], dtype=np.uint8)
+        return unpack_mask(stored["packed"], tuple(stored["shape"])).astype(np.uint8)
+
+    def mask_revision(self, row: int) -> str:
+        """Content fingerprint of the effective input, including override labels and source."""
+        override = self.get_override_mask(row)
+        mask = override if override is not None else self.get_mask(row)
+        digest = hashlib.sha256(b"override" if override is not None else b"stored")
+        if mask is not None:
+            digest.update(str(mask.shape).encode())
+            digest.update(np.asarray(mask, dtype=np.uint8).tobytes())
+        return digest.hexdigest()
 
     def clear_override_mask(self, row: int) -> bool:
         """Remove the override of ``row``; whether there was one."""
@@ -568,7 +589,7 @@ class Workspace:
 
     def effective_mask(self, row: int) -> BoolArray | None:
         override = self.get_override_mask(row)
-        return override if override is not None else self.get_mask(row)
+        return (override == 1) if override is not None else self.get_mask(row)
 
     # ------------------------------------------------------------------ edits
 

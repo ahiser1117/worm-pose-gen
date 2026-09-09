@@ -85,7 +85,9 @@ class AppState:
         return self.config.workspaces_root / _validate_name(name)
 
     def workspace(self, name: str) -> Workspace:
-        return self.view(name).workspace
+        view = self.view(name)
+        view.refresh()
+        return view.workspace
 
     def view(self, name: str) -> WorkspaceView:
         """The (cached) view of a workspace; ``NotFound`` when there is no such directory."""
@@ -327,6 +329,8 @@ class AppState:
             "workspaces_root": str(self.config.workspaces_root),
             "recording_roots": [str(p) for p in self.config.recording_roots],
             "poses_root": str(self.config.poses_root),
+            "corpus_root": str(self.config.corpus_root),
+            "checkpoints_root": str(self.config.checkpoints_root),
             "gpus": list(self.config.gpus),
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),

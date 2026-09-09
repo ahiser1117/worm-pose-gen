@@ -256,8 +256,9 @@ function jump(kind, direction) {
 }
 
 function togglePlay() {
-  if (state.playing) { clearInterval(state.playing); state.playing = null; $("#play").textContent = "Play"; return; }
+  if (state.playing) { clearInterval(state.playing); state.playing = null; $("#play").textContent = "Play"; if (typeof maskEditor !== "undefined") maskEditor.onFrame(); return; }
   if (!state.run) return;
+  if (typeof maskEditor !== "undefined" && !maskEditor.beforeMutation()) return;
   const period = 1000 / Math.max(1, Math.min(30, parseInt($("#fps").value, 10) || 10));
   // The cursor advances at the requested rate; frames whose full layers are
   // already cached show them, the others show the light tier and the mask

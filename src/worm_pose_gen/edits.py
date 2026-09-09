@@ -44,6 +44,8 @@ from .latent import encode_centerline
 from .mask_fit import max_bend_widths, taper_asymmetry
 from .pipeline import (
     SOURCE_CODES,
+    INDEPENDENT_COPIES,
+    effective_mask_statistics,
     read_summary,
     workspace_arrays,
     workspace_image_shape,
@@ -52,7 +54,7 @@ from .pipeline import (
 )
 
 
-EDIT_KINDS = ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", "undo")
+EDIT_KINDS = ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", "set_mask", "clear_mask", "undo")
 PICK_ALGORITHM = "manual:pick"
 FLIP_ALGORITHM = "manual:flip"
 EDITS_DIR = "edits"
@@ -389,6 +391,8 @@ def _write_pose(arrays: dict[str, np.ndarray], row: int, pose: dict[str, Any]) -
 
     pose = _complete_pose(arrays, row, pose)
     arrays["fitted"][row] = True
+    if "mask_stale" in arrays:
+        arrays["mask_stale"][row] = False
     arrays["latent"][row] = pose["latent"]
     arrays["width_px"][row] = pose["width_px"]
     arrays["width_shape"][row] = pose["width_shape"]
@@ -517,6 +521,7 @@ def _commit(
     payload: dict[str, Any],
     summary_before: dict[int, dict[str, Any]],
     edit_id: str | None = None,
+    before_save: Callable[[], None] | None = None,
 ) -> EditResult:
     """Save the changed slices of ``window`` as the edit's snapshot, write the arrays, log the edit under ``edit_id``.
 
@@ -541,6 +546,8 @@ def _commit(
     with open(tmp, "wb") as handle:
         np.savez_compressed(handle, **changed)
     tmp.replace(snapshot)
+    if before_save is not None:
+        before_save()
     _save(workspace, loaded, hypotheses=any(k.startswith("hypotheses:") for k in changed))
     frames = np.asarray(loaded.state["frame_index"], dtype=np.int64)
     summary = {
@@ -718,6 +725,84 @@ def flip_segment(workspace: Any, row: int, *, note: str = "") -> EditResult:
     return flip_orientation(workspace, list(range(a, b + 1)), note=note or f"flip segment rows {a}-{b}")
 
 
+def set_mask(workspace: Any, row: int, labels: np.ndarray | None, *, revision: str | None = None, note: str = "") -> EditResult:
+    """Reversible override edit; ignore labels are excluded from the binary geometric target.
+
+    Clearing reveals the base mask. Corpus samples are separate explicit writes.
+    """
+    with workspace_lock(workspace, timeout=LOCK_TIMEOUT):
+        loaded = _load(workspace)
+        rows = _check_rows([row], loaded.n)
+        row = rows[0]
+        if hasattr(workspace, "clear_mask_cache"):
+            workspace.clear_mask_cache()
+        if revision is not None and revision != workspace.mask_revision(row):
+            raise ValueError("mask changed since it was loaded; reload before saving")
+        previous = workspace.get_override_mask(row)
+        if labels is None and previous is None:
+            raise ValueError("frame has no mask override to clear")
+        window = _window(rows, loaded.n)
+        before = _capture(loaded, window)
+        before["mask:present"] = np.array(previous is not None)
+        before["mask:labels"] = np.zeros((0, 0), dtype=np.uint8) if previous is None else previous
+        summary_before = {row: _row_summary(loaded, row)}
+        if labels is not None:
+            labels = np.asarray(labels)
+            if labels.ndim != 2 or (workspace.image_shape is not None and labels.shape != workspace.image_shape):
+                raise ValueError("override mask shape does not match frame")
+            if not np.isin(labels, [0, 1, 255]).all():
+                raise ValueError("override labels must be 0 background, 1 worm, or 255 ignore")
+            labels = labels.astype(np.uint8)
+        before["mask:after_labels"] = np.zeros((0, 0), dtype=np.uint8) if labels is None else labels
+        before["mask:after_present"] = np.array(labels is not None)
+        mask = workspace.get_mask(row) if labels is None else labels == 1
+        loaded.state["fitted"][row] = False
+        loaded.state["mask_stale"][row] = True
+        # These measurements and independent baselines were scored against the
+        # old mask. Keep them only in the undo snapshot, never as valid starts.
+        invalid = (*POSE_FIELDS, "taper_asymmetry", "orientation_gap", "tube_coverage", "max_bend_widths",
+                   "tube_area_px", "tube_area_visible_px", "score_independent", *(name for name, _ in INDEPENDENT_COPIES))
+        for key in invalid:
+            if key in loaded.state:
+                loaded.state[key][row] = _blank_value(loaded.state[key].dtype, key)
+        effective_mask_statistics(loaded.state, row, mask)
+        for key in _row_arrays(loaded.hypotheses, loaded.n):
+            loaded.hypotheses[key][row] = _blank_value(loaded.hypotheses[key].dtype, key)
+        _refresh_ambiguity(loaded, rows)
+        edit_id = _next_edit_id(workspace)
+        stamp = time.time()
+        loaded.provenance["algorithm"][row] = "manual:mask"
+        loaded.provenance["job"][row] = f"edit:{edit_id}"
+        loaded.provenance["time"][row] = stamp
+
+        def write_mask() -> None:
+            if labels is None:
+                workspace.clear_override_mask(row)
+            else:
+                workspace.set_override_mask(row, labels)
+            workspace.set_provenance(rows, "manual:mask", f"edit:{edit_id}", stamp)
+
+        try:
+            return _commit(workspace, loaded, before, window, rows, "clear_mask" if labels is None else "set_mask",
+                           {"note": note, "algorithm": "manual:mask", "ignore_policy": "excluded_from_binary_target"},
+                           summary_before, edit_id, before_save=write_mask)
+        except Exception:
+            # The write-ahead snapshot also survives a process crash. Recoverable
+            # write errors roll back the mask and array slices before returning.
+            if previous is None:
+                workspace.clear_override_mask(row)
+            else:
+                workspace.set_override_mask(row, previous)
+            index = np.asarray(window, dtype=np.int64)
+            for key, values in before.items():
+                group, _, array = key.partition(":")
+                if group in _GROUPS:
+                    _restore_slice(loaded.group(group), array, index, values)
+            _save(workspace, loaded, hypotheses=True)
+            _restore_provenance(workspace, {name: before[f"provenance:{name}"] for name in _PROVENANCE_KEYS}, window)
+            raise
+
+
 # ---------------------------------------------------------------------------
 # The log and undo
 
@@ -795,6 +880,15 @@ def undo(workspace: Any, edit_id: str | None = None) -> EditResult:
         before = _capture(loaded, window)
         summary_before = {row: _row_summary(loaded, row) for row in rows}
         index = np.asarray(window, dtype=np.int64)
+        mask_before = saved.pop("mask:labels", None)
+        mask_present = saved.pop("mask:present", None)
+        saved.pop("mask:after_labels", None)
+        saved.pop("mask:after_present", None)
+        if mask_present is not None:
+            if bool(mask_present):
+                workspace.set_override_mask(rows[0], mask_before)
+            else:
+                workspace.clear_override_mask(rows[0])
         for key, values in saved.items():
             group_name, _, array = key.partition(":")
             _restore_slice(loaded.group(group_name), array, index, values)
@@ -808,7 +902,8 @@ def undo(workspace: Any, edit_id: str | None = None) -> EditResult:
         else:
             # The snapshot predates provenance slices: at least stamp the rows as touched now.
             _apply_provenance(workspace, loaded, rows, str(loaded.provenance["algorithm"][rows[0]]), f"undo:{target['id']}")
-        _refresh_ambiguity(loaded, rows)
+        if mask_present is None:
+            _refresh_ambiguity(loaded, rows)
         record = {"undoes": target["id"], "undone_kind": target.get("kind"), "note": f"undo {target['id']}"}
         if payload.get("candidate_set"):
             record["candidate_set"] = str(payload["candidate_set"])

@@ -281,6 +281,8 @@ class LocalGPUBackend:
         job_env = dict(env)
         if record.gpu is not None:
             job_env["CUDA_VISIBLE_DEVICES"] = str(record.gpu)
+        elif record.spec.gpus == 0:
+            job_env["CUDA_VISIBLE_DEVICES"] = ""
         Path(record.log_path).parent.mkdir(parents=True, exist_ok=True)
         log = open(record.log_path, "ab")
         try:
@@ -556,12 +558,13 @@ class JobRunner:
         for record in queued:
             if len(self._running()) >= self.max_concurrent:
                 break
-            if self.gpus is not None and not free:
-                break
+            needs_gpu = record.spec.gpus > 0 and self.gpus is not None
+            if needs_gpu and not free:
+                continue
             # One job per workspace at a time; later jobs on it wait their turn.
             if record.spec.workspace and record.spec.workspace in busy:
                 continue
-            record.gpu = free.pop(0) if self.gpus is not None else None
+            record.gpu = free.pop(0) if needs_gpu else None
             self._start(record)
             if record.state == "running" and record.spec.workspace:
                 busy.add(record.spec.workspace)

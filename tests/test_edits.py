@@ -542,7 +542,7 @@ class UndoTests(EditFixture):
 
 class ContractTests(unittest.TestCase):
     def test_edit_kinds(self) -> None:
-        self.assertEqual(EDIT_KINDS, ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", "undo"))
+        self.assertEqual(EDIT_KINDS, ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", "set_mask", "clear_mask", "undo"))
 
 
 if __name__ == "__main__":

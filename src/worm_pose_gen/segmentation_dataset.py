@@ -86,6 +86,7 @@ class SampleRecord:
     ignore_fraction: float
     flat_fielded: bool
     revision: int = 1
+    dataset_path: str = "/img_nir"
 
 
 def _validate_mask(mask: NDArray[np.generic]) -> NDArray[np.uint8]:
@@ -179,6 +180,8 @@ class SegmentationStore:
         image_raw: NDArray[np.generic] | None = None,
         flat_fielded: bool = True,
         split: str | None = None,
+        dataset_path: str = "/img_nir",
+        revision: int | None = None,
     ) -> SampleRecord:
         """Write one sample atomically; a repeat save replaces the label.
 
@@ -200,6 +203,8 @@ class SegmentationStore:
         raw_u8 = (
             frame_u8 if image_raw is None else np.clip(np.rint(np.asarray(image_raw)), 0, 255).astype(np.uint8)
         )
+        if raw_u8.shape != frame_u8.shape:
+            raise ValueError("raw image and corrected image shapes must match")
         sample_id = make_sample_id(recording, frame_index)
         valid = label != IGNORE_LABEL
         with self._lock:
@@ -231,7 +236,8 @@ class SegmentationStore:
                 foreground_fraction=float((label == 1).sum() / label.size),
                 ignore_fraction=float((~valid).sum() / label.size),
                 flat_fielded=bool(flat_fielded),
-                revision=int(previous["revision"]) + 1 if previous else 1,
+                revision=revision if revision is not None else (int(previous["revision"]) + 1 if previous else 1),
+                dataset_path=dataset_path,
             )
             self.samples_dir.mkdir(parents=True, exist_ok=True)
             path = self.sample_path(sample_id)
@@ -348,6 +354,7 @@ class SegmentationDataModule(L.LightningDataModule):
         num_workers: int = 4,
         seed: int = 0,
         train_label_filter: str = "all",
+        pad_batches: bool = False,
     ) -> None:
         """``train_label_filter`` restricts the training split only; validation
         and test always use every label they hold."""
@@ -359,6 +366,7 @@ class SegmentationDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.seed = seed
         self.train_label_filter = train_label_filter
+        self.pad_batches = pad_batches
 
     def train_records(self):
         return [r for r in self.store.records("train") if matches_label_filter(r.label_source, self.train_label_filter)]
@@ -378,6 +386,7 @@ class SegmentationDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=torch.cuda.is_available(),
             persistent_workers=self.num_workers > 0,
+            collate_fn=collate_segmentation if self.pad_batches else None,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:
@@ -393,3 +402,21 @@ class SegmentationDataModule(L.LightningDataModule):
 def iter_split(store: SegmentationStore, split: str) -> Iterator[tuple[NDArray[np.uint8], NDArray[np.uint8], SampleRecord]]:
     for record in store.records(split):
         yield store.load(record.sample_id)
+
+
+def collate_segmentation(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pad mixed recording sizes; padded pixels contribute no loss or metric.
+
+    A minimum of 64 pixels keeps the encoder's deepest batch normalization
+    valid even for a single small training example.
+    """
+    height = max(64, max(s["mask"].shape[-2] for s in samples))
+    width = max(64, max(s["mask"].shape[-1] for s in samples))
+    height, width = ((height + 31) // 32) * 32, ((width + 31) // 32) * 32
+    result = {"sample_id": [s["sample_id"] for s in samples]}
+    for name in ("image", "mask", "valid"):
+        result[name] = torch.stack([
+            torch.nn.functional.pad(s[name], (0, width - s[name].shape[-1], 0, height - s[name].shape[-2]))
+            for s in samples
+        ])
+    return result

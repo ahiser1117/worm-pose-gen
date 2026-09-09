@@ -178,6 +178,7 @@ function compareCandidates(run) {
 // reload never brings back the source the user just left.
 async function selectSource(kind, name, frameIndex, options = {}) {
   if (!name) return;
+  if (typeof maskEditor !== "undefined" && !maskEditor.leave()) { renderRunList(); return; }
   const selection = ++loads.selection;
   setLoading(1);
   try {
@@ -353,10 +354,12 @@ async function decodeFrame(payload) {
 // (``stale``) so the view keeps moving; anything older than what is on
 // screen is dropped.
 async function applyPayload(payload, row, stale = false) {
+  if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
   if (!payload._decoded) {
     const [decoded, image, imageRaw] = await Promise.all([decodeFrame(payload), loadImage(payload.layers && payload.layers.image), loadImage(payload.image_raw)]);
     payload._decoded = decoded; payload._image = image; payload._imageRaw = imageRaw;
   }
+  if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
   if (row !== state.row && !stale) return false;
   if (stale && row !== state.row && payload._seq !== undefined && payload._seq < loads.applied) return false;
   if (payload._seq !== undefined) loads.applied = Math.max(loads.applied, payload._seq);
@@ -368,7 +371,7 @@ async function applyPayload(payload, row, stale = false) {
   buildOverlay();
   draw();
   renderDetails();
-  if (row === state.row) fetchSegment(row);
+  if (row === state.row) { fetchSegment(row); if (typeof maskEditor !== "undefined") maskEditor.onFrame(); }
   return true;
 }
 
@@ -463,6 +466,7 @@ function showRow(row, options = {}) {
   if (!state.run || !state.run.series.frame_index.length) return Promise.resolve(false);
   const n = state.run.series.frame_index.length;
   row = Math.max(0, Math.min(n - 1, row));
+  if (typeof maskEditor !== "undefined" && (row !== state.row || maskEditor.corpusActive()) && !maskEditor.leave()) return Promise.resolve(false);
   state.row = row;
   $("#frame-index").value = state.run.series.frame_index[row];
   if (options.fit) state.fitPending = true;

@@ -190,6 +190,21 @@ class JobsTest(unittest.TestCase):
         free = self.runner.submit(JobSpec(kind="command"), _finishing())
         self.assertEqual(_wait_until(self.runner, free.id, ("done", "failed")).state, "done")
 
+    def test_cpu_job_can_start_while_gpu_jobs_wait_for_devices(self) -> None:
+        self.runner.max_concurrent = 3
+        stops = [self.root / f"cpu-case-stop{i}" for i in range(3)]
+        gpu_jobs = [self.runner.submit(self._spec(f"gpu{i}", workspace=f"gpu{i}"), _waiting(stops[i])) for i in range(3)]
+        cpu = self.runner.submit(JobSpec(kind="fine_tune", gpus=0), _finishing())
+        self.runner.tick()
+        self.assertEqual([self.runner.get(r.id).state for r in gpu_jobs], ["running", "running", "queued"])
+        self.assertEqual(self.runner.get(cpu.id).state, "running")
+        self.assertIsNone(self.runner.get(cpu.id).gpu)
+        self.assertEqual(_wait_until(self.runner, cpu.id, ("done", "failed")).state, "done")
+        for stop in stops:
+            stop.touch()
+        for record in gpu_jobs:
+            self.assertEqual(_wait_until(self.runner, record.id, ("done", "failed")).state, "done")
+
     def test_max_concurrent_below_gpu_count(self) -> None:
         runner = JobRunner(self.root, self.backend, max_concurrent=1)
         stops = [self.root / f"stop{i}" for i in range(2)]
