@@ -4,8 +4,12 @@ It serves the viewer's browser UI and API (runs, frames, poses, notes) and
 adds what ``docs/APP_PLAN.md`` calls Phase 1: a catalog of the HDF5
 recordings under the configured roots, workspaces that hold a recording
 range's masks, poses, hypotheses and provenance, and a job queue that runs
-pipeline stages over a workspace on the local GPUs.  Everything the UI does
-goes through these endpoints, so a script can drive the same work headless.
+pipeline stages over a workspace on the local GPUs; Phase 2: manual
+interventions (hypothesis pick, orientation flip, undo) through the edit
+log with provenance per frame; and Phase 3: the algorithm registry run on a
+region between anchors as a job, the candidate sets it produces (compared,
+accepted or discarded) and the outcome log.  Everything the UI does goes
+through these endpoints, so a script can drive the same work headless.
 
 Errors come back as ``{"error": ...}`` with 400 for a bad request (unknown
 frame, bad parameter), 404 for a missing run, workspace, job or file
@@ -33,7 +37,8 @@ from ..segmentation_dataset import DEFAULT_DATASET_ROOT
 from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import AppConfig
 from .state import AppState, NotFound
-from .routers import jobs, recordings, static, viewer, workspaces
+from ..pipeline import WorkspaceBusy
+from .routers import algorithms, edits, jobs, recordings, static, viewer, workspaces
 
 __all__ = ["AppConfig", "AppState", "NotFound", "create_app", "main", "parse_args"]
 
@@ -57,6 +62,10 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
         return _error(error.status_code, str(error.detail))
+
+    @app.exception_handler(WorkspaceBusy)
+    async def busy(request: Request, error: WorkspaceBusy) -> JSONResponse:
+        return _error(409, str(error))
 
     for kind in BAD_REQUEST_ERRORS:
         @app.exception_handler(kind)
@@ -90,6 +99,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(recordings.router)
     app.include_router(recordings.files_router)
     app.include_router(workspaces.router)
+    app.include_router(edits.router)
+    app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(static.router)
     return app

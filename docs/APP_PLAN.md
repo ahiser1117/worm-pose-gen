@@ -55,12 +55,15 @@ worm_pose_gen.app            FastAPI application (uvicorn), serves the UI and th
   routers/workspaces         create, list, open, snapshot, export
   routers/frames             layers, statistics, hypotheses (the viewer's endpoints today)
   routers/jobs               submit, list, status, log, cancel
-  routers/algorithms         registry: scopes, parameter schemas, run on a region
-  routers/edits              hypothesis pick, orientation flip, accept path, mask override, notes
-  routers/corpus             labels into the user's segmentation store, fine-tune job
+  routers/algorithms         registry and parameter schemas, region proposals, candidate sets
+                             (list, inspect, accept, discard), the outcome log
+  routers/edits              hypothesis pick, orientation flip, undo, the edit log, the segment of a frame
+  routers/corpus             labels into the user's segmentation store, fine-tune job (Phase 4)
+  regions                    frames <-> rows for the region endpoints, region job specs, accept responses
 worm_pose_gen.workspace      on-disk workspace: arrays, masks, provenance, edit log, jobs
+worm_pose_gen.edits          the interventions: pick, flip, accept path, set pose, undo; before-snapshots
 worm_pose_gen.jobs           runner with backends: local GPUs (now), Slurm (later)
-worm_pose_gen.algorithms     registry and the existing methods wrapped as plugins
+worm_pose_gen.algorithms     registry and the existing methods wrapped as region algorithms; candidate sets
 worm_pose_gen.client         Python client over the API; `worm-pose` command line
 worm_pose_gen.pose_viewer_ui the browser UI (grows from the viewer)
 ```
@@ -71,9 +74,17 @@ their shapes so the UI carries over. Static assets stay in the package.
 Phase 1 has `routers/viewer` (the viewer's endpoints, `/api/state`, `/run`,
 `/frame`, `/pose`, `/starts`, notes), `routers/recordings`,
 `routers/workspaces`, `routers/jobs` (jobs and the stage schemas) and
-`routers/static`; `algorithms`, `edits`, `corpus` and the client arrive with
-their phases. The stdlib viewer (`worm-pose-viewer`) is kept for read-only
-runs and serves the same UI.
+`routers/static`. Phase 2 adds `routers/edits` (`GET/POST
+/api/workspaces/{name}/edits`, `GET .../segment`) over `worm_pose_gen.edits`;
+Phase 3 adds `routers/algorithms` (`GET /api/algorithms`, `GET
+/api/workspaces/{name}/region`, `GET/DELETE .../candidates[/{id}]`, `POST
+.../candidates/{id}/accept`, `GET /api/outcomes`) over
+`worm_pose_gen.algorithms`, with region jobs submitted as `kind: region`
+through `POST /api/jobs`. Requests and responses speak frames; rows appear
+beside them in responses. Edits and accepts answer 409 while a job writes
+the workspace (`pipeline.WorkspaceBusy`). `corpus` and the client arrive
+with their phases. The stdlib viewer (`worm-pose-viewer`) is kept for
+read-only runs and serves the same UI with the editing controls disabled.
 
 ## 4. Workspace
 
@@ -87,18 +98,29 @@ One workspace per recording range, replacing the write-once run directory
   hypotheses.npz         candidates per frame (hypotheses_*, path_*, prediction_*)
   provenance.npz         per frame: algorithm id, job or edit id, unix time
   masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk, a few KB per frame
-  overrides/masks/       sparse: frames whose mask the user edited (NNNNNNN.npz per row)
+                         (the segment stage writes them; a region run stores the masks
+                         it had to segment on the fly)
+  overrides/masks/       sparse: frames whose mask the user edited (NNNNNNN.npz per row; Phase 4)
   recording_prior.json   the prior the fit stage uses (bootstrapped, cached or given)
   summary.json           a run-shaped summary kept up to date by the stages, so the
                          viewer's loaders read a workspace like a run
   imported_summary.json  the summary.json of an imported run (fallback for the above)
-  edits.jsonl            append-only log of every intervention with its inputs
+  edits.jsonl            append-only log of every intervention with its inputs; an undo
+                         is itself an entry naming the edit it undoes
+  edits/<id>.npz         the before-snapshot of every array slice edit <id> changed
+                         (state, hypotheses and provenance rows), what undo restores
+  candidates/<id>.npz    a region run's candidate set: per-row candidates, the chosen path,
+    + <id>.json          metrics before and after, accept state; <id> is the job id
   snapshots/<time>_<label>/  copies of state, hypotheses and provenance on demand
   exports/<time>.parquet     Parquet exports
-  .lock                  flock held by the stage process that is writing the workspace
+  .lock                  flock held by the stage process that is writing the workspace;
+                         edits take it too and give up after two seconds (WorkspaceBusy)
 <workspaces>/jobs/       job records shared by all workspaces: <id>.json, <id>.log,
                          <id>.progress.json and the id counter (ids are never reused)
+<workspaces>/algorithm_outcomes.jsonl  one line per region run (region, anchors, algorithm,
+                         parameters, metrics before and after), then accepted / unaccepted lines
 <workspaces>/recordings_index.json   the recording browser's per-file cache
+<workspaces>/recordings_registry.json  HDF5 files added by hand, with their dataset name
 ```
 
 Rows are positions in `range(first, last + 1, step)`; every per-frame
@@ -125,24 +147,45 @@ the workspace; stages can be rerun independently:
 7. export (Parquet)
 
 `fit_recording.py` becomes the composition of these stages and keeps
-working from the command line.
+working from the command line. Since Phase 3 the propagate stage treats
+rows placed by hand or by an accepted region run (`manual:*` and the region
+algorithms' provenance) as fixed: the stretches are cut around them and the
+chains anchor on them, so a rerun of the stage does not undo an
+intervention. A region run is the eighth kind of job (`python -m
+worm_pose_gen.pipeline --workspace ... --region-run '<spec json>'`,
+`pipeline.region_command`); it writes a candidate set, never the state.
 
 ## 6. Algorithm registry
 
 ```python
 class Algorithm(Protocol):
     id: str                      # "chain_forward", "beam_path", "independent_multistart", ...
-    scope: Literal["frame", "region", "recording"]
-    parameters: dict[str, Parameter]   # name -> type, default, bounds, help
-    def run(self, ctx: Context, frames: range, params: dict) -> Candidates
+    label: str
+    scope: str                   # "region" for every algorithm so far
+    description: str
+    parameters: list[Parameter]  # name, type (int/float/bool/str/choice), default, bounds or choices, help
+    needs_anchor: tuple[str, ...]   # ("before",) / ("after",) for the chains, () otherwise
+    def run(self, ctx: RegionContext, params: dict, progress=None) -> CandidateSet
 ```
 
-`Context` gives masks, the recording prior, the current state and the
-anchors; `Candidates` are per-frame lists of poses with energies, ready for
-the path selection. Wrapped first: the independent multi-start fit, forward
-and backward chains with prediction, the beam-and-path second pass, the
-slow-schedule refit, the track-length refit, mirror orientation. Every run
-on a region is logged with its outcome (overlap, jumps, frames accepted), so
+`RegionContext` gives the region's rows and masks, the workspace's fit
+configuration and prior, the current state and hypotheses and the anchors
+(rows outside the region whose poses are trusted; they need not be adjacent,
+the algorithm works on a local copy where they are). A `CandidateSet` holds
+per-row candidates (`CandidatePose`: centerline, latent, widths, crop,
+energy, IoU, source and start) and the path `propagation.select_path` chose
+through them with the anchors fixing its ends and orientation, plus the
+region's metrics before and after (`region_metrics`: median and p10 IoU,
+frames below 0.9, pose jumps over a body width, length jumps over 3%,
+orientation flips, seconds). Registered: `independent_multistart`,
+`chain_forward`, `chain_backward`, `beam_path` (the pipeline's second pass),
+`slow_refit` and `mirror`; the track-length refit is still only a stage.
+`run_region` saves the set under `candidates/` and appends its outcome to
+`<workspaces root>/algorithm_outcomes.jsonl`; `accept_candidates` installs
+the path through one `accept_path` edit (candidates into the rows'
+hypotheses, provenance `<algorithm>` / `candidates:<id>`), marks the set
+accepted (whole or on part of its rows) and appends an `accepted` line; an
+undo of the accept appends `unaccepted`. `outcomes()` folds those lines, so
 the defaults question can be answered from the log.
 
 ## 7. Phases
@@ -205,8 +248,8 @@ job backend; whole-recording runs; packaging with the bundled checkpoint.
 | Phase | State | Notes |
 |---|---|---|
 | 1 | done (2026-09-08) | foundation landed on branch `pose-app`; details below |
-| 2 | not started | |
-| 3 | not started | |
+| 2 | done (2026-09-09) | picks, flips, undo, provenance strip and jumps landed; open: whole-state rewrite per edit, no redo, no browser test in `tests/` |
+| 3 | done (2026-09-09) | registry, region jobs, candidate sets, comparison, accept, outcome log landed; open: beam_path takes minutes on a 240-row coil, no warning when a set equals the current track |
 | 4 | not started | |
 | 5 | not started | |
 | 6 | not started | |
@@ -232,3 +275,56 @@ blanks the refit rows' hypotheses, which `propagate` must rerun to fill; the
 `worm-pose-app` console script appears in `.venv/bin` only after `uv sync`
 (`python -m worm_pose_gen.app` works without); the Python client and command
 line are Phase 5.
+
+**Phase 2.** `edits.py` (`pick_hypothesis`, `flip_frame`, `flip_segment`,
+`flip_orientation`, `accept_path`, `set_pose`, `undo`, `list_edits`,
+`segment_info`) writes poses the way the stages do, records provenance
+(`manual:pick`, `manual:flip`, or the algorithm and job a caller passes),
+refreshes the ambiguity signals of the touched rows and their neighbours and
+saves a before-snapshot per edit under `edits/<id>.npz`; older workspaces
+with centerline-only hypotheses get the pose rebuilt from the centerline.
+`routers/edits` exposes `POST /api/workspaces/{name}/edits` with kinds
+`pick_hypothesis`, `flip` (frame, segment or a frame list) and `undo`,
+answering with the edit, the refreshed frame, a series patch of the touched
+rows and the provenance so the browser updates in place; `GET .../edits` is
+the log, `GET .../segment?frame=` the stretch around a frame. The UI
+(`edits.js`) has "use" per hypothesis, Flip frame / Flip segment, an Edits
+section with Undo (Ctrl+Z), a provenance strip over the timeline with a
+legend and jumps by algorithm or to edited frames. Verified on the imported
+coil run (`2026-09-08T20-02-21Z_6c_coil_0201_6b_anchor`, frames
+17500--18699): pick, frame flip, segment flip over 237 rows and three
+undos restored the imported poses bit for bit. Left open: every edit
+rewrites `state.npz` (about a second on 1200 rows) and recomputes the
+series over all rows for the patch, so whole-recording workspaces will feel
+it; undo recomputes the ambiguity window rather than restoring hand-set
+flags; no redo; the browser checks live outside `tests/` as Playwright
+scripts; provenance colours for unknown algorithms follow their position in
+the run's algorithm list.
+
+**Phase 3.** `algorithms.py` (section 6) with the six region algorithms,
+`RegionContext`, `CandidateSet`, `region_metrics`, `propose_region` and
+`propose_anchors` (nearest fitted rows outside the region with ambiguity
+score 0 and IoU at least 0.9), `run_region`, `accept_candidates`,
+`unaccept_candidates` and the outcome log; `pipeline.py` gains
+`--region-run` and `region_command`, and `run_propagate` keeps placed rows
+fixed (`placed_rows`, `split_stretches`). `app/regions.py` and
+`routers/algorithms` speak frames; region jobs go through `POST /api/jobs`
+with `kind: region`. The UI (`regions.js`) has the Regions section (Use
+current stretch, Around frame, Anchors, the algorithm form generated from
+the registry, Run on region), candidate set cards with before -> after
+metrics, Show as layer A or B, a comparison table of the current track and
+two sets, Accept (whole or partial, disabled while an accept runs), Discard,
+and the Outcomes table. Verified on the coil workspace: `GET /region` at
+frame 17975 proposed frames 17765--18005 with anchors 17764 and 18006;
+`beam_path` with the defaults ran 5 min 58 s (330 s in the algorithm) for
+723 candidates over 241 rows and improved the region from median IoU
+0.94238 to 0.94282, min 0.91610 to 0.92099, orientation flips 2 to 0, with
+no frame below 0.9 before or after; accepting it made frame 17975's pose
+the chosen candidate exactly with provenance `beam_path` /
+`candidates:j00000002`, and `mirror` on the same region chose the
+unmirrored candidate everywhere. Left open: a `beam_path` run over a whole
+coil stretch takes minutes (the chains are quicker for a first look);
+accepting a set whose path equals the current track only rewrites
+provenance and the UI does not warn; the region's pose jump count stayed
+at 1 across algorithms on that coil; the track-length refit is not a region
+algorithm.

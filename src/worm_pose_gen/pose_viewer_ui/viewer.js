@@ -60,9 +60,18 @@ function describeSource(run) {
     const summary = run.workspace_summary || {};
     const prov = summary.provenance || {};
     lines.push(`workspace · ${fmt(summary.fitted)} fitted · masks ${summary.has_masks ? fmt(summary.mask_rows) + " rows" : "none"} · hypotheses ${summary.has_hypotheses ? "yes" : "no"} · prior ${summary.has_prior ? "yes" : "no"}`);
-    const counts = Object.entries(prov).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(", ");
+    // Live counts from the provenance block when the payload has one, else the summary's.
+    let counts = "";
+    if (run.provenance && run.provenance.algorithms.length) {
+      const tally = new Map();
+      for (const k of run.provenance.index) if (k >= 0) tally.set(k, (tally.get(k) || 0) + 1);
+      counts = run.provenance.algorithms.map((id, k) => `${id} ${tally.get(k) || 0}`).join(", ");
+      const edited = run.provenance.edited.reduce((a, v) => a + (v ? 1 : 0), 0);
+      if (edited) counts += ` · ${edited} rows manually edited`;
+    } else counts = Object.entries(prov).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(", ");
     if (counts) lines.push(`provenance: ${counts}`);
-    if (summary.edits !== undefined) lines.push(`edits ${summary.edits} · snapshots ${(summary.snapshots || []).length}${(entry.imported_runs || []).length ? ` · imported ${entry.imported_runs.join(", ")}` : ""}`);
+    const edits = run.edits_count !== undefined ? run.edits_count : summary.edits;
+    if (edits !== undefined) lines.push(`edits ${edits} · snapshots ${(summary.snapshots || []).length}${(entry.imported_runs || []).length ? ` · imported ${entry.imported_runs.join(", ")}` : ""}`);
   } else {
     lines.push(`mask: ${entry.mask_cleanup} · threshold ${run.threshold !== undefined ? run.threshold : "?"} · segmenter ${entry.checkpoint_sha || "?"}`);
     lines.push(`IoU median ${fmt(entry.iou_median)} · min ${fmt(entry.iou_min)} · below 0.9: ${fmt(entry["frames_below_0.9"])} · ${entry.propagated ? "propagated" : "independent only"} · git ${entry.git_commit}`);
@@ -134,6 +143,7 @@ function normaliseSourcePayload(payload, kind, name) {
   payload.stretches = payload.stretches || [];
   payload.cleanup = payload.cleanup || {};
   if (payload.threshold === undefined) payload.threshold = null;
+  normaliseProvenance(payload);
   return payload;
 }
 
@@ -186,6 +196,8 @@ async function selectSource(kind, name, frameIndex, options = {}) {
     state.frame = null; state.decoded = null;
     state.starts = null;
     state.compare = null; state.compareName = null; state.compareKind = null; state.comparePose = null;
+    state.segments.clear();
+    state.edits = []; state.editsError = null;
     $("#run-info").textContent = describeSource(run);
     $("#run-summary").textContent = runSummaryText(run);
     renderRunList();
@@ -201,6 +213,8 @@ async function selectSource(kind, name, frameIndex, options = {}) {
     state.timeline = timeline || { start: 0, end: run.series.frame_index.length, dragging: false };
     buildCharts();
     renderNotes();
+    renderEditControls();
+    loadEdits();
     if (typeof onSourceChanged === "function") onSourceChanged();
     let row = 0;
     if (frameIndex !== undefined && frameIndex !== null) {
@@ -354,6 +368,7 @@ async function applyPayload(payload, row, stale = false) {
   buildOverlay();
   draw();
   renderDetails();
+  if (row === state.row) fetchSegment(row);
   return true;
 }
 

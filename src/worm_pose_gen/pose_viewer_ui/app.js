@@ -37,6 +37,11 @@ function bindEvents() {
   $("#show-compare").addEventListener("change", drawCharts);
   $("#jump-iou").addEventListener("change", drawCharts);
   $("#timeline-toggle").addEventListener("click", () => togglePanel("bottom"));
+  // Phase 2 edits.
+  $("#flip-frame").addEventListener("click", flipFrame);
+  $("#flip-segment").addEventListener("click", flipSegment);
+  $("#edit-undo").addEventListener("click", () => undoEdit());
+  $("#edits-refresh").addEventListener("click", loadEdits);
 
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
@@ -85,6 +90,11 @@ function bindEvents() {
   window.addEventListener("keydown", (event) => {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") { if (event.key === "Escape") document.activeElement.blur(); return; }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && (event.key === "z" || event.key === "Z")) {
+      event.preventDefault();
+      if (editsSupported()) undoEdit(); else setStatus("undo needs a workspace on the app server", "error");
+      return;
+    }
     const big = event.ctrlKey ? 100 : event.shiftKey ? 10 : 1;
     switch (event.key) {
       case "ArrowLeft": step(-big); event.preventDefault(); break;

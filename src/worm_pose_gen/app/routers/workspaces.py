@@ -1,4 +1,4 @@
-"""Workspaces: create, import a run, list, open, frames, snapshots and the edit log."""
+"""Workspaces: create, import a run, list, open, frames and snapshots (the edits live in ``routers/edits``)."""
 
 from __future__ import annotations
 
@@ -52,8 +52,3 @@ def snapshot(name: str, payload: dict[str, Any] = Body(default={}), app: AppStat
     workspace = app.workspace(name)
     path = workspace.snapshot(str(payload.get("label") or "snapshot"))
     return {"path": str(path), "name": path.name, "snapshots": workspace.snapshots()}
-
-
-@router.get("/{name}/edits")
-def edits(name: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return {"edits": app.workspace(name).edits()}

@@ -280,8 +280,10 @@ priors on the 30-frame set.
 ## Pose app
 
 The pose app is the front end for running the pipeline, auditing its results
-and (in later phases) fixing them by hand; its plan and status are in
-[`docs/APP_PLAN.md`](docs/APP_PLAN.md). Start it with
+and fixing them by hand: picking among a frame's stored hypotheses, flipping
+orientations, rerunning an algorithm on a region between anchors and
+accepting its result, every step recorded and reversible; its plan and status
+are in [`docs/APP_PLAN.md`](docs/APP_PLAN.md). Start it with
 
 ```bash
 scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.app
@@ -340,19 +342,128 @@ from the server appear as a toast over the frame as well as in the status
 line.
 
 A workspace holds a recording range's masks, poses, hypotheses and
-provenance (which algorithm and job produced each frame's pose, and when),
-its snapshots, edit log and Parquet exports (one row per frame with pose,
-statistics, flags, provenance and kinematics); the layout is in section 4 of
-the plan. Existing runs appear read-only in the viewer's source list and
-"Import run as workspace" copies one into a workspace so its stages can be
-rerun. The frame panel shows each frame's provenance (algorithm, job, time)
-and the source summary counts frames per algorithm; a second run or
-workspace of the same recording can be compared on the same frames.
+provenance (which algorithm and job or edit produced each frame's pose, and
+when), its edit log with a before-snapshot per edit, its candidate sets,
+snapshots and Parquet exports (one row per frame with pose, statistics,
+flags, provenance and kinematics); the layout is in section 4 of the plan.
+Existing runs appear read-only in the viewer's source list and "Import run as
+workspace" copies one into a workspace so its stages can be rerun and its
+frames edited. The frame panel shows each frame's provenance (algorithm, job
+or edit, time) and the source summary counts frames per algorithm; a second
+run or workspace of the same recording can be compared on the same frames.
+
+### Interventions
+
+On a workspace the viewer edits frames; every edit is one line of
+`edits.jsonl` and can be undone:
+
+- **Hypothesis pick.** The frame panel's hypotheses table lists the stored
+  candidates of the frame (the independent starts and the forward and
+  backward chains the propagate stage kept, with their IoU and whether the
+  path chose them); "use" on a row makes that candidate the frame's pose, as
+  it is or mirrored. Older workspaces that store only the candidates'
+  centerlines get the pose rebuilt from the centerline (latent re-encoded,
+  the frame's widths and crop carried over). The frame keeps its ambiguity
+  signals up to date: the edit recomputes them for the touched rows and their
+  neighbours, since a pose jump belongs to a pair of frames.
+- **Flips.** "Flip frame" reverses the frame's orientation; "Flip segment"
+  reverses the whole propagation stretch around it (or, outside a stretch,
+  the run of fitted frames between the neighbouring stretches), which is how
+  a coil that came out backwards end to end is fixed in one step.
+- **Undo.** Ctrl+Z (or the Undo button in the Edits section) undoes the
+  newest live edit; the Edits section lists the log newest first, strikes
+  undone entries through, and clicking an entry jumps to its frames. Undo
+  restores the before-snapshot of every array slice the edit touched
+  (`edits/<id>.npz`), so a pick, flip or accept comes back bit for bit,
+  and it is itself a log entry (redo is not offered).
+- **Provenance.** Workspaces get a provenance strip over the timeline,
+  one colour per algorithm (independent fit, forward and backward chain,
+  track refit, the region algorithms) with manual edits in pink and a tick
+  on edited rows; the legend under the charts counts frames per algorithm,
+  the "◀ prov. / prov. ▶" buttons jump between frames of the chosen
+  algorithm or to the frames manual edits touched, and the frame panel names
+  the algorithm, the job or edit and the time for the current frame.
+
+Edits answer 409 while a job is writing the workspace (and raise
+`pipeline.WorkspaceBusy` after two seconds when another process holds its
+lock), and a rerun of the propagate stage keeps manually placed and accepted
+rows fixed and anchors its chains on them rather than overwriting them.
+
+### Regions
+
+The Pipeline tab's Regions section reruns an algorithm on part of a
+workspace and compares the result with the current track before anything is
+changed:
+
+- **Region and anchors.** "Use current stretch" proposes the propagation
+  stretch around the current frame padded by two frames, "Around frame" ten
+  frames either side, or type the first and last frame; "Anchors" proposes
+  anchors, the nearest fitted frames outside the region with ambiguity
+  score 0 and IoU at least 0.9 (`GET /api/workspaces/{name}/region?frame=`
+  or `?first=&last=`). Anchors need not be adjacent: the algorithms run on a
+  local copy in which the anchors sit next to the region, so the chains and
+  the path connect the region to the anchors chosen. Everything is in frames.
+- **Algorithms.** The registry (`GET /api/algorithms`) lists each
+  algorithm with its parameters, defaults and bounds, and the form is
+  generated from it. `independent_multistart` fits every frame from the
+  standard starts of its mask (both orientations); `chain_forward` and
+  `chain_backward` run one chain from the anchor before or after the region
+  with prediction (`prediction_damping`), temporal prior
+  (`temporal_prior_weight`, `temporal_prior_sigma_widths`), beam width
+  (`beam`) and a length prior centred on the anchors (`chain_length_sigma`);
+  `beam_path` is the pipeline's second pass on the region (both chains, the
+  refit independent poses with `refit_independent`, `anchor_diversity`);
+  `slow_refit` refits the current poses under a longer schedule with the
+  anchors' length prior (`preset`, `length_sigma`); `mirror` fits nothing and
+  offers each frame's pose and its reversal, an orientation fix over a
+  region. Every algorithm shares the path-selection weights
+  (`path_temperature`, `path_distance_weight`, `path_inview_weight`,
+  `path_length_weight`) and, where it fits, the schedule `preset`. The chains
+  require their anchor; a request without one is a 400.
+- **Candidate sets.** "Run on region" submits a job (`POST /api/jobs` with
+  `kind: region`, `workspace`, `algorithm`, `first`, `last`,
+  `anchor_before`, `anchor_after`, `params`); the job stores per-frame
+  candidates and the path chosen among them under `candidates/<job id>.npz`
+  and writes nothing to the state. The set's card shows the region's metrics
+  before and after (median and p10 IoU, frames below 0.9, pose jumps over a
+  body width, length jumps over 3%, orientation flips); "Show" overlays a
+  set's chosen candidates on the frame as layer A or B and the comparison
+  table sets the current track and up to two sets side by side, and the
+  frame panel lists the sets covering the current frame with their
+  candidate for it. A region job on an imported workspace segments the
+  masks it lacks and stores them, so the next run on those frames is faster.
+- **Accept.** "Accept" (`POST .../candidates/{id}/accept`, optionally with
+  `rows`, a list of frame numbers, for part of the path) installs the set's
+  path as the frames' poses in one `accept_path` edit, puts the set's
+  candidates into the frames' hypotheses, and records the algorithm and
+  `candidates:<id>` as provenance; undo restores the previous poses and
+  hypotheses and un-marks the set. A set accepted on part of its path stays
+  open for the rest; accepting rows already accepted is refused; "Discard"
+  (`DELETE .../candidates/{id}`) removes a set.
+- **Outcomes.** Every region run appends a line to
+  `<workspaces root>/algorithm_outcomes.jsonl` with the region, anchors,
+  algorithm and parameters, the metrics before and after, and later whether
+  it was accepted or the accept undone (`GET /api/outcomes?workspace=&algorithm=`);
+  the Outcomes table filters by algorithm and workspace, so which defaults
+  make manual work rare can be read off the log.
+
+A region run is a subprocess the job runner starts, and it also works by
+hand (rows, not frames, in the spec; the id names the candidate set):
+
+```bash
+PYTHONPATH=src .venv/bin/python -m worm_pose_gen.pipeline \
+  --workspace /temp_data4/alex/external_artifacts/workspaces/<name> \
+  --region-run '{"algorithm": "beam_path", "first": 265, "last": 505,
+                 "anchor_before": 264, "anchor_after": 506,
+                 "params": {"beam": 3}, "id": "coil_beam"}'
+```
 
 Everything the UI does goes through the HTTP API (`/api/recordings`,
-`/api/workspaces`, `/api/jobs`, `/api/stages`, and the viewer's `/api/state`,
-`/api/run`, `/api/frame`, `/api/pose`, `/api/starts`), so a script can drive
-the same work; `/docs` is the generated OpenAPI page. The stdlib viewer,
+`/api/workspaces` with `/{name}/edits`, `/{name}/segment`, `/{name}/region`
+and `/{name}/candidates`, `/api/algorithms`, `/api/outcomes`, `/api/jobs`,
+`/api/stages`, and the viewer's `/api/state`, `/api/run`, `/api/frame`,
+`/api/pose`, `/api/starts`), so a script can drive the same work; `/docs` is
+the generated OpenAPI page. The stdlib viewer,
 `python -m worm_pose_gen.pose_viewer` (`worm-pose-viewer`), remains for
 looking at runs read-only without the job runner; it serves the same UI on
 the same default port, so run only one of the two or pass `--port`.

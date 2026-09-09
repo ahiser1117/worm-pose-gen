@@ -88,8 +88,8 @@ function showTab(name) {
     $(`#tabs button[data-tab="${tab}"]`).classList.toggle("active", tab === name);
   }
   writeStorage("poseViewer.tab", name);
-  // The recordings panel wants room; widen a narrow sidebar once.
-  if (name === "data" && !layout.collapsed.left && layout.sizes.left < 420) { layout.sizes.left = 460; applyLayout(); saveLayout(); }
+  // The recordings and pipeline panels want room; widen a narrow sidebar once.
+  if ((name === "data" || name === "pipeline") && !layout.collapsed.left && layout.sizes.left < 420) { layout.sizes.left = 460; applyLayout(); saveLayout(); }
   if (name === "data" && !state.recordings.length) loadRecordings(false);
 }
 
@@ -525,6 +525,7 @@ function stageInfo(name) { return (state.stages || []).find((s) => s.name === na
 function jobStage(job) {
   const spec = job.spec || {};
   const params = spec.params || {};
+  if (spec.kind === "region") return `region ${params.algorithm || spec.algorithm || ""}`.trim();
   return spec.stage || params.stage || (spec.label || "").split(/[ :]/)[0] || spec.kind;
 }
 
@@ -737,13 +738,19 @@ async function loadJobs() {
   renderJobs();
   renderJobsBadge();
   if (state.stages) for (const stage of state.stages) renderStageMeta(stage.name);
+  if (typeof renderCandidateJobs === "function") renderCandidateJobs();
   tickChain();
   // The interval follows what is running now, so a job submitted while idle is polled at once.
   scheduleJobsPoll();
   await refreshLogs();
-  // A job that just finished on the current workspace: show its results.
-  if (finished.some((j) => j.state === "done" && (j.spec || {}).workspace && isWorkspace() && j.spec.workspace === state.runName)) {
-    setStatus(`${finished.map((j) => jobStage(j)).join(", ")} finished on ${state.runName}; refreshing`, "ok");
+  // A job that just finished on the current workspace: show its results; one that failed or was cancelled: say so.
+  const mine = finished.filter((j) => (j.spec || {}).workspace && isWorkspace() && j.spec.workspace === state.runName);
+  const broken = mine.filter((j) => j.state === "failed" || j.state === "cancelled");
+  if (broken.length) {
+    setStatus(broken.map((j) => `${jobStage(j)} ${j.id} ${j.state}${j.error || j.message ? `: ${j.error || j.message}` : ""}`).join(" · "), "error");
+  }
+  if (mine.some((j) => j.state === "done")) {
+    if (!broken.length) setStatus(`${mine.filter((j) => j.state === "done").map((j) => jobStage(j)).join(", ")} finished on ${state.runName}; refreshing`, "ok");
     await reloadSource();
   }
   if (finished.length) refreshCatalog().catch(() => {});
@@ -874,6 +881,7 @@ function onSourceChanged() {
   renderStages();
   renderJobs();
   if (state.recording) renderRecordingDetail();
+  if (typeof regionsOnSourceChanged === "function") regionsOnSourceChanged();
 }
 
 function initPanels() {
@@ -902,5 +910,6 @@ function initPanels() {
   $("#jobs-mine").addEventListener("change", renderJobs);
   $("#jobs-refresh").addEventListener("click", () => loadJobs());
   loadStages();
+  if (typeof initRegions === "function") initRegions();
   loadJobs().catch(() => {}).then(scheduleJobsPoll);
 }

@@ -66,6 +66,12 @@ function renderLegend() {
     if (l.id === "starts" && !state.starts) continue;
     if (l.id.startsWith("hyp_") && !(state.frame && state.frame.pose && state.frame.pose.hypotheses && state.frame.pose.hypotheses.some((h) => h.source === l.id.slice(4)))) continue;
     if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.prediction_xy)) continue;
+    if (l.id === "cand_a" || l.id === "cand_b") {
+      // Phase 3: the slot's legend entry names the shown set (regions.js).
+      const text = typeof candidateSetLegendText === "function" ? candidateSetLegendText(l.id) : null;
+      if (text) parts.push(`<span><span class="swatch" style="background:rgb(${l.color.join(",")})"></span>${escapeHtml(text)}</span>`);
+      continue;
+    }
     if (l.id === "residual") { parts.push(`<span><span class="swatch" style="background:rgb(40,80,255)"></span>mask missed</span><span><span class="swatch" style="background:rgb(255,50,50)"></span>tube extra</span>`); continue; }
     parts.push(`<span><span class="swatch" style="background:rgb(${l.color.join(",")})"></span>${l.name.replace(/ \(.*\)$/, "")}</span>`);
   }
@@ -194,6 +200,8 @@ function draw() {
       drawCurve(state.comparePose.pose.centerline_xy, `rgb(${cmp.color.join(",")})`, 2, [3, 4], cmp.alpha);
       drawEnds(state.comparePose.pose.centerline_xy, `rgb(${cmp.color.join(",")})`);
     }
+    // Phase 3: the chosen candidates of the shown candidate sets, under the centerline.
+    if (typeof drawCandidateSetOverlays === "function") drawCandidateSetOverlays();
     if (layer("width_ticks").on && pose.width_profile) drawWidthTicks(pose.centerline_xy, pose.width_profile, "rgba(255,80,165,0.9)");
     const line = layer("centerline");
     if (line.on && pose.centerline_xy) {
@@ -224,11 +232,11 @@ function renderCaption() {
     parts.push(`IoU ${fmt(s.iou)}`);
     if (s.iou_independent !== undefined && s.source) parts.push(`(indep ${fmt(s.iou_independent)})`);
     parts.push(`len ${fmt(s.body_length_px, 0)} px`, `width ${fmt(s.width_px, 1)} px`, `in view ${fmt(s.in_view_fraction, 2)}`);
-    if (s.source_name && s.source_name !== "independent") parts.push(s.source_name);
+    const prov = frameProvenance(f);
+    if (prov && prov.algorithm) parts.push(shortAlgorithm(prov.algorithm) + (prov.edit ? " ✎" : ""));
+    else if (s.source_name && s.source_name !== "independent") parts.push(s.source_name);
     if (s.ambiguity_score) parts.push(`score ${s.ambiguity_score}`);
   } else parts.push("no fit");
-  const prov = frameProvenance(f);
-  if (prov && prov.algorithm) parts.push(prov.algorithm);
   if (f.threshold !== undefined && f.threshold !== state.run.threshold) parts.push(`threshold ${f.threshold} (override)`);
   $("#caption").textContent = parts.join("  ");
 }
@@ -249,7 +257,7 @@ function frameProvenance(f) {
   const arrays = state.run && state.run.provenance;
   if (arrays && Array.isArray(arrays.algorithm) && f.stats && f.stats.row !== undefined) {
     const r = f.stats.row;
-    return { algorithm: arrays.algorithm[r], job: arrays.job ? arrays.job[r] : undefined, time: arrays.time ? arrays.time[r] : undefined };
+    return { algorithm: arrays.algorithm[r], job: arrays.job ? arrays.job[r] : undefined, time: arrays.time ? arrays.time[r] : undefined, edited: arrays.edited ? !!arrays.edited[r] : undefined };
   }
   const series = state.run && state.run.series;
   if (series && series.provenance_algorithm && f.stats && f.stats.row !== undefined) {
@@ -287,15 +295,14 @@ function renderDetails() {
     rows.push(row("job / edit", escapeHtml(prov.job || "–"), "wrap"));
     rows.push(row("time", escapeHtml(fmtTime(prov.time))));
     if (prov.params) rows.push(row("params", escapeHtml(JSON.stringify(prov.params))));
+    const edit = prov.edit;
+    if (edit) rows.push(row("edit", `${escapeHtml(edit.id)} · ${escapeHtml(editLabel(edit))}${edit.note ? " — " + escapeHtml(edit.note) : ""} · ${escapeHtml(fmtTime(edit.time))}`, "wrap edited"));
+    else if (prov.edited) rows.push(row("edit", "touched by a manual edit", "edited"));
+    else if (edit === null && isWorkspace()) rows.push(row("edit", "none", "dim"));
   }
   if (f.pose && f.pose.hypotheses) {
     const path = f.pose.path || {};
-    rows.push(section(`hypotheses (6c) · ${f.pose.hypotheses.length} candidates${path.mirrored ? " · chosen mirrored" : ""}`));
-    const ranked = f.pose.hypotheses.slice().sort((a, b) => a.energy - b.energy);
-    for (const h of ranked) {
-      const label = `${h.chosen ? "✓ " : ""}${h.source}${h.source === "independent" ? "" : " #" + (h.beam + 1)}`;
-      rows.push(row(label, `E ${fmt(h.energy, 4)} · IoU ${fmt(h.iou)} · ${(h.start || "").replace(/_(forward|backward)$/, "").replace("independent_refit", "refit")}`, h.chosen ? "" : "dim"));
-    }
+    rows.push(section(`path (6c) · ${f.pose.hypotheses.length} candidates${path.mirrored ? " · chosen mirrored" : ""}`));
     rows.push(row("path", path.override ? `overrode lowest energy by ${fmt(path.energy_gap, 4)}` : "lowest energy", path.override ? "diff" : ""));
     rows.push(row("distance to prediction", f.pose.prediction_distance_px === null || f.pose.prediction_distance_px === undefined ? "–" : `${fmt(f.pose.prediction_distance_px, 1)} px`));
   }
@@ -349,6 +356,9 @@ function renderDetails() {
   drawWidthChart();
   drawCurvatureChart();
   renderLayerAvailability();
+  renderHypothesesTable();
+  renderSegmentInfo();
+  if (typeof renderFrameCandidateSets === "function") renderFrameCandidateSets();
 }
 
 // ---------------------------------------------------------------- small charts
@@ -476,7 +486,7 @@ function renderLayerAvailability() {
   const pose = state.frame && state.frame.pose;
   if (state.frame && state.frame.detail === "light") {
     const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);
-    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy };
+    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy, cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1] };
     for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
@@ -489,6 +499,7 @@ function renderLayerAvailability() {
     hyp_backward: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "backward")),
     hyp_independent: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "independent")),
     prediction: !!(pose && pose.prediction_xy),
+    cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1],
   };
   for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", available[node.dataset.layer] === false);
 }

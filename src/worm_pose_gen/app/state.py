@@ -17,7 +17,7 @@ import torch
 
 from ..jobs import JobRunner, LocalGPUBackend
 from ..pose_viewer import ViewerState
-from ..pipeline import workspace_dataset
+from ..pipeline import WorkspaceBusy, workspace_dataset
 from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
 from ..workspace import Workspace, list_workspaces
 from .config import AppConfig
@@ -291,6 +291,31 @@ class AppState:
         if self.is_run(name):
             return self.viewer.starts_payload(name, frame, threshold)
         return self.view(name).starts(frame, self.viewer.segmenters, threshold, self.device)
+
+    # --------------------------------------------------------------------- edits
+
+    def check_writable(self, name: str) -> None:
+        """``WorkspaceBusy`` (a 409) when a job is running on workspace ``name``: an edit made now would land on arrays the job is rewriting.
+
+        The job's process holds the workspace lock for its whole run, so
+        without this check an edit would wait for it (minutes to hours) and
+        then apply a stale intention; the lock's own timeout covers writers
+        this server does not know about.
+        """
+
+        running = [r for r in self.runner.list("running") if r.spec.workspace == name]
+        if running:
+            job = running[0]
+            raise WorkspaceBusy(f"job {job.id} ({job.spec.label or job.spec.kind}) is writing workspace {name}; wait for it to finish or cancel it")
+
+    def apply_edit(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Apply one manual edit to a workspace (``WorkspaceView.edit``); runs are read-only and cannot be edited, a workspace with a running job is busy (409)."""
+
+        if not self.has_workspace(name) and self.is_run(name):
+            raise ValueError(f"{name!r} is a run directory; import it as a workspace to edit it")
+        view = self.view(name)
+        self.check_writable(name)
+        return view.edit(payload, self.viewer.segmenters, self.device)
 
     def state_payload(self, rescan: bool = False) -> dict[str, Any]:
         added = self.viewer.rescan() if rescan else 0

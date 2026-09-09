@@ -67,6 +67,11 @@
             <button data-jump="jump:1" type="button" title="next pose jump flag">jump ▶</button>
             <button data-jump="edge:1" type="button" title="next edge frame">edge ▶</button>
           </span>
+          <span class="row wrap">
+            <button data-jump="provenance:-1" type="button" title="previous frame with this provenance">◀ prov.</button>
+            <button data-jump="provenance:1" type="button" title="next frame with this provenance">prov. ▶</button>
+            <select id="jump-provenance" title="Provenance: the algorithm that produced the frame's pose, or frames a manual edit touched" style="flex:1 1 auto;width:auto"><option value="manual">manual edits</option></select>
+          </span>
           <label>Worst frames <select id="worst"></select></label>
         </section>
 
@@ -93,6 +98,16 @@
           </span>
           <div id="note-list" class="list"></div>
           <div id="notes-path" class="note"></div>
+        </section>
+
+        <section class="group">
+          <h3>Edits <small id="edits-count"></small></h3>
+          <span class="row">
+            <button id="edit-undo" type="button" title="undo the newest edit (Ctrl+Z / Cmd+Z)" disabled>Undo</button>
+            <button id="edits-refresh" type="button" title="re-read the edit log">↻</button>
+            <span class="note">newest first · click an entry to go to its frames</span>
+          </span>
+          <div id="edits-list" class="list edits"></div>
         </section>
       </div>
 
@@ -172,6 +187,53 @@
           </span>
           <div id="chain" class="chain" hidden></div>
         </section>
+        <section class="group" id="regions-section">
+          <h3>Regions <small id="region-target"></small></h3>
+          <span class="row wrap">
+            <button id="region-propose" type="button" title="the propagation stretch around the current frame (padded), with proposed anchors">Use current stretch</button>
+            <button id="region-around" type="button" title="ten frames either side of the current frame">Around frame</button>
+            <button id="region-anchors" type="button" title="propose anchors for the frames typed below: the nearest clean rows outside the region">Anchors</button>
+            <button id="region-clear" type="button" title="clear the region">Clear</button>
+          </span>
+          <div class="form-grid region-grid">
+            <label>first frame <input id="region-first" type="number" step="1" placeholder="frame"></label>
+            <label>last frame <input id="region-last" type="number" step="1" placeholder="frame"></label>
+            <label>anchor before <input id="region-anchor-before" type="number" step="1" placeholder="none"></label>
+            <label>anchor after <input id="region-anchor-after" type="number" step="1" placeholder="none"></label>
+          </div>
+          <div id="region-info" class="note"></div>
+          <label>algorithm <select id="region-algorithm"></select></label>
+          <div id="region-algorithm-help" class="note"></div>
+          <div id="region-params" class="stage-form region-params"></div>
+          <span class="row">
+            <button id="region-run" type="button" class="primary" disabled>Run on region</button>
+            <span id="region-run-note" class="note"></span>
+          </span>
+        </section>
+        <section class="group" id="candidates-section">
+          <h3>Candidate sets <small id="candidates-count"></small></h3>
+          <span class="row">
+            <span class="note">Show overlays a set's chosen candidates (A, B); Accept installs its path.</span>
+            <button id="candidates-refresh" type="button" title="re-read the candidate sets">↻</button>
+          </span>
+          <div id="candidates-jobs"></div>
+          <div id="candidates"></div>
+          <div id="comparison" class="comparison" hidden></div>
+        </section>
+        <section class="group" id="outcomes-section">
+          <h3>Outcomes <small id="outcomes-count"></small></h3>
+          <span class="row">
+            <select id="outcomes-algorithm" title="filter by algorithm"><option value="">all algorithms</option></select>
+            <label class="inline"><input id="outcomes-mine" type="checkbox" checked> this workspace</label>
+            <button id="outcomes-refresh" type="button" title="refresh">↻</button>
+          </span>
+          <div class="table-wrap outcomes-wrap">
+            <table id="outcomes" class="outcomes">
+              <thead><tr><th>time</th><th>algorithm</th><th>frames</th><th class="num" title="median IoU before → after">IoU</th><th class="num" title="frames below IoU 0.9 before → after">&lt;0.9</th><th class="num" title="pose jumps over a width · length jumps over 3% before → after">jumps</th><th class="num" title="orientation flips before → after">flips</th><th title="accepted into the workspace">acc.</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
         <section class="group">
           <h3>Jobs <small id="jobs-summary"></small></h3>
           <span class="row">
@@ -191,8 +253,8 @@
       </div>
 
       <div id="status" class="status"></div>
-      <p class="hint">Wheel: zoom · drag: pan · click timeline: seek · wheel on timeline: zoom range · double-click timeline: reset.
-        Keys: ←/→ ±1 (Shift ±10, Ctrl ±100) · Space play · [ ] flagged · , . low IoU · 1–9 layers · F raw · 0 fit · N note.</p>
+      <p class="hint">Wheel: zoom · drag: pan · click timeline: seek · Shift+drag timeline: select a region · wheel on timeline: zoom range · double-click timeline: reset.
+        Keys: ←/→ ±1 (Shift ±10, Ctrl ±100) · Space play · [ ] flagged · , . low IoU · 1–9 layers · F raw · 0 fit · N note · Ctrl+Z undo edit.</p>
     </aside>
 
     <div id="split-left" class="splitter v" title="drag to resize · double-click to reset"><button type="button">◂</button></div>
@@ -210,7 +272,21 @@
       <div id="tags" class="tags"></div>
       <section class="group">
         <h3>Frame statistics</h3>
+        <span class="row wrap edit-actions">
+          <button id="flip-frame" type="button" title="reverse head and tail of this frame's pose" disabled>Flip frame</button>
+          <button id="flip-segment" type="button" title="reverse head and tail over the segment" disabled>Flip segment</button>
+          <span id="segment-info" class="note"></span>
+        </span>
         <table id="stats" class="stats"></table>
+      </section>
+      <section class="group" id="hypotheses-section" hidden>
+        <h3>Hypotheses (6c) <small id="hypotheses-head"></small></h3>
+        <table id="hypotheses" class="stats hypotheses"></table>
+        <div id="hypotheses-note" class="note"></div>
+      </section>
+      <section class="group" id="frame-candidates-section" hidden>
+        <h3>Candidate sets on this frame <small id="frame-candidates-head"></small></h3>
+        <div id="frame-candidates" class="list frame-candidates"></div>
       </section>
       <section class="group">
         <h3>Ambiguity flags</h3>
@@ -246,6 +322,7 @@
         <label class="inline"><input id="show-compare" type="checkbox" checked> compare run</label>
         <button id="timeline-toggle" type="button" title="collapse / expand the timeline">▾</button>
       </div>
+      <div id="provenance-legend" class="prov-legend" hidden></div>
       <div id="charts"></div>
     </footer>
   </div>
@@ -253,7 +330,9 @@
   <script src="/static/layers.js"></script>
   <script src="/static/charts.js"></script>
   <script src="/static/viewer.js"></script>
+  <script src="/static/edits.js"></script>
   <script src="/static/panels.js"></script>
+  <script src="/static/regions.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

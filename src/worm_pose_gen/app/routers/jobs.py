@@ -1,9 +1,12 @@
-"""The job queue: submit a stage over a workspace, list, inspect, cancel, read logs; the stage parameter schemas.
+"""The job queue: submit a stage or a region run over a workspace, list, inspect, cancel, read logs; the stage parameter schemas.
 
-A stage job's command comes from ``pipeline.stage_command`` so the process
-that runs it is the same ``python -m worm_pose_gen.pipeline`` a script would
-start; the runner adds ``WORM_POSE_PROGRESS_FILE`` and ``WORM_POSE_JOB_ID``
-to its environment, which is how progress and provenance find their way back.
+A stage job's command comes from ``pipeline.stage_command`` and a region
+job's (``kind: region``: an algorithm of the registry on frames between two
+anchors, Phase 3) from ``pipeline.region_command``, so the process that runs
+it is the same ``python -m worm_pose_gen.pipeline`` a script would start; the
+runner adds ``WORM_POSE_PROGRESS_FILE`` and ``WORM_POSE_JOB_ID`` to its
+environment, which is how progress and provenance find their way back (a
+region job names its candidate set after the job id).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from fastapi import APIRouter, Body, Depends
 from . import get_state
 from ... import pipeline
 from ...jobs import STATES, JobRecord, JobSpec
+from .. import regions
 from ..state import AppState, NotFound
 
 router = APIRouter(prefix="/api")
@@ -62,10 +66,12 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
         spec, command = stage_job(app, payload, str(payload.get("stage") or ""))
     elif kind == "export":
         spec, command = stage_job(app, payload, "export")
+    elif kind == regions.REGION_JOB_KIND:
+        spec, command = regions.region_job(app.view(str(payload.get("workspace") or "")), payload)
     elif kind == "command":
         spec, command = command_job(payload)
     else:
-        raise ValueError(f"unknown job kind {kind!r}; expected stage, export or command")
+        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region or command")
     return app.runner.submit(spec, command).to_dict()
 
 

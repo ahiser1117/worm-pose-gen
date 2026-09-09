@@ -31,6 +31,9 @@ const LAYERS = [
   { id: "compare", name: "Compare run pose", kind: "vector", on: true, alpha: 1.0, color: [255, 170, 60] },
   { id: "starts", name: "Fitter starts (press Starts)", kind: "vector", on: true, alpha: 0.9, color: [120, 255, 255] },
   { id: "crop", name: "Crop window", kind: "vector", on: false, alpha: 0.8, color: [150, 150, 150] },
+  // Phase 3: the chosen candidates of up to two shown candidate sets (regions.js fills the names in).
+  { id: "cand_a", name: "Candidate set A", kind: "vector", on: true, alpha: 1.0, color: [0, 220, 255] },
+  { id: "cand_b", name: "Candidate set B", kind: "vector", on: true, alpha: 1.0, color: [255, 110, 40] },
 ];
 
 const NOTE_TAGS = ["coil", "edge", "fragment", "orientation", "length", "jump", "segmentation", "propagation", "good example", "other"];
@@ -97,6 +100,23 @@ const state = {
   jobStates: new Map(),  // job id -> last seen state, to notice transitions
   openLogs: new Set(),   // job ids whose log viewer is expanded
   chain: null,           // {workspace, queue: [stage], current: jobId | null}
+  // Phase 2 edits.
+  edits: [],             // list_edits entries of the current workspace, newest first
+  editsError: null,
+  segments: new Map(),   // row -> /segment payload ({frames, rows, in_stretch}) of the current workspace
+  // Phase 3 regions.
+  algorithms: null,      // /api/algorithms entries [{id, label, scope, description, parameters}]
+  algorithmsError: null,
+  algorithm: null,       // selected algorithm id
+  regionParams: {},      // algorithm id -> {param: value} as edited in the form
+  region: null,          // {first, last, anchor_before, anchor_after, reason} in ROWS of the current source
+  rangeSelect: null,     // Shift+drag in progress on a timeline chart: {anchor, current} rows
+  candidateSets: [],     // list entries of the workspace's candidate sets, newest first
+  candidateSetsError: null,
+  candidateDetails: new Map(),  // set id -> normalised detail payload (per-row candidates and path)
+  shownSets: [null, null],      // set ids in the overlay slots A and B
+  outcomes: [],
+  outcomesError: null,
 };
 
 let toastTimer = null;

@@ -490,6 +490,33 @@ class IndependentCopyTests(unittest.TestCase):
         del arrays["latent_independent"]
         self.assertEqual(restore_independent_rows(arrays, algorithm), [])
 
+    def test_placed_rows_and_split_stretches_keep_manual_poses_out_of_a_pass(self) -> None:
+        config = BatchFitConfig()
+        arrays = new_arrays(np.arange(8), config)
+        arrays["fitted"][:] = True
+        arrays["fitted"][7] = False
+        algorithm = np.array(["independent_fit", "manual:pick", "chain_forward", "manual:flip", "mirror", "track_length_refit", "", "manual:pick"])
+        placed = pipeline.placed_rows(arrays, algorithm)
+        # Picks, flips and accepted region runs are placed; the stages' rows and unfitted rows are not.
+        self.assertEqual(placed.tolist(), [False, True, False, True, True, False, False, False])
+        self.assertEqual(pipeline.split_stretches([(0, 6)], placed), [(0, 0), (2, 2), (5, 6)])
+        self.assertEqual(pipeline.split_stretches([(1, 1), (3, 4)], placed), [])
+        self.assertEqual(pipeline.split_stretches([(5, 7)], placed), [(5, 7)])
+        self.assertEqual(pipeline.split_stretches([(0, 2), (4, 6)], None), [(0, 2), (4, 6)])
+        # The kept rows' hypotheses come over into the pass's fresh arrays, slots permitting.
+        old = pipeline.empty_hypotheses(8, config, 2)
+        old["hypotheses_count"][1] = 5
+        old["hypotheses_energy"][1, :5] = np.arange(5)
+        old["hypotheses_source"][1, :5] = "forward"
+        old["path_index"][1] = 4
+        fresh = pipeline.empty_hypotheses(8, config, 1)
+        pipeline.keep_hypotheses(fresh, old, [1])
+        self.assertEqual(int(fresh["hypotheses_count"][1]), 3)
+        self.assertEqual(fresh["hypotheses_energy"][1].tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(fresh["hypotheses_source"][1].tolist(), ["forward"] * 3)
+        self.assertEqual(int(fresh["path_index"][1]), 4)
+        self.assertEqual(int(fresh["hypotheses_count"][2]), 0)
+
 
 class ExportTableTests(unittest.TestCase):
     def test_kinematics_from_synthetic_arrays(self) -> None:
@@ -516,3 +543,151 @@ class ExportTableTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HypothesisArrayTests(unittest.TestCase):
+    """The richer hypotheses arrays (Phase 2): every name, its shape, blanking, and what a propagate pass stores."""
+
+    def test_empty_hypotheses_has_every_array_with_the_contract_shapes(self) -> None:
+        config = BatchFitConfig()
+        empty = pipeline.empty_hypotheses(7, config, beam=2)
+        self.assertEqual(set(empty), set(pipeline.HYPOTHESIS_ARRAYS))
+        H = 1 + 2 * 2
+        self.assertEqual(empty["hypotheses_latent"].shape, (7, H, config.coefficients + 4))
+        self.assertEqual(empty["hypotheses_width_px"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_width_shape"].shape, (7, H, config.width_coefficients))
+        self.assertEqual(empty["hypotheses_width_profile"].shape, (7, H, config.n_points))
+        self.assertEqual(empty["hypotheses_body_length_px"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_points_in_fov"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_crop"].shape, (7, H, 4))
+        self.assertEqual(empty["hypotheses_soft_dice"].shape, (7, H))
+        for key in ("hypotheses_latent", "hypotheses_width_px", "hypotheses_width_shape", "hypotheses_width_profile", "hypotheses_body_length_px", "hypotheses_soft_dice"):
+            self.assertTrue(np.isnan(empty[key]).all(), key)
+        self.assertEqual(empty["hypotheses_points_in_fov"].dtype, np.int64)
+        self.assertEqual(empty["hypotheses_crop"].dtype, np.int64)
+        self.assertFalse(empty["hypotheses_points_in_fov"].any())
+        self.assertFalse(empty["hypotheses_crop"].any())
+
+    def test_blank_hypotheses_blanks_the_richer_arrays_too(self) -> None:
+        class _Store:
+            def __init__(self, arrays: dict[str, np.ndarray]) -> None:
+                self.arrays = arrays
+
+            def load_hypotheses(self) -> dict[str, np.ndarray]:
+                return self.arrays
+
+            def save_hypotheses(self, arrays: dict[str, np.ndarray]) -> None:
+                self.arrays = arrays
+
+        config = BatchFitConfig()
+        arrays = pipeline.empty_hypotheses(4, config, beam=1)
+        for row in (1, 2):
+            arrays["hypotheses_count"][row] = 1
+            arrays["hypotheses_latent"][row, 0] = 1.0
+            arrays["hypotheses_width_px"][row, 0] = 9.0
+            arrays["hypotheses_crop"][row, 0] = (1, 2, 3, 4)
+            arrays["hypotheses_points_in_fov"][row, 0] = 100
+            arrays["hypotheses_soft_dice"][row, 0] = 0.1
+        store = _Store(arrays)
+        pipeline.blank_hypotheses(store, [2], config)
+        blanked = store.arrays
+        self.assertEqual(blanked["hypotheses_count"].tolist(), [0, 1, 0, 0])
+        self.assertTrue(np.isnan(blanked["hypotheses_latent"][2]).all())
+        self.assertFalse(np.isnan(blanked["hypotheses_latent"][1, 0]).any())
+        self.assertTrue(np.isnan(blanked["hypotheses_soft_dice"][2]).all())
+        self.assertFalse(blanked["hypotheses_crop"][2].any())
+        self.assertEqual(blanked["hypotheses_crop"][1, 0].tolist(), [1, 2, 3, 4])
+        self.assertFalse(blanked["hypotheses_points_in_fov"][2].any())
+
+    def test_propagate_stores_the_candidates_fields_and_a_pick_reuses_them(self) -> None:
+        # A forced stretch around row 3 makes the pass produce real candidates on the synthetic recording.
+        from worm_pose_gen import edits
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "rec.h5"
+            _write_recording(recording)
+            workspace = Workspace.create(root / "workspaces", "stretch", recording, 0, FRAMES - 1)
+            run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
+            run_stage(workspace, "fit", FIT_PARAMS, device="cpu", job="jfit")
+            run_stage(workspace, "ambiguity", {}, device="cpu")
+            # The pass recomputes the scores from the stored poses, so the ambiguity has to be real:
+            # a pose shifted by two body widths with a poor stored overlap trips low_iou and pose_jump.
+            state = workspace.load_state()
+            state["centerline_xy"][3, :, 0] += 25.0
+            state["latent"][3, -2] += 25.0
+            state["iou"][3] = 0.5
+            workspace.save_state(state)
+            result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1, "propagate_preset": "fast"}, device="cpu", job="jprop")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
+            hyps = workspace.load_hypotheses()
+            for key in pipeline.HYPOTHESIS_ARRAYS:
+                self.assertIn(key, hyps)
+            state = workspace.load_state()
+            config = workspace_setup(workspace).config
+            for row in (2, 3, 4):
+                count = int(hyps["hypotheses_count"][row])
+                self.assertGreater(count, 0)
+                for j in range(count):
+                    latent = hyps["hypotheses_latent"][row, j]
+                    self.assertTrue(np.isfinite(latent).all())
+                    np.testing.assert_allclose(decode_centerline(latent, config.coefficients), hyps["hypotheses_centerline_xy"][row, j], atol=1e-3)
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_px"][row, j]))
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_shape"][row, j]).all())
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_profile"][row, j]).all())
+                    self.assertGreater(float(hyps["hypotheses_body_length_px"][row, j]), 0.0)
+                    self.assertGreater(int(hyps["hypotheses_points_in_fov"][row, j]), 0)
+                    x0, x1, y0, y1 = hyps["hypotheses_crop"][row, j].tolist()
+                    self.assertTrue(0 <= x0 < x1 <= WIDTH and 0 <= y0 < y1 <= HEIGHT)
+                    self.assertTrue(np.isfinite(hyps["hypotheses_soft_dice"][row, j]))
+                    self.assertLessEqual(float(hyps["hypotheses_soft_dice"][row, j]), float(hyps["hypotheses_energy"][row, j]) + 1e-9)
+                # Slots beyond the count stay blank.
+                self.assertTrue(np.isnan(hyps["hypotheses_latent"][row, count:]).all())
+                self.assertFalse(hyps["hypotheses_crop"][row, count:].any())
+                # The path's choice is what the state holds (the path did not mirror a symmetric body's candidates).
+                chosen = int(hyps["path_index"][row])
+                self.assertGreaterEqual(chosen, 0)
+                if not hyps["path_mirrored"][row]:
+                    np.testing.assert_allclose(state["latent"][row], hyps["hypotheses_latent"][row, chosen], atol=1e-9)
+                    self.assertEqual(float(state["width_px"][row]), float(hyps["hypotheses_width_px"][row, chosen]))
+                    self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, chosen].tolist())
+                    self.assertEqual(float(state["energy"][row]), float(hyps["hypotheses_soft_dice"][row, chosen]))
+            # A manual pick of another candidate writes exactly the stored fields, and undo puts the path's choice back.
+            row = 3
+            before = {k: v[row].copy() for k, v in workspace.load_arrays().items() if v.ndim >= 1 and v.shape[0] == FRAMES}
+            other = next(j for j in range(int(hyps["hypotheses_count"][row])) if j != int(hyps["path_index"][row]))
+            edit = edits.pick_hypothesis(workspace, row, other)
+            state = workspace.load_state()
+            np.testing.assert_array_equal(state["latent"][row], hyps["hypotheses_latent"][row, other])
+            np.testing.assert_array_equal(state["centerline_xy"][row], hyps["hypotheses_centerline_xy"][row, other])
+            np.testing.assert_array_equal(state["width_profile"][row], hyps["hypotheses_width_profile"][row, other])
+            self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, other].tolist())
+            self.assertEqual(int(state["points_in_fov"][row]), int(hyps["hypotheses_points_in_fov"][row, other]))
+            self.assertEqual(int(workspace.load_hypotheses()["path_index"][row]), other)
+            self.assertEqual(str(workspace.load_provenance()["algorithm"][row]), "manual:pick")
+            edits.undo(workspace, edit.edit_id)
+            after = workspace.load_arrays()
+            for key, value in before.items():
+                if key.startswith(("hypotheses_", "prediction_")) or key in ("ambiguity_score",):
+                    continue
+                np.testing.assert_array_equal(after[key][row], value, err_msg=key)
+            self.assertEqual(str(workspace.load_provenance()["job"][row]), "jprop")
+            # A pick that stands when the pass runs again is kept: the row anchors the stretch's two halves,
+            # its hypotheses and provenance survive, and the edit log still describes what is in the arrays.
+            edit = edits.pick_hypothesis(workspace, row, other)
+            picked = workspace.load_state()
+            result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1, "propagate_preset": "fast"}, device="cpu", job="jprop2")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 2], [4, 4]])
+            state = workspace.load_state()
+            np.testing.assert_array_equal(state["centerline_xy"][row], picked["centerline_xy"][row])
+            np.testing.assert_array_equal(state["latent"][row], picked["latent"][row])
+            provenance = workspace.load_provenance()
+            self.assertEqual((str(provenance["algorithm"][row]), str(provenance["job"][row])), ("manual:pick", f"edit:{edit.edit_id}"))
+            self.assertEqual(str(provenance["job"][2]), "jprop2")
+            kept = workspace.load_hypotheses()
+            self.assertEqual(int(kept["hypotheses_count"][row]), int(hyps["hypotheses_count"][row]))
+            self.assertEqual(int(kept["path_index"][row]), other)
+            np.testing.assert_array_equal(kept["hypotheses_centerline_xy"][row], hyps["hypotheses_centerline_xy"][row])
+            self.assertEqual(pipeline.read_summary(workspace)["propagation"]["fixed_rows"], 1)
+            self.assertTrue(edits.edited_rows(workspace, FRAMES)[row])
+            self.assertEqual(edits.edit_of_row(workspace, row)["id"], edit.edit_id)

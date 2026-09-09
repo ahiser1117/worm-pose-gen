@@ -15,6 +15,8 @@ function chartSpecs() {
     { id: "flags", label: "Flags", height: 9 * 10 + 2, raster: true },
     { id: "strip", label: "Class · source", height: 20, strip: true },
   ];
+  // Which algorithm produced each row (workspaces carry provenance; runs do not).
+  if (run.provenance && run.provenance.index) specs.push({ id: "provenance", label: "Provenance", height: 14, provenance: true });
   return specs;
 }
 
@@ -27,6 +29,11 @@ function buildCharts() {
     for (const [key, label] of EXTRA_SERIES) { const o = document.createElement("option"); o.value = key; o.textContent = label; extra.appendChild(o); }
     extra.value = state.extra;
   }
+  // The canvases a drag or a Shift+drag was captured on are gone with the rebuild
+  // (a job finished, the source reloaded): forget the gesture, or the next plain
+  // click would finish it as a range on the new canvases.
+  state.rangeSelect = null;
+  state.timeline.dragging = false;
   if (!state.run) return;
   for (const spec of chartSpecs()) {
     const label = document.createElement("div");
@@ -36,9 +43,26 @@ function buildCharts() {
     node.dataset.height = spec.height;
     node.style.height = `${spec.height}px`;
     container.appendChild(label); container.appendChild(node);
-    node.addEventListener("pointerdown", (event) => { state.timeline.dragging = true; node.setPointerCapture(event.pointerId); seekFromEvent(node, event); });
-    node.addEventListener("pointermove", (event) => { if (state.timeline.dragging) seekFromEvent(node, event); });
-    node.addEventListener("pointerup", () => { state.timeline.dragging = false; });
+    // Shift+drag selects a row range for a region run (regions.js); a plain drag scrubs.
+    node.addEventListener("pointerdown", (event) => {
+      node.setPointerCapture(event.pointerId);
+      if (event.shiftKey && typeof beginRangeSelection === "function") { beginRangeSelection(rowFromX(node, event.clientX)); return; }
+      state.timeline.dragging = true; seekFromEvent(node, event);
+    });
+    node.addEventListener("pointermove", (event) => {
+      if (state.rangeSelect) { updateRangeSelection(rowFromX(node, event.clientX)); return; }
+      if (state.timeline.dragging) seekFromEvent(node, event);
+    });
+    node.addEventListener("pointerup", (event) => {
+      if (state.rangeSelect) { endRangeSelection(rowFromX(node, event.clientX)); return; }
+      state.timeline.dragging = false;
+    });
+    for (const type of ["pointercancel", "lostpointercapture"]) {
+      node.addEventListener(type, () => {
+        if (state.rangeSelect) { state.rangeSelect = null; drawCharts(); }
+        state.timeline.dragging = false;
+      });
+    }
     node.addEventListener("wheel", (event) => { event.preventDefault(); zoomTimeline(node, event); }, { passive: false });
     node.addEventListener("dblclick", () => { state.timeline.start = 0; state.timeline.end = state.run.series.frame_index.length; drawCharts(); });
     state.charts.push({ spec, node, label });
@@ -107,6 +131,8 @@ function drawChartsNow() {
       c.fillStyle = "rgba(255,255,255,0.06)";
       c.fillRect(X(a) - colw / 2, 0, X(b) - X(a) + colw, h);
     }
+    // The region being set up (and a Shift+drag in progress) with its anchors, on every chart.
+    if (typeof drawRegionOnChart === "function") drawRegionOnChart(c, X, colw, h, start, end);
     if (spec.raster) {
       const names = Object.keys(series.flags || {});
       const rowh = (h - 2) / Math.max(1, names.length);
@@ -117,6 +143,16 @@ function drawChartsNow() {
         for (let i = start; i < end; i++) if (values[i]) c.fillRect(X(i) - colw / 2, 1 + k * rowh, Math.max(1, colw), rowh - 1);
       });
       label.innerHTML = names.map((nm) => `<div style="height:${rowh}px;line-height:${rowh}px;font-size:9px;overflow:hidden">${nm}</div>`).join("");
+    } else if (spec.provenance) {
+      // One colour per algorithm; a white tick marks rows a manual edit touched.
+      const prov = state.run.provenance;
+      const colors = prov.algorithms.map((id, k) => provenanceColor(id, k));
+      for (let i = start; i < end; i++) {
+        const k = prov.index[i];
+        c.fillStyle = k >= 0 ? colors[k] || "#888" : series.fitted[i] ? "#2a343c" : "#111";
+        c.fillRect(X(i) - colw / 2, 1, Math.max(1, colw), h - 2);
+        if (prov.edited[i]) { c.fillStyle = "rgba(255,255,255,0.95)"; c.fillRect(X(i) - colw / 2, 1, Math.max(1, colw), 3); }
+      }
     } else if (spec.strip) {
       const half = (h - 2) / 2;
       for (let i = start; i < end; i++) {
@@ -172,6 +208,8 @@ function drawChartsNow() {
         polyline(c, xs, series[l.key].slice(start, end).map((v) => (v === null ? null : Y(v))), l.color, l.dash, 1.2);
       }
       if (compare) polyline(c, xs, compare.slice(start, end).map((v) => (v === null ? null : Y(v))), "#ffaa3c", [3, 3], 1);
+      // Per-frame IoU of the shown candidate sets' chosen candidates.
+      if (spec.id === "iou" && typeof drawCandidateSetIou === "function") drawCandidateSetIou(c, xs, Y, start, end);
     }
     // Cursor.
     if (state.row >= start && state.row < end) {
@@ -196,7 +234,9 @@ function jump(kind, direction) {
     iou: (r) => series.fitted[r] && series.iou && series.iou[r] !== null && series.iou[r] < maxIou,
     jump: (r) => flags.pose_jump && flags.pose_jump[r],
     edge: (r) => series.fitted[r] && ((series.mask_on_border && series.mask_on_border[r]) || (series.points_in_fov && series.points_in_fov[r] < nPoints) || (flags.edge_inside && flags.edge_inside[r])),
+    provenance: provenanceJumpTest(),
   }[kind];
+  if (kind === "provenance" && !test) { setStatus("this source has no provenance (open it as a workspace)", "error"); return; }
   if (kind === "stretch") {
     const stretches = state.run.stretches || [];
     if (!stretches.length) { setStatus("no propagation stretches in this run", "error"); return; }

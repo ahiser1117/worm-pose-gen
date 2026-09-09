@@ -31,7 +31,9 @@ Stages and what they read and write:
 
 Each stage's parameters are a dataclass whose defaults match the script's
 flags; ``from_dict`` ignores unknown keys, so one parameter dict can drive
-every stage.  With ``checkpoint=None`` the segmenter is replaced by a
+every stage.  Besides the stages, the command line runs one region algorithm
+of ``worm_pose_gen.algorithms`` (``--region-run``, argv from
+``region_command``), which writes a candidate set rather than the state.  With ``checkpoint=None`` the segmenter is replaced by a
 threshold on dark pixels (below 128), which keeps the stages testable on a
 synthetic recording without the network.
 """
@@ -115,6 +117,10 @@ CANDIDATE_ALGORITHMS = {"independent": "independent_refit", "forward": "chain_fo
 TRACK_ALGORITHM = "track_length_refit"
 # Provenance of poses a propagation pass put in place of the independent fit.
 PROPAGATION_ALGORITHMS = tuple(CANDIDATE_ALGORITHMS.values())
+# Every provenance algorithm the stages themselves write.  A fitted row whose
+# algorithm is anything else (a manual pick or flip, an accepted region run)
+# was put there on purpose: a propagate pass keeps it and works around it.
+PIPELINE_ALGORITHMS = frozenset((*SOURCE_ALGORITHMS.values(), *PROPAGATION_ALGORITHMS, TRACK_ALGORITHM, ""))
 SUMMARY_FILE = "summary.json"
 WORKSPACE_LOCK_FILE = ".lock"
 # The per-frame arrays ``store_result`` writes, and the name each is kept
@@ -137,6 +143,18 @@ INDEPENDENT_COPIES = (
     ("best_start_independent", "best_start"),
 )
 BEST_START_DTYPE = "<U48"
+# Every array ``empty_hypotheses`` makes (and the propagate stage stores in
+# ``hypotheses.npz``).  Besides the candidates' centerlines and scores, each
+# candidate carries what a pick needs to become the frame's pose without a
+# refit (``worm_pose_gen.edits``): latent, widths, crop, in-view count and the
+# overlap energy without priors.  Older workspaces lack the ``hypotheses_``
+# arrays after ``hypotheses_beam``; ``edits.pose_from_hypothesis`` reconstructs them.
+HYPOTHESIS_ARRAYS = (
+    "hypotheses_centerline_xy", "hypotheses_energy", "hypotheses_iou", "hypotheses_source", "hypotheses_start",
+    "hypotheses_beam", "hypotheses_latent", "hypotheses_width_px", "hypotheses_width_shape", "hypotheses_width_profile",
+    "hypotheses_body_length_px", "hypotheses_points_in_fov", "hypotheses_crop", "hypotheses_soft_dice", "hypotheses_count",
+    "path_index", "path_mirrored", "path_override", "path_energy_gap", "path_cost", "prediction_xy", "prediction_distance_px",
+)
 
 Progress = Callable[[float, str], None]
 MaskArray = NDArray[np.bool_]
@@ -844,6 +862,14 @@ def empty_hypotheses(n: int, config: BatchFitConfig, beam: int) -> dict[str, np.
         "hypotheses_source": np.full((n, hypotheses), "", dtype="<U12"),
         "hypotheses_start": np.full((n, hypotheses), "", dtype="<U32"),
         "hypotheses_beam": np.full((n, hypotheses), -1, dtype=np.int8),
+        "hypotheses_latent": _nan((n, hypotheses, config.coefficients + 4)),
+        "hypotheses_width_px": _nan((n, hypotheses)),
+        "hypotheses_width_shape": _nan((n, hypotheses, config.width_coefficients)),
+        "hypotheses_width_profile": _nan((n, hypotheses, config.n_points)),
+        "hypotheses_body_length_px": _nan((n, hypotheses)),
+        "hypotheses_points_in_fov": np.zeros((n, hypotheses), dtype=np.int64),
+        "hypotheses_crop": np.zeros((n, hypotheses, 4), dtype=np.int64),
+        "hypotheses_soft_dice": _nan((n, hypotheses)),
         "hypotheses_count": np.zeros(n, dtype=np.int64),
         "path_index": np.full(n, -1, dtype=np.int64),
         "path_mirrored": np.zeros(n, dtype=bool),
@@ -853,6 +879,29 @@ def empty_hypotheses(n: int, config: BatchFitConfig, beam: int) -> dict[str, np.
         "prediction_xy": _nan((n, config.n_points, 2)),
         "prediction_distance_px": _nan((n,)),
     }
+
+
+def store_hypothesis(
+    hypotheses: dict[str, np.ndarray], row: int, index: int, result: MaskFitResult, source: str, start_name: str, beam: int, total_energy: float
+) -> None:
+    """Write one candidate into slot ``index`` of ``row``: the ``store_result`` fields plus where it came from."""
+
+    best = result.records[result.best_index]
+    hypotheses["hypotheses_centerline_xy"][row, index] = result.centerline_xy
+    hypotheses["hypotheses_energy"][row, index] = total_energy
+    hypotheses["hypotheses_iou"][row, index] = float(best["final_iou"])
+    hypotheses["hypotheses_source"][row, index] = source
+    hypotheses["hypotheses_start"][row, index] = start_name
+    hypotheses["hypotheses_beam"][row, index] = beam
+    hypotheses["hypotheses_latent"][row, index] = result.latent
+    hypotheses["hypotheses_width_px"][row, index] = result.width_px
+    if len(result.width_shape) == hypotheses["hypotheses_width_shape"].shape[2]:
+        hypotheses["hypotheses_width_shape"][row, index] = result.width_shape
+    hypotheses["hypotheses_width_profile"][row, index] = result.width_profile
+    hypotheses["hypotheses_body_length_px"][row, index] = result.body_length_px
+    hypotheses["hypotheses_points_in_fov"][row, index] = int(result.points_in_fov)
+    hypotheses["hypotheses_crop"][row, index] = (result.crop.x0, result.crop.x1, result.crop.y0, result.crop.y1)
+    hypotheses["hypotheses_soft_dice"][row, index] = float(best.get("final_soft_dice_energy", float("nan")))
 
 
 @dataclass
@@ -865,6 +914,32 @@ class PropagationOutcome:
     info: dict[str, Any]
 
 
+def split_stretches(stretches: Sequence[tuple[int, int]], fixed: NDArray[np.generic] | None) -> list[tuple[int, int]]:
+    """``stretches`` with the ``fixed`` rows cut out: a fixed row inside a stretch ends it and starts the next one after the row.
+
+    The fixed rows then bound the sub-stretches the way anchors bound a
+    stretch (the chains start from their poses), so a pose the user placed
+    is never refit and the frames around it follow it.
+    """
+
+    if fixed is None:
+        return [(int(a), int(b)) for a, b in stretches]
+    flags = np.asarray(fixed, dtype=bool)
+    out: list[tuple[int, int]] = []
+    for a, b in stretches:
+        start: int | None = None
+        for row in range(int(a), int(b) + 1):
+            if row < len(flags) and flags[row]:
+                if start is not None:
+                    out.append((start, row - 1))
+                start = None
+            elif start is None:
+                start = row
+        if start is not None:
+            out.append((start, int(b)))
+    return out
+
+
 def propagation_pass(
     arrays: dict[str, np.ndarray],
     masks_of: MasksOf,
@@ -874,12 +949,16 @@ def propagation_pass(
     *,
     image_shape: tuple[int, int] | None,
     progress: Progress | None = None,
+    fixed: NDArray[np.generic] | None = None,
 ) -> PropagationOutcome:
     """Plan steps 5, 6a-c on ``arrays`` in place: stretches, chains with prediction and beam, one path per stretch.
 
     Requires the ambiguity arrays (``ambiguity_score``, ``score_independent``)
     and the independent copies.  The chosen poses replace the stored ones,
     ``source`` records where each came from, and the ambiguity is recomputed.
+    Rows flagged in ``fixed`` (manual edits, accepted region runs) are never
+    refit: the stretches are cut around them (``split_stretches``) so they
+    anchor the chains instead.
     """
 
     config, template = setup.config, setup.template
@@ -899,7 +978,7 @@ def propagation_pass(
     # The independent fit's score seeds the stretches, so a rerun of the pass
     # finds the same stretches whatever the previous pass changed.
     seed_score = arrays["score_independent"] if "score_independent" in arrays else arrays["ambiguity_score"]
-    stretches = ambiguous_stretches(seed_score, arrays["fitted"], propagation, seeds)
+    stretches = split_stretches(ambiguous_stretches(seed_score, arrays["fitted"], propagation, seeds), fixed)
     stretch_rows = [row for a, b in stretches for row in range(a, b + 1)]
     # The anchors' masks too, for the chains' second starting state (anchor diversity).
     anchor_rows = [r for a, b in stretches for r in (a - 1, b + 1) if 0 <= r < n and arrays["fitted"][r]]
@@ -931,12 +1010,7 @@ def propagation_pass(
         ranked = sorted(options, key=lambda c: (SOURCE_CODES.get(c.source, 3), c.beam))[:hypotheses]
         hyp_arrays["hypotheses_count"][row] = len(ranked)
         for j, candidate in enumerate(ranked):
-            hyp_arrays["hypotheses_centerline_xy"][row, j] = candidate.result.centerline_xy
-            hyp_arrays["hypotheses_energy"][row, j] = candidate.total_energy
-            hyp_arrays["hypotheses_iou"][row, j] = float(candidate.result.records[candidate.result.best_index]["final_iou"])
-            hyp_arrays["hypotheses_source"][row, j] = candidate.source
-            hyp_arrays["hypotheses_start"][row, j] = candidate.start_name
-            hyp_arrays["hypotheses_beam"][row, j] = candidate.beam
+            store_hypothesis(hyp_arrays, row, j, candidate.result, candidate.source, candidate.start_name, candidate.beam, candidate.total_energy)
             if row in chosen and chosen[row].candidate is candidate:
                 hyp_arrays["path_index"][row] = j
     chosen_source: dict[int, str] = {}
@@ -962,6 +1036,7 @@ def propagation_pass(
             "jump_seeds": None if seeds is None else int(np.sum(seeds & arrays["fitted"])),
             "jump_seeds_below_score": None if seeds is None else int(np.sum(seeds & arrays["fitted"] & (arrays["score_independent"] < propagation.min_score))),
             "frames_replaced": len(chosen),
+            "fixed_rows": 0 if fixed is None else int(np.sum(np.asarray(fixed, dtype=bool) & arrays["fitted"])),
             "replaced_by_source": {name: int(sum(c.candidate.source == name for c in chosen.values())) for name in SOURCE_CODES},
             "refit_preset": params.propagate_preset,
             "path": {
@@ -1180,9 +1255,20 @@ def update_summary(workspace: Any, updates: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+class WorkspaceBusy(RuntimeError):
+    """Another process holds the workspace lock (a stage is writing it) and the caller would not wait."""
+
+
 @contextmanager
-def workspace_lock(workspace: Any) -> Iterator[None]:
-    """Hold ``<workspace>/.lock`` (an ``flock``) so only one stage writes the workspace at a time, from any process."""
+def workspace_lock(workspace: Any, timeout: float | None = None) -> Iterator[None]:
+    """Hold ``<workspace>/.lock`` (an ``flock``) so only one writer touches the workspace at a time, from any process.
+
+    A stage waits for the lock (``timeout=None``).  An edit passes a short
+    ``timeout`` in seconds: the lock is retried until then and
+    ``WorkspaceBusy`` is raised if it is still held, so a request never
+    hangs behind a stage that runs for an hour (and never applies to arrays
+    that stage is rewriting).
+    """
 
     path = getattr(workspace, "path", None)
     if path is None:
@@ -1192,8 +1278,19 @@ def workspace_lock(workspace: Any) -> Iterator[None]:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print(f"waiting for another stage to finish on {path}", flush=True)
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            if timeout is None:
+                print(f"waiting for another stage to finish on {path}", flush=True)
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            else:
+                deadline = time.monotonic() + max(0.0, float(timeout))
+                while True:
+                    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise WorkspaceBusy(f"a job is writing workspace {Path(path).name}; try again when it has finished") from None
         try:
             yield
         finally:
@@ -1505,6 +1602,32 @@ def run_ambiguity(workspace: Any, params: AmbiguityParams, *, device: torch.devi
     return {"ambiguity": summary}
 
 
+def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray) -> NDArray[np.bool_]:
+    """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): manual picks and flips, accepted region runs."""
+
+    names = np.asarray(algorithm).astype(str)
+    return np.asarray(arrays["fitted"], dtype=bool) & ~np.isin(names, tuple(PIPELINE_ALGORITHMS))
+
+
+def keep_hypotheses(fresh: dict[str, np.ndarray], old: dict[str, np.ndarray], rows: Sequence[int]) -> None:
+    """Copy ``rows`` of the ``old`` hypotheses arrays into ``fresh`` (as many slots as both have), so a pass keeps what it did not refit."""
+
+    index = [int(r) for r in rows]
+    if not index:
+        return
+    for key, value in fresh.items():
+        previous = old.get(key)
+        if previous is None or previous.shape[0] != value.shape[0]:
+            continue
+        if previous.shape == value.shape:
+            value[index] = previous[index]
+        elif key.startswith("hypotheses_") and value.ndim >= 2 and previous.ndim == value.ndim and previous.shape[2:] == value.shape[2:]:
+            width = min(previous.shape[1], value.shape[1])
+            value[index, :width] = previous[index, :width]
+    if "hypotheses_count" in fresh and "hypotheses_count" in old and "hypotheses_energy" in fresh:
+        fresh["hypotheses_count"][index] = np.minimum(old["hypotheses_count"][index], fresh["hypotheses_energy"].shape[1])
+
+
 def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
     setup = workspace_setup(workspace)
     arrays = workspace_arrays(workspace, setup.config)
@@ -1520,10 +1643,16 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
     arrays = workspace_arrays(workspace, setup.config)
     if "iou_independent" not in arrays:
         independent_copies(arrays)
+    # Rows the user placed (picks, flips, accepted region runs) stay as they
+    # are and anchor the chains around them; their hypotheses survive too.
+    fixed = placed_rows(arrays, workspace.load_provenance()["algorithm"])
+    old_hypotheses = workspace.load_hypotheses() if fixed.any() else {}
     # The pass writes a fresh set of hypotheses for every stretch frame; older ones are replaced.
     outcome = propagation_pass(
-        arrays, workspace_masks_of(workspace), setup, params, device, image_shape=image_shape, progress=progress
+        arrays, workspace_masks_of(workspace), setup, params, device, image_shape=image_shape, progress=progress, fixed=fixed,
     )
+    if old_hypotheses:
+        keep_hypotheses(outcome.hypotheses, old_hypotheses, np.nonzero(fixed)[0].tolist())
     state = {k: v for k, v in arrays.items() if k not in outcome.hypotheses}
     workspace.save_state(state)
     workspace.save_hypotheses(outcome.hypotheses)
@@ -1534,7 +1663,7 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
     for algorithm, rows in by_algorithm.items():
         workspace.set_provenance(rows, algorithm, job, now)
     summary_updates = {
-        "propagation": {**outcome.info, "restored_rows": len(restored)},
+        "propagation": {**outcome.info, "restored_rows": len(restored), "fixed_rows": int(fixed.sum())},
         "propagate_params": params.to_dict(),
         "ambiguity": summarize_ambiguity(arrays) if arrays["fitted"].any() else None,
         "continuity": continuity_summary(arrays),
@@ -1724,6 +1853,56 @@ def stage_command(workspace_path: Path | str, stage: str, params: dict[str, Any]
     ]
 
 
+REGION_SPEC_KEYS = ("algorithm", "first", "last", "params", "anchor_before", "anchor_after", "id")
+
+
+def region_command(workspace_path: Path | str, spec: Any) -> list[str]:
+    """The argv that runs one region algorithm as a job (``worm_pose_gen.algorithms.run_region`` through this module).
+
+    ``spec`` is the region-run dictionary ``{algorithm, first, last, params,
+    anchor_before, anchor_after, id}`` with ``first``, ``last`` and the
+    anchors as workspace ROWS (a ``JobSpec`` is accepted too: its ``params``
+    is the dictionary).  ``id`` names the candidate set; when omitted the job
+    process uses ``WORM_POSE_JOB_ID``.
+    """
+
+    values = getattr(spec, "params", spec)
+    if not isinstance(values, dict):
+        raise ValueError("a region spec is a dict (or a JobSpec whose params is one)")
+    if not values.get("algorithm"):
+        raise ValueError("a region spec needs an algorithm")
+    if values.get("first") is None or values.get("last") is None:
+        raise ValueError("a region spec needs first and last rows")
+    payload = {k: values.get(k) for k in REGION_SPEC_KEYS if values.get(k) is not None}
+    payload.setdefault("params", {})
+    return [
+        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        "--workspace", str(workspace_path), "--region-run", json.dumps(_json_safe(payload)),
+    ]
+
+
+def run_region_spec(workspace: Any, spec: dict[str, Any], *, device: torch.device | str | None = None, progress: Progress | None = None) -> dict[str, Any]:
+    """Run a region spec (``region_command``'s dictionary) on the workspace; returns the job result (candidate set id and metrics)."""
+
+    from .algorithms import run_region
+
+    algorithm = str(spec["algorithm"])
+    job = str(spec.get("id") or os.environ.get("WORM_POSE_JOB_ID") or "")
+    candidate_set = run_region(
+        workspace, algorithm, int(spec["first"]), int(spec["last"]), dict(spec.get("params") or {}),
+        anchor_before=None if spec.get("anchor_before") is None else int(spec["anchor_before"]),
+        anchor_after=None if spec.get("anchor_after") is None else int(spec["anchor_after"]),
+        device=device, progress=progress, job=job,
+    )
+    return {
+        "candidate_set": candidate_set.id, "algorithm": candidate_set.algorithm, "params": candidate_set.params,
+        "rows": [candidate_set.first, candidate_set.last], "frames": list(candidate_set.frames),
+        "anchors": {"before": candidate_set.anchor_before, "after": candidate_set.anchor_after},
+        "metrics": candidate_set.metrics, "metrics_before": candidate_set.metrics_before,
+        "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path),
+    }
+
+
 def _report_progress(progress: float, message: str, result: dict[str, Any] | None = None) -> None:
     """Write the job progress file (``jobs.report_progress`` when available, else the same JSON directly)."""
 
@@ -1755,13 +1934,23 @@ def _json_safe(value: Any) -> Any:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one pipeline stage over a workspace.")
     parser.add_argument("--workspace", type=Path, required=True)
-    parser.add_argument("--stage", required=True, choices=STAGES)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--stage", choices=STAGES)
+    group.add_argument("--region-run", default=None, help="JSON region spec: algorithm, first, last (rows), params, anchor_before, anchor_after, id")
     parser.add_argument("--params", default="{}", help="JSON object of stage parameters")
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
     from .workspace import Workspace
 
     workspace = Workspace.open(args.workspace)
+    if args.region_run is not None:
+        spec = json.loads(args.region_run)
+        label = str(spec.get("algorithm", "region"))
+        _report_progress(0.0, f"{label}: starting")
+        result = run_region_spec(workspace, spec, device=args.device, progress=_report_progress)
+        _report_progress(1.0, f"{label}: done", _json_safe(result))
+        print(json.dumps(_json_safe(result), indent=1))
+        return 0
     params = json.loads(args.params)
     _report_progress(0.0, f"{args.stage}: starting")
     result = run_stage(workspace, args.stage, params, device=args.device, progress=_report_progress)
