@@ -334,7 +334,7 @@ def render_centerline_mask(
     width: NDArray[np.generic] | float,
     image_shape: tuple[int, int],
 ) -> BoolArray:
-    """Rasterize a nearest-centerline-sample tube using only NumPy."""
+    """Rasterize the union of centerline-sample disks using only NumPy."""
 
     points = np.asarray(centerline_xy, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
@@ -350,15 +350,11 @@ def render_centerline_mask(
     if not np.all(np.isfinite(diameter)) or np.any(diameter <= 0):
         raise ValueError("width must be finite and positive")
     yy, xx = np.mgrid[:height, :image_width]
-    best_distance = np.full((height, image_width), np.inf, dtype=np.float64)
-    nearest = np.zeros((height, image_width), dtype=np.int64)
-    for index, (x, y) in enumerate(points):
+    mask = np.zeros((height, image_width), dtype=bool)
+    for (x, y), local_diameter in zip(points, diameter, strict=True):
         distance = (xx - x) ** 2 + (yy - y) ** 2
-        update = distance < best_distance
-        best_distance[update] = distance[update]
-        nearest[update] = index
-    radius = 0.5 * diameter[nearest]
-    return best_distance <= np.square(radius)
+        mask |= distance <= (0.5 * local_diameter) ** 2
+    return mask
 
 
 def extract_mask_anchor(

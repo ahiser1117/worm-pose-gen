@@ -34,6 +34,8 @@ const LAYERS = [
   // Phase 3: the chosen candidates of up to two shown candidate sets (regions.js fills the names in).
   { id: "cand_a", name: "Candidate set A", kind: "vector", on: true, alpha: 1.0, color: [0, 220, 255] },
   { id: "cand_b", name: "Candidate set B", kind: "vector", on: true, alpha: 1.0, color: [255, 110, 40] },
+  { id: "editable_mask", name: "Editable mask (Paint)", kind: "editor", on: true, alpha: 0.45, color: [255, 65, 155] },
+  { id: "fixed_body", name: "Fixed body (dashed = extrapolated)", kind: "vector", on: true, alpha: 0.9, color: [100, 235, 255] },
 ];
 
 const NOTE_TAGS = ["coil", "edge", "fragment", "orientation", "length", "jump", "segmentation", "propagation", "good example", "other"];
@@ -56,10 +58,13 @@ const HYP_COLORS = { forward: [255, 211, 77], backward: [192, 128, 255], indepen
 
 // Pipeline stages in their natural order; the server's /api/stages payload
 // is the authority, this is the fallback when it is unavailable.
-const STAGE_ORDER = ["segment", "prior", "fit", "ambiguity", "propagate", "track", "export"];
+const STAGE_ORDER = ["segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_body", "export"];
 const JOB_STATES = ["queued", "running", "done", "failed", "cancelled"];
 
 const state = {
+  activeTask: "inspect",
+  screen: "workspace",
+  drawer: null,
   info: null,            // /api/state payload
   runs: [],              // catalog rows of run directories
   workspaces: [],        // WorkspaceInfo (+summary) rows
@@ -121,23 +126,61 @@ const state = {
 
 let toastTimer = null;
 
-// Errors also appear as a toast over the stage: the status line sits at the
-// bottom of a sidebar tab and is easy to miss.
+// Errors remain available until dismissed or their task/source changes.
+function dismissToast() {
+  clearTimeout(toastTimer);
+  const node = $("#toast");
+  if (node) node.hidden = true;
+  const status = $("#status");
+  if (status?.classList.contains("error")) { status.textContent = ""; status.className = "status"; }
+}
+
 function showToast(text, kind) {
   const node = document.querySelector("#toast");
   if (!node) return;
-  node.textContent = text;
+  node.replaceChildren();
+  const message = document.createElement("span");
+  message.textContent = text;
+  const dismiss = document.createElement("button");
+  dismiss.type = "button"; dismiss.textContent = "Dismiss";
+  dismiss.setAttribute("aria-label", "Dismiss notification");
+  dismiss.onclick = dismissToast;
+  node.append(message, dismiss);
+  node.setAttribute("role", kind === "error" ? "alert" : "status");
   node.className = "toast" + (kind ? " " + kind : "");
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, kind === "error" ? 9000 : 3500);
+  if (kind !== "error") toastTimer = setTimeout(dismissToast, 3500);
 }
 
 function setStatus(text, kind) {
   const node = $("#status");
+  node.setAttribute("aria-live", kind === "error" ? "off" : "polite");
   node.textContent = text;
   node.className = "status" + (kind ? " " + kind : "");
   if (kind === "error") showToast(text, "error");
+}
+
+function clearFieldError(field, id) {
+  const message = document.getElementById(id);
+  if (message) { message.hidden = true; message.textContent = ""; }
+  field.removeAttribute("aria-invalid");
+  const descriptions = (field.getAttribute("aria-describedby") || "").split(/\s+/).filter(value => value && value !== id);
+  if (descriptions.length) field.setAttribute("aria-describedby", descriptions.join(" "));
+  else field.removeAttribute("aria-describedby");
+}
+
+function setFieldError(field, id, text) {
+  let message = document.getElementById(id);
+  if (!message) {
+    message = document.createElement("span"); message.id = id; message.className = "field-error";
+    message.setAttribute("role", "alert");
+    (field.closest("label") || field).insertAdjacentElement("afterend", message);
+  }
+  message.textContent = text; message.hidden = false;
+  field.setAttribute("aria-invalid", "true");
+  const descriptions = new Set((field.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+  descriptions.add(id); field.setAttribute("aria-describedby", [...descriptions].join(" "));
 }
 
 function describeHttpError(path, response, payload) {
@@ -268,4 +311,46 @@ function recordingStem(path) {
   if (!path) return "";
   const base = String(path).split("/").pop();
   return base.replace(/\.h5$/, "");
+}
+
+
+// Visible preparation steps live outside the canvas so Import and Labels show them too.
+let previewTaskSequence = 0;
+function beginPreviewTask(title) {
+  const token = ++previewTaskSequence, box = $("#preview-progress");
+  const steps = new Map();
+  if (box) { box.hidden = false; box.classList.remove("error"); $("#preview-progress-title").textContent = title; $("#preview-progress-close").hidden = true; }
+  return {
+    update(stage, message) {
+      if (!box || token !== previewTaskSequence) return;
+      steps.set(stage, message);
+      const list = $("#preview-progress-steps"); list.replaceChildren();
+      for (const [key, text] of steps) { const item = document.createElement("li"); item.textContent = text; item.className = key === stage ? "current" : "done"; list.append(item); }
+    },
+    finish(error) {
+      if (!box || token !== previewTaskSequence) return;
+      if (!error) { box.hidden = true; return; }
+      box.classList.add("error");
+      this.update("error", `Could not prepare preview: ${error.message}`);
+      const close = $("#preview-progress-close"); close.hidden = false; close.onclick = () => { box.hidden = true; };
+    },
+  };
+}
+
+async function prepareRecording(source, progress) {
+  if (!serverIsApp()) return;
+  progress.update("correction", "Preparing illumination correction (calculated once for a new video)…");
+  let stopped = false, timer;
+  const poll = async () => {
+    try {
+      const status = await api(`/api/recordings/preparation?${new URLSearchParams(source)}`);
+      if (!stopped && status.stage !== "idle") progress.update("correction", status.message);
+    } catch (_) { /* The preparation request below reports failures. */ }
+    if (!stopped) timer = setTimeout(poll, 350);
+  };
+  timer = setTimeout(poll, 200);
+  try {
+    const result = await post("/api/recordings/prepare", source);
+    progress.update("correction", result.message);
+  } finally { stopped = true; clearTimeout(timer); }
 }

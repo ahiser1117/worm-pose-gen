@@ -1,0 +1,28 @@
+/* Central library surfaces share stable headings and explicit action groups. */
+#screen-import { width: min(1180px, calc(100% - 32px)); }
+.import-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.import-columns > .group { min-width: 0; border-top: 0; }
+#recordings-browser { padding-top: 12px; }
+#screen-import .explorer-entries { max-height: 240px; }
+#screen-import .table-wrap { max-height: 240px; overflow: auto; }
+.recording-select { text-align: left; overflow-wrap: anywhere; max-width: 100%; }
+#recording-detail .thumb-box { margin-top: 0; }
+#recording-detail details { margin-top: 18px; }
+.library-actions { position: sticky; bottom: 0; padding: 12px 0; background: var(--panel); z-index: 2; flex-wrap: wrap; border-top: 1px solid var(--border); }
+#screen-open .panel-head { position: sticky; top: -20px; padding: 12px 0; background: var(--panel); z-index: 2; }
+#import-preview-progress #preview-progress { position: static; transform: none; width: 100%; box-sizing: border-box; box-shadow: none; margin-bottom: 12px; padding: 12px; }
+#explorer-error { color: var(--danger); padding: 8px 0; overflow-wrap: anywhere; }
+#training-counts { font-size: 18px; font-weight: 600; }
+.training-advanced { margin: 18px 0; }
+.training-advanced summary { cursor: pointer; margin-bottom: 12px; }
+#screen-training .group, #screen-labels .group { margin-inline: auto; }
+#screen-training .panel-head { max-width: 1100px; margin-inline: auto; }
+@media (max-width: 900px) {
+  .import-columns { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  #screen-import { width: calc(100% - 16px); }
+  #screen-training .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  #screen-training .form-grid, #screen-labels .corpus-filters { grid-template-columns: minmax(0, 1fr); }
+  #recordings-browser { padding-inline: 12px; }
+}

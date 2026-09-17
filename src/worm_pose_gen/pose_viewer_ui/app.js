@@ -5,8 +5,8 @@
 // loaded before this file) and boots the page from /api/state.
 
 function bindEvents() {
-  $("#run").addEventListener("change", (e) => { const source = parseSourceKey(e.target.value); if (source) selectSource(source.kind, source.name); });
-  $("#run-filter").addEventListener("input", renderRunList);
+  $("#run").addEventListener("change", () => renderOpenSelection());
+  $("#run-filter").addEventListener("input", () => { renderRunList(); renderOpenSelection(); });
   $("#rescan").addEventListener("click", async () => {
     try {
       const info = await refreshCatalog(true);
@@ -15,8 +15,12 @@ function bindEvents() {
     } catch (error) { setStatus(error.message, "error"); }
   });
   $("#compare").addEventListener("change", (e) => selectCompare(e.target.value));
-  $("#go").addEventListener("click", () => { if (!state.run) return; const r = state.run.series.frame_index.indexOf(parseInt($("#frame-index").value, 10)); if (r >= 0) showRow(r, { keepView: true }); else setStatus("frame not in this source", "error"); });
+  $("#go").addEventListener("click", goToEnteredFrame);
   $("#frame-index").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#go").click(); });
+  $("#frame-index").addEventListener("input", () => {
+    const field = $("#frame-index");
+    if (field.value.trim() && state.run?.series.frame_index.includes(Number(field.value))) clearFieldError(field, "frame-error");
+  });
   $("#prev").addEventListener("click", () => step(-1));
   $("#next").addEventListener("click", () => step(1));
   $("#play").addEventListener("click", togglePlay);
@@ -25,7 +29,7 @@ function bindEvents() {
     const [kind, direction] = button.dataset.jump.split(":");
     button.addEventListener("click", () => jump(kind, parseInt(direction, 10)));
   }
-  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
+  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); $("#toggle-raw").setAttribute("aria-pressed", String(state.showRaw)); if (maskEditor.corpusActive()) draw(); else showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
   $("#fit-view").addEventListener("click", fitView);
   $("#starts").addEventListener("click", computeStarts);
   $("#threshold").addEventListener("input", (e) => { $("#threshold-value").textContent = e.target.value; if ($("#threshold-on").checked) showRow(state.row, { keepView: true, keepStarts: true }); });
@@ -36,7 +40,6 @@ function bindEvents() {
   $("#show-independent").addEventListener("change", drawCharts);
   $("#show-compare").addEventListener("change", drawCharts);
   $("#jump-iou").addEventListener("change", drawCharts);
-  $("#timeline-toggle").addEventListener("click", () => togglePanel("bottom"));
   // Phase 2 edits.
   $("#flip-frame").addEventListener("click", flipFrame);
   $("#flip-segment").addEventListener("click", flipSegment);
@@ -73,7 +76,8 @@ function bindEvents() {
       }
     }
   });
-  canvas.addEventListener("pointerup", () => { state.panning = false; state.last = null; canvas.style.cursor = "grab"; });
+  for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) canvas.addEventListener(name, () => { state.panning = false; state.last = null; canvas.style.cursor = "grab"; });
+  canvas.addEventListener("contextmenu", event => event.preventDefault());
   // Panels resize the stage and the charts without a window resize.
   let pending = null;
   const relayout = () => {
@@ -84,38 +88,42 @@ function bindEvents() {
   new ResizeObserver(relayout).observe($("#charts"));
   new ResizeObserver(relayout).observe($("#details"));
   window.addEventListener("resize", relayout);
+  workflowRun.init();
+  workflowInspect.init();
+  workflowCompare.init();
+  workflowExport.init();
   initSplitters();
   initPanels();
   maskEditor.init();
   corpusUI.init();
 
-  window.addEventListener("keydown", (event) => {
-    const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") { if (event.key === "Escape") document.activeElement.blur(); return; }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && (event.key === "z" || event.key === "Z")) {
-      event.preventDefault();
-      if (maskEditor.undoStroke()) return;
-      if (maskEditor.isDirty()) { setStatus("Save or discard the mask draft before undoing a saved edit", "error"); return; }
-      if (editsSupported()) undoEdit(); else setStatus("undo needs a workspace on the app server", "error");
-      return;
-    }
-    const big = event.ctrlKey ? 100 : event.shiftKey ? 10 : 1;
-    switch (event.key) {
-      case "ArrowLeft": step(-big); event.preventDefault(); break;
-      case "ArrowRight": step(big); event.preventDefault(); break;
-      case " ": togglePlay(); event.preventDefault(); break;
-      case "[": jump("flag", -1); break;
-      case "]": jump("flag", 1); break;
-      case ",": jump("iou", -1); break;
-      case ".": jump("iou", 1); break;
-      case "f": case "F": $("#toggle-raw").click(); break;
-      case "0": fitView(); break;
-      case "n": case "N": showTab("view"); $("#note-comment").focus(); event.preventDefault(); break;
-      case "s": case "S": computeStarts(); break;
-      default:
-        if (/^[1-9]$/.test(event.key)) toggleLayer(parseInt(event.key, 10) - 1);
-    }
-  });
+  initTaskShell();
+  shortcuts.init();
+
+}
+
+function goToEnteredFrame() {
+  if (!state.run) return;
+  const field = $("#frame-index"), frames = state.run.series.frame_index;
+  const value = field.value.trim() === "" ? NaN : Number(field.value);
+  const row = Number.isInteger(value) ? frames.indexOf(value) : -1;
+  if (row >= 0) {
+    clearFieldError(field, "frame-error");
+    showRow(row, {keepView: true});
+    return;
+  }
+  let message;
+  const step = frames.length > 1 ? frames[1] - frames[0] : 0;
+  if (frames.length === 1) message = `Enter frame ${frames[0]}; it is the only frame in this source.`;
+  else if (step === 1 && frames.every((frame, i) => frame === frames[0] + i)) message = `Enter a frame from ${frames[0]} to ${frames.at(-1)}.`;
+  else if (frames.every((frame, i) => frame === frames[0] + i * step)) message = `Enter a sampled frame from ${frames[0]} to ${frames.at(-1)} in steps of ${step}.`;
+  else {
+    const after = frames.findIndex(frame => frame >= value);
+    const nearby = Number.isFinite(value) ? after < 0 ? [frames.at(-1)] : frames.slice(Math.max(0, after - 1), after + 1) : frames.slice(0, 3);
+    message = `Choose an available frame from ${frames[0]} to ${frames.at(-1)}. Available nearby: ${nearby.join(", ")}.`;
+  }
+  setFieldError(field, "frame-error", message);
+  field.focus();
 }
 
 // The source to open first: the URL hash, else the newest workspace, else the newest run.
@@ -140,7 +148,8 @@ async function boot() {
     const wanted = parseHash();
     const initial = initialSource(wanted);
     if (initial) await selectSource(initial.kind, initial.name, wanted.frame);
-    else { setStatus("no workspaces or runs yet: pick a recording in the Recordings tab and create a workspace", "error"); showTab("data"); }
+    else if (!(state.info.labeling_manifests || []).length) { setStatus("No workspaces yet: import a recording to begin", "error"); showTab("import"); }
+    if ((state.info.labeling_manifests || []).length && paintNavigation.startStartupQueue) await paintNavigation.startStartupQueue();
   } catch (error) {
     setStatus(error.message, "error");
   }

@@ -25,6 +25,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -105,6 +106,8 @@ class RecordingSource:
         self.cache_dir = Path(cache_dir)
         self.dataset_path = dataset
         self._lock = threading.Lock()
+        self._field_lock = threading.Lock()
+        self.preparation = {"stage": "idle", "message": "Waiting to prepare video"}
         self._handle: h5py.File | None = None
         self._field: FlatField | None = None
         with h5py.File(self.path, "r") as handle:
@@ -128,9 +131,21 @@ class RecordingSource:
             return np.asarray(self._dataset()[int(frame_index)], dtype=np.uint8)
 
     def flat_field(self) -> FlatField:
+        # Light/full previews and label proposals can request the same field concurrently.
+        with self._field_lock:
+            try:
+                field = self._prepare_flat_field()
+            except Exception as error:
+                self.preparation = {"stage": "error", "message": str(error)}
+                raise
+            self.preparation = {"stage": "ready", "message": "Illumination correction ready"}
+            return field
+
+    def _prepare_flat_field(self) -> FlatField:
         if self._field is not None:
             return self._field
         cache = self.cache_dir / f"{self.name}.npz"
+        self.preparation = {"stage": "cache", "message": "Checking saved illumination correction"}
         if cache.exists():
             with np.load(cache) as archive:
                 self._field = FlatField(
@@ -144,7 +159,8 @@ class RecordingSource:
         frames = []
         with self._lock:
             dataset = self._dataset()
-            for i in indices:
+            for number, i in enumerate(indices):
+                self.preparation = {"stage": "reading", "message": f"Reading calibration frames: {number + 1} of {len(indices)}", "completed": number, "total": len(indices)}
                 try:
                     frames.append(np.asarray(dataset[int(i)], dtype=np.uint8))
                 except OSError:
@@ -153,17 +169,25 @@ class RecordingSource:
         if len(frames) < min(8, len(indices)):
             raise OSError(f"only {len(frames)} of {len(indices)} calibration frames of {self.name} are readable")
         calibration = np.stack(frames)
+        self.preparation = {"stage": "calculating", "message": "Calculating flat-field illumination correction"}
         field = estimate_flat_field(
             calibration, temporal_quantile=0.8, spatial_radius=31, smoothing_passes=2, min_gain=0.5, max_gain=2.5
         )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        temporary = cache.with_suffix(".npz.partial")
-        with open(temporary, "wb") as handle:
-            np.savez_compressed(
-                handle, illumination=field.illumination, dark_level=field.dark_level,
-                reference_level=field.reference_level, gain=field.gain,
-            )
-        temporary.replace(cache)
+        self.preparation = {"stage": "saving", "message": "Saving illumination correction for future previews"}
+        # Every writer owns its temporary file, including separate server/job processes.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.cache_dir, prefix=f"{cache.name}.", suffix=".partial", delete=False) as handle:
+                temporary = Path(handle.name)
+                np.savez_compressed(
+                    handle, illumination=field.illumination, dark_level=field.dark_level,
+                    reference_level=field.reference_level, gain=field.gain,
+                )
+            temporary.replace(cache)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         self._field = field
         return field
 
@@ -610,16 +634,11 @@ def unified_main(argv: list[str] | None = None) -> None:
     """Compatibility launcher: ordinary labeling now opens the pose app.
 
     The old ``--dataset-root`` holds both labels and flat-field caches, so
-    map it to both app roots. Queue manifests retain their standalone
-    ordering and split semantics until the unified app supports queues.
+    map it to both app roots. Queue manifests use the unified labeling
+    service with canonical recording identities and retained split pledges.
     ``main`` and the module entry point remain available for legacy callers.
     """
-    args = parse_args(argv, description="Open the unified pose app for mask painting, corpus editing and fine-tuning. Legacy labeling flags remain supported; --queue retains the standalone manifest interface.")
-    if args.queue is not None:
-        print("Deprecated standalone labeler: --queue uses the legacy interface to preserve "
-              "manifest order and split pledges. Ordinary labeling now uses worm-pose-app.", file=sys.stderr)
-        main(argv)
-        return
+    args = parse_args(argv, description="Open the unified pose app for mask painting, corpus editing and fine-tuning. Legacy labeling flags and queue manifests remain supported.")
 
     import uvicorn
     from .app import AppConfig, create_app
@@ -632,9 +651,11 @@ def unified_main(argv: list[str] | None = None) -> None:
     try:
         for path in args.recordings or []:
             state.register_recording({"path": str(path), "dataset": DATASET_PATH})
+        if args.queue is not None:
+            state.labeling.load_manifest(args.queue)
         print(f"worm-pose-labeler now opens the unified pose app at http://{config.host}:{config.port}/", flush=True)
-        print(f"Corpus: {config.corpus_root}. Open or create a workspace to edit masks; "
-              "saved labels are available in Corpus.", flush=True)
+        print(f"Corpus: {config.corpus_root}. Use Labels to label recordings or a manifest; "
+              "open a workspace to correct its masks.", flush=True)
         uvicorn.run(app, host=config.host, port=config.port, log_level="info")
     finally:
         state.close()

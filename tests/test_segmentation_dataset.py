@@ -115,10 +115,26 @@ class SegmentationDatasetTests(unittest.TestCase):
                 store.save("rec", index, image, mask, source_path="/x.h5", label_source=source)
             module = SegmentationDataModule(directory, batch_size=2, crop_size=32, num_workers=0, train_label_filter="manual")
             module.setup()
-            self.assertTrue(all("manual" in r.label_source for r in module.train_set.records))
+            self.assertTrue(all("manual" in r.label_source for d in module.train_set.datasets for r in d.records))
             self.assertEqual(len(module.train_records()), len(module.train_set))
             self.assertLess(len(module.train_set), store.counts()["train"])
             self.assertEqual(len(module.val_set) + len(module.test_set), 2)  # held-out splits are unfiltered
+
+    def test_data_module_unions_several_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image, mask = _sample(0)
+            for name, count in (("a", 6), ("b", 4)):
+                store = SegmentationStore(f"{directory}/{name}")
+                for index in range(count):
+                    store.save(name, index, image, mask, source_path="/x.h5", label_source="network+manual")
+            module = SegmentationDataModule([f"{directory}/a", f"{directory}/b"], batch_size=2, crop_size=32, num_workers=0)
+            module.setup()
+            self.assertEqual(len(module.stores), 2)
+            self.assertEqual(sum(module.counts().values()), 10)
+            self.assertEqual(len(module.train_set), module.counts()["train"])
+            self.assertEqual(len(module.train_records()), len(module.train_set))
+            self.assertEqual(len(module.val_set) + len(module.test_set), 10 - module.counts()["train"])
+            self.assertEqual({r.recording for r in module.train_records()}, {"a", "b"})
 
     def test_store_rejects_bad_masks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

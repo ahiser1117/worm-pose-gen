@@ -94,7 +94,8 @@ from .segmentation_dataset import DEFAULT_DATASET_ROOT
 from .workspace import MASK_CHUNK_ROWS, pack_mask
 
 
-STAGES = ("segment", "prior", "fit", "ambiguity", "propagate", "track", "export")
+STAGES = ("segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_body", "export")
+DEFAULT_STAGES = tuple(stage for stage in STAGES if stage != "fixed_body")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "segmenter" / "best.ckpt"
 EXTERNAL_ROOT = Path(os.environ.get("WORM_POSE_EXTERNAL_ROOT", "/temp_data4/alex/external_artifacts"))
@@ -270,6 +271,14 @@ class TrackParams(_Params):
 
 
 @dataclass
+class FixedBodyParams(_Params):
+    segments: int = _help("equal-length body segments (4–200)", default=99)
+    min_iou: float = _help("minimum overlap for automatic calibration frames", default=0.9)
+    min_anchors: int = _help("minimum number of fully visible calibration frames", default=3)
+    anchor_frames: str = _help("optional comma-separated trusted frame IDs; replaces automatic quality selection", default="")
+
+
+@dataclass
 class ExportParams(_Params):
     name: str | None = _help("file stem under exports/ (default: the UTC time)", default=None)
 
@@ -281,6 +290,7 @@ STAGE_PARAMS: dict[str, type[_Params]] = {
     "ambiguity": AmbiguityParams,
     "propagate": PropagateParams,
     "track": TrackParams,
+    "fixed_body": FixedBodyParams,
     "export": ExportParams,
 }
 
@@ -357,7 +367,12 @@ class Frames:
         raw = self.read(indices)
         t1 = time.perf_counter()
         field = self.field()
-        corrected = np.stack([flat_fielded(frame, field) for frame in raw])
+        if field is None:
+            corrected = raw
+        else:
+            corrected = np.empty_like(raw)
+            for index, frame in enumerate(raw):
+                corrected[index] = flat_fielded(frame, field)
         return corrected, t1 - t0, time.perf_counter() - t1
 
     def close(self) -> None:
@@ -997,6 +1012,7 @@ def propagation_pass(
     candidates, info = propagate(
         arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation,
         warm_config=refit_config,
+        progress=None if progress is None else lambda fraction, message: progress(0.06 + 0.73 * fraction, message),
     )
     if progress is not None:
         progress(0.8, "propagation: selecting paths")
@@ -1847,13 +1863,16 @@ def run_stage(
             return run_propagate(workspace, PropagateParams.from_dict(params), device=resolved, progress=progress, job=job_id)
         if stage == "track":
             return run_track(workspace, TrackParams.from_dict(params), device=resolved, progress=progress, job=job_id)
+        if stage == "fixed_body":
+            from .fixed_body import run_fixed_body
+            return run_fixed_body(workspace, FixedBodyParams.from_dict(params), progress=progress, job=job_id)
         return run_export(workspace, ExportParams.from_dict(params), device=resolved, progress=progress, job=job_id)
 
 
 def run_all(
     workspace: Any,
     params_by_stage: dict[str, dict[str, Any]] | None = None,
-    stages: Sequence[str] = STAGES,
+    stages: Sequence[str] = DEFAULT_STAGES,
     *,
     device: torch.device | str | None = None,
     progress: Progress | None = None,

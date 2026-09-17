@@ -34,8 +34,9 @@ from ..pipeline import config_from_dict, read_summary, workspace_arrays
 from ..pose_run import cleanup_options
 from ..pose_viewer import LoadedRun, Segmenters, _round, compatible_entries, run_payload
 from ..workspace import Workspace
+from ..fixed_body import FixedBodyResult
 
-STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "imported_summary.json", "recording_prior.json", "edits.jsonl")
+STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "imported_summary.json", "recording_prior.json", "edits.jsonl", "fixed_body.npz")
 STAMPED_DIRS = ("masks", "overrides/masks", "snapshots")
 # The per-row series an edit can change: the pose's own numbers, the ambiguity
 # signals of the row and its neighbours (a pose jump belongs to a pair of
@@ -142,6 +143,7 @@ class WorkspaceView:
         self._summary: dict[str, Any] | None = None
         # Candidate sets by id with the modification time of the metadata they were loaded from.
         self._sets: dict[str, tuple[int, CandidateSet]] = {}
+        self._fixed_body: FixedBodyResult | None = None
 
     @property
     def name(self) -> str:
@@ -157,6 +159,7 @@ class WorkspaceView:
             self.workspace = Workspace.open(self.workspace.path)
             self._run = workspace_run(self.workspace, self.source, self.source_error)
             self._summary = self.workspace.summary()
+            self._fixed_body = FixedBodyResult(self.workspace.path)
             self._stamp = stamp
 
     @property
@@ -316,17 +319,26 @@ class WorkspaceView:
         }
 
     def frame(self, frame: int, segmenters: Segmenters, threshold: float | None, device: torch.device, *, raw: bool, detail: str) -> dict[str, Any]:
+        """Defer mask metadata and validated candidate sets to full previews."""
+
         if detail not in ("full", "light"):
             raise ValueError("detail must be 'full' or 'light'")
         run = self.run
         row = run.row_of(frame)
         payload = run.frame(row, segmenters, threshold, device, raw=raw, detail=detail)
         payload["provenance"] = self.row_provenance(row)
+        payload["mask_stale"] = bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])
+        payload["details_deferred"] = detail == "light"
+        payload["fixed_body"] = self._fixed_body.frame(row) if self._fixed_body else None
+        if detail == "light":
+            # Candidate validation fingerprints every input mask in the region,
+            # clearing the chunk cache to detect changes from other processes.
+            # Defer it, and mask reads for the selected row, until playback stops.
+            return payload
         payload["has_stored_mask"] = self.workspace.get_mask(row) is not None
         override = self.workspace.get_override_mask(row)
         payload["has_override"] = override is not None
         payload["mask_revision"] = self.workspace.mask_revision(row)
-        payload["mask_stale"] = bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])
         if override is not None:
             payload.setdefault("layers", {})["mask_override"] = data_url(mask_to_png_values(override))
             payload["layers"]["mask_final"] = data_url(np.where(override == 1, 255, 0).astype(np.uint8))
@@ -341,6 +353,7 @@ class WorkspaceView:
         except ValueError:
             return {"present": False}
         payload = {"present": True, "pose": run.pose(row), "stats": run.stats(row), "provenance": self.row_provenance(row)}
+        payload["fixed_body"] = self._fixed_body.frame(row) if self._fixed_body else None
         self._attach_candidate_sets(payload, row)
         return payload
 

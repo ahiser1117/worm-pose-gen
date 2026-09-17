@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -9,6 +10,7 @@ from fastapi.responses import Response
 
 from . import get_state, query_flag
 from ..state import AppState
+from ...pipeline import workspace_dataset
 
 router = APIRouter(prefix="/api/recordings")
 
@@ -26,6 +28,36 @@ def datasets(path: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
 @router.post("/register")
 def register(payload: dict[str, Any], app: AppState = Depends(get_state)) -> dict[str, Any]:
     return app.register_recording(payload).to_dict()
+
+
+def preparation_source(app: AppState, path: str | None = None, dataset: str | None = None, workspace: str | None = None, run: str | None = None):
+    if workspace:
+        work = app.workspace(workspace)
+        recording, dataset = work.recording, workspace_dataset(work)
+    elif run:
+        # Resolve through the existing run catalog, not an arbitrary file path.
+        entry = app.viewer.catalog.get(run)
+        if entry is None:
+            raise ValueError("Unknown run")
+        recording = Path(entry["recording_path"])
+    else:
+        recording = app.recording_path(path or "")
+    source, error = app.viewer._source(str(recording.resolve()), dataset or app.recording_dataset(recording))
+    if source is None:
+        raise ValueError(error or "Cannot read recording")
+    return source
+
+
+@router.get("/preparation")
+def preparation(path: str | None = None, dataset: str | None = None, workspace: str | None = None, run: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    return dict(preparation_source(app, path, dataset, workspace, run).preparation)
+
+
+@router.post("/prepare")
+def prepare(payload: dict[str, Any], app: AppState = Depends(get_state)) -> dict[str, Any]:
+    source = preparation_source(app, **{key: payload.get(key) for key in ("path", "dataset", "workspace", "run")})
+    source.flat_field()
+    return dict(source.preparation)
 
 
 @router.post("/unregister")

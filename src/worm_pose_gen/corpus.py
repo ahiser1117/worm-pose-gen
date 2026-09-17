@@ -75,12 +75,41 @@ class CorpusStore(SegmentationStore):
         with self.locked():
             return self._save(recording, frame_index, image, mask, **kwargs)
 
-    def save_frame(self, source_path, dataset_path, frame_index, image, mask, *, image_raw=None, split=None) -> SampleRecord:
+    def find_frame(self, source_path, dataset_path, frame_index) -> SampleRecord | None:
+        """Find canonical and legacy samples by file, dataset and frame, never basename."""
+        source_path = str(Path(source_path).expanduser().resolve())
+        dataset_path = "/" + str(dataset_path).strip("/")
+        return next((record for record in self.records()
+                     if str(Path(record.source_path).expanduser().resolve()) == source_path
+                     and "/" + record.dataset_path.strip("/") == dataset_path
+                     and record.frame_index == int(frame_index)), None)
+
+    def frame_pledge(self, source_path, dataset_path, frame_index) -> str | None:
+        identity = recording_identity(source_path, dataset_path)
+        recording = self._identities().get(make_sample_id(identity, frame_index), identity)
+        current = self.find_frame(source_path, dataset_path, frame_index)
+        return self.pledged_split(current.recording if current else recording, frame_index)
+
+    def filtered(self, *, source="", split="", recording="", q="") -> list[SampleRecord]:
+        if split and split not in ("train", "val", "test"):
+            raise ValueError("unknown corpus split")
+        records = [r for r in self.records()
+                   if (not source or r.label_source == source)
+                   and (not split or r.split == split)
+                   and (not recording or recording in (r.recording, r.source_path, recording_identity(r.source_path, r.dataset_path)))
+                   and (not q or q.lower() in " ".join(map(str, asdict(r).values())).lower())]
+        return sorted(records, key=lambda r: (r.source_path, r.dataset_path, r.frame_index, r.sample_id))
+
+    def save_frame(self, source_path, dataset_path, frame_index, image, mask, *, image_raw=None, split=None,
+                   revision=None, label_source="manual:workspace") -> SampleRecord:
         """Canonical file/dataset identity; adopt matching legacy labels in place."""
         source_path = str(Path(source_path).expanduser().resolve())
         dataset_path = "/" + dataset_path.strip("/")
         recording = recording_identity(source_path, dataset_path)
         with self.locked():
+            previous = self.find_frame(source_path, dataset_path, frame_index)
+            if revision is not None and int(revision) != (previous.revision if previous else 0):
+                raise ValueError("label changed since it was opened; reload before saving")
             recording = self._identities().get(make_sample_id(recording, frame_index), recording)
             # Existing stores used a recording basename. Reuse only an exact
             # source-path/dataset match, preserving its original split pledge.
@@ -91,7 +120,7 @@ class CorpusStore(SegmentationStore):
                     break
             return self._save(recording, frame_index, image, mask, image_raw=image_raw,
                               source_path=source_path, dataset_path=dataset_path,
-                              label_source="manual:workspace", flat_fielded=True, split=split)
+                              label_source=label_source, flat_fielded=True, split=split)
 
     def update_label(self, sample_id: str, mask: np.ndarray, revision: int | None = None) -> SampleRecord:
         with self.locked():

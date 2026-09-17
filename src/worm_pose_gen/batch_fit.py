@@ -32,6 +32,7 @@ from numpy.typing import NDArray
 import torch
 from torch import Tensor
 
+from .head_fit import HeadConstraint, HeadPriors
 from .mask_fit import (
     CropWindow,
     Initialization,
@@ -68,6 +69,13 @@ class BatchFitConfig(MaskFitConfig):
     stage_point_stride: tuple[int, ...] = (2, 1)
     crop_multiple: int = 32
     compile_renderer: bool = True
+    # Opt-in for independent fits without temporal references or head
+    # constraints: fuse geometry, overlap and priors with the renderer.
+    # Independent of compile_renderer (CUDA or CPU); requires a working
+    # compiler and costs more compilation up front. Specialization-limit errors
+    # fall back to the normal renderer; other compiler errors still surface.
+    # Enable with fit overrides {"compile_energy": true} after benchmarking.
+    compile_energy: bool = False
     # Rows (frame x start) times raster pixels per optimization group.
     row_pixel_budget: int = 4_000_000
     max_rows: int = 256
@@ -95,6 +103,8 @@ PRESETS: dict[str, "BatchFitConfig"] = {
 
 Renderer = Callable[..., Tensor]
 _COMPILED: dict[str, Renderer] = {}
+# Diagnostic count of groups that exceeded Dynamo's specialization budget.
+_ENERGY_COMPILE_FALLBACKS = 0
 
 
 def get_renderer(compile_renderer: bool) -> Renderer:
@@ -168,8 +178,9 @@ def _downsample_batch(values: Tensor, factor: int) -> Tensor:
 
 
 def _point_index(n_points: int, stride: int, device: torch.device) -> Tensor:
-    index = torch.arange(0, n_points, max(1, stride), device=device)
-    if int(index[-1]) != n_points - 1:
+    stride = max(1, stride)
+    index = torch.arange(0, n_points, stride, device=device)
+    if (n_points - 1) % stride:
         index = torch.cat((index, torch.tensor([n_points - 1], device=device)))
     return index
 
@@ -180,22 +191,67 @@ def _window_targets(
     """Hard target, signed edge distance (-inf off camera), and validity per frame."""
 
     n = len(masks)
-    target = torch.zeros((n, height, width), dtype=torch.float32, device=device)
-    valid = torch.zeros((n, height, width), dtype=torch.float32, device=device)
-    distance = torch.full((n, height, width), -float("inf"), dtype=torch.float32, device=device)
+    # Masks and the exact distance transform live on the host. Assemble the
+    # whole group here, then transfer each array once instead of sending every
+    # crop to the GPU and back for its distance transform and validity checks.
+    target = np.zeros((n, height, width), dtype=np.float32)
+    valid = np.zeros_like(target)
+    distance = np.full_like(target, -float("inf"))
     for f, (mask, w) in enumerate(zip(masks, windows, strict=True)):
         ix0, ix1 = max(w.x0, 0), min(w.x1, w.image_width)
         iy0, iy1 = max(w.y0, 0), min(w.y1, w.image_height)
-        local = torch.as_tensor(mask[iy0:iy1, ix0:ix1], dtype=torch.float32, device=device)
+        local = mask[iy0:iy1, ix0:ix1]
         rows = slice(iy0 - w.y0, iy1 - w.y0)
         cols = slice(ix0 - w.x0, ix1 - w.x0)
         target[f, rows, cols] = local
         valid[f, rows, cols] = 1.0
-        if bool(local.all()):
+        if local.all():
             distance[f, rows, cols] = float("inf")
         else:
-            distance[f, rows, cols] = signed_edge_distance(local >= 0.5)
-    return target, distance, valid
+            distance[f, rows, cols] = signed_edge_distance(torch.from_numpy(local)).numpy()
+    return tuple(torch.from_numpy(array).to(device=device) for array in (target, distance, valid))
+
+
+@torch.no_grad()
+def _render_hard_winners(
+    centerline: Tensor, diameter: Tensor, height: int, width: int, *,
+    edge_softness: float, threshold: float, chunk_rows: int,
+) -> Tensor:
+    """Render only pixels that can reach the hard threshold in each chunk.
+
+    A segment lies inside its endpoints' bounding box. Expanding that box by
+    the largest radius plus the sigmoid's threshold margin contains every
+    potentially occupied pixel. Keep pixel coordinates in the original raster
+    so cropping does not change floating-point distances at the boundary.
+    """
+
+    hard = torch.zeros((len(centerline), height, width), dtype=torch.bool, device=centerline.device)
+    effective_threshold = float(torch.tensor(threshold, dtype=centerline.dtype, device="cpu"))
+    bounded = 0.0 < effective_threshold < 1.0 and edge_softness > 0
+    if bounded:
+        bounds = torch.cat((centerline.amin(1), centerline.amax(1), diameter.amax(1)[:, None]), 1).cpu().numpy()
+        # One extra pixel makes the bound conservative against rounding in
+        # interpolated radii and in the float32 sigmoid near the threshold.
+        margin = max(0.0, -edge_softness * (np.log(effective_threshold) - np.log1p(-effective_threshold))) + 1.0
+    rows = max(1, chunk_rows)
+    for start in range(0, len(centerline), rows):
+        stop = min(start + rows, len(centerline))
+        x0, y0, x1, y1 = 0, 0, width, height
+        if bounded and np.isfinite(bounds[start:stop]).all():
+            block = bounds[start:stop]
+            radius = max(0.0, float(block[:, 4].max()) * 0.5) + margin
+            x0 = max(0, min(width, int(np.floor(block[:, 0].min() - radius))))
+            y0 = max(0, min(height, int(np.floor(block[:, 1].min() - radius))))
+            x1 = max(0, min(width, int(np.ceil(block[:, 2].max() + radius)) + 1))
+            y1 = max(0, min(height, int(np.ceil(block[:, 3].max() + radius)) + 1))
+        if x0 >= x1 or y0 >= y1:
+            continue
+        rendered = render_tube_segments(
+            centerline[start:stop], diameter[start:stop], y1 - y0, x1 - x0,
+            edge_softness=edge_softness, pixel_origin_xy=(x0, y0),
+        )
+        hard[start:stop, y0:y1, x0:x1] = rendered >= threshold
+    return hard
 
 
 def fit_masks(
@@ -206,18 +262,23 @@ def fit_masks(
     config: BatchFitConfig = BatchFitConfig(),
     device: torch.device | str | None = None,
     references: Sequence[NDArray[np.generic] | None] | None = None,
+    head_constraints: Sequence[HeadConstraint | None] | None = None,
 ) -> list[MaskFitResult]:
     """Fit every mask from its own starts; results follow the input order.
 
     ``references`` gives, per mask, a centerline ``[n_points, 2]`` the fit is
     pulled toward by the temporal prior (``config.temporal_prior_weight``),
     or ``None`` for no pull on that frame.
+    ``head_constraints`` adds tracking/previous-head penalties and projects
+    every optimizer iterate into the permitted head movement and image bounds.
     """
 
     if len(masks) != len(initializations):
         raise ValueError("masks and initializations must align")
     if references is not None and len(references) != len(masks):
         raise ValueError("references must align with masks")
+    if head_constraints is not None and len(head_constraints) != len(masks):
+        raise ValueError("head_constraints must align with masks")
     if not masks:
         return []
     if not (
@@ -260,6 +321,7 @@ def fit_masks(
             config,
             resolved_device,
             references=None if references is None else [references[i] for i in group],
+            head_constraints=None if head_constraints is None else [head_constraints[i] for i in group],
         )
         for index, result in zip(group, fitted, strict=True):
             results[index] = result
@@ -274,15 +336,19 @@ def _fit_group(
     config: BatchFitConfig,
     device: torch.device,
     references: Sequence[NDArray[np.generic] | None] | None = None,
+    head_constraints: Sequence[HeadConstraint | None] | None = None,
 ) -> list[MaskFitResult]:
-    renderer = get_renderer(config.compile_renderer)
+    # Whole-energy compilation is measured only for independent fits. The
+    # changing references/head constraints in sequential fitting can generate
+    # unstable specialized GPU kernels, so those calls retain normal rendering.
+    compile_energy = config.compile_energy and references is None and head_constraints is None
+    renderer = get_renderer(config.compile_renderer and not compile_energy)
     windows, height, width = batch_windows(crops)
     target, distance, valid = _window_targets(masks, windows, height, width, device)
     starts_flat = [s for starts in initializations for s in starts]
-    frame_of_row = torch.as_tensor(
-        [f for f, starts in enumerate(initializations) for _ in starts], device=device
-    )
-    row_windows = [windows[int(f)] for f in frame_of_row.tolist()]
+    frame_indices = [f for f, starts in enumerate(initializations) for _ in starts]
+    frame_of_row = torch.as_tensor(frame_indices, device=device)
+    row_windows = [windows[f] for f in frame_indices]
     offsets = torch.as_tensor(
         [[w.x0, w.y0] for w in row_windows], dtype=torch.float32, device=device
     )
@@ -323,16 +389,33 @@ def _fit_group(
         temporal_scale = config.temporal_prior_weight / float(config.temporal_prior_sigma_px) ** 2
 
     state = _MaskFitState(starts_flat, config, device)
+    head_priors = None if head_constraints is None else HeadPriors(
+        [head_constraints[f] for f, starts in enumerate(initializations) for _ in starts], camera_size,
+    )
+
+    def constrain_head() -> None:
+        if head_priors is not None:
+            with torch.no_grad():
+                head = state.centerline()[:, 0]
+                state.centroid.add_(head_priors.project(head) - head)
+
+    constrain_head()
     optimizer = state.optimizer()
     base_rates = [group["lr"] for group in optimizer.param_groups]
     finest = min(config.stage_downsample)
     eps = torch.finfo(torch.float32).eps
-    stage_cache: dict[int, tuple[Tensor, Tensor]] = {}
+    stage_cache: dict[int, tuple[Tensor, Tensor, Tensor]] = {}
+    point_indices = {
+        stride: slice(None) if stride <= 1 else _point_index(config.n_points, stride, device)
+        for stride in set(config.stage_point_stride)
+    }
 
-    def stage_arrays(factor: int) -> tuple[Tensor, Tensor]:
+    def stage_arrays(factor: int) -> tuple[Tensor, Tensor, Tensor]:
         if factor not in stage_cache:
             soft = torch.sigmoid(distance / (config.edge_softness * factor))
-            stage_cache[factor] = (_downsample_batch(soft, factor), _downsample_batch(valid, factor))
+            soft = _downsample_batch(soft, factor)[frame_of_row]
+            weight = _downsample_batch(valid, factor)[frame_of_row]
+            stage_cache[factor] = (soft, weight, (soft * weight).sum((1, 2)))
         return stage_cache[factor]
 
     def regularization(centerline: Tensor) -> Tensor:
@@ -348,10 +431,12 @@ def _fit_group(
         if use_temporal:
             squared = ((centerline - reference_t).square().sum(-1) * reference_mask_t).sum(1) / reference_mask_t.sum(1).clamp_min(1.0)
             total = total + temporal_scale * squared
+        if head_priors is not None:
+            total = total + head_priors.energy(centerline[:, 0])
         return total
 
     def render_rows(centerline: Tensor, diameter: Tensor, factor: int, stride: int, fn: Renderer) -> Tensor:
-        index = _point_index(centerline.shape[1], stride, device)
+        index = point_indices[stride]
         local = (centerline[:, index] - offsets[:, None, :] + 0.5) / factor - 0.5
         return fn(
             local, diameter[:, index] / factor, height // factor, width // factor, edge_softness=config.edge_softness
@@ -361,20 +446,55 @@ def _fit_group(
         centerline = state.centerline()
         diameter = state.diameter(template)
         rendered = render_rows(centerline, diameter, factor, stride, renderer)
-        soft, weight = stage_arrays(factor)
-        soft = soft[frame_of_row]
-        weight = weight[frame_of_row]
+        soft, weight, target_mass = stage_arrays(factor)
         intersection = (rendered * soft * weight).sum((1, 2))
-        denominator = (rendered * weight).sum((1, 2)) + (soft * weight).sum((1, 2))
+        denominator = (rendered * weight).sum((1, 2)) + target_mass
         dice = 1 - (2 * intersection + eps) / (denominator + eps)
         return dice, dice + regularization(centerline)
+
+    if compile_energy:
+        # Mutating this dictionary after capture would invalidate Dynamo's
+        # guards. All fixed data is ready before tracing the two stage shapes.
+        for factor in set(config.stage_downsample):
+            stage_arrays(factor)
+        from torch._dynamo.exc import FailOnRecompileLimitHit
+
+        eager_energy = energy
+        compiled_energy = torch.compile(eager_energy, dynamic=True, fullgraph=True)
+
+        def evaluate_energy(factor: int, stride: int) -> tuple[Tensor, Tensor]:
+            nonlocal compiled_energy, renderer
+            global _ENERGY_COMPILE_FALLBACKS
+            if compiled_energy is not None:
+                try:
+                    return compiled_energy(factor, stride)
+                except FailOnRecompileLimitHit:
+                    # Different group shapes and configurations can exhaust
+                    # Dynamo's shared guard cache. Keep this group's
+                    # optimizer and schedule, returning to the normal renderer
+                    # path for all its remaining evaluations.
+                    compiled_energy = None
+                    renderer = get_renderer(config.compile_renderer)
+                    _ENERGY_COMPILE_FALLBACKS += 1
+                    if _ENERGY_COMPILE_FALLBACKS == 1:
+                        warnings.warn(
+                            "whole-energy compilation exceeded its specialization limit; "
+                            "continuing affected groups with the normal renderer",
+                            RuntimeWarning, stacklevel=2,
+                        )
+            return eager_energy(factor, stride)
+
+        energy = evaluate_energy
 
     finest_stride = config.stage_point_stride[config.stage_downsample.index(finest)]
     with torch.no_grad():
         initial_dice, _ = energy(finest, finest_stride)
     best_loss = torch.full((len(starts_flat),), float("inf"), device=device)
     best_snapshot = state.parameter_snapshot()
-    history: list[list[float]] = []
+    # Keep the small history on the fitting device and transfer it once. A
+    # host copy inside every iteration forces CUDA to finish every queued op.
+    history = torch.empty((sum(config.stage_steps), len(starts_flat)), device=device)
+    history_step = 0
     for factor, steps, scale, stride in zip(
         config.stage_downsample, config.stage_steps, config.stage_lr_scale, config.stage_point_stride, strict=True
     ):
@@ -390,15 +510,16 @@ def _fit_group(
                 raise RuntimeError("non-finite batch mask-fit energy")
             if factor == finest:
                 improved = loss.detach() < best_loss
-                if bool(improved.any()):
-                    rows = torch.nonzero(improved, as_tuple=False).squeeze(1)
-                    current = state.parameter_snapshot()
-                    for kept, now in zip(best_snapshot, current, strict=True):
-                        kept[rows] = now[rows]
+                with torch.no_grad():
+                    for kept, now in zip(best_snapshot, state.parameters(), strict=True):
+                        selected = improved.reshape(-1, *([1] * (now.ndim - 1)))
+                        torch.where(selected, now, kept, out=kept)
                     best_loss = torch.where(improved, loss.detach(), best_loss)
             total.backward()
             optimizer.step()
-            history.append([float(v) for v in dice.detach().cpu()])
+            constrain_head()
+            history[history_step].copy_(dice.detach())
+            history_step += 1
     if bool(torch.isfinite(best_loss).any()):
         rows = torch.nonzero(torch.isfinite(best_loss), as_tuple=False).squeeze(1)
         state.restore_rows(best_snapshot, rows)
@@ -411,21 +532,18 @@ def _fit_group(
         # Winner per frame by total energy (overlap plus priors), then one
         # full-resolution render of the winners.
         winners: list[int] = []
+        loss_np = final_loss.cpu().numpy()
         row_start = 0
         for starts in initializations:
-            block = final_loss[row_start : row_start + len(starts)]
-            winners.append(row_start + int(torch.argmin(block)))
+            block = loss_np[row_start : row_start + len(starts)]
+            winners.append(row_start + int(np.argmin(block)))
             row_start += len(starts)
         winner_rows = torch.as_tensor(winners, device=device)
-        hard = torch.zeros((len(winners), height, width), dtype=torch.bool, device=device)
-        for chunk_start in range(0, len(winners), max(1, config.final_render_rows)):
-            chunk = winner_rows[chunk_start : chunk_start + config.final_render_rows]
-            index = _point_index(centerline.shape[1], 1, device)
-            local = centerline[chunk][:, index] - offsets[chunk][:, None, :]
-            rendered = render_tube_segments(
-                local, diameter[chunk][:, index], height, width, edge_softness=config.edge_softness
-            )
-            hard[chunk_start : chunk_start + len(chunk)] = rendered >= config.hard_threshold
+        hard = _render_hard_winners(
+            centerline[winner_rows] - offsets[winner_rows, None, :], diameter[winner_rows],
+            height, width, edge_softness=config.edge_softness,
+            threshold=config.hard_threshold, chunk_rows=config.final_render_rows,
+        )
         hard_np = hard.cpu().numpy()
         centerline_np = centerline.cpu().numpy().astype(np.float64)
         diameter_np = diameter.cpu().numpy().astype(np.float64)
@@ -434,8 +552,7 @@ def _fit_group(
         shape_np = state.width_shape.detach().cpu().numpy().astype(np.float64)
         initial_np = initial_dice.cpu().numpy()
         final_np = final_dice.cpu().numpy()
-        loss_np = final_loss.cpu().numpy()
-    history_np = np.asarray(history, dtype=np.float64)
+    history_np = history.cpu().numpy().astype(np.float64)
 
     results: list[MaskFitResult] = []
     row_start = 0

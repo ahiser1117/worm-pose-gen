@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 from numpy.typing import NDArray
 import torch
@@ -14,6 +16,13 @@ FloatArray = NDArray[np.float64]
 def cubic_bspline_basis(samples: int = 99, coefficients: int = 16) -> FloatArray:
     """Return a uniform clamped cubic B-spline design matrix."""
 
+    # Keep the public result independently writable (including tensors that
+    # share its NumPy storage), while computing each fixed design only once.
+    return _cached_cubic_bspline_basis(samples, coefficients).copy()
+
+
+@lru_cache(maxsize=32)
+def _cached_cubic_bspline_basis(samples: int, coefficients: int) -> FloatArray:
     degree = 3
     if samples < 2 or coefficients < degree + 1:
         raise ValueError("cubic splines need at least two samples and four coefficients")
@@ -40,6 +49,7 @@ def cubic_bspline_basis(samples: int = 99, coefficients: int = 16) -> FloatArray
     result = basis[:, :coefficients]
     if not np.allclose(result.sum(1), 1.0, atol=1e-12):
         raise RuntimeError("B-spline basis lost partition of unity")
+    result.setflags(write=False)
     return result
 
 

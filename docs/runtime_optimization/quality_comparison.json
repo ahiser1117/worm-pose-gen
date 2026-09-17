@@ -1,0 +1,170 @@
+{
+  "independent": {
+    "fitted": {
+      "exact": true
+    },
+    "best_start": {
+      "exact": true
+    },
+    "reversed": {
+      "exact": true
+    },
+    "source": {
+      "exact": true
+    },
+    "iou": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "centerline_xy": {
+      "exact": false,
+      "max_abs_difference": 0.000244140625
+    },
+    "width_profile": {
+      "exact": false,
+      "max_abs_difference": 6.103515625e-05
+    },
+    "body_length_px": {
+      "exact": false,
+      "max_abs_difference": 0.0003370238679281101
+    }
+  },
+  "independent_energy": {
+    "fitted": {
+      "exact": true
+    },
+    "best_start": {
+      "exact": true
+    },
+    "reversed": {
+      "exact": true
+    },
+    "source": {
+      "exact": true
+    },
+    "iou": {
+      "exact": false,
+      "max_abs_difference": 8.705457255875348e-05
+    },
+    "centerline_xy": {
+      "exact": false,
+      "max_abs_difference": 0.0064239501953125
+    },
+    "width_profile": {
+      "exact": false,
+      "max_abs_difference": 0.000301361083984375
+    },
+    "body_length_px": {
+      "exact": false,
+      "max_abs_difference": 0.0040651433720313435
+    }
+  },
+  "learned": {
+    "fitted": {
+      "exact": true
+    },
+    "best_start": {
+      "exact": true
+    },
+    "reversed": {
+      "exact": true
+    },
+    "source": {
+      "exact": true
+    },
+    "path_index": {
+      "exact": true
+    },
+    "path_mirrored": {
+      "exact": true
+    },
+    "iou": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "centerline_xy": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "width_profile": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "body_length_px": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    }
+  },
+  "learned_independent_energy": {
+    "fitted": {
+      "exact": true
+    },
+    "best_start": {
+      "exact": true
+    },
+    "reversed": {
+      "exact": true
+    },
+    "source": {
+      "exact": true
+    },
+    "path_index": {
+      "exact": true
+    },
+    "path_mirrored": {
+      "exact": true
+    },
+    "iou": {
+      "exact": false,
+      "max_abs_difference": 3.024711896193466e-05
+    },
+    "centerline_xy": {
+      "exact": false,
+      "max_abs_difference": 0.00848388671875
+    },
+    "width_profile": {
+      "exact": false,
+      "max_abs_difference": 0.00537872314453125
+    },
+    "body_length_px": {
+      "exact": false,
+      "max_abs_difference": 0.006697316045574553
+    }
+  },
+  "learned_confirmation": {
+    "fitted": {
+      "exact": true
+    },
+    "best_start": {
+      "exact": true
+    },
+    "reversed": {
+      "exact": true
+    },
+    "source": {
+      "exact": true
+    },
+    "path_index": {
+      "exact": true
+    },
+    "path_mirrored": {
+      "exact": true
+    },
+    "iou": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "centerline_xy": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "width_profile": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    },
+    "body_length_px": {
+      "exact": true,
+      "max_abs_difference": 0.0
+    }
+  }
+}

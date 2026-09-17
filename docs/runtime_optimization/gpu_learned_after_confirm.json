@@ -1,0 +1,659 @@
+{
+  "source_root": "/home/alex/git/worm-pose-gen/src",
+  "python": "3.13.15",
+  "source_sha256": "4ddfd105e35154a78a3387dea3f4bc209cd31b478c0ba2ce743f69e45567a48a",
+  "torch": "2.13.0+cu130",
+  "device": "cuda",
+  "threads": 1,
+  "cuda_visible_devices": "3",
+  "compile": true,
+  "shape": [
+    6,
+    732,
+    968
+  ],
+  "params": {
+    "checkpoint": "/home/alex/git/worm-pose-gen/checkpoints/segmenter/best.ckpt",
+    "flat_field": true,
+    "prior": "bootstrap",
+    "compile": true,
+    "init_workers": 0,
+    "min_worm_pixels": 100,
+    "overrides": {},
+    "prior_file": "/temp_data4/alex/external_artifacts/workspaces/2024-05-22-15_f0-1199/recording_prior.json",
+    "dataset_root": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1"
+  },
+  "stages": [
+    "segment",
+    "prior",
+    "fit",
+    "ambiguity",
+    "propagate",
+    "track",
+    "export"
+  ],
+  "input": "/store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-15.h5",
+  "first_frame": 0,
+  "propagation_params": {
+    "min_score": 0,
+    "pad": 0,
+    "beam": 1,
+    "anchor_diversity": false,
+    "jump_seeds": false
+  },
+  "limitations": "Learned segmentation and flat-field correction; no prior bootstrap or video export.",
+  "runs": [
+    {
+      "seconds": {
+        "segment": 1.4299758076667786,
+        "prior": 0.001842365600168705,
+        "fit": 7.796240227296948,
+        "ambiguity": 0.011873633600771427,
+        "propagate": 5.959168604575098,
+        "track": 0.021887372247874737,
+        "export": 0.09012678638100624
+      },
+      "total_seconds": 15.311114797368646,
+      "frames_fit": 6,
+      "median_iou": 0.9696093945525781,
+      "stage_summaries": {
+        "segment": {
+          "frames": 6,
+          "frames_with_worm": 6,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.0021626288071274757,
+            "flat_field": 0.5118897641077638,
+            "network": 0.44436381570994854,
+            "cleanup": 0.05469447374343872,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.26403261441737413
+        },
+        "prior": {
+          "prior": {
+            "length_px": 770.5977681094059,
+            "log_length_sigma": 0.05,
+            "width_px": 42.92736194458541,
+            "log_width_sigma": 0.05,
+            "width_shape": [
+              -0.21986068040132523,
+              0.08016650751233101,
+              0.24800889939069748,
+              0.3795953691005707,
+              -0.049189964309334755,
+              -0.5617697536945343
+            ],
+            "width_shape_sigma": [
+              0.06584210803359747,
+              0.05,
+              0.05,
+              0.05,
+              0.05,
+              0.05
+            ],
+            "frames_used": 16,
+            "frames_candidates": 182,
+            "selection": {
+              "min_iou": 0.85,
+              "min_taper": 0.1,
+              "area_ratio": 0.15
+            },
+            "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-15.h5",
+            "source": "bootstrap of 182 frames spread over 20482, preset balanced"
+          },
+          "prior_source": "/temp_data4/alex/external_artifacts/workspaces/2024-05-22-15_f0-1199/recording_prior.json",
+          "bootstrap": null
+        },
+        "fit": {
+          "frames_fit": 6,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.711917226202786,
+            "fit": 7.07555915415287
+          },
+          "iou": {
+            "median": 0.9699734190944935,
+            "p10": 0.9682841698013999,
+            "min": 0.9671734727805822,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 0,
+              "edge_inside": 0
+            },
+            "frames_with_score_at_least_1": 0,
+            "frames_with_score_at_least_2": 0,
+            "iou_by_score": {
+              "0": {
+                "frames": 6,
+                "iou_median": 0.9699734190944935
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9813938431985636,
+              0.98212057075144,
+              0.9837289361978125
+            ],
+            "self_contact_px_p10": 108.69232498626687,
+            "pose_jump_px_p50_p90_max": [
+              4.143774476693597,
+              6.755114328843976,
+              8.21239416069313
+            ]
+          }
+        },
+        "propagate": {
+          "stretches": [
+            [
+              1,
+              4
+            ]
+          ],
+          "frames_replaced": 4,
+          "replaced_by_source": {
+            "independent": 1,
+            "forward": 2,
+            "backward": 1
+          },
+          "restored_rows": 0
+        },
+        "track": {
+          "window": 50,
+          "sigma": 0.02,
+          "tolerance": 0.02,
+          "refit": "clipped-deviating",
+          "frames_clipped": 0,
+          "frames_deviating": 0,
+          "frames_refit": 0,
+          "seconds": 0.00024743378162384033,
+          "track_length_p10_p50_p90": [
+            772.8437995501224,
+            772.8437995501224,
+            772.8437995501224
+          ]
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-g6q1sb3e/run-0/exports/benchmark.parquet",
+          "rows": 6,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "loss_compile_fallback_groups": 0,
+      "peak_gpu_allocated_bytes": 3761454592
+    },
+    {
+      "seconds": {
+        "segment": 0.6656425530090928,
+        "prior": 0.001894875429570675,
+        "fit": 2.047295310534537,
+        "ambiguity": 0.011703076772391796,
+        "propagate": 5.033362177200615,
+        "track": 0.021473740227520466,
+        "export": 0.010364828631281853
+      },
+      "total_seconds": 7.79173656180501,
+      "frames_fit": 6,
+      "median_iou": 0.9696093945525781,
+      "stage_summaries": {
+        "segment": {
+          "frames": 6,
+          "frames_with_worm": 6,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.03160401526838541,
+            "flat_field": 0.17352632619440556,
+            "network": 0.03520958963781595,
+            "cleanup": 0.05531085096299648,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.06619430147111416
+        },
+        "prior": {
+          "prior": {
+            "length_px": 770.5977681094059,
+            "log_length_sigma": 0.05,
+            "width_px": 42.92736194458541,
+            "log_width_sigma": 0.05,
+            "width_shape": [
+              -0.21986068040132523,
+              0.08016650751233101,
+              0.24800889939069748,
+              0.3795953691005707,
+              -0.049189964309334755,
+              -0.5617697536945343
+            ],
+            "width_shape_sigma": [
+              0.06584210803359747,
+              0.05,
+              0.05,
+              0.05,
+              0.05,
+              0.05
+            ],
+            "frames_used": 16,
+            "frames_candidates": 182,
+            "selection": {
+              "min_iou": 0.85,
+              "min_taper": 0.1,
+              "area_ratio": 0.15
+            },
+            "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-15.h5",
+            "source": "bootstrap of 182 frames spread over 20482, preset balanced"
+          },
+          "prior_source": "/temp_data4/alex/external_artifacts/workspaces/2024-05-22-15_f0-1199/recording_prior.json",
+          "bootstrap": null
+        },
+        "fit": {
+          "frames_fit": 6,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.724004341289401,
+            "fit": 1.314534512348473
+          },
+          "iou": {
+            "median": 0.9699734190944935,
+            "p10": 0.9682841698013999,
+            "min": 0.9671734727805822,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 0,
+              "edge_inside": 0
+            },
+            "frames_with_score_at_least_1": 0,
+            "frames_with_score_at_least_2": 0,
+            "iou_by_score": {
+              "0": {
+                "frames": 6,
+                "iou_median": 0.9699734190944935
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9813938431985636,
+              0.98212057075144,
+              0.9837289361978125
+            ],
+            "self_contact_px_p10": 108.69232498626687,
+            "pose_jump_px_p50_p90_max": [
+              4.143774476693597,
+              6.755114328843976,
+              8.21239416069313
+            ]
+          }
+        },
+        "propagate": {
+          "stretches": [
+            [
+              1,
+              4
+            ]
+          ],
+          "frames_replaced": 4,
+          "replaced_by_source": {
+            "independent": 1,
+            "forward": 2,
+            "backward": 1
+          },
+          "restored_rows": 0
+        },
+        "track": {
+          "window": 50,
+          "sigma": 0.02,
+          "tolerance": 0.02,
+          "refit": "clipped-deviating",
+          "frames_clipped": 0,
+          "frames_deviating": 0,
+          "frames_refit": 0,
+          "seconds": 0.00023180991411209106,
+          "track_length_p10_p50_p90": [
+            772.8437995501224,
+            772.8437995501224,
+            772.8437995501224
+          ]
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-g6q1sb3e/run-1/exports/benchmark.parquet",
+          "rows": 6,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "loss_compile_fallback_groups": 0,
+      "peak_gpu_allocated_bytes": 3760640000
+    },
+    {
+      "seconds": {
+        "segment": 0.5599892986938357,
+        "prior": 0.0018631182610988617,
+        "fit": 2.055799945257604,
+        "ambiguity": 0.011762434616684914,
+        "propagate": 5.05371203366667,
+        "track": 0.021537206135690212,
+        "export": 0.26827459782361984
+      },
+      "total_seconds": 7.972938634455204,
+      "frames_fit": 6,
+      "median_iou": 0.9696093945525781,
+      "stage_summaries": {
+        "segment": {
+          "frames": 6,
+          "frames_with_worm": 6,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.004582506604492664,
+            "flat_field": 0.09899701364338398,
+            "network": 0.035147346556186676,
+            "cleanup": 0.055563030764460564,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.05971332546323538
+        },
+        "prior": {
+          "prior": {
+            "length_px": 770.5977681094059,
+            "log_length_sigma": 0.05,
+            "width_px": 42.92736194458541,
+            "log_width_sigma": 0.05,
+            "width_shape": [
+              -0.21986068040132523,
+              0.08016650751233101,
+              0.24800889939069748,
+              0.3795953691005707,
+              -0.049189964309334755,
+              -0.5617697536945343
+            ],
+            "width_shape_sigma": [
+              0.06584210803359747,
+              0.05,
+              0.05,
+              0.05,
+              0.05,
+              0.05
+            ],
+            "frames_used": 16,
+            "frames_candidates": 182,
+            "selection": {
+              "min_iou": 0.85,
+              "min_taper": 0.1,
+              "area_ratio": 0.15
+            },
+            "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-15.h5",
+            "source": "bootstrap of 182 frames spread over 20482, preset balanced"
+          },
+          "prior_source": "/temp_data4/alex/external_artifacts/workspaces/2024-05-22-15_f0-1199/recording_prior.json",
+          "bootstrap": null
+        },
+        "fit": {
+          "frames_fit": 6,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.7357441335916519,
+            "fit": 1.310590099543333
+          },
+          "iou": {
+            "median": 0.9699734190944935,
+            "p10": 0.9682841698013999,
+            "min": 0.9671734727805822,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 0,
+              "edge_inside": 0
+            },
+            "frames_with_score_at_least_1": 0,
+            "frames_with_score_at_least_2": 0,
+            "iou_by_score": {
+              "0": {
+                "frames": 6,
+                "iou_median": 0.9699734190944935
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9813938431985636,
+              0.98212057075144,
+              0.9837289361978125
+            ],
+            "self_contact_px_p10": 108.69232498626687,
+            "pose_jump_px_p50_p90_max": [
+              4.143774476693597,
+              6.755114328843976,
+              8.21239416069313
+            ]
+          }
+        },
+        "propagate": {
+          "stretches": [
+            [
+              1,
+              4
+            ]
+          ],
+          "frames_replaced": 4,
+          "replaced_by_source": {
+            "independent": 1,
+            "forward": 2,
+            "backward": 1
+          },
+          "restored_rows": 0
+        },
+        "track": {
+          "window": 50,
+          "sigma": 0.02,
+          "tolerance": 0.02,
+          "refit": "clipped-deviating",
+          "frames_clipped": 0,
+          "frames_deviating": 0,
+          "frames_refit": 0,
+          "seconds": 0.00023439247161149979,
+          "track_length_p10_p50_p90": [
+            772.8437995501224,
+            772.8437995501224,
+            772.8437995501224
+          ]
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-g6q1sb3e/run-2/exports/benchmark.parquet",
+          "rows": 6,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "loss_compile_fallback_groups": 0,
+      "peak_gpu_allocated_bytes": 3760640000
+    }
+  ],
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "median_seconds": {
+    "segment": 0.6656425530090928,
+    "prior": 0.0018631182610988617,
+    "fit": 2.055799945257604,
+    "ambiguity": 0.011762434616684914,
+    "propagate": 5.05371203366667,
+    "track": 0.021537206135690212,
+    "export": 0.09012678638100624
+  },
+  "median_total_seconds": 7.972938634455204,
+  "warm_median_seconds": {
+    "segment": 0.6128159258514643,
+    "prior": 0.0018789968453347683,
+    "fit": 2.0515476278960705,
+    "ambiguity": 0.011732755694538355,
+    "propagate": 5.043537105433643,
+    "track": 0.02150547318160534,
+    "export": 0.13931971322745085
+  },
+  "warm_median_total_seconds": 7.882337598130107
+}

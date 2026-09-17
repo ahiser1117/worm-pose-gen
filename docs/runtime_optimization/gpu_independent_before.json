@@ -1,0 +1,594 @@
+{
+  "source_root": "/tmp/worm-pose-runtime-baseline/src",
+  "python": "3.13.15",
+  "source_sha256": "2252285997286d8e46391ec21e1bc31b8a3510c32e8061d39b18ee3a1ed70e36",
+  "torch": "2.13.0+cu130",
+  "device": "cuda",
+  "threads": 1,
+  "cuda_visible_devices": "3",
+  "compile": true,
+  "shape": [
+    4,
+    732,
+    968
+  ],
+  "params": {
+    "checkpoint": null,
+    "flat_field": false,
+    "prior": "none",
+    "compile": true,
+    "init_workers": 0,
+    "min_worm_pixels": 100,
+    "overrides": {}
+  },
+  "stages": [
+    "segment",
+    "fit",
+    "ambiguity",
+    "export"
+  ],
+  "input": "/tmp/pose-runtime-development-masks.npz",
+  "propagation_params": null,
+  "limitations": "Threshold segmentation; no learned network, flat-field estimation, prior bootstrap or video export.",
+  "runs": [
+    {
+      "seconds": {
+        "segment": 0.36423948872834444,
+        "fit": 14.51709961425513,
+        "ambiguity": 0.01570765022188425,
+        "export": 0.15647397004067898
+      },
+      "total_seconds": 15.053520723246038,
+      "frames_fit": 4,
+      "median_iou": 0.9730889707146202,
+      "stage_summaries": {
+        "segment": {
+          "frames": 4,
+          "frames_with_worm": 4,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.003265121951699257,
+            "flat_field": 0.002537675201892853,
+            "network": 0.08650525473058224,
+            "cleanup": 0.2607729882001877,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.0
+        },
+        "fit": {
+          "frames_fit": 4,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.5291436007246375,
+            "fit": 13.97058776114136
+          },
+          "iou": {
+            "median": 0.9730889707146202,
+            "p10": 0.962363396708952,
+            "min": 0.9582677165354331,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 2,
+              "edge_inside": 3
+            },
+            "frames_with_score_at_least_1": 3,
+            "frames_with_score_at_least_2": 2,
+            "iou_by_score": {
+              "0": {
+                "frames": 1,
+                "iou_median": 0.9582677165354331
+              },
+              "1": {
+                "frames": 1,
+                "iou_median": 0.9754164427727029
+              },
+              "2": {
+                "frames": 2,
+                "iou_median": 0.9730889707146202
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9946051824140748,
+              1.0124600922161868,
+              1.0289473905062378
+            ],
+            "self_contact_px_p10": 72.69404068258028,
+            "pose_jump_px_p50_p90_max": [
+              236.63430318107189,
+              260.2009223711593,
+              266.0925771686812
+            ]
+          }
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-erylw005/run-0/exports/benchmark.parquet",
+          "rows": 4,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "peak_gpu_allocated_bytes": 4124680192
+    },
+    {
+      "seconds": {
+        "segment": 0.3099989574402571,
+        "fit": 2.951952933333814,
+        "ambiguity": 0.015536132268607616,
+        "export": 0.01712772063910961
+      },
+      "total_seconds": 3.2946157436817884,
+      "frames_fit": 4,
+      "median_iou": 0.9730889707146202,
+      "stage_summaries": {
+        "segment": {
+          "frames": 4,
+          "frames_with_worm": 4,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.002548130229115486,
+            "flat_field": 0.0025877589359879494,
+            "network": 0.19106444716453552,
+            "cleanup": 0.10473327897489071,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.0
+        },
+        "fit": {
+          "frames_fit": 4,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.5124096423387527,
+            "fit": 2.4227059790864587
+          },
+          "iou": {
+            "median": 0.9730889707146202,
+            "p10": 0.962363396708952,
+            "min": 0.9582677165354331,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 2,
+              "edge_inside": 3
+            },
+            "frames_with_score_at_least_1": 3,
+            "frames_with_score_at_least_2": 2,
+            "iou_by_score": {
+              "0": {
+                "frames": 1,
+                "iou_median": 0.9582677165354331
+              },
+              "1": {
+                "frames": 1,
+                "iou_median": 0.9754164427727029
+              },
+              "2": {
+                "frames": 2,
+                "iou_median": 0.9730889707146202
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9946051824140748,
+              1.0124600922161868,
+              1.0289473905062378
+            ],
+            "self_contact_px_p10": 72.69404068258028,
+            "pose_jump_px_p50_p90_max": [
+              236.63430318107189,
+              260.2009223711593,
+              266.0925771686812
+            ]
+          }
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-erylw005/run-1/exports/benchmark.parquet",
+          "rows": 4,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "peak_gpu_allocated_bytes": 4124680192
+    },
+    {
+      "seconds": {
+        "segment": 0.12634323444217443,
+        "fit": 2.9661440700292587,
+        "ambiguity": 0.015543714165687561,
+        "export": 0.01168841402977705
+      },
+      "total_seconds": 3.1197194326668978,
+      "frames_fit": 4,
+      "median_iou": 0.9730889707146202,
+      "stage_summaries": {
+        "segment": {
+          "frames": 4,
+          "frames_with_worm": 4,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.0018267016857862473,
+            "flat_field": 0.0006722025573253632,
+            "network": 0.01571787614375353,
+            "cleanup": 0.10009575076401234,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.0
+        },
+        "fit": {
+          "frames_fit": 4,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.5192148182541132,
+            "fit": 2.4315567864105105
+          },
+          "iou": {
+            "median": 0.9730889707146202,
+            "p10": 0.962363396708952,
+            "min": 0.9582677165354331,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 2,
+              "edge_inside": 3
+            },
+            "frames_with_score_at_least_1": 3,
+            "frames_with_score_at_least_2": 2,
+            "iou_by_score": {
+              "0": {
+                "frames": 1,
+                "iou_median": 0.9582677165354331
+              },
+              "1": {
+                "frames": 1,
+                "iou_median": 0.9754164427727029
+              },
+              "2": {
+                "frames": 2,
+                "iou_median": 0.9730889707146202
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9946051824140748,
+              1.0124600922161868,
+              1.0289473905062378
+            ],
+            "self_contact_px_p10": 72.69404068258028,
+            "pose_jump_px_p50_p90_max": [
+              236.63430318107189,
+              260.2009223711593,
+              266.0925771686812
+            ]
+          }
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-erylw005/run-2/exports/benchmark.parquet",
+          "rows": 4,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "peak_gpu_allocated_bytes": 4124680192
+    },
+    {
+      "seconds": {
+        "segment": 0.12405513692647219,
+        "fit": 2.9483325593173504,
+        "ambiguity": 0.015126234851777554,
+        "export": 0.012531783431768417
+      },
+      "total_seconds": 3.1000457145273685,
+      "frames_fit": 4,
+      "median_iou": 0.9730889707146202,
+      "stage_summaries": {
+        "segment": {
+          "frames": 4,
+          "frames_with_worm": 4,
+          "frames_empty": 0,
+          "seconds": {
+            "read": 0.002421678975224495,
+            "flat_field": 0.0008678184822201729,
+            "network": 0.012822864577174187,
+            "cleanup": 0.09931638557463884,
+            "init": 0.0,
+            "fit": 0.0,
+            "video": 0.0
+          },
+          "flat_field_seconds": 0.0
+        },
+        "fit": {
+          "frames_fit": 4,
+          "frames_skipped": {
+            "empty_mask": 0,
+            "small_mask": 0,
+            "no_starts": 0,
+            "fit_error": 0
+          },
+          "seconds": {
+            "init": 0.5095088416710496,
+            "fit": 2.423469719476998
+          },
+          "iou": {
+            "median": 0.9730889707146202,
+            "p10": 0.962363396708952,
+            "min": 0.9582677165354331,
+            "fraction_at_least_0.8": 1.0,
+            "fraction_at_least_0.9": 1.0
+          }
+        },
+        "ambiguity": {
+          "ambiguity": {
+            "thresholds": {
+              "low_iou": 0.9,
+              "area_deficit": 0.9,
+              "area_excess": 1.1,
+              "self_contact_width_fraction": 0.8,
+              "holes_px": 200,
+              "fragments_px": 500,
+              "length_sigmas": 2.0,
+              "jump_width_fraction": 1.0,
+              "min_separation": 15
+            },
+            "flag_counts": {
+              "low_iou": 0,
+              "area_deficit": 0,
+              "area_excess": 0,
+              "self_contact": 0,
+              "holes": 0,
+              "fragments": 0,
+              "length_deviation": 0,
+              "pose_jump": 2,
+              "edge_inside": 3
+            },
+            "frames_with_score_at_least_1": 3,
+            "frames_with_score_at_least_2": 2,
+            "iou_by_score": {
+              "0": {
+                "frames": 1,
+                "iou_median": 0.9582677165354331
+              },
+              "1": {
+                "frames": 1,
+                "iou_median": 0.9754164427727029
+              },
+              "2": {
+                "frames": 2,
+                "iou_median": 0.9730889707146202
+              }
+            },
+            "area_ratio_p10_p50_p90": [
+              0.9946051824140748,
+              1.0124600922161868,
+              1.0289473905062378
+            ],
+            "self_contact_px_p10": 72.69404068258028,
+            "pose_jump_px_p50_p90_max": [
+              236.63430318107189,
+              260.2009223711593,
+              266.0925771686812
+            ]
+          }
+        },
+        "export": {
+          "path": "/tmp/pose-runtime-erylw005/run-3/exports/benchmark.parquet",
+          "rows": 4,
+          "columns": [
+            "frame_index",
+            "fitted",
+            "iou",
+            "tube_coverage",
+            "body_length_px",
+            "width_px",
+            "points_in_fov",
+            "source",
+            "ambiguity_score",
+            "flag_low_iou",
+            "flag_area_deficit",
+            "flag_area_excess",
+            "flag_self_contact",
+            "flag_holes",
+            "flag_fragments",
+            "flag_length_deviation",
+            "flag_pose_jump",
+            "flag_edge_inside",
+            "provenance_algorithm",
+            "provenance_job",
+            "provenance_time",
+            "centerline_x",
+            "centerline_y",
+            "width_profile",
+            "centroid_x",
+            "centroid_y",
+            "speed_px_per_frame",
+            "mean_abs_curvature"
+          ]
+        }
+      },
+      "peak_gpu_allocated_bytes": 4124680192
+    }
+  ],
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "median_seconds": {
+    "segment": 0.21817109594121575,
+    "fit": 2.9590485016815364,
+    "ambiguity": 0.015539923217147589,
+    "export": 0.014829752035439014
+  },
+  "median_total_seconds": 3.207167588174343,
+  "warm_median_seconds": {
+    "segment": 0.12634323444217443,
+    "fit": 2.951952933333814,
+    "ambiguity": 0.015536132268607616,
+    "export": 0.012531783431768417
+  },
+  "warm_median_total_seconds": 3.1197194326668978
+}

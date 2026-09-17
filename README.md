@@ -131,12 +131,12 @@ on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
 hand-refined, and the promoted model is `r2-hand165` (see
 `docs/segmenter_model_names.json` for the model names the plots use). New
 labeling work uses the pose app at `http://127.0.0.1:8768`: paint masks in
-View, save labels, and browse or fine-tune them in Corpus (see
+Paint, save labels, browse them in Labels, and fine-tune in Training (see
 [Segmentation corrections and corpus](#segmentation-corrections-and-corpus)).
 The `worm-pose-labeler` command now opens this unified interface while
 preserving its old recording, dataset-root, device and port flags.
-The module `python -m worm_pose_gen.label_app` and the launcher's `--queue`
-mode retain the legacy manifest workflow described in
+The launcher's `--queue` opens the manifest in unified Paint navigation.
+The module `python -m worm_pose_gen.label_app` retains the legacy interface described in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
 
 A targeted round (coils, self-contact, holes, fragments, camera-edge frames
@@ -180,6 +180,12 @@ images (mask the tube misses in blue, tube outside the mask in red) for its
 stored run without refitting, and `scripts/compare_pose_runs.py` puts
 several runs side by side on the same frames.
 
+Runtime improvements and reproducible GPU 3 benchmarks are documented in
+[Runtime optimization](docs/RUNTIME_OPTIMIZATION.md). The default optimizations
+preserve fitting schedules. `--compile-energy` additionally compiles the whole
+independent fitting loss; it adds startup cost and should be benchmarked on
+your workload before enabling.
+
 The pose viewer is the interactive way to look at a run:
 
 ```bash
@@ -189,8 +195,13 @@ scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.pose_vi
 ```
 
 It scrubs through a run's frames (arrow keys, play, click or drag on the
-timeline, wheel to zoom the timeline range; the image, tube and statistics
-follow the cursor at once and the mask layers arrive once it rests) and
+timeline, wheel to zoom the timeline range; the image, centerlines and saved
+statistics follow the cursor). During playback and scrubbing, expensive
+layers are deferred. Pausing or releasing the scrubber restores the selected
+frame's masks, tube outlines and residuals with the existing layer settings.
+Workspace candidate checks, mask fingerprints and comparison requests also
+wait until motion stops; candidate acceptance always validates its input masks.
+Background prefetching only loads cheap previews. The viewer
 composites every layer the pipeline produced on the flat-fielded frame,
 each with its own toggle and opacity: the segmenter's probability heat map, the thresholded mask, the
 pixels a hole fill adds and the pixels the largest-component rule drops,
@@ -305,46 +316,78 @@ lists the runs under `/temp_data4/alex/external_artifacts/poses/`
 probability maps and for the segment stage. The app binds to localhost and
 is meant to be reached through an SSH tunnel; nothing authenticates.
 
-The UI is the pose viewer described above with three more tabs:
+Choose **Job GPU** in Run for stage and region jobs, or **GPU for retries**
+in Jobs before clicking **Retry** on a finished job. The selection is remembered
+in the browser; a specific GPU waits for its slot instead of switching devices.
+The available devices come from `--gpus` (physical GPU IDs); for example,
+`--gpus 3,0 --max-concurrent 1` makes GPU 3 the automatic first choice.
+The API accepts `"gpu": 3` on job submissions and
+`POST /api/jobs/{id}/retry`; `null` means automatic selection. Omitting the
+GPU on a retry preserves the previous job's device and parameters.
 
-- **Corpus** browses and edits saved segmentation labels, starts fine-tuning
-  jobs, and selects completed checkpoints for a workspace.
-- **Recordings** lists every HDF5 file under the roots with its frame count
-  and image size, whether it can be read, whether a recording prior is cached
-  and which runs and workspaces already refer to it (the per-file facts are
-  cached in `recordings_index.json`; the refresh button rescans), shows a
-  flat-fielded thumbnail, and creates a workspace from a recording and a frame
-  range (first, last, step).
-- **Pipeline** runs the seven stages of the pipeline (segment, prior, fit,
-  ambiguity, propagate, track, export) on the selected workspace, each as a
-  job with a form generated from the stage's parameters (the defaults are
-  `fit_recording.py`'s); "Run all" queues the checked stages one after
-  another. The jobs panel shows every job with its state, progress, log tail
-  and result, and cancels running ones. Jobs are subprocesses on the local
-  GPUs; one job runs per workspace at a time, records survive a server
-  restart (a job found finished by its progress file is marked done), and
-  each job is `python -m worm_pose_gen.pipeline --workspace ... --stage ...`,
-  which also works by hand.
+The workspace UI follows **Run → Inspect → Paint → Compare → Export**.
+The selected frame, range, view and draft survive task changes. Import and Open
+are separate central panels. Statistics, Layers, Jobs and History are tabs in
+the resizable right panel; Shortcuts remains a toggleable drawer.
+The header keeps the current frame, exact selection bounds, and saved/draft
+state visible. Frame-specific side panels are hidden outside the workspace;
+Training can open Jobs and restores the workspace's side-panel view on return.
 
-Recordings are found under the recording roots (`--recording-root`,
-repeatable; default `/store1/shared/all_data_raw/prj_aversion`), but any
-HDF5 video can be added by hand: "Add recording…" in the Recordings tab
-opens a file explorer (type a path or use the shortcuts, open a directory,
-pick an `.h5` file), lists the file's datasets with the
-`[frames, height, width]` ones marked, preselects `/img_nir` or the single
-video dataset, and "Add to recordings" registers the file
-(`POST /api/recordings/register {path, dataset}`; the registry lives in
-`<workspaces root>/recordings_registry.json`). A registered recording is
-marked ♦ in the table, can be removed again from its detail card, and a
-workspace made from it remembers the dataset name so every stage reads the
-right frames. The same endpoints serve scripts: `GET /api/files?path=`
-lists directories and HDF5 files (`&all=1` lists every file, and any file
-can be opened to see whether it is HDF5), `GET /api/recordings/datasets?path=`
-lists a file's datasets.
+- **Import** browses any accessible directory, uses `/img_nir` automatically,
+  and prepares the illumination correction before showing the corrected preview.
+  Calibration, computation and loading steps are visible. Choose **Entire
+  recording** (the default) or **Selected range**, check the inclusive bounds
+  and frame count, then **Create workspace & configure pipeline**.
+- **Open** selects a workspace or read-only run before an explicit **Resume
+  workspace**, **Open run read-only**, or **Create editable copy** action.
+- **Run** opens new workspaces with setup guidance, a checkpoint/configuration
+  summary, detailed stage settings and **Run pipeline**. It runs checked stages
+  (segment, prior, fit, ambiguity, propagate and track) sequentially and opens
+  Jobs. Completion offers **Inspect results**. Current-frame and selected-range
+  runs retain their anchors, parameters and explicit scope. Scope comes before
+  configuration, and segmentation checks that the selected checkpoint is available.
+- **Inspect** lists unprocessed and flagged segments with reasons and human-review
+  state. **Minimum segment length** defaults to **8 sampled frames** and is
+  adjustable and remembered across reloads. The queue and next-segment actions
+  honor this filter; shorter regions and their flags are preserved. Selecting a segment seeks
+  to it and sets the range for looping, painting, orientation correction and
+  another fit. **Mark reviewed & next** persists human review independently of automatic
+  flags. Corrections preserve reviews of unchanged segments; changed frames and
+  their neighbors need review again. Global input/configuration changes reset review.
+- **Paint** keeps its existing brush, proposal and refinement tools visible.
+  Save actions stay pinned in the tool pane; narrow layouts place the viewer first.
+  **Save & refit selected range** saves the current frame's mask before opening
+  Run with the selected bounds. Refit candidates are never accepted automatically.
+- **Compare** switches the main viewer between Current/A/B overlays and synchronized
+  side-by-side previews of selected options. One acceptance group shows exact bounds, changed mask
+  inputs block stale candidates, and another attempt preserves the range.
+- Deleting a computed option requires confirmation naming its option and range.
+- **Export** uses a central checklist with links to Inspect, Paint and Jobs. It shows saved workspace scope, destination and outstanding review
+  status, then writes named Parquet from a matching workspace snapshot. Names
+  cannot overwrite prior exports. The download points to the captured result,
+  so later corrections cannot change it. Export is separate from Run pipeline.
+
+Labels browses saved segmentation samples and opens frames for labeling;
+Training presents label counts and prerequisites before common settings, with
+advanced settings in a disclosure and explicit checkpoint selection. These are
+optional supporting workflows. Jobs remains available alongside Training and
+shows progress, logs, results and cancellation. Job records survive restarts.
+Stage jobs use `python -m worm_pose_gen.pipeline --workspace ... --stage ...`.
+
+Recordings are found under the recording roots (`--recording-root`, repeatable;
+default `/store1/shared/all_data_raw/prj_aversion`), and can be added from any
+accessible directory through Import. The browser provides editable paths,
+folder navigation, breadcrumbs and Up. The Import header and Close button
+remain visible while its contents scroll. Registration uses
+`POST /api/recordings/register {path, dataset}` and preparation uses
+`POST /api/recordings/prepare`; `GET /api/recordings/preparation` reports its
+current step. The registry lives in `<workspaces root>/recordings_registry.json`.
+Scripts can use `GET /api/files?path=` (`&all=1` lists all files) and
+`GET /api/recordings/datasets?path=` to inspect files and alternate datasets.
 
 The read-only viewer (`worm-pose-viewer`) serves the same UI on the same
 default port but has none of these endpoints; the UI says so in the
-Recordings and Pipeline tabs and disables what needs the app, and errors
+Import and Run screens and disables what needs the app, and errors
 from the server appear as a toast over the frame as well as in the status
 line.
 
@@ -360,6 +403,12 @@ or edit, time) and the source summary counts frames per algorithm; a second
 run or workspace of the same recording can be compared on the same frames.
 
 ### Interventions
+
+After reviewing and repairing poses, the optional **Fixed body** stage adds a
+separate overlay with a single frozen length and width profile across the
+workspace. Run it from **Run → Whole workspace → Detailed stage configuration**;
+it is excluded from the default pipeline. See [Fixed body overlay](docs/FIXED_BODY.md)
+for calibration, extrapolation, and result storage.
 
 On a workspace the viewer edits frames; every edit is one line of
 `edits.jsonl` and can be undone:
@@ -377,7 +426,7 @@ On a workspace the viewer edits frames; every edit is one line of
   reverses the whole propagation stretch around it (or, outside a stretch,
   the run of fitted frames between the neighbouring stretches), which is how
   a coil that came out backwards end to end is fixed in one step.
-- **Undo.** Ctrl+Z (or the Undo button in the Edits section) undoes the
+- **Undo.** The Undo button in History undoes the
   newest live edit; the Edits section lists the log newest first, strikes
   undone entries through, and clicking an entry jumps to its frames. Undo
   restores the before-snapshot of every array slice the edit touched
@@ -398,7 +447,7 @@ rows fixed and anchors its chains on them rather than overwriting them.
 
 ### Regions
 
-The Pipeline tab's Regions section reruns an algorithm on part of a
+The Run tab's selected-range controls reruns an algorithm on part of a
 workspace and compares the result with the current track before anything is
 changed:
 
@@ -423,10 +472,33 @@ changed:
   `slow_refit` refits the current poses under a longer schedule with the
   anchors' length prior (`preset`, `length_sigma`); `mirror` fits nothing and
   offers each frame's pose and its reversal, an orientation fix over a
-  region. Every algorithm shares the path-selection weights
+  region. **Head-tracked temporal fit** (`tracked_head`) uses the recording's
+  acquisition nose landmarks with a gentle previous-pose prior and strong head priors,
+  an adjustable maximum head movement (default 8 pixels per recorded frame),
+  and a head-in-frame constraint. It runs forward and keeps its fitted head
+  orientation. See [tracked-head fitting](docs/TRACKED_HEAD_FITTING.md) for
+  the tracking schema, controls, and anchor behavior. **Fixed-body temporal
+  smoother** (`fixed_body_smoother`) fits nothing: it re-expresses the
+  region's current poses as one fixed-length, fixed-width body and smooths
+  them jointly under a first-order motion prior on head position and bending
+  whose scales are measured on the workspace's trusted frames. Trusted frames
+  (IoU at least `min_iou`, ambiguity score below 2) keep their pose; the
+  others are bridged from their neighbours (`untrusted_weight`,
+  `data_sigma_px`, `motion_tolerance`, `min_calibration_frames`). See
+  [fixed body](docs/FIXED_BODY.md#temporal-smoother). Other algorithms share the path-selection weights
   (`path_temperature`, `path_distance_weight`, `path_inview_weight`,
   `path_length_weight`) and, where it fits, the schedule `preset`. The chains
   require their anchor; a request without one is a 400.
+- **Hole filling for a refit.** Each fitting method offers **Hole filling**:
+  **Use workspace masks** retains existing behavior; **On** fills narrow holes
+  for this run; **Off** resegments unedited frames without hole filling, since
+  saved binary masks may already have holes filled. Manual masks remain the
+  source for edited frames, and ignored pixels stay excluded. These options
+  do not replace saved masks. The choice is recorded with the candidate set.
+  Head-tracked temporal fit defaults to Off; other fitting methods default to
+  Use workspace masks. Parameter explanations appear on hover.
+  Mirror and the fixed-body smoother have no hole-filling control because
+  they do no fitting.
 - **Candidate sets.** "Run on region" submits a job (`POST /api/jobs` with
   `kind: region`, `workspace`, `algorithm`, `first`, `last`,
   `anchor_before`, `anchor_after`, `params`); the job stores per-frame
@@ -477,18 +549,29 @@ the same default port, so run only one of the two or pass `--port`.
 
 ### Segmentation corrections and corpus
 
-In **View → Segmentation correction**, enable Paint mask and use Worm,
-Background or Ignore with the brush-size control. Alt or middle drag pans;
-stroke undo is separate from undoing a saved edit. The original prediction
-and editable mask have separate layers. Save or discard a draft before
-navigating or changing poses.
+In **Paint**, use Worm, Background or Ignore with the brush-size control.
+Network, Classical, raw Threshold and Saved proposals have explicit previews;
+Apply combines them by replace, union, intersection or subtraction. Fill holes,
+largest component, grow, shrink and tube fit are undoable draft operations.
+All controls stay expanded, including inapplicable controls with disabled reasons.
+Right, middle, Shift or Alt drag pans. The Shortcuts drawer lists the single
+binding registry; no chord changes meaning between tasks. Z/Ctrl+Z/Cmd+Z only
+undo draft changes. Saved edits are undone explicitly in History.
 
-**Save override** records a reversible workspace edit. The full label keeps
-ignore pixels, while the geometry fitter uses only pixels explicitly labeled
-worm. A mask change invalidates the old pose, its measurements and hypotheses;
-the viewer says it needs refitting. **Clear override** restores the underlying
-segmentation and is also undoable. Corpus labels are independent copies:
-undoing a workspace edit does not undo a corpus save.
+Next frame supports sequential stride, network uncertainty, random unlabeled,
+manifest queue and filtered saved labels. The declared workspace, selection,
+recording or manifest pool bounds traversal; P returns to visited targets.
+Changing frames or sources with an unsaved draft offers Save, Discard or Stay.
+Changing task tabs preserves the draft.
+
+**Save mask** records a reversible workspace edit. **Also save a training label**
+is optional; Save + next advances only after all selected destinations succeed.
+Partial saves report each result and retry only the incomplete destination.
+The full label keeps ignore pixels, while the fitter uses only explicit worm
+pixels. Mask changes invalidate the old pose and mark it for refitting.
+**Remove override** restores the automatic segmentation and is undoable through
+History. Clear draft and Discard draft affect only the unsaved draft. Corpus
+labels remain independent: undoing a workspace edit does not undo a corpus save.
 
 **Refit frame…** prepares an independent multi-start region run; **Refit
 stretch…** prepares a slow refit on the proposed stretch. Review its bounds,
@@ -497,7 +580,7 @@ Accept. Neither button reruns the whole workspace. Candidate sets record the
 input masks, including anchors, and cannot be accepted after those masks
 change. A segmentation-stage rerun preserves overrides.
 
-**Save label to corpus** copies the saved override and raw/corrected source
+**Save label to corpus** copies the current draft and raw/corrected source
 images into `--corpus-root` (default `<workspaces-root>/corpus`). Choose Auto
 for balanced 80/10/10 assignment or explicitly pledge a new label to train,
 validation or test. A frame retains its pledge through edits, deletion and
@@ -505,11 +588,12 @@ relabeling. Recording identity includes the full path and HDF5 dataset;
 same-named files do not collide. Each app save archives an immutable revision.
 Pass an existing segmentation store to `--corpus-root` to continue using it.
 
-In **Corpus**, filter, open, repaint or delete saved labels. Fine-tuning needs
+In **Labels**, filter by source, split and recording, open, repaint or delete
+saved labels, or open a new recording frame. Fine-tuning in **Training** needs
 at least one train and one validation label. **Start fine-tune job** snapshots
 the exact label revisions and configured worm checkpoint before queueing;
 later corpus edits cannot change the training inputs. Progress, logs and
-cancellation use Pipeline's job panel. Outputs live under
+cancellation use the right-panel Jobs tab. Outputs live under
 `--checkpoints-root` (default `<workspaces-root>/checkpoints`) in separate run
 directories with the input snapshot, run record, metrics and best/last weights.
 The app does not replace the base checkpoint or automatically promote a run.
@@ -529,17 +613,26 @@ The same operations are available through the API:
 | Undo saved override | `POST /api/workspaces/{name}/edits` with `kind: undo` |
 | Browse/save labels | `GET /api/corpus`, `POST /api/corpus/labels` with `workspace`, `frame`, optional `split` |
 | Read/edit/delete label | `GET/PUT/DELETE /api/corpus/labels/{sample_id}` |
+| Label draft/proposals/refinement/traversal | `POST /api/labeling/frame`, `/proposals`, `/refine`, `/save`, `/next` (under `/api/labeling`) |
+| Queue manifests | `GET/POST /api/labeling/manifests` |
 | Training schema/job | `GET /api/training`, `POST /api/jobs` with `kind: fine_tune` and `params` |
 | List/select checkpoint | `GET /api/checkpoints`, `POST /api/workspaces/{name}/checkpoint` with `checkpoint` ID or path |
 
-The brush regression is `tests/browser/mask_editor.cjs`; the complete workflow
+Browser regressions include `mask_editor.cjs`, `paint_tasks.cjs`,
+`task_labels_review.cjs`, `task_shortcuts.cjs`, `workflow_run.cjs`,
+`workflow_compare_export.cjs`, `inspection_filter.cjs`, `usability_library.cjs`
+and `usability_shell.cjs` under `tests/browser`; the shell test uses a separately
+started `phase4_fixture.py` at `UI_BASE_URL` (default `http://127.0.0.1:18770`). The complete workflow
 is `tests/browser/phase4_workflow.cjs`, which starts its own synthetic CPU app,
-trains for one epoch, accepts a regional refit and checks undo. It removes its
+trains for one epoch, accepts a regional refit, checks undo, records human
+review and downloads a named snapshot export. It removes its
 temporary labels/checkpoints on completion. Run either with `node` from the
 repository root; set
 `PLAYWRIGHT_MODULE` and `CHROMIUM_EXECUTABLE` if they are not installed in the
 default locations. Python coverage includes `test_mask_edits`, `test_mask_api`,
-`test_corpus`, `test_corpus_api`, `test_phase4_integration` and `test_label_launcher`.
+`test_corpus`, `test_corpus_api`, `test_labeling_api`, `test_phase4_integration`
+and `test_label_launcher`. The approved design is in
+[`docs/UI_TASK_TABS_PLAN.md`](docs/UI_TASK_TABS_PLAN.md).
 
 ## Evaluate the frozen pipeline
 

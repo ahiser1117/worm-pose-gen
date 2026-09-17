@@ -1,4 +1,4 @@
-"""Conservative, dependency-free classical worm centerline extraction.
+"""Conservative classical worm centerline extraction.
 
 This module intentionally targets easy, fully visible frames.  Rejection is a
 valid result: output from this code is a proxy label, never ground truth.
@@ -12,6 +12,7 @@ import math
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import ndimage
 
 
 FloatArray = NDArray[np.float64]
@@ -111,60 +112,48 @@ def robust_dark_ridge(image: NDArray[np.generic], config: ClassicalConfig) -> Fl
     return (residual - median) / scale
 
 
-def _dilate(mask: BoolArray, radius: int) -> BoolArray:
+def _square_morphology(mask: BoolArray, radius: int, *, erode: bool) -> BoolArray:
     if radius <= 0:
         return mask.copy()
-    padded = np.pad(mask, radius, mode="constant")
-    out = np.zeros_like(mask)
     size = 2 * radius + 1
-    for dy in range(size):
-        for dx in range(size):
-            out |= padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
-    return out
+    if radius > 16:
+        operation = ndimage.minimum_filter if erode else ndimage.maximum_filter
+        return operation(mask, size=size, mode="constant", cval=0)
+    # A square is separable. Two short, vectorized 1-D passes avoid the old
+    # quadratic number of image-wide operations, and are faster than generic
+    # ndimage filters for the small binary kernels used by segmentation.
+    operation = np.logical_and if erode else np.logical_or
+    padded = np.pad(mask, ((0, 0), (radius, radius)), mode="constant")
+    horizontal = np.full_like(mask, erode)
+    for offset in range(size):
+        operation(horizontal, padded[:, offset : offset + mask.shape[1]], out=horizontal)
+    padded = np.pad(horizontal, ((radius, radius), (0, 0)), mode="constant")
+    result = np.full_like(mask, erode)
+    for offset in range(size):
+        operation(result, padded[offset : offset + mask.shape[0], :], out=result)
+    return result
+
+
+def _dilate(mask: BoolArray, radius: int) -> BoolArray:
+    return _square_morphology(mask, radius, erode=False)
 
 
 def _erode(mask: BoolArray, radius: int) -> BoolArray:
-    if radius <= 0:
-        return mask.copy()
-    padded = np.pad(mask, radius, mode="constant")
-    out = np.ones_like(mask)
-    size = 2 * radius + 1
-    for dy in range(size):
-        for dx in range(size):
-            out &= padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
-    return out
+    return _square_morphology(mask, radius, erode=True)
 
 
 def _largest_component(mask: BoolArray) -> tuple[BoolArray, int, int]:
     """Return largest 8-connected component, its area, and component count."""
 
-    h, w = mask.shape
-    visited = np.zeros_like(mask)
-    largest: list[tuple[int, int]] = []
-    count = 0
-    for y, x in np.argwhere(mask):
-        yi, xi = int(y), int(x)
-        if visited[yi, xi]:
-            continue
-        count += 1
-        queue = deque([(yi, xi)])
-        visited[yi, xi] = True
-        pixels: list[tuple[int, int]] = []
-        while queue:
-            cy, cx = queue.popleft()
-            pixels.append((cy, cx))
-            for ny in range(max(0, cy - 1), min(h, cy + 2)):
-                for nx in range(max(0, cx - 1), min(w, cx + 2)):
-                    if mask[ny, nx] and not visited[ny, nx]:
-                        visited[ny, nx] = True
-                        queue.append((ny, nx))
-        if len(pixels) > len(largest):
-            largest = pixels
-    result = np.zeros_like(mask)
-    if largest:
-        yy, xx = np.asarray(largest).T
-        result[yy, xx] = True
-    return result, len(largest), count
+    labels, count = ndimage.label(mask, structure=np.ones((3, 3), dtype=bool))
+    if not count:
+        return np.zeros_like(mask), 0, 0
+    areas = np.bincount(labels.ravel())
+    areas[0] = 0
+    # Labels follow raster order, so argmax preserves the original first-seen
+    # winner when multiple components have the same area.
+    largest = int(areas.argmax())
+    return labels == largest, int(areas[largest]), int(count)
 
 
 def _connected_extension(seed: BoolArray, eligible: BoolArray) -> BoolArray:
@@ -172,17 +161,9 @@ def _connected_extension(seed: BoolArray, eligible: BoolArray) -> BoolArray:
 
     if seed.shape != eligible.shape or seed.ndim != 2:
         raise ValueError("seed and eligible masks must share a two-dimensional shape")
-    result = seed.copy()
-    queue = deque((int(y), int(x)) for y, x in np.argwhere(seed))
-    height, width = result.shape
-    while queue:
-        y, x = queue.popleft()
-        for neighbor_y in range(max(0, y - 1), min(height, y + 2)):
-            for neighbor_x in range(max(0, x - 1), min(width, x + 2)):
-                if eligible[neighbor_y, neighbor_x] and not result[neighbor_y, neighbor_x]:
-                    result[neighbor_y, neighbor_x] = True
-                    queue.append((neighbor_y, neighbor_x))
-    return result
+    return ndimage.binary_propagation(
+        seed, structure=np.ones((3, 3), dtype=bool), mask=eligible
+    )
 
 
 def segment_dark_ridge(

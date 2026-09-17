@@ -191,7 +191,9 @@ region's metrics before and after (`region_metrics`: median and p10 IoU,
 frames below 0.9, pose jumps over a body width, length jumps over 3%,
 orientation flips, seconds). Registered: `independent_multistart`,
 `chain_forward`, `chain_backward`, `beam_path` (the pipeline's second pass),
-`slow_refit` and `mirror`; the track-length refit is still only a stage.
+`slow_refit`, `tracked_head`, `fixed_body_smoother` (the fixed body's joint
+temporal smoother, `body_smoother`) and `mirror`; the track-length refit is
+still only a stage.
 `run_region` saves the set under `candidates/` and appends its outcome to
 `<workspaces root>/algorithm_outcomes.jsonl`; `accept_candidates` installs
 the path through one `accept_path` edit (candidates into the rows'
@@ -342,7 +344,7 @@ at 1 across algorithms on that coil; the track-length refit is not a region
 algorithm.
 
 **Phase 4.** The viewer's `masks.js` brings worm/background/ignore painting,
-transformed brush coordinates, draft protection and stroke undo into View;
+transformed brush coordinates, draft protection and draft undo into Paint;
 original prediction and editable labels are separate layers. `routers/masks`
 provides `GET/POST/DELETE /api/workspaces/{name}/mask` in frames with optional
 optimistic revisions. `edits.set_mask` logs save/clear operations, persists
@@ -368,7 +370,7 @@ undone with workspace edits.
 HDF5-dataset identity, immutable revisions and a process lock. Existing stores
 are supported through `--corpus-root`; relabeling and deletion preserve split
 pledges. `routers/corpus` exposes label list/save/read/update/delete, training
-schemas and checkpoint list/selection. Corpus's browser supports filtering,
+schemas and checkpoint list/selection. The Labels browser supports structured source/split/recording filtering,
 repainting and deleting saved labels; users may deliberately pledge a new label
 to train, validation or test. `training.fine_tune_job` freezes label bytes and
 initialization before enqueueing, and the worker trains from those inputs,
@@ -380,20 +382,29 @@ retaining historical mask provenance and overrides. Model and frame caches
 notice checkpoint replacement. CPU fine-tunes do not reserve a GPU.
 
 The `worm-pose-labeler` launcher now opens the unified app with its legacy flags;
-`--queue` explicitly retains the old manifest interface, and the old Python
-module/helper APIs remain available. Packaging the checkpoint and integrating
-the audit/manifest queue remain Phase 6 work. The existing research training
+`--queue` opens the manifest in unified Paint navigation. The old Python
+module/helper APIs remain available. Packaging the checkpoint and further audit
+integration remain Phase 6 work. The existing research training
 script keeps its historical promotion behavior; app jobs use the new worker.
 
 Validation includes focused mask transactions and race checks, imported / fresh /
 custom-dataset API round trips, an actual small refit followed by accept and
 undo with outside-region poses unchanged, corpus revision/split tests, a real
 one-epoch CPU fine-tune, checkpoint-cache checks and browser brush tests.
-The combined app, workspace, edits, jobs, segmentation, corpus, viewer, pipeline
-and algorithm regression run passed all 132 tests on CPU.
+Before the task-tabs redesign, the combined app, workspace, edits, jobs,
+segmentation, corpus, viewer, pipeline and algorithm regression run passed all
+132 tests on CPU.
 A Chromium app smoke test painted and saved an override, saved/repainted its
 corpus copy, saved a validation label, completed a fine-tune job and selected
 its checkpoint for both preview and segmentation. It then ran a targeted
 refit, accepted its candidate and verified that undo restored the stale pose.
 The training smoke uses synthetic labels to validate the workflow; model quality
 on new lab data still requires held-out evaluation.
+
+The task-tabs redesign uses Inspect → Paint → Rerun → Review, with separate
+Import/Open, Labels and Training screens and shared Jobs/History drawers. Paint
+restores proposal/combine/refine tools, all five labeling traversal modes, visited
+history, manifests and Save + next. Its controls stay expanded; navigation guards
+preserve drafts and dual saves retry only unfinished destinations. A single
+shortcut registry prevents overlapping actions and keeps draft undo separate
+from saved edit history. See `UI_TASK_TABS_PLAN.md` for the implementation contract.

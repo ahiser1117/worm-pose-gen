@@ -213,7 +213,7 @@ class SegmentationModule(L.LightningModule):
             "lr_scheduler": {"scheduler": scheduler, "interval": "epoch", "monitor": "val_loss", "strict": False},
         }
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def predict_probability(self, frame: NDArray[np.generic] | Tensor) -> NDArray[np.float32]:
         """Worm probability for one ``[H,W]`` frame, on the module's device."""
 
@@ -224,28 +224,29 @@ class SegmentationModule(L.LightningModule):
             logits = self(image)
         finally:
             self.train(was_training)
-        return torch.sigmoid(logits)[0, 0].cpu().numpy().astype(np.float32)
+        return torch.sigmoid(logits)[0, 0].float().cpu().numpy()
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def predict_probability_batch(self, frames: NDArray[np.generic] | Tensor, batch_size: int = 16) -> NDArray[np.float32]:
         """Worm probability for ``[N,H,W]`` frames, run through the network in batches."""
 
         stack = torch.as_tensor(np.asarray(frames)) if not isinstance(frames, Tensor) else frames
         if stack.ndim != 3:
             raise ValueError("frames must have shape [N,H,W]")
+        output = np.empty(tuple(stack.shape), dtype=np.float32)
+        batch_size = max(1, int(batch_size))
         was_training = self.training
         self.eval()
-        outputs = []
         try:
-            for start in range(0, stack.shape[0], max(1, batch_size)):
+            for start in range(0, stack.shape[0], batch_size):
                 chunk = stack[start : start + batch_size].to(self.device, dtype=torch.float32)
                 image = ((chunk / 255.0 - INPUT_MEAN) / INPUT_STD).unsqueeze(1)
                 with torch.autocast(device_type=self.device.type, enabled=self.device.type == "cuda"):
                     logits = self(image)
-                outputs.append(torch.sigmoid(logits.float())[:, 0].cpu())
+                output[start : start + batch_size] = torch.sigmoid(logits.float())[:, 0].cpu().numpy()
         finally:
             self.train(was_training)
-        return torch.cat(outputs).numpy().astype(np.float32)
+        return output
 
 
 def load_segmenter(

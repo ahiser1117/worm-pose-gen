@@ -62,6 +62,8 @@ class JobSpec:
     workspace: str | None = None
     frames: list[int] | None = None
     gpus: int = 1
+    # Physical GPU requested by the user; None lets the queue choose.
+    gpu: int | None = None
     label: str = ""
 
     @classmethod
@@ -428,6 +430,13 @@ class JobRunner:
 
     def submit(self, spec: JobSpec, command: list[str]) -> JobRecord:
         with self._lock:
+            if spec.gpu is not None:
+                if isinstance(spec.gpu, bool) or not isinstance(spec.gpu, int) or spec.gpu < 0:
+                    raise ValueError("gpu must be a non-negative integer or null for automatic selection")
+                if spec.gpus == 0:
+                    raise ValueError("a CPU-only job cannot request a GPU")
+                if self.gpus is None or spec.gpu not in self.gpus:
+                    raise ValueError(f"GPU {spec.gpu} is not enabled for jobs; available GPUs: {self.gpus or []}")
             job_id = self._next_id()
             record = JobRecord(
                 id=job_id,
@@ -559,12 +568,23 @@ class JobRunner:
             if len(self._running()) >= self.max_concurrent:
                 break
             needs_gpu = record.spec.gpus > 0 and self.gpus is not None
-            if needs_gpu and not free:
+            requested = record.spec.gpu
+            if requested is not None and (self.gpus is None or requested not in self.gpus):
+                self._save(_finish(record, "failed", f"requested GPU {requested} is no longer enabled for jobs"))
                 continue
-            # One job per workspace at a time; later jobs on it wait their turn.
+            # Reserve this workspace's place even when its requested GPU is
+            # busy, so a later stage on another GPU cannot overtake it.
             if record.spec.workspace and record.spec.workspace in busy:
                 continue
-            record.gpu = free.pop(0) if needs_gpu else None
+            if record.spec.workspace:
+                busy.add(record.spec.workspace)
+            if needs_gpu and not free:
+                continue
+            if requested is not None and requested not in free:
+                continue
+            record.gpu = (requested if requested is not None else free[0]) if needs_gpu else None
+            if record.gpu is not None:
+                free.remove(record.gpu)
             self._start(record)
             if record.state == "running" and record.spec.workspace:
                 busy.add(record.spec.workspace)

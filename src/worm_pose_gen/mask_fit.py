@@ -31,6 +31,7 @@ from typing import Sequence
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import ndimage
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
@@ -547,7 +548,8 @@ def fill_narrow_holes(
 
     Segmentation texture holes inside the body are narrow; the interior of a
     coiled worm is not.  Background connected to the image border is never
-    filled.  Returns the filled mask and the number of pixels added.
+    filled. Returns the filled mask and the number of pixels added. Cleanup
+    runs on the CPU; ``device`` is retained for compatibility with fit callers.
     """
 
     binary = np.asarray(mask, dtype=bool)
@@ -557,39 +559,37 @@ def fill_narrow_holes(
         raise ValueError("radius must be non-negative")
     if radius == 0 or not binary.any():
         return binary.copy(), 0
-    resolved = torch.device(
-        device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    # Inputs and outputs are NumPy arrays even when the fit runs on CUDA.
+    # A compiled frontier flood fill avoids pooling the entire crop once for
+    # every pixel of geodesic distance from the border.
     yy, xx = np.nonzero(binary)
     height, width = binary.shape
     y0, y1 = max(0, int(yy.min()) - 1), min(height, int(yy.max()) + 2)
     x0, x1 = max(0, int(xx.min()) - 1), min(width, int(xx.max()) + 2)
-    local = torch.as_tensor(binary[y0:y1, x0:x1], device=resolved)
-    background = ~local
-    reached = torch.zeros_like(background)
+    background = ~binary[y0:y1, x0:x1]
+    reached = np.zeros_like(background)
     reached[0, :] = background[0, :]
     reached[-1, :] = background[-1, :]
     reached[:, 0] = background[:, 0]
     reached[:, -1] = background[:, -1]
-
-    def dilate(values: Tensor, size: int) -> Tensor:
-        pooled = F.max_pool2d(values.to(torch.float32)[None, None], size, stride=1, padding=size // 2)
-        return pooled[0, 0] > 0
-
-    for _ in range(max_iterations):
-        grown = dilate(reached, 3) & background
-        if bool(torch.equal(grown, reached)):
-            break
-        reached = grown
+    if max_iterations > 0:
+        reached = ndimage.binary_dilation(
+            reached,
+            structure=np.ones((3, 3), dtype=bool),
+            iterations=max_iterations,
+            mask=background,
+        )
     enclosed = background & ~reached
-    if not bool(enclosed.any()):
+    if not enclosed.any():
         return binary.copy(), 0
     size = 2 * radius + 1
-    eroded = ~dilate(~enclosed, size)
-    survivors = dilate(eroded, size) & enclosed
+    # max_pool2d ignores out-of-image pixels. For erosion this is equivalent
+    # to a foreground border, including with a deliberately truncated flood.
+    eroded = ndimage.minimum_filter(enclosed, size=size, mode="constant", cval=1)
+    survivors = ndimage.maximum_filter(eroded, size=size, mode="constant", cval=0) & enclosed
     addition = enclosed & ~survivors
     filled = binary.copy()
-    filled[y0:y1, x0:x1] |= addition.cpu().numpy()
+    filled[y0:y1, x0:x1] |= addition
     return filled, int(addition.sum())
 
 
@@ -620,37 +620,25 @@ def signed_edge_distance(mask: Tensor, *, chunk_pixels: int = 4096) -> Tensor:
 
     Positive inside.  A pixel adjacent to the edge reads ``0.5``, so a soft
     target ``sigmoid(distance / softness)`` crosses one half exactly where the
-    renderer's tube boundary does.  Distances are measured to the opposite
-    side's boundary pixels, which keeps the computation small.
+    renderer's tube boundary does. Exact Euclidean transforms measure distance
+    to the opposite class in linear time. ``chunk_pixels`` is retained for API
+    compatibility; no pairwise distance chunks are allocated.
     """
 
     values = mask.to(dtype=torch.bool)
     if values.ndim != 2:
         raise ValueError("mask must have shape [H,W]")
-    if not bool(values.any()) or bool(values.all()):
+    binary = values.cpu().numpy()
+    if not binary.any() or binary.all():
         raise ValueError("mask must contain foreground and background")
-    floating = values.to(dtype=torch.float32)
-    dilated = F.max_pool2d(floating[None, None], 3, stride=1, padding=1)[0, 0] > 0
-    eroded = -F.max_pool2d(-floating[None, None], 3, stride=1, padding=1)[0, 0] > 0
-    outer_boundary = dilated & ~values
-    inner_boundary = values & ~eroded
-    height, width = values.shape
-    yy, xx = torch.meshgrid(
-        torch.arange(height, device=values.device),
-        torch.arange(width, device=values.device),
-        indexing="ij",
-    )
-    pixels = torch.stack((yy, xx), -1).reshape(-1, 2).to(dtype=torch.float32)
-    result = torch.empty(height * width, dtype=torch.float32, device=values.device)
-    flat_inside = values.reshape(-1)
-    for side, targets in ((True, outer_boundary), (False, inner_boundary)):
-        target_yx = torch.nonzero(targets, as_tuple=False).to(dtype=torch.float32)
-        rows = torch.nonzero(flat_inside == side, as_tuple=False).squeeze(1)
-        for start in range(0, len(rows), chunk_pixels):
-            index = rows[start : start + chunk_pixels]
-            distance = torch.cdist(pixels[index], target_yx).min(1).values - 0.5
-            result[index] = distance if side else -distance
-    return result.reshape(height, width)
+    # The closest opposite-class pixel is necessarily on its boundary, so
+    # Euclidean distance transforms give the same distances as the pairwise
+    # boundary search in linear time and without pixel-by-edge matrices.
+    # Targets are static: one host transfer also avoids large CUDA workspaces.
+    inside = ndimage.distance_transform_edt(binary)
+    outside = ndimage.distance_transform_edt(~binary)
+    distance = np.where(binary, inside - 0.5, 0.5 - outside).astype(np.float32)
+    return torch.from_numpy(distance).to(device=values.device)
 
 
 def _downsample(values: Tensor, factor: int) -> Tensor:
@@ -798,15 +786,20 @@ def render_tube_segments(
     image_width: int,
     *,
     edge_softness: float = 0.8,
+    pixel_origin_xy: tuple[int, int] = (0, 0),
 ) -> Tensor:
     """Soft tube occupancy from distance to the centerline *polyline*.
 
-    ``worm_pose_gen.renderer.render_worm`` measures distance to the nearest
-    centerline sample.  That makes occupancy between samples depend on sample
+    ``worm_pose_gen.renderer.render_worm`` uses disks at centerline samples.
+    That makes occupancy between samples depend on sample
     spacing, so lengthening the body shrinks the rendered tube everywhere and
     the length gradient carries a consistent shortening bias.  Distance to the
-    polyline segments removes that bias.  Diameter is interpolated along the
-    nearest segment.  Shapes: ``[B,N,2]`` points, ``[B,N]`` diameters.
+    polyline segments removes that bias. Diameter is interpolated along each
+    segment, and occupancy is their union. A narrow nose or tail can therefore
+    touch or overlap the wider body without cutting into its silhouette.
+    Shapes: ``[B,N,2]`` points, ``[B,N]`` diameters. ``pixel_origin_xy``
+    renders a subwindow in the original coordinate system without rounding
+    the centerline again when translating it to a smaller raster.
     """
 
     if centerline_xy.ndim != 3 or centerline_xy.shape[-1] != 2 or centerline_xy.shape[1] < 2:
@@ -817,25 +810,39 @@ def render_tube_segments(
         raise ValueError("positive image dimensions and edge_softness are required")
     dtype, device = centerline_xy.dtype, centerline_xy.device
     yy, xx = torch.meshgrid(
-        torch.arange(image_height, dtype=dtype, device=device),
-        torch.arange(image_width, dtype=dtype, device=device),
+        torch.arange(image_height, dtype=dtype, device=device) + pixel_origin_xy[1],
+        torch.arange(image_width, dtype=dtype, device=device) + pixel_origin_xy[0],
         indexing="ij",
     )
-    pixels = torch.stack((xx, yy), -1).reshape(1, -1, 1, 2)
-    start = centerline_xy[:, None, :-1, :]
-    segment = (centerline_xy[:, 1:, :] - centerline_xy[:, :-1, :])[:, None, :, :]
-    segment_length_sq = segment.square().sum(-1).clamp_min(1e-6)
-    to_pixel = pixels - start
-    t = ((to_pixel * segment).sum(-1) / segment_length_sq).clamp(0.0, 1.0)
-    closest = start + t[..., None] * segment
-    distance_sq = (pixels - closest).square().sum(-1)
-    min_distance_sq, nearest = distance_sq.min(-1)
-    t_nearest = torch.gather(t, 2, nearest[..., None]).squeeze(-1)
-    diameter_start = torch.gather(diameter[:, :-1], 1, nearest)
-    diameter_end = torch.gather(diameter[:, 1:], 1, nearest)
-    local_diameter = (1.0 - t_nearest) * diameter_start + t_nearest * diameter_end
-    distance = torch.sqrt(min_distance_sq + torch.finfo(dtype).eps)
-    mask = torch.sigmoid((0.5 * local_diameter - distance) / edge_softness)
+    if centerline_xy.is_cuda:
+        # Keep the established vector form on CUDA. With the scalar form,
+        # compiled amax backward can produce non-finite gradients on ordinary
+        # worm geometry even when occupancy and eager gradients are finite.
+        pixels = torch.stack((xx, yy), -1).reshape(1, -1, 1, 2)
+        start = centerline_xy[:, None, :-1, :]
+        segment = (centerline_xy[:, 1:, :] - centerline_xy[:, :-1, :])[:, None, :, :]
+        segment_length_sq = segment.square().sum(-1).clamp_min(1e-6)
+        to_pixel = pixels - start
+        t = ((to_pixel * segment).sum(-1) / segment_length_sq).clamp(0.0, 1.0)
+        closest = start + t[..., None] * segment
+        distance_sq = (pixels - closest).square().sum(-1)
+    else:
+        # Separate CPU coordinates avoid the huge trailing size-two dimension
+        # in eager autograd's allocations and reductions.
+        pixel_x, pixel_y = xx.reshape(1, -1, 1), yy.reshape(1, -1, 1)
+        start_x = centerline_xy[:, None, :-1, 0]
+        start_y = centerline_xy[:, None, :-1, 1]
+        segment_x = centerline_xy[:, None, 1:, 0] - start_x
+        segment_y = centerline_xy[:, None, 1:, 1] - start_y
+        segment_length_sq = (segment_x.square() + segment_y.square()).clamp_min(1e-6)
+        t = (((pixel_x - start_x) * segment_x + (pixel_y - start_y) * segment_y) / segment_length_sq).clamp(0.0, 1.0)
+        distance_sq = (pixel_x - (start_x + t * segment_x)).square() + (pixel_y - (start_y + t * segment_y)).square()
+    local_diameter = (1.0 - t) * diameter[:, None, :-1] + t * diameter[:, None, 1:]
+    distance = torch.sqrt(distance_sq + torch.finfo(dtype).eps)
+    # Union the tube surfaces, not the centerline distances: the nearest
+    # centerline may be a thin tip beside a wider segment covering this pixel.
+    signed_coverage = (0.5 * local_diameter - distance).amax(-1)
+    mask = torch.sigmoid(signed_coverage / edge_softness)
     return mask.reshape(centerline_xy.shape[0], image_height, image_width)
 
 
@@ -941,17 +948,18 @@ def fit_mask(
     template_t = torch.as_tensor(template, dtype=torch.float32, device=resolved_device)
 
     crop = crop_window(binary, config.crop_padding, max(config.stage_downsample))
-    target_full = torch.as_tensor(
-        binary[crop.y0 : crop.y1, crop.x0 : crop.x1], dtype=torch.float32, device=resolved_device
-    )
+    local_mask = binary[crop.y0 : crop.y1, crop.x0 : crop.x1]
     # The renderer produces a sigmoid of distance at ``edge_softness`` pixels of
-    # the stage raster.  Blurring the observed mask with the same sigmoid of
+    # the stage raster. Blurring the observed mask with the same sigmoid of
     # its signed distance keeps the optimum consistent across stages; a hard
-    # target would bias a coarse stage toward a shorter, wider tube.
-    if bool(target_full.all()):
-        signed_distance = torch.full_like(target_full, float("inf"))
+    # target would bias a coarse stage toward a shorter, wider tube. Compute
+    # from the original CPU mask and transfer only the completed distance map.
+    if local_mask.all():
+        signed_distance = torch.full(
+            local_mask.shape, float("inf"), dtype=torch.float32, device=resolved_device
+        )
     else:
-        signed_distance = signed_edge_distance(target_full >= 0.5)
+        signed_distance = signed_edge_distance(torch.from_numpy(local_mask)).to(device=resolved_device)
 
     def stage_target(factor: int) -> Tensor:
         soft = torch.sigmoid(signed_distance / (config.edge_softness * factor))

@@ -49,6 +49,7 @@ Example (one minute at 20 fps of an unseen recording, with video):
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 import json
@@ -132,6 +133,7 @@ def parse_args() -> argparse.Namespace:
         help="starting states per frame (default skeleton+straight; the reference preset uses all). The skeleton start wins on nearly every frame",
     )
     parser.add_argument("--no-compile", action="store_true", help="render eagerly instead of through torch.compile")
+    parser.add_argument("--compile-energy", action="store_true", help="opt in to compiling the complete energy for independent fitting (adds compilation startup; benchmark before enabling)")
     parser.add_argument(
         "--width-coefficients", type=int, default=None,
         help="cubic B-spline coefficients of the log-space width correction (0 = symmetric template; preset default 6)",
@@ -219,6 +221,7 @@ def fit_params(args: argparse.Namespace) -> FitParams:
         width_coefficients=args.width_coefficients, width_prior=args.width_prior, orient=not args.no_orient, prior=args.prior,
         prior_shape_weight=args.prior_shape_weight, min_bend_radius=args.min_bend_radius, row_pixel_budget=args.row_pixel_budget,
         init_workers=args.init_workers, slab=args.slab, min_worm_pixels=args.min_worm_pixels,
+        overrides={"compile_energy": True} if args.compile_energy else {},
     )
 
 
@@ -244,6 +247,63 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
     from worm_pose_gen.pipeline import build_fit_config
 
     return build_fit_config(fit_params(args))
+
+
+class _PackedMaskCache:
+    """Run-local LRU with at most 128 MiB of packed mask data by default."""
+
+    def __init__(self, max_bytes: int = 128 * 1024 * 1024) -> None:
+        self.max_bytes = max(0, int(max_bytes))
+        self.nbytes = 0
+        self._entries: OrderedDict[int, tuple[np.ndarray, tuple[int, int], int]] = OrderedDict()
+
+    def put(self, row: int, mask: np.ndarray, worm_pixels: int) -> None:
+        previous = self._entries.pop(int(row), None)
+        if previous is not None:
+            self.nbytes -= previous[0].nbytes
+        packed = np.packbits(np.asarray(mask, dtype=bool).ravel())
+        if packed.nbytes > self.max_bytes:
+            return
+        while self._entries and self.nbytes + packed.nbytes > self.max_bytes:
+            _, (evicted, _, _) = self._entries.popitem(last=False)
+            self.nbytes -= evicted.nbytes
+        self._entries[int(row)] = (packed, (int(mask.shape[0]), int(mask.shape[1])), int(worm_pixels))
+        self.nbytes += packed.nbytes
+
+    def get(self, row: int) -> tuple[np.ndarray, int] | None:
+        entry = self._entries.get(int(row))
+        if entry is None:
+            return None
+        self._entries.move_to_end(int(row))
+        packed, shape, worm_pixels = entry
+        mask = np.unpackbits(packed, count=shape[0] * shape[1]).astype(bool).reshape(shape)
+        return mask, worm_pixels
+
+
+def _segment_cached_rows(
+    rows: list[int], frames: Frames, model: Any, frame_index: np.ndarray,
+    params: SegmentParams, device: Any, cache: _PackedMaskCache,
+) -> dict[int, np.ndarray]:
+    """Reuse this run's cleaned masks; segment only rows evicted from the cache."""
+
+    out: dict[int, np.ndarray] = {}
+    missing: list[int] = []
+    for row in rows:
+        cached = cache.get(row)
+        if cached is None:
+            missing.append(row)
+        else:
+            mask, worm_pixels = cached
+            if worm_pixels >= params.min_worm_pixels:
+                out[int(row)] = mask
+    for start in range(0, len(missing), params.batch_size):
+        chunk = missing[start : start + params.batch_size]
+        masks, stats, _ = segment_frames(frames, model, [int(frame_index[row]) for row in chunk], params, device)
+        for row, mask, frame_stats in zip(chunk, masks, stats, strict=True):
+            cache.put(row, mask, frame_stats["worm_pixels"])
+            if frame_stats["worm_pixels"] >= params.min_worm_pixels:
+                out[int(row)] = mask
+    return {int(row): out[int(row)] for row in rows if int(row) in out}
 
 
 def main() -> int:
@@ -285,6 +345,7 @@ def main() -> int:
     timing = {stage: 0.0 for stage in STAGES}
 
     # Independent fits, slab by slab: segment, clean, start, fit, store.
+    mask_cache = _PackedMaskCache()
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
     try:
         for slab_start in range(0, n, args.slab):
@@ -295,6 +356,7 @@ def main() -> int:
             fit_masks_here: list[np.ndarray] = []
             fit_rows: list[int] = []
             for row, mask, frame_stats in zip(slab_rows, masks, stats, strict=True):
+                mask_cache.put(row, mask, frame_stats["worm_pixels"])
                 store_mask_stats(arrays, row, frame_stats)
                 if frame_stats["worm_pixels"] == 0:
                     skipped["empty_mask"] += 1
@@ -320,16 +382,7 @@ def main() -> int:
             pool.shutdown()
 
     def segment_rows(rows: list[int]) -> dict[int, np.ndarray]:
-        """Re-segment and clean the masks of these rows (masks are not kept from the first pass)."""
-
-        out: dict[int, np.ndarray] = {}
-        for chunk_start in range(0, len(rows), args.batch_size):
-            chunk = rows[chunk_start : chunk_start + args.batch_size]
-            masks, stats, _ = segment_frames(frames, model, [int(arrays["frame_index"][r]) for r in chunk], segmentation, device)
-            for r, mask, frame_stats in zip(chunk, masks, stats, strict=True):
-                if frame_stats["worm_pixels"] >= args.min_worm_pixels:
-                    out[int(r)] = mask
-        return out
+        return _segment_cached_rows(rows, frames, model, arrays["frame_index"], segmentation, device, mask_cache)
 
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
     # independent pose itself is kept so a viewer can show what propagation

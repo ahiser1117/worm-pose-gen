@@ -1,0 +1,17 @@
+#paint-primary {
+  position: sticky;
+  top: var(--task-nav-height, 49px);
+  z-index: 4;
+  padding: 8px 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#paint-primary button { white-space: normal; padding: 5px 7px; font-size: 12px; }
+#paint-primary .row { gap: 5px; margin: 5px 0; }
+#paint-primary .note { font-size: 12px; margin: 5px 0; }
+#paint-primary .note:empty { display: none; }
+#paint-quick-brush { padding-top: 8px; }
+@media (max-width: 800px) {
+  #app[data-screen="workspace"][data-task="paint"] > #workspace-main { order: -1; }
+  #paint-primary { position: static; }
+}

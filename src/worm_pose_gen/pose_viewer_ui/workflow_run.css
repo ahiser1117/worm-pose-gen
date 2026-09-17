@@ -1,0 +1,14 @@
+#workflow-run-summary { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.65; }
+#workflow-run-status { line-height: 1.45; }
+#workflow-stage-progress { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; list-style: none; padding: 0; margin: 12px 0; font-size: 12px; }
+#workflow-stage-progress li { padding: 6px 8px; border: 1px solid var(--line, #313945); border-radius: 4px; }
+#workflow-stage-progress [data-state="running"] { color: var(--accent, #8dcaff); }
+#workflow-stage-progress [data-state="failed"] { color: #ff9d95; }
+#workflow-stage-progress [data-state="done"] { color: #8fd9ab; }
+#workflow-stage-details > summary { cursor: pointer; padding: 10px 0; }
+#ws-range-summary { margin: 8px 0; }
+.workflow-range-mode select { width: 100%; }
+#ws-create { white-space: normal; }
+#workflow-run-models select { width: 100%; }
+#workflow-run-models .row { margin-top: 6px; }
+#workflow-stage-progress [data-state="model unavailable"] { color: var(--red, #ff9d95); }

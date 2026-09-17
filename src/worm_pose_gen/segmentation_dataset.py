@@ -22,14 +22,14 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 import lightning as L
 import numpy as np
 from numpy.typing import NDArray
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 from .segmenter import IGNORE_LABEL, normalize_frame
 
@@ -347,7 +347,7 @@ class SegmentationDataset(Dataset[dict[str, Tensor | str]]):
 class SegmentationDataModule(L.LightningDataModule):
     def __init__(
         self,
-        root: str | Path = DEFAULT_DATASET_ROOT,
+        roots: str | Path | Sequence[str | Path] = DEFAULT_DATASET_ROOT,
         *,
         batch_size: int = 4,
         crop_size: int | None = 512,
@@ -356,11 +356,13 @@ class SegmentationDataModule(L.LightningDataModule):
         train_label_filter: str = "all",
         pad_batches: bool = False,
     ) -> None:
-        """``train_label_filter`` restricts the training split only; validation
-        and test always use every label they hold."""
+        """Train, validate, and test on the union of the stores at ``roots``;
+        each store keeps its own splits.  ``train_label_filter`` restricts the
+        training split only; validation and test always use every label they
+        hold."""
 
         super().__init__()
-        self.store = SegmentationStore(root)
+        self.stores = [SegmentationStore(r) for r in ([roots] if isinstance(roots, (str, Path)) else roots)]
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
@@ -368,15 +370,28 @@ class SegmentationDataModule(L.LightningDataModule):
         self.train_label_filter = train_label_filter
         self.pad_batches = pad_batches
 
-    def train_records(self):
-        return [r for r in self.store.records("train") if matches_label_filter(r.label_source, self.train_label_filter)]
+    def counts(self) -> dict[str, int]:
+        result = {name: 0 for name in SPLITS}
+        for store in self.stores:
+            for name, value in store.counts().items():
+                result[name] += value
+        return result
+
+    def train_records(self) -> list[SampleRecord]:
+        return [
+            r for store in self.stores for r in store.records("train")
+            if matches_label_filter(r.label_source, self.train_label_filter)
+        ]
 
     def setup(self, stage: str | None = None) -> None:
-        self.train_set = SegmentationDataset(
-            self.store, "train", augment=True, crop_size=self.crop_size, seed=self.seed, label_filter=self.train_label_filter,
-        )
-        self.val_set = SegmentationDataset(self.store, "val")
-        self.test_set = SegmentationDataset(self.store, "test")
+        self.train_set = ConcatDataset([
+            SegmentationDataset(
+                store, "train", augment=True, crop_size=self.crop_size, seed=self.seed, label_filter=self.train_label_filter,
+            )
+            for store in self.stores
+        ])
+        self.val_set = ConcatDataset([SegmentationDataset(store, "val") for store in self.stores])
+        self.test_set = ConcatDataset([SegmentationDataset(store, "test") for store in self.stores])
 
     def _loader(self, dataset: Dataset[Any], shuffle: bool, batch_size: int) -> DataLoader[Any]:
         return DataLoader(

@@ -1,0 +1,10 @@
+#workspace-main.export-task-active > :is(#stage,#canvas-tools,#compare-side) {display:none}
+.export-workflow {padding:24px;width:100%;max-width:850px;box-sizing:border-box;line-height:1.5;align-self:center;overflow-wrap:anywhere}
+.export-workflow[hidden] {display:none}
+.export-workflow label {display:block;margin:16px 0 6px;font-weight:600}
+.export-workflow input {width:320px;max-width:100%;box-sizing:border-box}
+.export-workflow a {color:#69d8ff}
+.export-checklist {list-style:none;padding:0;margin:12px 0;border-top:1px solid var(--border)}
+.export-checklist li {display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border);padding:10px 0}
+.export-checklist p {margin:4px 0}.export-checklist button {flex-shrink:0}
+@media(max-width:650px){.export-workflow{padding:12px}.export-checklist li{align-items:flex-start;flex-direction:column;gap:6px}}

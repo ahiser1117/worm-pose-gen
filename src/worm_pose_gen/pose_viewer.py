@@ -532,20 +532,17 @@ class LoadedRun:
     ) -> dict[str, Any]:
         """Layers and statistics of one frame, cached per threshold.
 
-        ``detail="light"`` skips the segmenter and the mask layers (image,
-        tube, pose and statistics only), which is what the browser asks for
-        while the user scrubs; the full layers follow once the cursor rests.
+        ``detail="light"`` skips segmentation and all raster overlays, including
+        tube rendering. Only the image, saved pose and statistics follow the
+        cursor; full layers load when playback or scrubbing stops.
         """
 
         threshold = self.threshold if threshold is None else float(threshold)
         light = detail == "light"
         model_signature = segmenters.signature(self.segmentation_checkpoint)
-        key = (row, threshold, "full", model_signature)
+        key = (row, threshold, "light" if light else "full", model_signature)
         with self._lock:
             cached = self._cache.get(key)
-            if cached is None and light:
-                key = (row, threshold, "light", model_signature)
-                cached = self._cache.get(key)
             if cached is not None:
                 self._cache.move_to_end(key)
         if cached is None:
@@ -554,7 +551,7 @@ class LoadedRun:
                 self._cache[key] = cached
                 while len(self._cache) > FRAME_CACHE_SIZE:
                     self._cache.popitem(last=False)
-        payload = dict(cached)
+        payload = {**cached, "layers": dict(cached["layers"])}
         if raw and self.source is not None:
             payload["image_raw"] = jpeg_data_url(self.source.read(int(self.frame_index[row])))
         payload["stats"] = self.stats(row)
@@ -640,7 +637,7 @@ class LoadedRun:
                 stored = {k: int(arrays[k][row]) for k in ("raw_worm_pixels", "pixels_filled", "components", "pixels_outside_largest", "worm_pixels") if k in arrays}
                 payload["mask_stats_stored"] = stored
         payload["height"], payload["width"] = height, width
-        if arrays["fitted"][row] and height and width:
+        if not light and arrays["fitted"][row] and height and width:
             tube = render_tube(arrays["centerline_xy"][row], arrays["width_profile"][row], height, width, window=tuple(arrays["crop"][row]), device=device)
             payload["layers"]["tube"] = mask_data_url(tube)
             if "centerline_xy_independent" in arrays and "source" in arrays and int(arrays["source"][row]) != 0:

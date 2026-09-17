@@ -132,8 +132,9 @@ function renderEdits() {
   count.textContent = editsSupported() ? `${live} live · ${edits.length} entries` : "";
   const undoButton = $("#edit-undo");
   const target = newestUndoable();
+  undoButton.textContent = "Undo saved edit";
   undoButton.disabled = !editsSupported() || !target;
-  undoButton.title = target ? `undo ${editLabel(target)} ${editFrames(target)} (Ctrl+Z)` : editsSupported() ? "nothing to undo" : "edits need a workspace on the app server";
+  undoButton.title = target ? `undo ${editLabel(target)} ${editFrames(target)}` : editsSupported() ? "nothing to undo" : "edits need a workspace on the app server";
   list.innerHTML = "";
   if (!editsSupported()) { list.innerHTML = `<div class="empty">${state.sourceKind === "run" ? "Read-only run: import it as a workspace to edit." : "Edits need a workspace on the app server."}</div>`; return; }
   if (state.editsError) { list.innerHTML = `<div class="empty">${escapeHtml(state.editsError)}</div>`; return; }
@@ -143,7 +144,7 @@ function renderEdits() {
     item.className = `item edit ${e.kind}${e.undone ? " undone" : ""}`;
     item.dataset.edit = e.id;
     const summary = editSummaryText(e);
-    item.innerHTML = `<span><b>${escapeHtml(editLabel(e))}</b> ${escapeHtml(editFrames(e))}${e.note ? " — " + escapeHtml(e.note) : ""}<div class="meta">${escapeHtml(e.id)} · ${escapeHtml(fmtTime(e.time))}${e.algorithm && !isManualAlgorithm(e.algorithm) ? " · " + escapeHtml(e.algorithm) : ""}${summary ? " · " + escapeHtml(summary) : ""}${e.undone ? " · undone" : ""}</div></span><span>${target && e.id === target.id ? '<button type="button" title="undo this edit (Ctrl+Z)">Undo</button>' : ""}</span>`;
+    item.innerHTML = `<span><b>${escapeHtml(editLabel(e))}</b> ${escapeHtml(editFrames(e))}${e.note ? " — " + escapeHtml(e.note) : ""}<div class="meta">${escapeHtml(e.id)} · ${escapeHtml(fmtTime(e.time))}${e.algorithm && !isManualAlgorithm(e.algorithm) ? " · " + escapeHtml(e.algorithm) : ""}${summary ? " · " + escapeHtml(summary) : ""}${e.undone ? " · undone" : ""}</div></span><span>${target && e.id === target.id ? '<button type="button" title="undo this saved workspace edit">Undo saved edit</button>' : ""}</span>`;
     item.addEventListener("click", (event) => {
       if (event.target.tagName === "BUTTON") { event.stopPropagation(); undoEdit(e.id); return; }
       if (e.frames && state.run) {
@@ -174,7 +175,7 @@ function fetchSegment(row) {
   renderSegmentInfo();
   clearTimeout(segmentTimer);
   segmentTimer = setTimeout(() => {
-    if (row !== state.row || !state.run || state.segments.has(row)) return;
+    if (row !== state.row || !state.run || state.playing || state.timeline.dragging || state.segments.has(row)) return;
     const name = state.runName;
     const frame = state.run.series.frame_index[row];
     state.segments.set(row, { pending: true });
@@ -250,10 +251,11 @@ let editInFlight = false;
 function claimEdit() {
   if (editInFlight) { setStatus("an edit is still being applied", "error"); return false; }
   editInFlight = true;
+  window.dispatchEvent(new CustomEvent("workflow:edit-state"));
   return true;
 }
 
-function releaseEdit() { editInFlight = false; }
+function releaseEdit() { editInFlight = false; window.dispatchEvent(new CustomEvent("workflow:edit-state")); }
 
 function editPending() { return editInFlight; }
 
@@ -314,7 +316,7 @@ function undoEdit(editId) {
 // Apply what an edit changed: the series patch (iou, source, ambiguity
 // score, classification, provenance for the rows around the edit), then
 // drop the cached frames, show the refreshed frame and reload the log.
-async function applyEditResponse(payload) {
+async function applyEditResponse(payload, options = {}) {
   const run = state.run;
   const series = run.series;
   const n = series.frame_index.length;
@@ -343,7 +345,7 @@ async function applyEditResponse(payload) {
       if (change.after && change.after.algorithm !== undefined) setRowProvenance(change.row, change.after.algorithm);
     }
   }
-  if (typeof maskEditor !== "undefined") maskEditor.invalidate();
+  if (typeof maskEditor !== "undefined" && !options.preserveMaskDraft) maskEditor.invalidate();
   state.frameCache.clear();
   state.segments.clear();
   const row = state.row;
@@ -355,12 +357,13 @@ async function applyEditResponse(payload) {
   let edits;
   if (Array.isArray(payload.edits)) { state.edits = payload.edits; state.editsError = null; renderEdits(); edits = Promise.resolve(); }
   else edits = loadEdits();
-  await Promise.all([edits, showRow(row, { keepView: true, keepStarts: true, immediate: true })]);
+  await Promise.all([edits, showRow(row, { keepView: true, keepStarts: true, immediate: true, skipMaskGuard: !!options.preserveMaskDraft })]);
   if (run.provenance && !patch.edited && !payload.provenance) markEditedRowsFromLog();
   renderProvenanceLegend();
   drawCharts();
   if (typeof onSourceChanged === "function") onSourceChanged();
   $("#run-info").textContent = describeSource(run);
+  window.dispatchEvent(new CustomEvent("workflow:changed"));
 }
 
 // Without an "edited" patch from the server, the rows a live edit touched

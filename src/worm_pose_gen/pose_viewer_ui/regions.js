@@ -38,7 +38,69 @@ const COMPARE_METRICS = [
 ];
 const REGION_AROUND_ROWS = 10;
 
-const regions = { sourceKey: null, loadingDetail: new Set(), unsupported: null };
+const regions = { sourceKey: null, loadingDetail: new Set(), unsupported: null, rerunScope: "current", currentRegion: null };
+
+// The operation scope is independent of the temporal selection, including when
+// the selected recording has gaps or a sampling step greater than one.
+function effectiveRerunRegion() {
+  if (!state.run || !rowCount() || regions.rerunScope === "workspace") return null;
+  if (regions.rerunScope === "selection") return state.region ? { ...state.region } : null;
+  const saved = regions.currentRegion;
+  return saved && saved.first === state.row && saved.sourceKey === currentSourceKey()
+    ? { ...saved }
+    : { first: state.row, last: state.row, anchor_before: null, anchor_after: null, reason: "current frame", sourceKey: currentSourceKey() };
+}
+
+function setRerunScope(scope) {
+  if (!["current", "selection", "workspace"].includes(scope)) return false;
+  regions.rerunScope = scope;
+  refreshRerunScope();
+  return true;
+}
+
+function refreshRerunScope() {
+  const scope = regions.rerunScope, region = effectiveRerunRegion();
+  const select = $("#rerun-scope"); if (select) select.value = scope;
+  const note = $("#rerun-scope-info");
+  if (note) note.textContent = !state.run ? "Open a workspace to rerun poses." : scope === "workspace"
+    ? `Whole workspace: ${rowCount()} frames. Only checked stages run, in order.`
+    : region ? `${scope === "current" ? "Current frame" : "Selected range"}: ${frameOfRow(region.first)}–${frameOfRow(region.last)} · ${region.last - region.first + 1} frame${region.last === region.first ? "" : "s"}. Hole filling follows the setting below.`
+    : "Select an exact frame range on the timeline or enter its bounds.";
+  for (const side of ["before", "after"]) {
+    const input = $(`#rerun-current-${side}`);
+    if (input) { const row = region && scope === "current" ? region[`anchor_${side}`] : null; input.value = row == null ? "" : frameOfRow(row); input.disabled = scope !== "current" || !regionsSupported(); }
+  }
+  renderRegionInfo();
+  window.dispatchEvent(new CustomEvent("rerun-scope-changed", { detail: { scope, region } }));
+}
+
+function readCurrentAnchors() {
+  const region = effectiveRerunRegion();
+  if (!region || regions.rerunScope !== "current") return false;
+  try {
+    for (const side of ["before", "after"]) {
+      const input = $(`#rerun-current-${side}`); if (!input) continue;
+      const value = input.value.trim(), row = value === "" ? null : rowOfFrame(Number(value));
+      if (row !== null && (row < 0 || !Number.isInteger(Number(value)) || (side === "before" ? row >= region.first : row <= region.last))) throw new Error(`Anchor ${side} must be a workspace frame ${side} the current frame.`);
+      region[`anchor_${side}`] = row;
+    }
+    regions.currentRegion = { ...region, sourceKey: currentSourceKey() };
+    renderRegionInfo(); return true;
+  } catch (error) { renderRegionInfo(error.message); setStatus(error.message, "error"); return false; }
+}
+
+async function prepareMaskRefit(scope = "current") {
+  if (scope === "selection" && !state.region) { setStatus("Select a range before preparing its refit.", "error"); return false; }
+  if (!regionsSupported()) { setStatus(regionsWhyNot(), "error"); return false; }
+  setRerunScope(scope);
+  state.algorithm = scope === "current" ? "independent_multistart" : "slow_refit";
+  renderAlgorithmSelect(); renderAlgorithmForm();
+  showTab("rerun");
+  await proposeAnchors();
+  setStatus("Refit prepared from saved masks. Check the exact bounds, run, then compare candidates in Review.", "ok");
+  return true;
+}
+
 
 function regionsSupported() { return isWorkspace() && serverIsApp(); }
 
@@ -127,14 +189,16 @@ function readRegionForm() {
 
 function setRegionRows(first, last, reason) {
   const n = rowCount();
-  first = Math.max(0, Math.min(n - 1, Math.min(first, last)));
-  last = Math.max(0, Math.min(n - 1, Math.max(first, last)));
+  const lower = Math.min(first, last), upper = Math.max(first, last);
+  first = Math.max(0, Math.min(n - 1, lower));
+  last = Math.max(0, Math.min(n - 1, upper));
   const previous = state.region || {};
   // Anchors survive a new range when they still lie outside it.
   const before = previous.anchor_before !== null && previous.anchor_before !== undefined && previous.anchor_before < first ? previous.anchor_before : null;
   const after = previous.anchor_after !== null && previous.anchor_after !== undefined && previous.anchor_after > last ? previous.anchor_after : null;
   state.region = { first, last, anchor_before: before, anchor_after: after, reason: reason || "selected on the timeline" };
   writeRegionForm();
+  refreshRerunScope();
 }
 
 function clearRegion() {
@@ -146,6 +210,7 @@ function clearRegion() {
 function regionAroundFrame() {
   if (!state.run) return;
   setRegionRows(state.row - REGION_AROUND_ROWS, state.row + REGION_AROUND_ROWS, `${REGION_AROUND_ROWS} frames either side of frame ${frameOfRow(state.row)}`);
+  setRerunScope("selection");
 }
 
 // /region for the current frame: the stretch containing it padded, with
@@ -167,6 +232,7 @@ async function proposeRegion() {
     const before = rowFromServer(payload.anchor_before), after = rowFromServer(payload.anchor_after);
     state.region = { first, last, anchor_before: before !== null && before >= 0 ? before : null, anchor_after: after !== null && after >= 0 ? after : null, reason: payload.reason || "proposed by the server" };
     writeRegionForm();
+    setRerunScope("selection");
     setStatus(`region frames ${frameOfRow(first)}–${frameOfRow(last)}: ${payload.reason || "proposed"}`, "ok");
   } catch (error) {
     setStatus(`region proposal failed: ${error.message}`, "error");
@@ -178,21 +244,25 @@ async function proposeRegion() {
 async function proposeAnchors() {
   const why = regionsWhyNot();
   if (why) { setStatus(why, "error"); return; }
-  if (!readRegionForm()) return;
-  const name = state.runName;
-  const region = state.region;
+  const scope = regions.rerunScope;
+  if (scope === "workspace") return;
+  if (scope === "selection" && !readRegionForm()) return;
+  const name = currentSourceKey(), region = effectiveRerunRegion();
+  if (!region) return;
   setLoading(1);
   try {
     const payload = await api(regionUrl("region", `first=${frameOfRow(region.first)}&last=${frameOfRow(region.last)}`));
-    if (state.runName !== name || !state.region) return;
+    const active = effectiveRerunRegion();
+    if (currentSourceKey() !== name || regions.rerunScope !== scope || !active || active.first !== region.first || active.last !== region.last) return;
     const before = rowFromServer(payload.anchor_before), after = rowFromServer(payload.anchor_after);
-    state.region = { ...state.region, anchor_before: before !== null && before >= 0 ? before : null, anchor_after: after !== null && after >= 0 ? after : null };
-    writeRegionForm();
-    const missing = [before === null ? "before" : "", after === null ? "after" : ""].filter(Boolean);
-    setStatus(missing.length ? `no clean anchor ${missing.join(" or ")} the region within reach; give one by hand or run without` : `anchors frames ${frameOfRow(before)} / ${frameOfRow(after)}`, missing.length ? "error" : "ok");
-  } catch (error) {
-    setStatus(`anchor proposal failed: ${error.message}`, "error");
-  } finally { setLoading(-1); }
+    const updated = { ...region, anchor_before: before !== null && before >= 0 ? before : null, anchor_after: after !== null && after >= 0 ? after : null };
+    if (scope === "current") regions.currentRegion = { ...updated, sourceKey: name };
+    else { state.region = updated; writeRegionForm(); }
+    refreshRerunScope();
+    const missing = [updated.anchor_before === null ? "before" : "", updated.anchor_after === null ? "after" : ""].filter(Boolean);
+    setStatus(missing.length ? `No clean anchor ${missing.join(" or ")} the scope; give one by hand or run without.` : `Anchors frames ${frameOfRow(before)} / ${frameOfRow(after)}`, missing.length ? "error" : "ok");
+  } catch (error) { setStatus(`Anchor proposal failed: ${error.message}`, "error"); }
+  finally { setLoading(-1); }
 }
 
 function renderRegionInfo(problem, options) {
@@ -204,7 +274,8 @@ function renderRegionInfo(problem, options) {
   if (problem) { info.textContent = problem; info.classList.toggle("error", !neutral); run.disabled = true; return; }
   info.classList.remove("error");
   if (why) { info.textContent = why; run.disabled = true; return; }
-  const region = state.region;
+  const region = effectiveRerunRegion();
+  if (regions.rerunScope === "workspace") { info.textContent = "Whole-workspace scope uses the stage controls. Regional algorithms never widen this scope."; run.disabled = true; return; }
   if (!region) { info.textContent = "No region: use the current stretch, Shift+drag on a timeline chart, or type frames."; run.disabled = true; return; }
   const n = region.last - region.first + 1;
   const anchor = (row) => (row === null || row === undefined ? "none" : `frame ${frameOfRow(row)}`);
@@ -239,7 +310,7 @@ function endRangeSelection(row) {
   setRegionRows(a, b, "selected on the timeline");
   const why = regionsWhyNot();
   setStatus(`selected frames ${frameOfRow(a)}–${frameOfRow(b)} (${b - a + 1} rows)${why ? " · " + why : ""}`, why ? "error" : "ok");
-  if (!why) showTab("pipeline");
+  if (!why) setRerunScope("selection");
 }
 
 // The region (shaded, edges) and its anchors (dashed lines) on a timeline
@@ -302,6 +373,8 @@ function renderAlgorithmSelect() {
     option.value = ""; option.textContent = state.algorithmsError ? "unavailable" : "loading…";
     select.appendChild(option);
     $("#region-algorithm-help").textContent = state.algorithmsError ? `algorithms unavailable: ${regions.unsupported || state.algorithmsError}` : "";
+    $("#region-algorithm-help").hidden = !state.algorithmsError;
+    select.title = "";
     $("#region-params").innerHTML = "";
     renderRegionInfo();
     return;
@@ -320,12 +393,17 @@ function renderAlgorithmSelect() {
 function renderAlgorithmForm() {
   const box = $("#region-params");
   const help = $("#region-algorithm-help");
+  const select = $("#region-algorithm");
   box.innerHTML = "";
   const algorithm = algorithmInfo(state.algorithm);
+  help.hidden = true;
+  select.title = algorithm?.description || "";
+  select.setAttribute("aria-describedby", help.id);
   if (!algorithm) { help.textContent = ""; renderRegionInfo(); return; }
   help.textContent = algorithm.description || "";
   if (!algorithm.parameters.length) box.innerHTML = '<div class="empty">no parameters</div>';
-  for (const param of algorithm.parameters) box.appendChild(renderRegionParamField(algorithm.id, param));
+  const parameters = [...algorithm.parameters].sort((a, b) => Number(b.name === "fill_holes") - Number(a.name === "fill_holes"));
+  for (const param of parameters) box.appendChild(renderRegionParamField(algorithm.id, param));
   if (algorithm.parameters.length) {
     const reset = document.createElement("button");
     reset.type = "button"; reset.className = "stage-reset"; reset.textContent = "defaults";
@@ -349,17 +427,19 @@ function renderRegionParamField(algorithmId, param) {
   const edited = regionParamValue(algorithmId, param);
   const value = edited === undefined ? param.default : edited;
   const field = document.createElement("label");
-  field.className = "param" + (edited === undefined ? "" : " edited");
+  field.className = "param" + (edited === undefined || JSON.stringify(edited) === JSON.stringify(param.default) ? "" : " edited");
   const bounds = [param.minimum !== null && param.minimum !== undefined ? `min ${param.minimum}` : "", param.maximum !== null && param.maximum !== undefined ? `max ${param.maximum}` : ""].filter(Boolean).join(", ");
   field.title = `${param.help || ""}\ndefault: ${JSON.stringify(param.default)}${bounds ? " · " + bounds : ""}`.trim();
   const name = document.createElement("span");
   name.className = "param-name";
-  name.textContent = param.name;
+  const labels = {fill_holes: "Hole filling", tracking_weight: "Head tracking strength", head_sigma_px: "Head distance scale (px)", previous_pose_weight: "Previous pose strength", previous_head_weight: "Previous head strength", max_head_step_px: "Maximum head movement (px / source frame)", keep_head_in_frame: "Keep head inside frame",
+    min_iou: "Trusted frame minimum IoU", untrusted_weight: "Untrusted frame data weight", data_sigma_px: "Data scale (px)", motion_tolerance: "Motion tolerance (× typical)", min_calibration_frames: "Minimum calibration frames"};
+  name.textContent = param.label || labels[param.name] || (param.name.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()));
   field.appendChild(name);
   let input;
   if (kind === "choice") {
     input = document.createElement("select");
-    for (const choice of param.choices || []) { const o = document.createElement("option"); o.value = String(choice); o.textContent = String(choice); input.appendChild(o); }
+    for (const choice of param.choices || []) { const o = document.createElement("option"); o.value = String(choice); o.textContent = param.name === "fill_holes" ? ({workspace: "Use workspace masks", on: "On — fill narrow holes", off: "Off — preserve holes"}[choice] || String(choice)) : String(choice); input.appendChild(o); }
     input.value = String(value);
   } else if (kind === "bool") {
     input = document.createElement("input"); input.type = "checkbox"; input.checked = !!value;
@@ -386,7 +466,16 @@ function renderRegionParamField(algorithmId, param) {
     writeStorage("poseViewer.regionParams", state.regionParams);
     field.classList.toggle("edited", param.name in values);
   });
+  input.setAttribute("aria-label", name.textContent);
   field.appendChild(input);
+  if (param.help) {
+    const hint = document.createElement("span");
+    hint.hidden = true;
+    hint.id = `region-param-help-${algorithmId}-${param.name}`;
+    hint.textContent = param.help;
+    input.setAttribute("aria-describedby", hint.id);
+    field.appendChild(hint);
+  }
   return field;
 }
 
@@ -396,6 +485,21 @@ function coerceChoice(param, text) {
   return match === undefined ? text : match;
 }
 
+function prepareCandidateRerun(id) {
+  const entry = candidateSetEntry(id);
+  if (!entry || !entry.rows || entry.rows.some(row => row < 0)) return;
+  setRegionRows(entry.rows[0], entry.rows[1], `rerun candidate set ${id}`);
+  setRerunScope("selection");
+  if (algorithmInfo(entry.algorithm)) { state.algorithm = entry.algorithm; state.regionParams[entry.algorithm] = { ...(entry.params || {}) }; }
+  renderAlgorithmSelect(); renderAlgorithmForm(); refreshRerunScope(); showTab("rerun");
+}
+
+function keepCurrentCandidates() {
+  state.shownSets = [null, null];
+  renderCandidateSets(); renderComparison(); renderFrameCandidateSets(); relayerCandidates();
+  setStatus("Kept current poses. Candidate sets remain available for later review.", "ok");
+}
+
 function collectRegionParams(algorithmId) { return { ...(state.regionParams[algorithmId] || {}) }; }
 
 // ---------------------------------------------------------------- running a region
@@ -403,13 +507,23 @@ function collectRegionParams(algorithmId) { return { ...(state.regionParams[algo
 async function runRegion() {
   const why = regionsWhyNot();
   if (why) { setStatus(why, "error"); return; }
-  if (!readRegionForm()) return;
-  const region = state.region;
+  if (regions.rerunScope === "workspace") { setStatus("Use the checked stage controls for the whole workspace.", "error"); return; }
+  if (regions.rerunScope === "selection" && !readRegionForm()) return;
+  if (regions.rerunScope === "current" && !readCurrentAnchors()) return;
+  const region = effectiveRerunRegion();
+  if (!region) { setStatus("Select a range first.", "error"); return; }
+  const sourceKey = currentSourceKey(), scope = regions.rerunScope;
+  if (typeof maskEditor !== "undefined") {
+    const saved = typeof maskEditor.ensureSavedForRerun === "function" ? await maskEditor.ensureSavedForRerun() : maskEditor.beforeMutation();
+    if (!saved) { showTab("paint"); return; }
+  }
+  const active = effectiveRerunRegion();
+  if (sourceKey !== currentSourceKey() || scope !== regions.rerunScope || !active || active.first !== region.first || active.last !== region.last) { setStatus("Rerun target changed while saving. Check its bounds and run again.", "error"); return; }
   const algorithm = algorithmInfo(state.algorithm);
   if (!algorithm) { setStatus("pick an algorithm", "error"); return; }
   const frame = (row) => (row === null || row === undefined ? null : frameOfRow(row));
   const body = {
-    kind: "region", workspace: state.runName, algorithm: algorithm.id,
+    kind: "region", workspace: state.runName, algorithm: algorithm.id, gpu: selectedJobGpu(),
     first: frame(region.first), last: frame(region.last), anchor_before: frame(region.anchor_before), anchor_after: frame(region.anchor_after),
     params: collectRegionParams(algorithm.id), label: `region ${algorithm.id} frames ${frame(region.first)}–${frame(region.last)} on ${state.runName}`,
   };
@@ -558,16 +672,14 @@ function renderCandidateSets() {
     const heads = REGION_METRICS.map(([, label, , , help]) => `<th class="num" title="${help}">${label}</th>`).join("");
     const partial = !s.accepted && s.accepted_rows && s.accepted_rows.length ? `${s.accepted_rows.length}/${s.path_rows || "?"} rows accepted` : "";
     const stateText = s.stale ? "mask changed; rerun" : s.accepted ? `accepted${s.accepted_edit ? " · " + escapeHtml(s.accepted_edit) : ""}` : [partial, slot >= 0 ? `shown as ${CANDIDATE_SLOTS[slot]}` : ""].filter(Boolean).join(" · ");
-    const acceptDisabled = s.stale || s.accepted || acceptPending;
-    const acceptTitle = s.stale ? "Mask changed; rerun this region before accepting candidates." : s.accepted ? "already accepted" : acceptPending ? "an accept is being applied" : partial ? "accept the rest of the path (an undoable edit)" : "install the path's candidates as the poses of these frames (an undoable edit)";
     node.innerHTML =
       `<div class="cand-head">${slot >= 0 ? `<span class="slot" style="background:${slotCss(slot)}">${CANDIDATE_SLOTS[slot]}</span>` : ""}<b>${escapeHtml(shortAlgorithm(s.algorithm))}</b><span class="cand-frames">${escapeHtml(frames)}</span><span class="cand-state">${stateText}</span></div>` +
-      `<div class="meta">${escapeHtml(s.id)} · ${escapeHtml(fmtTime(s.created_at))} · anchors ${anchor(s.anchor_before)} / ${anchor(s.anchor_after)} · ${fmt(s.candidates)} candidates${s.metrics.seconds ? ` · ${fmtDuration(s.metrics.seconds)}` : ""}<div class="params" title="${escapeHtml(JSON.stringify(s.params || {}))}">${escapeHtml(paramsSummary(s.params))}</div></div>` +
+      `<div class="meta">${escapeHtml(s.id)} · ${escapeHtml(fmtTime(s.created_at))} · anchors ${anchor(s.anchor_before)} / ${anchor(s.anchor_after)} · ${fmt(s.candidates)} candidates${s.metrics.seconds ? ` · ${fmtDuration(s.metrics.seconds)}` : ""}<details class="params"><summary>Parameters · ${escapeHtml(paramsSummary(s.params))}</summary><pre>${escapeHtml(JSON.stringify(s.params || {}, null, 2))}</pre></details></div>` +
       `<table class="cand-metrics"><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>` +
-      `<div class="row cand-actions"><button type="button" data-show>${slot >= 0 ? "Hide" : "Show"}</button><button type="button" data-goto title="go to the first frame of the region">go to</button><button type="button" data-accept class="primary" ${acceptDisabled ? "disabled" : ""} title="${acceptTitle}">${s.stale ? "Mask changed; rerun" : "Accept"}</button><button type="button" data-discard title="delete this candidate set">Discard</button></div>`;
+      `<div class="row cand-actions"><button type="button" data-show class="${slot >= 0 ? "active" : ""}" aria-pressed="${slot >= 0}">${slot >= 0 ? "Hide" : "Show"}</button><button type="button" data-goto title="go to the first frame of the region">go to</button>${s.stale ? '<button type="button" data-rerun>Prepare new run</button>' : ""}<button type="button" data-discard class="danger" title="Permanently delete this computed option">Delete option…</button></div>`;
     node.querySelector("[data-show]").addEventListener("click", () => toggleCandidateSet(s.id));
     node.querySelector("[data-goto]").addEventListener("click", () => { if (s.rows[0] >= 0) showRow(s.rows[0], { keepView: true }); });
-    node.querySelector("[data-accept]").addEventListener("click", () => acceptCandidateSet(s.id));
+    const rerun = node.querySelector("[data-rerun]"); if (rerun) rerun.addEventListener("click", () => prepareCandidateRerun(s.id));
     node.querySelector("[data-discard]").addEventListener("click", () => discardCandidateSet(s.id));
     box.appendChild(node);
   }
@@ -657,6 +769,9 @@ function shownDetail(slot) {
 async function showCandidateSet(id, slot) {
   if (candidateSlot(id) >= 0) return;
   if (slot === undefined) { slot = state.shownSets.indexOf(null); if (slot < 0) slot = 1; }
+  const other = state.shownSets[1 - slot] && candidateSetEntry(state.shownSets[1 - slot]);
+  const incoming = candidateSetEntry(id);
+  if (other && incoming && !sameRows(other, incoming)) { setStatus("A and B must cover the same exact bounds. Hide the other set before comparing a different range.", "error"); return; }
   const replaced = state.shownSets[slot];
   state.shownSets[slot] = id;
   renderCandidateSets();
@@ -665,6 +780,11 @@ async function showCandidateSet(id, slot) {
   setLoading(1);
   try {
     await loadCandidateDetail(id);
+    const comparisonDetail = state.candidateDetails.get(id);
+    if (comparisonDetail?.rows) {
+      setRegionRows(comparisonDetail.rows[0], comparisonDetail.rows[1], "comparison range");
+      if (state.row < comparisonDetail.rows[0] || state.row > comparisonDetail.rows[1]) await showRow(comparisonDetail.rows[0], { keepView: true });
+    }
     setStatus(`${id} shown as ${CANDIDATE_SLOTS[slot]}${replaced ? ` (replacing ${replaced})` : ""}`, "ok");
   } catch (error) {
     state.shownSets[slot] = null;
@@ -724,7 +844,7 @@ function drawCandidateSetOverlays() {
   const row = f.stats && f.stats.row !== undefined ? f.stats.row : rowOfFrame(f.frame_index);
   const fromFrame = (f.pose && f.pose.candidate_sets) || [];
   state.shownSets.forEach((id, slot) => {
-    if (!id) return;
+    if (!id || (window.workflowCompare && !window.workflowCompare.visible(CANDIDATE_SLOTS[slot]))) return;
     const l = layer(CANDIDATE_LAYER_IDS[slot]);
     if (!l.on || l.alpha <= 0) return;
     const color = `rgb(${l.color.join(",")})`;
@@ -800,6 +920,9 @@ async function acceptCandidateSet(id) {
 
 async function discardCandidateSet(id) {
   if (!regionsSupported()) { setStatus(regionsWhyNot(), "error"); return; }
+  const entry = candidateSetEntry(id);
+  const range = entry?.frames ? `, frames ${entry.frames[0]}–${entry.frames[1]}` : "";
+  if (!window.confirm(`Delete option “${id}”${range}? This permanently removes the computed option. Current poses are kept.`)) return;
   const name = state.runName;
   try {
     await api(regionUrl(`candidates/${encodeURIComponent(id)}`), { method: "DELETE" });
@@ -807,9 +930,9 @@ async function discardCandidateSet(id) {
     hideCandidateSet(id);
     state.candidateDetails.delete(id);
     await loadCandidateSets();
-    setStatus(`discarded ${id}`, "ok");
+    setStatus(`Deleted option ${id}`, "ok");
   } catch (error) {
-    setStatus(`discard ${id} failed: ${error.message}`, "error");
+    setStatus(`Delete option ${id} failed: ${error.message}`, "error");
   }
 }
 
@@ -818,6 +941,7 @@ async function discardCandidateSet(id) {
 function sameRows(a, b) { return !!(a && b && a.rows[0] === b.rows[0] && a.rows[1] === b.rows[1]); }
 
 function renderComparison() {
+  window.dispatchEvent(new Event("workflow:candidates"));
   const box = $("#comparison");
   if (!box) return;
   const details = [shownDetail(0), shownDetail(1)];
@@ -841,10 +965,11 @@ function renderComparison() {
     const cells = values.map((v) => `<td class="num ${best !== null && v === best && best !== worst ? "better" : ""}">${metricText(v === undefined ? null : v, digits)}</td>`).join("");
     return `<tr><td>${label}</td>${cells}</tr>`;
   }).join("");
-  const region = (d) => (d && d.frames ? `frames ${d.frames[0]}–${d.frames[1]}` : "");
+  const region = (d) => (d && d.frames ? `frames ${d.frames[0]}–${d.frames[1]} (${d.rows[1] - d.rows[0] + 1} frames)` : "");
   const caption = both ? (split ? `A ${region(details[0])} · B ${region(details[1])} (different regions: each has its own current column)` : `${region(details[0])} · A ${details[0].id} ${shortAlgorithm(details[0].algorithm)} · B ${details[1].id} ${shortAlgorithm(details[1].algorithm)}`) : `${region(details[0] || details[1])} · ${(details[0] || details[1]).id} ${shortAlgorithm((details[0] || details[1]).algorithm)}`;
-  const accepts = details.map((d, slot) => (d ? `<button type="button" data-accept-slot="${slot}" class="primary" ${candidateSetStale(d.id, d) || d.accepted || acceptPending ? "disabled" : ""} title="${candidateSetStale(d.id, d) ? "Mask changed; rerun this region before accepting candidates." : "Accept this candidate path"}" style="border-color:${slotCss(slot)}">${candidateSetStale(d.id, d) ? "Mask changed; rerun" : "Accept " + CANDIDATE_SLOTS[slot]}</button>` : "")).join("");
-  box.innerHTML = `<div class="meta">${escapeHtml(caption)}</div><table class="stats comparison-table"><thead><tr><th>metric</th>${head}</tr></thead><tbody>${rows}</tbody></table><div class="row">${accepts}</div>`;
+  const accepts = details.map((d, slot) => (d ? `<button type="button" data-accept-slot="${slot}" class="primary" ${candidateSetStale(d.id, d) || d.accepted || acceptPending ? "disabled" : ""} title="${candidateSetStale(d.id, d) ? "Mask changed; rerun this region before accepting candidates." : "Accept this candidate path"}" style="border-color:${slotCss(slot)}">${candidateSetStale(d.id, d) ? "Mask changed; rerun" : "Accept option " + CANDIDATE_SLOTS[slot] + " · frames " + d.frames[0] + "–" + d.frames[1]}</button>` : "")).join("");
+  box.innerHTML = `<div class="meta">${escapeHtml(caption)}</div><table class="stats comparison-table"><thead><tr><th>metric</th>${head}</tr></thead><tbody>${rows}</tbody></table><div class="row wrap">${accepts}<button type="button" data-keep-current>Keep current</button></div>`;
+  box.querySelector("[data-keep-current]").addEventListener("click", keepCurrentCandidates);
   for (const button of box.querySelectorAll("[data-accept-slot]")) button.addEventListener("click", () => { const id = state.shownSets[parseInt(button.dataset.acceptSlot, 10)]; if (id) acceptCandidateSet(id); });
 }
 
@@ -858,7 +983,7 @@ function renderFrameCandidateSets() {
   const list = $("#frame-candidates");
   if (!section || !list) return;
   const f = state.frame;
-  if (!f || !state.run || !isWorkspace()) { section.hidden = true; list.innerHTML = ""; return; }
+  if (!f || !state.run || !isWorkspace() || previewMoving() || f.details_deferred) { section.hidden = true; list.innerHTML = ""; return; }
   const row = f.stats && f.stats.row !== undefined ? f.stats.row : rowOfFrame(f.frame_index);
   const covering = new Map();
   for (const s of (f.pose && f.pose.candidate_sets) || []) covering.set(String(s.id), { id: String(s.id), algorithm: s.algorithm, index: s.index, stale: s.stale });
@@ -875,9 +1000,9 @@ function renderFrameCandidateSets() {
     const item = document.createElement("div");
     item.className = "item";
     const facts = candidateSetStale(s.id, s) ? "mask changed; rerun before accepting" : chosen ? `chosen ${chosen.source || "#" + chosen.index}${entry.mirrored ? " ↔" : ""} · IoU ${fmt(chosen.iou)} · ${entry.candidates.length} candidates` : s.index !== null && s.index !== undefined ? `chosen #${s.index}` : "";
-    item.innerHTML = `<span>${slot >= 0 ? `<span class="slot" style="background:${slotCss(slot)}">${CANDIDATE_SLOTS[slot]}</span> ` : ""}<b>${escapeHtml(s.id)}</b> ${escapeHtml(shortAlgorithm(s.algorithm || ""))}<div class="meta">${escapeHtml(facts)}</div></span><span><button type="button">${slot >= 0 ? "hide" : "show"}</button></span>`;
+    item.innerHTML = `<span>${slot >= 0 ? `<span class="slot" style="background:${slotCss(slot)}">${CANDIDATE_SLOTS[slot]}</span> ` : ""}<b>${escapeHtml(s.id)}</b> ${escapeHtml(shortAlgorithm(s.algorithm || ""))}<div class="meta">${escapeHtml(facts)}</div></span><span><button type="button" class="${slot >= 0 ? "active" : ""}" aria-pressed="${slot >= 0}">${slot >= 0 ? "hide" : "show"}</button></span>`;
     item.querySelector("button").addEventListener("click", (event) => { event.stopPropagation(); toggleCandidateSet(s.id); });
-    item.addEventListener("click", () => showTab("pipeline"));
+    item.addEventListener("click", () => showTab("review"));
     list.appendChild(item);
   }
 }
@@ -934,7 +1059,7 @@ function renderOutcomes() {
       if (o.workspace && (!isWorkspace() || o.workspace !== state.runName)) { if (workspaceEntry(o.workspace)) selectSource("workspace", o.workspace, o.frames ? o.frames[0] : undefined); else setStatus(`workspace ${o.workspace} is not in the catalog`, "error"); return; }
       const r = o.frames ? rowOfFrame(o.frames[0]) : o.first;
       if (r !== undefined && r >= 0) showRow(r, { keepView: true });
-      if (o.candidate_set && candidateSetEntry(o.candidate_set)) { const node = document.querySelector(`.cand-set[data-set="${o.candidate_set}"]`); if (node) node.scrollIntoView({ block: "nearest" }); }
+      if (o.candidate_set && candidateSetEntry(o.candidate_set)) { showTab("review"); const node = document.querySelector(`.cand-set[data-set="${o.candidate_set}"]`); if (node) node.scrollIntoView({ block: "nearest" }); }
     });
     body.appendChild(tr);
   }
@@ -950,6 +1075,7 @@ function regionsOnSourceChanged() {
   if (key !== regions.sourceKey) {
     regions.sourceKey = key;
     state.region = null;
+    regions.currentRegion = null;
     state.rangeSelect = null;
     state.shownSets = [null, null];
     state.candidateDetails.clear();
@@ -967,6 +1093,9 @@ function regionsOnSourceChanged() {
 }
 
 function initRegions() {
+  const scope = $("#rerun-scope"); if (scope) scope.addEventListener("change", () => setRerunScope(scope.value));
+  for (const side of ["before", "after"]) { const input = $(`#rerun-current-${side}`); if (input) input.addEventListener("change", readCurrentAnchors); }
+  refreshRerunScope();
   $("#region-propose").addEventListener("click", proposeRegion);
   $("#region-around").addEventListener("click", regionAroundFrame);
   $("#region-clear").addEventListener("click", clearRegion);

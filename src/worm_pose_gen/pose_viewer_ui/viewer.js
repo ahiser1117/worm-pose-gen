@@ -88,7 +88,7 @@ function runSummaryText(run) {
   const prior = run.prior;
   const cleanup = run.cleanup || {};
   const lines = [];
-  if (!(run.series && run.series.fitted && run.series.fitted.some(Boolean))) lines.push("no fitted frames yet — run the segment, prior and fit stages from the Pipeline tab");
+  if (!(run.series && run.series.fitted && run.series.fitted.some(Boolean))) lines.push("no fitted frames yet — run the segment, prior and fit stages from Rerun → Whole workspace");
   lines.push(`IoU median ${fmt(s.median)} · p10 ${fmt(s.p10)} · min ${fmt(s.min)} · ≥0.9: ${fmt(s["fraction_at_least_0.9"])}`);
   lines.push(`length median ${fmt(l.median, 0)} px (p10 ${fmt(l.p10, 0)}, p90 ${fmt(l.p90, 0)}) · beyond prior 2σ: ${fmt(l.beyond_2_sigma_of_prior)}`);
   if (prior) lines.push(`prior: length ${fmt(prior.length_px, 0)} ± ${fmt(100 * prior.log_length_sigma, 0)}% · width ${fmt(prior.width_px, 1)} px · from ${prior.frames_used}/${prior.frames_candidates} frames`);
@@ -178,12 +178,22 @@ function compareCandidates(run) {
 // reload never brings back the source the user just left.
 async function selectSource(kind, name, frameIndex, options = {}) {
   if (!name) return;
-  if (typeof maskEditor !== "undefined" && !maskEditor.leave()) { renderRunList(); return; }
+  const sameSource = state.sourceKind === kind && state.runName === name;
+  if (!options.skipMaskGuard && !(sameSource && options.keepView) && typeof maskEditor !== "undefined") {
+    if (!await maskEditor.requestLeave({ destination: { kind: "source", sourceKind: kind, name } })) { renderRunList(); return false; }
+  }
+  const context = options.keepView && sameSource ? { region: state.region && { ...state.region }, view: { ...state.view }, userView: state.userView } : rememberedViewContext(kind, name);
+  if (!options.keepView) rememberViewContext();
+  if (frameIndex == null && context) frameIndex = context.frame;
   const selection = ++loads.selection;
+  const progress = beginPreviewTask(`Opening ${name}`);
   setLoading(1);
   try {
+    if (!sameSource) await prepareRecording({[kind === "workspace" ? "workspace" : "run"]: name}, progress);
+    if (selection !== loads.selection) { progress.finish(); return; }
+    progress.update("source", "Loading workspace frames and saved results…");
     const run = normaliseSourcePayload(await api(sourcePayloadUrl(kind, name)), kind, name);
-    if (selection !== loads.selection) return;
+    if (selection !== loads.selection) { progress.finish(); return; }
     const sameShape = !!options.keepView && state.run !== null && state.sourceKind === kind && state.runName === name
       && state.run.series.frame_index.length === run.series.frame_index.length;
     const timeline = sameShape ? { ...state.timeline, dragging: false } : null;
@@ -195,7 +205,7 @@ async function selectSource(kind, name, frameIndex, options = {}) {
     state.sourceKind = kind;
     state.frameCache.clear();
     state.frame = null; state.decoded = null;
-    state.starts = null;
+    clearStarts();
     state.compare = null; state.compareName = null; state.compareKind = null; state.comparePose = null;
     state.segments.clear();
     state.edits = []; state.editsError = null;
@@ -222,9 +232,16 @@ async function selectSource(kind, name, frameIndex, options = {}) {
       const found = run.series.frame_index.indexOf(frameIndex);
       row = found >= 0 ? found : 0;
     }
-    if (!run.series.frame_index.length) { setStatus("this source has no frames", "error"); draw(); return; }
-    await showRow(row, { fit: !sameShape, keepView: sameShape });
+    if (!run.series.frame_index.length) { throw new Error("This source has no frames"); }
+    if (context && context.showRaw !== undefined) state.showRaw = context.showRaw;
+    progress.update("preview", "Loading corrected preview, segmentation masks, and pose overlays…");
+    await showRow(row, { fit: !sameShape && !context, keepView: sameShape || !!context, skipMaskGuard: true });
+    restoreViewContext(context);
+    syncTaskSelection();
+    progress.finish();
+    return true;
   } catch (error) {
+    progress.finish(error);
     setStatus(error.message, "error");
   } finally {
     setLoading(-1);
@@ -282,10 +299,9 @@ function populateWorst() {
 
 // ---------------------------------------------------------------- frames
 //
-// Two tiers keep scrubbing smooth.  A light request (image, tube, pose and
-// statistics; no segmenter) follows the cursor at once and aborts whatever
-// it superseded; the full mask layers are asked for only once the cursor
-// has rested.  Payloads and their decoded images are cached by row.
+// Motion uses only the image and saved vector poses. Raster overlays, mask
+// validation and comparison requests wait until playback/scrubbing stops. Background
+// lookahead also stays light, so unseen frames never queue expensive work.
 
 const loads = {
   light: null, lightRow: null, lightWanted: null, full: null, compare: null, prefetch: null, fullTimer: null, fullResolve: null,
@@ -295,6 +311,36 @@ const loads = {
 };
 const FULL_DELAY_MS = 150;
 const CACHE_ENTRIES = 24;
+
+function previewMoving() { return !!state.playing || state.timeline.dragging; }
+
+function beginPreviewMotion() {
+  abortLoad("full"); abortLoad("prefetch"); abortLoad("compare"); cancelPendingFull();
+  state.comparePose = null;
+  // Drop raster overlays immediately, including those from a cached frame.
+  buildOverlay(); draw(); renderLegend(); renderLayerAvailability();
+  if (state.frame) { frameStatus(state.row, state.frame); renderDetails(); }
+  if (typeof maskEditor !== "undefined") maskEditor.onFrame();
+  updateLoadingIndicator();
+}
+
+function settlePreview() {
+  if (previewMoving() || !state.run) return;
+  return showRow(state.row, { keepView: true, keepStarts: true, immediate: true });
+}
+
+// Reuse the base image of a full cache hit without decoding its pixel layers.
+function lightPayload(payload) {
+  if (payload.detail === "light") return payload;
+  if (!payload._light) {
+    const { _decoded, _image, _imageRaw, _light, has_stored_mask, has_override, mask_revision, candidate_sets, ...fields } = payload;
+    const { candidate_sets: poseCandidates, ...pose } = payload.pose || {};
+    payload._light = { ...fields, pose: payload.pose ? pose : payload.pose, details_deferred: true,
+      detail: "light", layers: { image: payload.layers?.image }, mask_stats: null,
+      _image, _imageRaw, _decoded: _decoded ? { width: payload.width, height: payload.height } : undefined };
+  }
+  return payload._light;
+}
 
 function setLoading(delta) {
   state.loading = Math.max(0, state.loading + delta);
@@ -329,15 +375,15 @@ async function loadTier(row, detail, controller) {
   const raw = state.showRaw;
   let payload = state.frameCache.get(cacheKey(row, "full", raw));
   if (!payload && detail === "light") payload = state.frameCache.get(cacheKey(row, "light", raw));
-  if (payload) return payload;
+  if (payload) return detail === "light" ? lightPayload(payload) : payload;
   const generation = loads.generation;
   const key = cacheKey(row, detail, raw);
   payload = await fetchJson(frameUrl(row, detail, raw), controller);
   // The source changed (or was reloaded) while the request was out: the payload describes the old one.
-  if (generation !== loads.generation) throw new DOMException("source changed while loading", "AbortError");
+  if (generation !== loads.generation || controller.signal.aborted) throw new DOMException("frame request superseded", "AbortError");
   state.frameCache.set(key, payload);
   trimCache();
-  return payload;
+  return detail === "light" ? lightPayload(payload) : payload;
 }
 
 async function decodeFrame(payload) {
@@ -353,15 +399,19 @@ async function decodeFrame(payload) {
 // While scrubbing, a light payload a step behind the cursor is still shown
 // (``stale``) so the view keeps moving; anything older than what is on
 // screen is dropped.
-async function applyPayload(payload, row, stale = false) {
+async function applyPayload(payload, row, stale = false, controller = null) {
+  const generation = loads.generation;
   if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
+  if (controller?.signal.aborted || (payload.detail === "full" && previewMoving())) return false;
   if (!payload._decoded) {
     const [decoded, image, imageRaw] = await Promise.all([decodeFrame(payload), loadImage(payload.layers && payload.layers.image), loadImage(payload.image_raw)]);
     payload._decoded = decoded; payload._image = image; payload._imageRaw = imageRaw;
   }
   if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
-  if (row !== state.row && !stale) return false;
-  if (stale && row !== state.row && payload._seq !== undefined && payload._seq < loads.applied) return false;
+  if (generation !== loads.generation || controller?.signal.aborted || (payload.detail === "full" && previewMoving())) return false;
+  if (row !== state.row && !(stale && previewMoving())) return false;
+  if (payload._seq !== undefined && payload._seq < loads.applied) return false;
+  if (payload.detail === "light" && !previewMoving() && state.frame?.detail === "full" && state.frame.row === row) return false;
   if (payload._seq !== undefined) loads.applied = Math.max(loads.applied, payload._seq);
   state.frame = payload;
   state.decoded = payload._decoded;
@@ -371,7 +421,7 @@ async function applyPayload(payload, row, stale = false) {
   buildOverlay();
   draw();
   renderDetails();
-  if (row === state.row) { fetchSegment(row); if (typeof maskEditor !== "undefined") maskEditor.onFrame(); }
+  if (row === state.row && !previewMoving()) { fetchSegment(row); if (typeof maskEditor !== "undefined") maskEditor.onFrame(); }
   return true;
 }
 
@@ -379,25 +429,26 @@ function frameStatus(row, payload) {
   const n = state.run.series.frame_index.length;
   const frame = state.run.series.frame_index[row];
   if (payload.errors && payload.errors.length) { setStatus(payload.errors.join("; "), "error"); return; }
-  setStatus(`frame ${frame} · row ${row + 1}/${n}${payload.detail === "light" ? " · mask layers…" : ""}`, payload.detail === "light" ? "" : "ok");
+  const detail = previewMoving() ? " · quick preview · detailed layers on pause" : payload.detail === "light" ? " · loading detailed layers…" : "";
+  setStatus(`frame ${frame} · row ${row + 1}/${n}${detail}`, detail ? "" : "ok");
 }
 
 function updateLoadingIndicator() {
   const busy = loads.full !== null || loads.fullTimer !== null || state.loading > 0;
   $("#loading").hidden = !busy;
-  $("#loading").textContent = state.loading > 0 ? "Working…" : "mask layers…";
+  $("#loading").textContent = state.loading > 0 ? "Working…" : "Loading masks, pose overlays and candidate checks…";
 }
 
 function fetchCompare(row) {
   abortLoad("compare");
   state.comparePose = null;
-  if (!state.compareName) return;
+  if (!state.compareName || previewMoving()) return;
   const controller = new AbortController();
   loads.compare = controller;
   const frame = state.run.series.frame_index[row];
   fetchJson(sourceUrl(state.compareKind, state.compareName, "pose", `frame=${frame}`), controller)
     .then((payload) => {
-      if (row !== state.row) return;
+      if (controller.signal.aborted || previewMoving() || row !== state.row) return;
       state.comparePose = payload.present ? payload : null;
       draw(); renderDetails();
     })
@@ -405,35 +456,34 @@ function fetchCompare(row) {
     .finally(() => { if (loads.compare === controller) loads.compare = null; });
 }
 
-// One background loop fills the cache with the full layers of the rows just
-// ahead of the cursor, one request at a time, re-aiming after each; it runs
-// while the cursor rests and during playback, and idles when nothing is left.
+// Prefetch only cheap previews while resting; never render masks or tubes for
+// frames that have not been selected. Foreground motion gets priority.
 const PREFETCH_AHEAD = 4;
 
 async function prefetchLoop() {
-  if (loads.prefetching || !state.run) return;
+  if (loads.prefetching || !state.run || previewMoving()) return;
   loads.prefetching = true;
-  const runName = state.runName;
+  const generation = loads.generation;
   try {
     for (;;) {
-      if (state.runName !== runName) break;
+      if (loads.generation !== generation || previewMoving()) break;
       const n = state.run.series.frame_index.length;
       let target = null;
       for (let k = 1; k <= PREFETCH_AHEAD; k++) {
         const r = state.row + k;
-        if (r < n && !cachedFrame(r, state.showRaw)) { target = r; break; }
+        if (r < n && !cachedFrame(r, state.showRaw) && !state.frameCache.has(cacheKey(r, "light", state.showRaw))) { target = r; break; }
       }
       if (target === null) break;
       const controller = new AbortController();
       loads.prefetch = controller;
       let payload;
       try {
-        payload = await loadTier(target, "full", controller);
+        payload = await loadTier(target, "light", controller);
       } finally {
         if (loads.prefetch === controller) loads.prefetch = null;
       }
-      if (state.runName !== runName) break;
-      await applyPayload(payload, -1);  // decode ahead of time; never shown from here
+      if (loads.generation !== generation || previewMoving()) break;
+      await applyPayload(payload, -1, false, controller);  // decode ahead of time; never shown from here
     }
   } catch (error) {
     if (!isAbort(error)) console.warn("prefetch", error);
@@ -452,52 +502,59 @@ function requestLight(row) {
   loads.lightRow = row;
   const seq = ++loads.seq;
   loadTier(row, "light", controller)
-    .then((payload) => { payload._seq = Math.max(payload._seq || 0, seq); return applyPayload(payload, row, true).then((ok) => { if (ok && row === state.row) frameStatus(row, payload); }); })
+    .then((payload) => { payload._seq = Math.max(payload._seq || 0, seq); return applyPayload(payload, row, true, controller).then((ok) => { if (ok && row === state.row) frameStatus(row, payload); }); })
     .catch((error) => { if (!isAbort(error)) setStatus(error.message, "error"); })
     .finally(() => {
+      if (loads.light !== controller) return;
       loads.light = null;
-      if (loads.lightWanted !== null && loads.lightWanted !== row && !cachedFrame(loads.lightWanted, state.showRaw)) requestLight(loads.lightWanted);
+      if (loads.lightWanted !== null && loads.lightWanted !== row) requestLight(loads.lightWanted);
     });
 }
 
 // Move the cursor.  Resolves when the full layers are shown for this row, or
 // false when the cursor moved on first.
-function showRow(row, options = {}) {
+async function showRow(row, options = {}) {
   if (!state.run || !state.run.series.frame_index.length) return Promise.resolve(false);
   const n = state.run.series.frame_index.length;
   row = Math.max(0, Math.min(n - 1, row));
-  if (typeof maskEditor !== "undefined" && (row !== state.row || maskEditor.corpusActive()) && !maskEditor.leave()) return Promise.resolve(false);
+  if (!options.skipMaskGuard && typeof maskEditor !== "undefined" && (row !== state.row || maskEditor.corpusActive())) {
+    if (!await maskEditor.requestLeave({ destination: { kind: "frame", row } })) return false;
+  }
+  clearFieldError($("#frame-index"), "frame-error");
   state.row = row;
+  if (typeof syncTaskSelection === "function") syncTaskSelection();
   $("#frame-index").value = state.run.series.frame_index[row];
   if (options.fit) state.fitPending = true;
-  if (!options.keepStarts) state.starts = null;
+  if (!options.keepStarts) clearStarts();
   drawCharts();
   updateHash();
   abortLoad("full");
+  abortLoad("prefetch");
   cancelPendingFull();
   fetchCompare(row);
   renderNotes();
   const full = cachedFrame(row, state.showRaw);
-  if (full) {
+  if (full && !previewMoving()) {
     loads.lightWanted = null;
     full._seq = ++loads.seq;
     updateLoadingIndicator();
     return applyPayload(full, row).then((ok) => { if (ok) { frameStatus(row, full); prefetchLoop(); } return ok; });
   }
   requestLight(row);
-  const delay = options.immediate || state.playing ? 0 : FULL_DELAY_MS;
+  if (previewMoving()) { updateLoadingIndicator(); return false; }
+  const delay = options.immediate ? 0 : FULL_DELAY_MS;
   return new Promise((resolve) => {
     loads.fullResolve = resolve;
     loads.fullTimer = setTimeout(async () => {
       loads.fullTimer = null; loads.fullResolve = null;
-      if (row !== state.row) return resolve(false);
+      if (row !== state.row || previewMoving()) return resolve(false);
       const controller = new AbortController();
       loads.full = controller;
       updateLoadingIndicator();
       try {
         const payload = await loadTier(row, "full", controller);
         payload._seq = ++loads.seq;
-        const ok = await applyPayload(payload, row);
+        const ok = await applyPayload(payload, row, false, controller);
         if (ok) { frameStatus(row, payload); prefetchLoop(); }
         resolve(ok);
       } catch (error) {
@@ -615,14 +672,46 @@ function parseHash() {
   return { run: params.get("run"), ws: params.get("ws"), frame: params.has("frame") ? parseInt(params.get("frame"), 10) : null };
 }
 
+let startsRequest = null;
+
+function syncStartsToggle() {
+  const active = !!startsRequest || (state.starts !== null && layer("starts").on);
+  $("#starts").classList.toggle("active", active);
+  $("#starts").setAttribute("aria-pressed", String(active));
+}
+
+function clearStarts() {
+  if (startsRequest) startsRequest.abort();
+  startsRequest = null;
+  state.starts = null;
+  syncStartsToggle();
+}
+
 async function computeStarts() {
   if (!state.run) return;
+  if (startsRequest || (state.starts !== null && layer("starts").on)) {
+    clearStarts();
+    renderLegend(); renderLayerAvailability(); draw();
+    return;
+  }
+  layer("starts").on = true;
+  renderLayers();
+  if (state.starts !== null) { syncStartsToggle(); renderLegend(); renderLayerAvailability(); draw(); return; }
+  const request = new AbortController();
+  startsRequest = request;
+  syncStartsToggle();
   setLoading(1);
   try {
     const threshold = $("#threshold-on").checked ? `&threshold=${$("#threshold").value}` : "";
-    const payload = await api(sourceUrl(state.sourceKind, state.runName, "starts", `frame=${state.run.series.frame_index[state.row]}${threshold}`));
+    const payload = await api(sourceUrl(state.sourceKind, state.runName, "starts", `frame=${state.run.series.frame_index[state.row]}${threshold}`), {signal: request.signal});
+    if (startsRequest !== request) return;
     state.starts = payload.starts;
     setStatus(`${payload.starts.length} starts: ${payload.starts.map((s) => s.name).join(", ")}`, "ok");
     renderLegend(); renderLayerAvailability(); draw();
-  } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
+  } catch (error) { if (!isAbort(error)) setStatus(error.message, "error"); }
+  finally {
+    if (startsRequest === request) startsRequest = null;
+    syncStartsToggle();
+    setLoading(-1);
+  }
 }

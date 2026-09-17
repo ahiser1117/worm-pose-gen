@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -155,6 +156,33 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
 
 
 class PoseViewerHelperTests(unittest.TestCase):
+    def test_light_frames_skip_expensive_layers_even_after_full_cache_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "recording.h5"
+            run = root / "run"
+            _write_recording(recording)
+            _write_run(run, recording)
+            viewer = ViewerState([run], dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json")
+            try:
+                for warm_cache in (False, True):
+                    with self.subTest(warm_cache=warm_cache):
+                        if warm_cache:
+                            full = viewer.frame_payload("run", FRAMES - 1, None, False)
+                            self.assertIn("tube", full["layers"])
+                            self.assertIn("tube_independent", full["layers"])
+                        with patch("worm_pose_gen.pose_viewer.render_tube", side_effect=AssertionError("tube rendering during motion")), patch.object(viewer.segmenters, "probability", side_effect=AssertionError("segmentation during motion")):
+                            light = viewer.frame_payload("run", FRAMES - 1, None, True, "light")
+                        self.assertEqual(light["detail"], "light")
+                        self.assertEqual(list(light["layers"]), ["image"])
+                        self.assertEqual(light["errors"], [])
+                        self.assertTrue(light["image_raw"].startswith("data:image/jpeg"))
+                        self.assertIn("centerline_xy", light["pose"])
+                        self.assertIn("independent", light["pose"])
+                self.assertIn("tube", viewer.frame_payload("run", FRAMES - 1, None, False)["layers"])
+            finally:
+                viewer.close()
+
     def test_classification_separates_coils_edges_and_failures(self) -> None:
         clean = classify_frame(True, {}, 0, points_in_fov=100, n_points=100, mask_on_border=False)
         self.assertEqual(clean["kind"], "clean")
@@ -227,7 +255,7 @@ class PoseViewerServerTests(unittest.TestCase):
                 self.assertEqual(rescanned["added"], 1)
                 self.assertEqual(rescanned["runs"][0]["name"], "2026-09-06T13-00-00Z_late")
                 page = urlopen(f"{base}/").read().decode()
-                self.assertIn("Pose viewer", page)
+                self.assertIn("Worm pose", page)
                 self.assertIn("Width along the body", page)
                 # The UI is split into plain scripts loaded in order; the stdlib server serves the entry script.
                 for name in ("api.js", "layers.js", "charts.js", "viewer.js", "panels.js", "app.js"):
@@ -296,7 +324,7 @@ class PoseViewerServerTests(unittest.TestCase):
 
                 light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
                 self.assertEqual(light["detail"], "light")
-                self.assertEqual(sorted(light["layers"]), ["image", "tube"])
+                self.assertEqual(sorted(light["layers"]), ["image"])
                 self.assertEqual(light["errors"], [])
                 self.assertEqual(light["stats"]["frame_index"], 2)
                 with self.assertRaises(Exception):

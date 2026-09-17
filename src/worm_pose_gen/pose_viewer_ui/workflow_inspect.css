@@ -1,0 +1,12 @@
+.inspection-segments {display:flex;flex-direction:column;gap:5px;max-height:240px;overflow:auto;margin:8px 0;}
+.inspection-segment {text-align:left;white-space:normal;flex-shrink:0;}
+.inspection-segment[aria-pressed="true"] {outline:2px solid var(--accent,#69b8ec);outline-offset:-2px;}
+.inspection-actions {display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.inspection-actions button {white-space:normal;}
+#inspection-next {grid-column:1/-1;}
+.inspection-segment strong, .inspection-segment span { display: block; }
+.inspection-segment span { margin-top: 4px; line-height: 1.45; }
+#inspection-mark { grid-column: 1 / -1; }
+
+#inspection-min-frames { width: 100%; }
+#inspection-min-error:empty { display: none; }

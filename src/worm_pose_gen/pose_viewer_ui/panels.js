@@ -10,9 +10,9 @@
 // splitters drag them, their buttons collapse and restore them, and the
 // layout persists in localStorage.
 
-const LAYOUT_DEFAULT = { left: 290, right: 360, bottom: 330 };
-const LAYOUT_MIN = { left: 160, right: 220, bottom: 60 };
-const layout = { sizes: { ...LAYOUT_DEFAULT }, collapsed: {}, restore: {} };
+const LAYOUT_DEFAULT = { left: 320, right: 340, bottom: 150 };
+const LAYOUT_MIN = { left: 280, right: 220, bottom: 100 };
+const layout = { sizes: { ...LAYOUT_DEFAULT }, collapsed: { right: false }, restore: {} };
 
 function readStorage(key, fallback) {
   try { const raw = localStorage.getItem(key); return raw === null ? fallback : JSON.parse(raw); } catch (error) { return fallback; }
@@ -23,26 +23,39 @@ function writeStorage(key, value) {
 }
 
 function loadLayout() {
-  const saved = readStorage("poseViewer.layout", null);
+  const saved = readStorage("poseApp.taskLayout", null);
   if (saved && saved.sizes) { Object.assign(layout.sizes, saved.sizes); Object.assign(layout.collapsed, saved.collapsed || {}); }
 }
 
 function saveLayout() {
-  writeStorage("poseViewer.layout", { sizes: layout.sizes, collapsed: layout.collapsed });
+  writeStorage("poseApp.taskLayout", { sizes: layout.sizes, collapsed: layout.collapsed });
 }
 
 function applyLayout() {
   const app = $("#app");
   for (const side of ["left", "right", "bottom"]) {
-    const size = layout.collapsed[side] ? 0 : layout.sizes[side];
+    const size = layout.collapsed[side] ? (side === "bottom" ? 65 : 0) : layout.sizes[side];
     app.style.setProperty(`--${side}`, `${size}px`);
     const splitter = $(`#split-${side}`);
     splitter.classList.toggle("collapsed", !!layout.collapsed[side]);
     const button = splitter.querySelector("button");
     button.textContent = { left: layout.collapsed.left ? "▸" : "◂", right: layout.collapsed.right ? "◂" : "▸", bottom: layout.collapsed.bottom ? "▴" : "▾" }[side];
+    button.setAttribute("aria-expanded", String(!layout.collapsed[side]));
     button.title = layout.collapsed[side] ? "expand panel" : "collapse panel";
   }
   $("#timeline").classList.toggle("collapsed", !!layout.collapsed.bottom);
+  $("#details").hidden = !!layout.collapsed.right;
+  app.dataset.rightOpen = String(!layout.collapsed.right);
+  syncInspectorToggle();
+}
+
+function syncInspectorToggle() {
+  for (const id of ["toggle-inspector", "review-frame-tools"]) {
+    const active = !layout.collapsed.right && (id === "toggle-inspector" || (state.screen === "workspace" && (state.rightTab || "statistics") === "statistics"));
+    const button = $(`#${id}`);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
 }
 
 function togglePanel(side) {
@@ -79,26 +92,66 @@ function initSplitters() {
 
 // ---------------------------------------------------------------- tabs
 
-const TABS = ["view", "data", "pipeline", "corpus"];
+const TABS = ["rerun", "inspect", "paint", "review", "export"];
+const TAB_ALIASES = { view: "inspect", data: "open", pipeline: "rerun", run: "rerun", compare: "review", corpus: "labels" };
 
+const taskScrollPositions = new Map();
 function showTab(name) {
-  if (!TABS.includes(name)) name = "view";
-  for (const tab of TABS) {
-    $(`#tab-${tab}`).hidden = tab !== name;
-    $(`#tabs button[data-tab="${tab}"]`).classList.toggle("active", tab === name);
+  const previous = currentTab();
+  if (state.screen === "workspace") taskScrollPositions.set(previous, $("#sidebar").scrollTop);
+  name = TAB_ALIASES[name] || name;
+  if (["import", "open"].includes(name) && !["import", "open"].includes(previous)) state.panelReturn = previous;
+  const screen = ["import", "open", "labels", "training"].includes(name) ? name : "workspace";
+  if (state.run && previous !== name) state.userView = true;
+  if (screen === "workspace" && !TABS.includes(name)) name = "inspect";
+  if (screen === "workspace") state.activeTask = name;
+  closeDrawer();
+  state.screen = screen;
+  $("#app").dataset.screen = screen;
+  syncInspectorToggle();
+  const previewProgress = $("#preview-progress");
+  if (previewProgress) (screen === "import" ? $("#import-preview-progress") : document.body).append(previewProgress);
+  if (screen === "open") renderOpenSelection();
+  for (const button of document.querySelectorAll('.file-actions [data-screen]')) {
+    const active = button.dataset.screen === screen;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   }
-  writeStorage("poseViewer.tab", name);
-  // The recordings and pipeline panels want room; widen a narrow sidebar once.
-  if ((name === "data" || name === "pipeline") && !layout.collapsed.left && layout.sizes.left < 420) { layout.sizes.left = 460; applyLayout(); saveLayout(); }
-  if (name === "corpus" && typeof corpusUI !== "undefined") corpusUI.refresh();
-  if (name === "data" && !state.recordings.length) loadRecordings(false);
+  $("#app").dataset.task = state.activeTask || "inspect";
+  for (const tab of TABS) {
+    $(`#tab-${tab}`).hidden = tab !== state.activeTask;
+    const button = $(`#tabs button[data-tab="${tab}"]`);
+    button.classList.toggle("active", tab === state.activeTask);
+    button.setAttribute("aria-pressed", String(tab === state.activeTask));
+  }
+  for (const button of document.querySelectorAll("[data-main-tab]")) {
+    const active = button.dataset.mainTab === screen;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  for (const id of ["import", "open", "labels", "training"]) $(`#screen-${id}`).hidden = screen !== id;
+  const painting = screen === "workspace" && name === "paint";
+  $("#paint-tray").hidden = !painting;
+  $("#paint-display").hidden = !painting;
+  if (painting && state.playing) togglePlay();
+  if (typeof maskEditor !== "undefined" && maskEditor.setActive) maskEditor.setActive(painting);
+  writeStorage("poseApp.task", state.activeTask || "inspect");
+  if ((name === "labels" || name === "training") && typeof corpusUI !== "undefined") corpusUI.refresh();
+  if (name === "import") {
+    if (!state.recordings.length && serverIsApp()) loadRecordings(false);
+    toggleExplorer(true);
+  }
+  if (typeof syncTaskSelection === "function") syncTaskSelection();
+  window.dispatchEvent(new CustomEvent("workflow:task", {detail: {task: name, screen}}));
+  if (screen === "workspace" && name !== previous) $("#sidebar").scrollTop = taskScrollPositions.get(name) || 0;
+  requestAnimationFrame(() => { resizeCanvas(); drawCharts(); });
 }
 
-function currentTab() { return TABS.find((tab) => !$(`#tab-${tab}`).hidden) || "view"; }
+function currentTab() { return state.screen && state.screen !== "workspace" ? state.screen : state.activeTask || "inspect"; }
 
 function initTabs() {
-  for (const button of document.querySelectorAll("#tabs button")) button.addEventListener("click", () => showTab(button.dataset.tab));
-  showTab(readStorage("poseViewer.tab", "view"));
+  for (const button of document.querySelectorAll("button[data-tab]")) button.addEventListener("click", () => showTab(button.dataset.tab));
+  showTab(readStorage("poseApp.task", "inspect"));
 }
 
 // ---------------------------------------------------------------- catalog
@@ -107,10 +160,13 @@ function initTabs() {
 async function refreshCatalog(rescan = false) {
   const info = await api(rescan ? "/api/state?rescan=1" : "/api/state");
   state.info = info;
+  renderJobGpuControls();
+  if (typeof paintNavigation !== "undefined" && paintNavigation.onCatalog) paintNavigation.onCatalog(info);
   renderServerNotice(info);
   state.runs = info.runs || [];
   state.workspaces = (info.workspaces || []).map((w) => (w.summary ? w : { ...w, summary: w.summary || {} }));
   renderRunList();
+  renderOpenSelection();
   renderJobsBadge();
   if (state.recording) renderRecordingDetail();
   return info;
@@ -180,7 +236,7 @@ function renderRecordings() {
     if (rec.registered) tr.classList.add("registered");
     const dims = rec.height && rec.width ? `${rec.height}×${rec.width}` : "";
     tr.title = `${rec.path}${dims ? " · " + dims : ""}${rec.dataset && rec.dataset !== "/img_nir" ? " · dataset " + rec.dataset : ""}${rec.registered ? " · added by hand" : ""}${rec.error ? "\n" + rec.error : ""}`;
-    tr.innerHTML = `<td>${escapeHtml(rec.name)}</td><td class="num">${rec.frames === null || rec.frames === undefined ? "–" : rec.frames.toLocaleString()}</td><td class="num">${fmtBytes(rec.size_bytes)}</td>` +
+    tr.innerHTML = `<td><button type="button" class="recording-select" aria-label="Select recording ${escapeHtml(rec.name)}" aria-pressed="${!!(state.recording && state.recording.path === rec.path)}">${escapeHtml(rec.name)}</button></td><td class="num">${rec.frames === null || rec.frames === undefined ? "–" : rec.frames.toLocaleString()}</td><td class="num">${fmtBytes(rec.size_bytes)}</td>` +
       `<td class="flags"><span class="${rec.readable ? "ok" : "bad"}" title="${rec.readable ? "readable" : escapeHtml(rec.error || "not readable")}">${rec.readable ? "✓" : "✗"}</span>` +
       `<span class="${rec.prior_cached ? "ok" : "dim"}" title="${rec.prior_cached ? "recording prior cached" : "no cached prior"}">P</span></td>` +
       `<td class="num">${(rec.runs || []).length || ""}</td><td class="num">${(rec.workspaces || []).length || ""}</td>`;
@@ -204,8 +260,10 @@ function setThumbnail(rec, frame) {
   if (!rec || !rec.readable) { img.removeAttribute("src"); img.alt = rec ? "not readable" : ""; $("#thumb-label").textContent = rec ? `${rec.name}: not readable` : ""; return; }
   const bounded = Math.min(frame, Math.max(0, (rec.frames || 1) - 1));
   img.alt = `${rec.name} frame ${bounded}`;
+  $("#thumb-label").textContent = `Loading preview: ${rec.name} · frame ${bounded}…`;
+  img.onload = () => { $("#thumb-label").textContent = `${rec.name} · frame ${bounded}`; };
+  img.onerror = () => { $("#thumb-label").textContent = `Could not load preview for ${rec.name}`; };
   img.src = thumbnailUrl(rec, bounded);
-  $("#thumb-label").textContent = `${rec.name} · frame ${bounded}`;
 }
 
 // Hovering a row shows its thumbnail after a short rest; the selection's
@@ -217,7 +275,9 @@ function previewThumbnail(rec) {
 
 function selectRecording(path) {
   state.recording = state.recordings.find((r) => r.path === path) || null;
+  const focusedRecording = document.activeElement?.closest?.("tr[data-path]")?.dataset.path;
   renderRecordings();
+  if (focusedRecording) [...document.querySelectorAll("#recording-table tr[data-path]")].find(row => row.dataset.path === focusedRecording)?.querySelector("button")?.focus();
   renderRecordingDetail();
   resetWorkspaceForm();
 }
@@ -227,13 +287,14 @@ function defaultWorkspaceName(rec, first, last) { return `${rec.name}_f${first}-
 function renderRecordingDetail() {
   const rec = state.recording;
   const box = $("#recording-detail");
+  $("#import-preview-empty").hidden = !!rec;
   if (!rec) { box.hidden = true; return; }
   box.hidden = false;
   setThumbnail(rec, thumbFrame());
   const dims = rec.height && rec.width ? `${rec.height}×${rec.width}` : "?";
   $("#recording-facts").textContent = [
     rec.path + (rec.dataset && rec.dataset !== "/img_nir" ? `  (dataset ${rec.dataset})` : ""),
-    `${rec.frames === null ? "?" : rec.frames.toLocaleString()} frames · ${dims} · ${fmtBytes(rec.size_bytes)} · modified ${fmtTime(rec.modified_at)}`,
+    `${rec.frames == null ? "?" : rec.frames.toLocaleString()} frames · ${dims} · ${fmtBytes(rec.size_bytes)} · modified ${fmtTime(rec.modified_at)}`,
     `${rec.readable ? "readable" : "NOT readable: " + (rec.error || "")} · prior ${rec.prior_cached ? "cached" : "not cached"}${rec.registered ? " · added by hand" : ""}`,
   ].join("\n");
   const actions = $("#recording-actions");
@@ -276,10 +337,11 @@ function renderRecordingDetail() {
     wss.appendChild(item);
   }
   $("#ws-create").disabled = !rec.readable;
+  if (typeof workflowRun !== "undefined") workflowRun.renderImport();
   $("#ws-form-note").textContent = rec.readable ? "" : "the recording is not readable; a workspace cannot be created";
 }
 
-// New workspace form defaults: a minute from the start, name from the range.
+// New workspace form defaults: the entire recording, name from the range.
 // Only a new recording selection resets them; a catalog refresh while the
 // user types (a job finished elsewhere) leaves the form alone.
 function resetWorkspaceForm() {
@@ -289,14 +351,16 @@ function resetWorkspaceForm() {
   const first = $("#ws-first"), last = $("#ws-last");
   first.max = Math.max(0, frames - 1); last.max = Math.max(0, frames - 1);
   first.value = 0;
-  last.value = Math.max(0, Math.min(frames - 1, 1199));
+  last.value = Math.max(0, frames - 1);
   $("#ws-step").value = 1;
   $("#ws-name").dataset.auto = "1";
   $("#ws-name").value = defaultWorkspaceName(rec, first.value, last.value);
+  if (typeof workflowRun !== "undefined") workflowRun.resetImport();
 }
 
 function syncWorkspaceName() {
   const name = $("#ws-name");
+  if (typeof workflowRun !== "undefined") workflowRun.renderImport();
   if (name.dataset.auto !== "1" || !state.recording) return;
   name.value = defaultWorkspaceName(state.recording, $("#ws-first").value, $("#ws-last").value);
 }
@@ -304,10 +368,10 @@ function syncWorkspaceName() {
 async function createWorkspace() {
   const rec = state.recording;
   if (!rec) return;
-  const first = parseInt($("#ws-first").value, 10), last = parseInt($("#ws-last").value, 10), step = parseInt($("#ws-step").value, 10) || 1;
+  const first = Number($("#ws-first").value), last = Number($("#ws-last").value), step = Number($("#ws-step").value);
   const name = $("#ws-name").value.trim();
   if (!name) { setStatus("give the workspace a name", "error"); return; }
-  if (!(first >= 0 && last >= first)) { setStatus("first must be ≥ 0 and last ≥ first", "error"); return; }
+  if (!(Number.isInteger(first) && Number.isInteger(last) && Number.isInteger(step) && step >= 1 && first >= 0 && last >= first)) { setStatus("first must be ≥ 0 and last ≥ first", "error"); return; }
   if (rec.frames && last >= rec.frames) { setStatus(`last frame must be below ${rec.frames}`, "error"); return; }
   setLoading(1);
   try {
@@ -316,7 +380,8 @@ async function createWorkspace() {
     await refreshCatalog();
     await loadRecordings(false);
     await selectSource("workspace", info.name);
-    showTab("pipeline");
+    setRerunScope("workspace");
+    showTab("rerun");
   } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
 }
 
@@ -335,35 +400,62 @@ async function importRun(runName) {
 // ---------------------------------------------------------------- file explorer
 //
 // Browse the file system for an HDF5 video that is not under a recording
-// root, pick the dataset holding its frames, and register it so it appears
+// root, validate its /img_nir video, and register it so it appears
 // in the recordings table and can back a workspace.
 
-const explorer = { path: null, file: null, datasets: [], dataset: null };
+const explorer = { path: null, file: null, datasets: [], dataset: null, request: 0 };
 
 function toggleExplorer(open) {
   const box = $("#explorer");
   const show = open === undefined ? box.hidden : open;
   box.hidden = !show;
+  $("#explorer-toggle").classList.toggle("active", show);
+  $("#explorer-toggle").setAttribute("aria-pressed", String(show));
   $("#explorer-toggle").textContent = show ? "Hide explorer" : "Add recording…";
   if (show && explorer.path === null) browseTo(null);
 }
 
 function explorerError(message) {
-  const list = $("#explorer-entries");
-  list.innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
+  $("#explorer-entries").replaceChildren();
+  $("#explorer-error").textContent = message;
+  $("#explorer-error").hidden = false;
+  $("#explorer-path").setAttribute("aria-invalid", "true");
+  $("#explorer-recovery").hidden = false;
+  $("#explorer-retry").onclick = () => browseTo($("#explorer-path").value.trim() || null);
+  $("#explorer-choose").onclick = () => { $("#explorer-path").focus(); $("#explorer-path").select(); };
+  const attempted = $("#explorer-path").value.trim().replace(/\/+$/, "");
+  const parent = attempted.includes("/") ? attempted.slice(0, attempted.lastIndexOf("/")) || "/" : explorer.path;
+  $("#explorer-up").disabled = !parent || parent === attempted;
+  $("#explorer-up").dataset.parent = parent || "";
   $("#explorer-file").hidden = true;
 }
 
 async function browseTo(path) {
   if (!serverIsApp()) { explorerError(VIEWER_ONLY_NOTE); return; }
+  const request = ++explorer.request;
   const all = $("#explorer-all").checked ? "&all=1" : "";
   try {
     const listing = await api(`/api/files?${path ? `path=${encodeURIComponent(path)}` : ""}${all}`);
+    if (request !== explorer.request) return;
+    $("#explorer-error").hidden = true;
+    $("#explorer-recovery").hidden = true;
+    $("#explorer-path").removeAttribute("aria-invalid");
     explorer.path = listing.path;
     explorer.file = null; explorer.datasets = []; explorer.dataset = null;
     $("#explorer-path").value = listing.path;
     $("#explorer-up").disabled = !listing.parent;
     $("#explorer-up").dataset.parent = listing.parent || "";
+    const breadcrumbs = $("#explorer-breadcrumbs");
+    breadcrumbs.replaceChildren();
+    const parts = listing.path.split("/").filter(Boolean);
+    for (let i = 0; i <= parts.length; i++) {
+      const target = "/" + parts.slice(0, i).join("/");
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = i === 0 ? "/" : parts[i - 1]; button.title = target;
+      button.disabled = target === listing.path;
+      button.onclick = () => browseTo(target);
+      breadcrumbs.append(button);
+    }
     const shortcuts = $("#explorer-shortcuts");
     shortcuts.innerHTML = "";
     for (const s of listing.shortcuts || []) {
@@ -379,7 +471,8 @@ async function browseTo(path) {
     }
     const dirs = listing.entries.filter((e) => e.kind === "dir").length;
     for (const entry of listing.entries) {
-      const item = document.createElement("div");
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = `item ${entry.kind}${entry.registered ? " registered" : ""}${entry.readable ? "" : " unreadable"}`;
       item.title = entry.path + (entry.readable ? "" : " (not readable)") + (entry.kind === "file" ? " · click to check whether it is an HDF5 file" : "");
       item.innerHTML = `<span>${escapeHtml(entry.name)}</span><span class="meta">${entry.kind === "dir" ? "" : fmtBytes(entry.size_bytes)}</span>`;
@@ -388,46 +481,53 @@ async function browseTo(path) {
     }
     $("#explorer-file").hidden = true;
     setStatus(`${listing.path}: ${dirs} directories, ${listing.entries.length - dirs} files shown`, "ok");
-  } catch (error) { explorerError(`cannot list ${path || "the default directory"}: ${error.message}`); setStatus(error.message, "error"); }
+  } catch (error) { if (request !== explorer.request) return; explorerError(`cannot list ${path || "the default directory"}: ${error.message}`); setStatus(error.message, "error"); }
 }
 
 async function inspectFile(path) {
+  const request = ++explorer.request;
+  const progress = beginPreviewTask("Inspecting video");
+  progress.update("datasets", "Reading video frame dimensions…");
+  $("#explorer-file").hidden = true;
   try {
     const info = await api(`/api/recordings/datasets?path=${encodeURIComponent(path)}`);
-    explorer.file = info.path; explorer.datasets = info.datasets; explorer.dataset = info.default;
+    if (request !== explorer.request) { progress.finish(); return; }
+    explorer.file = info.path; explorer.datasets = info.datasets; explorer.dataset = "/img_nir";
     $("#explorer-file").hidden = false;
     $("#explorer-file-name").textContent = `${info.path}${info.registered ? " · already in the recordings" : ""}`;
-    renderDatasets();
-  } catch (error) { setStatus(error.message, "error"); }
+    renderImportFile();
+    progress.finish();
+  } catch (error) { if (request === explorer.request) { progress.finish(error); setStatus(error.message, "error"); } else progress.finish(); }
 }
 
-function renderDatasets() {
-  const list = $("#explorer-datasets");
-  list.innerHTML = "";
-  if (!explorer.datasets.length) list.innerHTML = '<div class="empty">no datasets in this file</div>';
-  for (const d of explorer.datasets) {
-    const item = document.createElement("div");
-    item.className = `item${d.video ? " video" : ""}${d.name === explorer.dataset ? " selected" : ""}`;
-    item.title = d.video ? "a [frames, height, width] video dataset" : "not a video dataset";
-    item.innerHTML = `<span>${escapeHtml(d.name)}</span><span class="meta">${d.shape.join("×")} ${escapeHtml(d.dtype)}</span>`;
-    item.addEventListener("click", () => { explorer.dataset = d.name; renderDatasets(); });
-    list.appendChild(item);
-  }
-  const chosen = explorer.datasets.find((d) => d.name === explorer.dataset);
-  $("#explorer-register").disabled = !chosen;
-  $("#explorer-note").textContent = !chosen ? "pick the dataset that holds the frames" : chosen.video ? `frames from ${chosen.name}` : `${chosen.name} does not look like a [T,H,W] video; it will be checked on adding`;
+function renderImportFile() {
+  const video = explorer.datasets.find((dataset) => dataset.name === "/img_nir" && dataset.video);
+  $("#explorer-register").disabled = !video;
+  $("#explorer-note").textContent = video
+    ? `${video.shape[0].toLocaleString()} frames · ${video.shape[2]} × ${video.shape[1]} px`
+    : "This file does not contain a video at /img_nir.";
 }
 
 async function registerRecording() {
   if (!explorer.file || !explorer.dataset) return;
+  const progress = beginPreviewTask("Importing video");
+  const source = {path: explorer.file, dataset: explorer.dataset};
+  $("#explorer-register").disabled = true;
   setLoading(1);
   try {
-    const rec = await post("/api/recordings/register", { path: explorer.file, dataset: explorer.dataset });
-    setStatus(`${rec.name} added to the recordings (${rec.frames.toLocaleString()} frames)`, "ok");
+    progress.update("register", "Checking video readability and adding it to recordings…");
+    const rec = await post("/api/recordings/register", source);
+    await prepareRecording(source, progress);
+    progress.update("catalog", "Refreshing recording details…");
     await loadRecordings(false);
+    progress.update("preview", "Loading corrected preview…");
     selectRecording(rec.path);
-    toggleExplorer(false);
-  } catch (error) { setStatus(error.message, "error"); } finally { setLoading(-1); }
+    await $("#recording-thumb").decode();
+    toggleExplorer(true);
+    setStatus(`${rec.name} imported; illumination correction and preview ready`, "ok");
+    progress.finish();
+  } catch (error) { progress.finish(error); setStatus(error.message, "error"); }
+  finally { setLoading(-1); renderImportFile(); }
 }
 
 // ---------------------------------------------------------------- stages
@@ -565,6 +665,7 @@ function renderStages() {
     if (run) run.disabled = !workspace;
     renderStageMeta(stage.name);
   }
+  if (typeof workflowRun !== "undefined") workflowRun.render();
 }
 
 function rebuildStages() {
@@ -578,14 +679,22 @@ function buildStages(box, key) {
   box.dataset.stages = key;
   const expanded = readStorage("poseViewer.stageOpen", {});
   const included = readStorage("poseViewer.stageInclude", {});
-  for (const stage of state.stages) {
+  for (const stage of state.stages.filter((s) => s.name !== "export")) {
     const node = document.createElement("div");
     node.className = "stage";
     node.dataset.stage = stage.name;
     const head = document.createElement("div");
     head.className = "stage-head";
-    head.innerHTML = `<input type="checkbox" class="stage-include" title="include in Run all" ${included[stage.name] === false ? "" : "checked"}><button type="button" class="stage-toggle" title="parameters">${expanded[stage.name] ? "▾" : "▸"}</button><b>${escapeHtml(stage.name)}</b><span class="stage-meta"></span><button type="button" class="stage-run primary" ${workspace ? "" : "disabled"}>Run</button>`;
+    const checked = included[stage.name] ?? stage.name !== "fixed_body";
+    const label = stage.name === "fixed_body" ? "Fixed body (optional)" : stage.name;
+    head.innerHTML = `<input type="checkbox" class="stage-include" title="include in pipeline" aria-label="Include ${escapeHtml(label)} in pipeline" ${checked ? "checked" : ""}><button type="button" class="stage-toggle${expanded[stage.name] ? " active" : ""}" aria-expanded="${!!expanded[stage.name]}" title="parameters">${expanded[stage.name] ? "▾" : "▸"}</button><b>${escapeHtml(label)}</b><span class="stage-meta"></span><button type="button" class="stage-run primary" ${workspace ? "" : "disabled"}>Run</button>`;
     node.appendChild(head);
+    if (stage.name === "fixed_body") {
+      const note = document.createElement("p");
+      note.className = "note";
+      note.textContent = "Run after reviewing and repairing poses. Freezes length and widths from clear frames across this workspace, and adds a separate Fixed body layer. Rebuild after edits.";
+      node.appendChild(note);
+    }
     const form = document.createElement("div");
     form.className = "stage-form";
     form.hidden = !expanded[stage.name];
@@ -598,26 +707,51 @@ function buildStages(box, key) {
       form.appendChild(reset);
     }
     node.appendChild(form);
-    head.querySelector(".stage-toggle").addEventListener("click", () => { form.hidden = !form.hidden; head.querySelector(".stage-toggle").textContent = form.hidden ? "▸" : "▾"; expanded[stage.name] = !form.hidden; writeStorage("poseViewer.stageOpen", expanded); });
+    head.querySelector(".stage-toggle").addEventListener("click", () => { form.hidden = !form.hidden; head.querySelector(".stage-toggle").textContent = form.hidden ? "▸" : "▾"; expanded[stage.name] = !form.hidden; head.querySelector(".stage-toggle").classList.toggle("active", !form.hidden); head.querySelector(".stage-toggle").setAttribute("aria-expanded", String(!form.hidden)); writeStorage("poseViewer.stageOpen", expanded); });
     head.querySelector(".stage-include").addEventListener("change", (e) => { included[stage.name] = e.target.checked; writeStorage("poseViewer.stageInclude", included); });
     head.querySelector(".stage-run").addEventListener("click", () => runStage(stage.name));
     box.appendChild(node);
   }
 }
 
-async function submitStage(workspace, stage) {
+function selectedJobGpu() {
+  const value = readStorage("poseApp.jobGpu", null);
+  return Number.isInteger(value) && (state.info?.gpus || []).includes(value) ? value : null;
+}
+
+function renderJobGpuControls() {
+  const gpus = state.info?.gpus || [], selected = selectedJobGpu();
+  for (const id of ["job-gpu", "jobs-gpu"]) {
+    const select = $("#" + id);
+    if (!select) continue;
+    select.replaceChildren(new Option(gpus.length ? "Automatic" : "CPU", ""));
+    for (const gpu of gpus) select.add(new Option(`GPU ${gpu}`, String(gpu)));
+    select.value = selected === null ? "" : String(selected);
+    select.disabled = !gpus.length;
+    select.onchange = () => {
+      writeStorage("poseApp.jobGpu", select.value === "" ? null : Number(select.value));
+      renderJobGpuControls();
+    };
+  }
+}
+
+async function submitStage(workspace, stage, gpu = selectedJobGpu()) {
   const params = collectParams(stage);
-  const record = await post("/api/jobs", { kind: "stage", workspace, stage, params });
+  const record = await post("/api/jobs", { kind: "stage", workspace, stage, params, gpu });
   await loadJobs();
   return record;
 }
 
 async function runStage(stage) {
   if (!isWorkspace()) { setStatus("select a workspace first", "error"); return; }
+  const workspace = state.runName;
+  if (typeof maskEditor !== "undefined" && !await maskEditor.ensureSavedForRerun()) return;
+  if (workspace !== state.runName || !isWorkspace()) return;
   try {
-    const record = await submitStage(state.runName, stage);
+    const record = await submitStage(workspace, stage);
     setStatus(`queued ${stage} on ${state.runName} as ${record.id}`, "ok");
     showTab("pipeline");
+    openRightTab("jobs", { refresh: false });
   } catch (error) { setStatus(error.message, "error"); }
 }
 
@@ -638,11 +772,17 @@ function writeSession(key, value) {
 
 function saveChain() { writeSession("poseViewer.chain", state.chain); }
 
-function runAll() {
+async function runAll() {
   if (!isWorkspace()) { setStatus("select a workspace first", "error"); return; }
-  const queue = [...document.querySelectorAll(".stage")].filter((n) => n.querySelector(".stage-include").checked).map((n) => n.dataset.stage);
+  const workspace = state.runName;
+  if (typeof maskEditor !== "undefined" && !await maskEditor.ensureSavedForRerun()) return;
+  if (workspace !== state.runName || !isWorkspace()) return;
+  if (state.chain) { setStatus("A pipeline is already running; wait for it to finish or stop it in Jobs", "error"); return; }
+  const queue = [...document.querySelectorAll("#stages .stage")].filter((n) => n.dataset.stage !== "export" && n.querySelector(".stage-include").checked).map((n) => n.dataset.stage);
   if (!queue.length) { setStatus("no stages included", "error"); return; }
-  state.chain = { workspace: state.runName, queue, current: null };
+  state.chain = { workspace: state.runName, queue, current: null, stages: [...queue], gpu: selectedJobGpu() };
+  if (typeof workflowRun !== "undefined") workflowRun.started(state.runName, queue);
+  openRightTab("jobs", { refresh: false });
   saveChain();
   advanceChain();
 }
@@ -663,7 +803,7 @@ function activeJobOf(stage, workspace) {
 async function advanceChain() {
   const chain = state.chain;
   if (!chain || chain.current) return;
-  if (!chain.queue.length) { state.chain = null; saveChain(); renderChain(); setStatus(`all stages finished on ${chain.workspace}`, "ok"); return; }
+  if (!chain.queue.length) { if (typeof workflowRun !== "undefined") workflowRun.completed(chain.workspace); state.chain = null; saveChain(); renderChain(); setStatus(`all stages finished on ${chain.workspace}`, "ok"); return; }
   const stage = chain.queue.shift();
   const existing = activeJobOf(stage, chain.workspace);
   if (existing) {
@@ -674,7 +814,7 @@ async function advanceChain() {
     return;
   }
   try {
-    const record = await submitStage(chain.workspace, stage);
+    const record = await submitStage(chain.workspace, stage, chain.gpu ?? null);
     chain.current = record.id;
     saveChain();
     setStatus(`run all: ${stage} queued as ${record.id}, ${chain.queue.length} to follow`, "ok");
@@ -720,10 +860,9 @@ function renderJobsBadge() {
 }
 
 async function loadJobs() {
-  const filter = $("#jobs-state").value;
   let jobs;
   try {
-    const payload = await api(`/api/jobs${filter ? `?state=${filter}` : ""}`);
+    const payload = await api("/api/jobs");
     jobs = Array.isArray(payload) ? payload : payload.jobs || [];
   } catch (error) {
     $("#jobs").innerHTML = `<div class="empty">jobs unavailable: ${escapeHtml(error.message)}</div>`;
@@ -738,6 +877,7 @@ async function loadJobs() {
   if (typeof corpusUI !== "undefined") corpusUI.onJobs(finished);
   state.jobs = jobs;
   renderJobs();
+  window.dispatchEvent(new CustomEvent("workflow:jobs"));
   renderJobsBadge();
   if (state.stages) for (const stage of state.stages) renderStageMeta(stage.name);
   if (typeof renderCandidateJobs === "function") renderCandidateJobs();
@@ -783,7 +923,8 @@ const openResults = new Set();
 function renderJobs() {
   const box = $("#jobs");
   const mine = $("#jobs-mine").checked && isWorkspace();
-  const jobs = state.jobs.filter((j) => !mine || (j.spec || {}).workspace === state.runName).slice(0, 60);
+  const filter = $("#jobs-state").value;
+  const jobs = state.jobs.filter((j) => (!filter || j.state === filter) && (!mine || (j.spec || {}).workspace === state.runName)).slice(0, 60);
   $("#jobs-summary").textContent = `${state.jobs.filter(jobActive).length} active · ${state.jobs.length} total`;
   if (!jobs.length) { box.innerHTML = `<div class="empty">${mine ? "no jobs on this workspace" : "no jobs"}</div>`; renderChain(); return; }
   for (const empty of box.querySelectorAll(".empty")) empty.remove();
@@ -809,10 +950,11 @@ function createJobNode(id) {
     '<div class="bar"><div></div></div>' +
     '<div class="job-line"><span data-ident></span><span data-elapsed></span></div>' +
     '<div class="job-msg"></div>' +
-    '<div class="row"><button type="button" data-log>log</button><button type="button" data-cancel hidden>Cancel</button><button type="button" data-result hidden>result</button></div>' +
+    '<div class="row"><button type="button" data-log>log</button><button type="button" data-cancel hidden>Cancel</button><button type="button" data-retry hidden>Retry</button><button type="button" data-result hidden>result</button></div>' +
     '<pre class="job-log" hidden></pre>';
   node.querySelector("[data-log]").addEventListener("click", () => toggleLog(id));
   node.querySelector("[data-cancel]").addEventListener("click", () => cancelJob(id));
+  node.querySelector("[data-retry]").addEventListener("click", () => retryJob(id));
   node.querySelector("[data-result]").addEventListener("click", () => toggleResult(id));
   return node;
 }
@@ -828,12 +970,20 @@ function updateJobNode(node, job) {
   ws.textContent = spec.workspace || ""; ws.title = spec.workspace || "";
   node.querySelector(".job-state").textContent = job.state;
   node.querySelector(".bar div").style.width = `${(100 * progress).toFixed(1)}%`;
-  node.querySelector("[data-ident]").textContent = `${job.id}${job.gpu !== null && job.gpu !== undefined ? ` · gpu ${job.gpu}` : ""}${frames}`;
+  const gpu = job.gpu ?? spec.gpu;
+  node.querySelector("[data-ident]").textContent = `${job.id}${gpu !== null && gpu !== undefined ? ` · GPU ${gpu}` : ""}${frames}`;
   node.querySelector("[data-elapsed]").textContent = `${jobActive(job) ? `${Math.round(100 * progress)}%` : ""}${elapsed !== null ? " · " + fmtDuration(elapsed) : ""}`;
   node.querySelector(".job-msg").textContent = job.error || job.message || (job.state === "queued" ? `queued ${fmtTime(job.created_at)}` : "");
   const showLog = state.openLogs.has(job.id), showResult = openResults.has(job.id);
   node.querySelector("[data-log]").textContent = showLog ? "hide log" : "log";
+  for (const [selector, active] of [["[data-log]", showLog], ["[data-result]", showResult]]) {
+    const button = node.querySelector(selector);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
   node.querySelector("[data-cancel]").hidden = !jobActive(job);
+  node.querySelector("[data-retry]").hidden = jobActive(job);
+  node.querySelector("[data-retry]").textContent = job.state === "done" ? "Run again" : "Retry";
   const result = node.querySelector("[data-result]");
   result.hidden = !(job.result && job.state === "done");
   result.textContent = showResult ? "hide result" : "result";
@@ -841,6 +991,19 @@ function updateJobNode(node, job) {
   pre.hidden = !(showLog || showResult);
   if (showResult) pre.textContent = JSON.stringify(job.result, null, 2);
   else if (!showLog) pre.textContent = "";
+}
+
+async function retryJob(id) {
+  const job = state.jobs.find(j => j.id === id);
+  if (!job || jobActive(job)) return;
+  const button = document.querySelector(`[data-job="${id}"] [data-retry]`);
+  if (button) button.disabled = true;
+  try {
+    const record = await post(`/api/jobs/${encodeURIComponent(id)}/retry`, {gpu: job.spec.gpus === 0 ? null : selectedJobGpu()});
+    await loadJobs();
+    setStatus(`queued retry ${record.id}${record.spec.gpu === null ? "" : ` on GPU ${record.spec.gpu}`}`, "ok");
+  } catch (error) { setStatus(error.message, "error"); }
+  finally { if (button) button.disabled = false; }
 }
 
 async function toggleLog(id) {
@@ -885,11 +1048,13 @@ function onSourceChanged() {
   renderJobs();
   if (state.recording) renderRecordingDetail();
   if (typeof regionsOnSourceChanged === "function") regionsOnSourceChanged();
+  window.dispatchEvent(new CustomEvent("workflow:source"));
 }
 
 function initPanels() {
   initTabs();
   state.chain = readSession("poseViewer.chain", null);
+  if (state.chain) { state.chain.queue = state.chain.queue.filter((stage) => stage !== "export"); saveChain(); }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) clearTimeout(jobsTimer);
     else loadJobs().catch(() => {}).then(scheduleJobsPoll);
@@ -905,9 +1070,10 @@ function initPanels() {
   $("#thumb-frame").addEventListener("change", () => { if (state.recording) setThumbnail(state.recording, thumbFrame()); });
   $("#ws-first").addEventListener("input", syncWorkspaceName);
   $("#ws-last").addEventListener("input", syncWorkspaceName);
+  $("#ws-step").addEventListener("input", syncWorkspaceName);
   $("#ws-name").addEventListener("input", () => { $("#ws-name").dataset.auto = $("#ws-name").value.trim() ? "0" : "1"; syncWorkspaceName(); });
   $("#ws-create").addEventListener("click", createWorkspace);
-  $("#import-run").addEventListener("click", () => { if (state.sourceKind === "run") importRun(state.runName); });
+  $("#import-run").addEventListener("click", importSelectedRun);
   $("#run-all").addEventListener("click", runAll);
   $("#jobs-state").addEventListener("change", () => loadJobs());
   $("#jobs-mine").addEventListener("change", renderJobs);
@@ -915,4 +1081,26 @@ function initPanels() {
   loadStages();
   if (typeof initRegions === "function") initRegions();
   loadJobs().catch(() => {}).then(scheduleJobsPoll);
+}
+
+// Selection in Open is reviewable before resuming or making a separate copy.
+function renderOpenSelection() {
+  const button = $("#open-selected");
+  if (!button) return;
+  const selected = parseSourceKey($("#run").value);
+  const entry = selected && (selected.kind === "workspace" ? workspaceEntry(selected.name) : runEntry(selected.name));
+  button.disabled = !entry || !!entry.error;
+  button.textContent = selected?.kind === "run" ? "Open run read-only" : "Resume workspace";
+  button.classList.toggle("primary", selected?.kind !== "run");
+  $("#import-run").classList.toggle("primary", selected?.kind === "run");
+  $("#import-run").hidden = !entry || selected.kind !== "run";
+  $("#run-info").textContent = entry ? `${selected.name} · ${sourceOptionTitle(selected.kind, entry)}${selected.kind === "run" ? "\nCreate editable copy preserves the original run." : "\nResume restores saved workspace context."}` : "Select a workspace or run above.";
+  button.onclick = async () => {
+    const source = parseSourceKey($("#run").value);
+    if (source && await selectSource(source.kind, source.name) === true) showTab(state.activeTask || "inspect");
+  };
+}
+function importSelectedRun() {
+  const selected = parseSourceKey($("#run").value);
+  if (selected?.kind === "run") return importRun(selected.name);
 }

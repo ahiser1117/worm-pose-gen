@@ -25,9 +25,10 @@ def render_worm(
 
     Inputs are ``[B,N,2]`` (or ``[N,2]``). Width may be scalar, ``[B]``,
     ``[N]``, or ``[B,N]`` and denotes full tube diameter in raster pixels.
-    The distance field is evaluated against centerline samples, which is smooth
-    and sufficient at the dense 100-point sampling used here. Pixels outside
-    the FOV are never instantiated, providing mandatory image-loss censoring.
+    Occupancy is the union of disks at the centerline samples, allowing contact
+    and overlap between body parts with different widths. Dense sampling limits
+    scalloping between disks. Pixels outside the FOV are never instantiated,
+    providing mandatory image-loss censoring.
     """
 
     if image_height <= 0 or image_width <= 0 or edge_softness <= 0:
@@ -55,12 +56,11 @@ def render_worm(
     )
     pixels = torch.stack((xx, yy), -1).reshape(1, -1, 1, 2)
     squared = (pixels - points[:, None, :, :]).square().sum(-1)
-    # Nearest sample also selects its local anatomical diameter. The min is
-    # piecewise differentiable and yields useful finite pose/width gradients.
-    min_squared, nearest = squared.min(-1)
-    local_diameter = torch.gather(diameter, 1, nearest)
-    distance = torch.sqrt(min_squared + torch.finfo(points.dtype).eps)
-    mask = torch.sigmoid((0.5 * local_diameter - distance) / edge_softness)
+    distance = torch.sqrt(squared + torch.finfo(points.dtype).eps)
+    # Include each sample's radius before choosing coverage, so a narrow tip
+    # never subtracts pixels already covered by a wider part of the body.
+    signed_coverage = (0.5 * diameter[:, None, :] - distance).amax(-1)
+    mask = torch.sigmoid(signed_coverage / edge_softness)
     mask = mask.reshape(batch, image_height, image_width)
 
     fg = torch.as_tensor(foreground, dtype=points.dtype, device=points.device).reshape(-1, 1, 1)

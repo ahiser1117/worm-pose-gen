@@ -1,0 +1,6 @@
+{
+  "environment": {"device": "cpu", "torch_threads": 1, "reduction": "median"},
+  "propagation_path": {"frames": 100, "candidate_count": 7, "mirrors": true, "points": 101, "repetitions": 4, "baseline_seconds": 0.5550355301238596, "optimized_seconds": 0.05739349778741598, "speedup": 9.67070402608492, "choices_exact": true, "cost_relative_tolerance": 1e-13},
+  "decode_centerline": {"calls": 1000, "coefficients": 16, "repetitions": 5, "baseline_seconds": 0.376488259062171, "optimized_seconds": 0.024999050423502922, "speedup": 15.060102391257812, "output_exact": true},
+  "segmenter": {"frames": 32, "height": 128, "width": 128, "batch_size": 8, "model": "ResNet18UNet", "weights": "seeded random", "repetitions": 5, "baseline_seconds": 1.336869846098125, "optimized_seconds": 1.3325997153297067, "speedup": 1.003204361159091, "output_exact": true, "interpretation": "within timing noise; fewer slab copies, no throughput gain claimed"}
+}

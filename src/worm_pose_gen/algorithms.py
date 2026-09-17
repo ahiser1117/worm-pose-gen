@@ -16,7 +16,7 @@ undo restores the previous candidates too and un-marks the set
 (``unaccept_candidates``); a set accepted on part of its path stays open for
 the rest (``CandidateSet.accepted_rows``).
 
-Every algorithm wraps existing code and adds no fitting of its own:
+The algorithms share the batched mask fitter and candidate storage:
 
 - ``independent_multistart``: every row fit from the standard starts of its
   mask (both orientations when a prior exists), every start a candidate.
@@ -27,6 +27,11 @@ Every algorithm wraps existing code and adds no fitting of its own:
   the refit independent poses and anchor diversity.
 - ``slow_refit``: the current poses refit under a longer schedule with the
   anchors' length prior.
+- ``tracked_head``: a forward fit with acquisition nose landmarks, gentle
+  body and strong head priors, and hard head movement and camera bounds.
+- ``fixed_body_smoother``: no fitting; the current poses re-expressed as one
+  fixed-length, fixed-width body and smoothed jointly under a calibrated
+  first-order motion prior (``body_smoother``), untrusted frames bridged.
 - ``mirror``: the current poses and their reversals, no fitting: an
   orientation fix over a region.
 
@@ -55,8 +60,13 @@ import torch
 
 from .ambiguity import pose_jump_px
 from .batch_fit import PRESETS, BatchFitConfig, fit_masks
-from .latent import encode_centerline
-from .mask_fit import CropWindow, Initialization, MaskFitResult, reverse_initialization, standard_initializations
+from .body_smoother import SmoothingProblem, initial_chain, motion_scales, smooth_chains
+from .fixed_body import calibrate_body, chain_targets, trusted_rows, whole_body_rows
+from .latent import cubic_bspline_basis, decode_centerline, encode_centerline
+from .head_fit import HeadConstraint
+from .head_tracking import read_head_tracking
+from .mask_fit import CropWindow, Initialization, MaskFitResult, crop_window, fill_narrow_holes, hard_iou, render_tube_segments, reverse_initialization, standard_initializations
+from .observation import soft_dice_energy
 from .pipeline import (
     SegmentParams,
     SOURCE_CODES,
@@ -98,6 +108,8 @@ SOURCE_DTYPE = "<U24"
 START_DTYPE = "<U48"
 # How far from a region ``propose_region`` looks for an anchor.
 ANCHOR_SEARCH_ROWS = 200
+# Trusted, fully visible frames nearest the region that calibrate the smoother's fixed body.
+CALIBRATION_LIMIT = 100
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +155,8 @@ class Parameter:
         else:
             out = str(value)
         if self.type in ("int", "float"):
+            if not math.isfinite(out):
+                raise ValueError(f"parameter {self.name!r}: must be finite")
             if self.minimum is not None and out < self.minimum:
                 raise ValueError(f"parameter {self.name!r}: {out} is below the minimum {self.minimum}")
             if self.maximum is not None and out > self.maximum:
@@ -156,6 +170,8 @@ def resolve_params(parameters: Sequence[Parameter], params: dict[str, Any] | Non
     given = dict(params or {})
     return {p.name: p.coerce(given.get(p.name)) for p in parameters}
 
+
+_FILL_HOLES = Parameter("fill_holes", "choice", "workspace", "Use saved workspace masks, fill narrow holes for this refit, or resegment unedited frames without filling holes. Saved masks and manual edits are kept; ignored pixels stay excluded.", choices=["workspace", "on", "off"])
 
 _PRESET = Parameter("preset", "choice", "fast", "fitting schedule: the fit's own (fast), or its steps scaled to the balanced or reference preset", choices=["fast", "balanced", "reference"])
 _BEAM = Parameter("beam", "int", 3, "distinct chain states kept per direction", minimum=1, maximum=8)
@@ -882,6 +898,10 @@ class Algorithm(Protocol):
     def run(self, ctx: RegionContext, params: dict[str, Any], progress: Progress | None = None) -> CandidateSet: ...
 
 
+# Algorithms that never fit a mask: no hole-filling control.
+NO_FITTING = ("mirror", "fixed_body_smoother")
+
+
 class _RegionAlgorithm:
     """Shared bookkeeping of the region algorithms: parameter resolution and the registry entry."""
 
@@ -893,9 +913,13 @@ class _RegionAlgorithm:
     # Which anchors the algorithm cannot run without ("before", "after"); checked
     # when a request is made, before a job is queued and the region segmented.
     needs_anchor: tuple[str, ...] = ()
+    fill_holes_default = "workspace"
+
+    def parameter_specs(self) -> list[Parameter]:
+        return list(self.parameters) + ([] if self.id in NO_FITTING else [replace(_FILL_HOLES, default=self.fill_holes_default)])
 
     def resolve(self, params: dict[str, Any] | None) -> dict[str, Any]:
-        return resolve_params(self.parameters, params)
+        return resolve_params(self.parameter_specs(), params)
 
     def check_anchors(self, anchor_before: int | None, anchor_after: int | None) -> None:
         """``ValueError`` when an anchor this algorithm needs is missing."""
@@ -907,7 +931,7 @@ class _RegionAlgorithm:
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id, "label": self.label, "scope": self.scope, "description": self.description,
-            "parameters": [p.to_dict() for p in self.parameters], "needs_anchor": list(self.needs_anchor),
+            "parameters": [p.to_dict() for p in self.parameter_specs()], "needs_anchor": list(self.needs_anchor),
         }
 
     def run(self, ctx: RegionContext, params: dict[str, Any], progress: Progress | None = None) -> CandidateSet:  # pragma: no cover - overridden
@@ -1041,7 +1065,7 @@ class SlowRefit(_RegionAlgorithm):
     def run(self, ctx: RegionContext, params: dict[str, Any], progress: Progress | None = None) -> CandidateSet:
         params = self.resolve(params)
         config = _preset_schedule(ctx.config, params["preset"], params["length_sigma"])
-        config = replace(config, temporal_prior_weight=0.0)
+        config = replace(config, temporal_prior_weight=0.0, compile_energy=False)
         length = ctx.anchor_length()
         if length is not None:
             config = replace(config, length_prior_px=length)
@@ -1058,6 +1082,121 @@ class SlowRefit(_RegionAlgorithm):
             _report(progress, 0.05 + 0.85 * (k + len(chunk)) / max(len(rows), 1), f"{self.id}: refit {k + len(chunk)}/{len(rows)} frames")
         _report(progress, 0.92, f"{self.id}: selecting the path")
         return _assemble(ctx, self.id, params, candidates, _path_config(params))
+
+
+class TrackedHead(_RegionAlgorithm):
+    id = "tracked_head"
+    label = "Head-tracked temporal fit"
+    fill_holes_default = "off"
+    description = (
+        "Fits forward using the recording's nose tracking, a gentle pull toward the previous body pose, a strong head prior, "
+        "and a hard head movement limit per recorded frame. Starts from the before anchor when selected; "
+        "otherwise starts from the tracked nose. Low-confidence tracking falls back to the previous fit. "
+        "Requires acquisition tracking in /pos_feature."
+    )
+    parameters = [
+        _PRESET,
+        Parameter("tracking_weight", "float", 0.2, "Pull the fitted head toward the acquisition nose landmark; larger values trust tracking more.", minimum=0.0),
+        Parameter("previous_pose_weight", "float", 0.005, "Pull the body toward the previous fitted pose. Lower values let the tail follow the mask more freely.", minimum=0.0),
+        Parameter("previous_head_weight", "float", 0.5, "Extra pull toward the previous fitted head to resist switching branches at intersections.", minimum=0.0),
+        Parameter("head_sigma_px", "float", 6.0, "Distance in pixels used to scale the tracking and previous-head penalties.", minimum=0.1),
+        Parameter("max_head_step_px", "float", 8.0, "Maximum head movement in image pixels per recorded frame; multiplied by the source-frame gap for sampled workspaces.", minimum=0.1),
+        Parameter("keep_head_in_frame", "bool", True, "Keep the head inside the image. Turn off only for a region where the head leaves the camera.")
+    ]
+
+    def run(self, ctx: RegionContext, params: dict[str, Any], progress: Progress | None = None) -> CandidateSet:
+        params = self.resolve(params)
+        rows = ctx.fit_rows()
+        if not rows:
+            raise ValueError("No usable masks in this region; segment or paint the region first.")
+        if ctx.image_shape is None:
+            raise ValueError("The head-tracked fit requires the recording's image dimensions.")
+        _report(progress, 0.02, "Loading acquisition nose tracking")
+        wanted = rows + ctx.anchors
+        frames = np.asarray(ctx.state["frame_index"], dtype=np.int64)
+        tracking = read_head_tracking(ctx.workspace.recording, frames[wanted], ctx.image_shape)
+        heads = {row: tracking.xy[i] for i, row in enumerate(wanted) if tracking.valid[i]}
+        if tracking.provenance.get("status") != "available" or (not heads and ctx.anchor_before is None):
+            reason = tracking.provenance.get("reason", "no confident in-frame nose observations")
+            raise ValueError(f"Head tracking unavailable for this region ({reason}). Choose another fitting method or a region with valid /pos_feature nose tracking.")
+        config = _preset_schedule(ctx.config, params["preset"])
+        if ctx.anchor_length() is not None:
+            config = replace(config, length_prior_px=ctx.anchor_length())
+
+        def oriented_start(start: Initialization, target: np.ndarray) -> Initialization:
+            curve = decode_centerline(start.latent, config.coefficients)
+            if np.linalg.norm(curve[-1] - target) < np.linalg.norm(curve[0] - target):
+                return reverse_initialization(start, config=config)
+            return start
+
+        previous: CandidatePose | None = None
+        previous_row: int | None = ctx.anchor_before
+        # Selected anchors are trusted, fixed poses. Reorienting a local copy
+        # would hide a jump at the unchanged workspace boundary.
+        for row in ctx.anchors:
+            cue = heads.get(row)
+            curve = ctx.state["centerline_xy"][row]
+            if cue is not None and np.linalg.norm(curve[-1] - cue) + float(ctx.state["width_px"][row]) < np.linalg.norm(curve[0] - cue):
+                raise ValueError(f"Anchor at frame {frames[row]} has its head opposite the acquisition nose. Correct its orientation or choose another anchor before refitting.")
+        if previous_row is not None:
+            previous = CandidatePose.from_state(ctx.state, previous_row, config)
+        if previous is None and rows[0] not in heads:
+            raise ValueError("The first usable frame has no confident nose tracking. Choose a before anchor or start the region at a frame with valid tracking.")
+
+        candidates: dict[int, list[CandidatePose]] = {}
+        observed, fallback, max_motion = 0, 0, 0.0
+        for i, row in enumerate(rows):
+            cue = heads.get(row)
+            reference = None if previous is None else previous.centerline_xy
+            target = cue if reference is None else reference[0]
+            starts: list[Initialization] = []
+            if previous is not None:
+                starts.append(warm_initialization(previous.latent, previous.width_px, previous.width_shape, "previous_pose"))
+            if bool(ctx.state["fitted"][row]):
+                start = warm_initialization(ctx.state["latent"][row], float(ctx.state["width_px"][row]), ctx.state["width_shape"][row], "current_pose")
+                starts.append(oriented_start(start, target))
+            if previous is None:
+                for start in standard_initializations(ctx.masks[row], config=config):
+                    start = oriented_start(start, target)
+                    if ctx.prior is not None:
+                        start = replace(start, width_shape=np.asarray(ctx.prior.width_shape, dtype=np.float64))
+                    starts.append(start)
+            gap = 1 if previous_row is None else max(1, int(frames[row] - frames[previous_row]))
+            sigma = max(1.0, 0.5 * (previous.width_px if previous is not None else config.default_width_px))
+            fit_config = replace(config, temporal_prior_weight=params["previous_pose_weight"], temporal_prior_sigma_px=sigma)
+            _report(progress, 0.05 + 0.87 * i / len(rows), f"Fitting frame {frames[row]} ({i + 1}/{len(rows)}) with head movement constraints")
+            result = fit_masks(
+                [ctx.masks[row]], [starts], width_template=ctx.width_template, config=fit_config, device=ctx.device,
+                references=[reference],
+                head_constraints=[HeadConstraint(
+                    tracking_xy=cue, previous_xy=None if reference is None else reference[0],
+                    tracking_weight=params["tracking_weight"], previous_weight=params["previous_head_weight"],
+                    sigma_px=params["head_sigma_px"], max_step_px=None if reference is None else params["max_head_step_px"] * gap,
+                    keep_in_frame=params["keep_head_in_frame"],
+                )],
+            )[0]
+            pose = CandidatePose.from_result(result, ctx.config, "forward", energy=float(result.records[result.best_index]["final_energy"]))
+            if reference is not None:
+                max_motion = max(max_motion, float(np.linalg.norm(pose.centerline_xy[0] - reference[0])) / gap)
+            candidates[row] = [pose]
+            previous, previous_row = pose, row
+            observed += int(cue is not None)
+            fallback += int(cue is None)
+            _report(progress, 0.05 + 0.87 * (i + 1) / len(rows), f"Head-tracked fit: {i + 1}/{len(rows)} frames · {'nose tracking' if cue is not None else 'previous-pose fallback'}")
+        if ctx.anchor_after is not None:
+            gap = max(1, int(frames[ctx.anchor_after] - frames[previous_row]))
+            speed = float(np.linalg.norm(previous.centerline_xy[0] - ctx.state["centerline_xy"][ctx.anchor_after, 0])) / gap
+            if speed > params["max_head_step_px"] + 1e-4:
+                raise ValueError("The head-tracked fit cannot reconnect to the after anchor within the head movement limit. Widen the region, increase the limit, or choose another after anchor.")
+            max_motion = max(max_motion, speed)
+        # This is a sequential constrained solution. A later orientation search
+        # must never reverse it and discard the head guarantee.
+        candidate_set = _assemble(ctx, self.id, params, candidates, _path_config({}, path_mirrors=False))
+        candidate_set.metrics.update({
+            "head_tracking": dict(tracking.provenance), "tracked_frames": observed, "tracking_fallback_frames": fallback,
+            "max_head_step_px_per_frame": max_motion,
+        })
+        return candidate_set
 
 
 class Mirror(_RegionAlgorithm):
@@ -1079,8 +1218,134 @@ class Mirror(_RegionAlgorithm):
         return _assemble(ctx, self.id, params, candidates, _path_config(params, path_mirrors=False))
 
 
+def _width_parameters(profile: np.ndarray, template: np.ndarray, config: BatchFitConfig) -> tuple[float, np.ndarray]:
+    """The fit's ``(width_px, width_shape)`` that best reproduce a diameter ``profile`` over the width ``template``."""
+
+    log_ratio = np.log(np.asarray(profile, dtype=np.float64) / np.asarray(template, dtype=np.float64))
+    width_px = float(np.exp(log_ratio.mean()))
+    if not config.width_coefficients:
+        return width_px, np.zeros(0)
+    basis = cubic_bspline_basis(config.n_points, config.width_coefficients)
+    centered = basis - basis.mean(axis=0, keepdims=True)
+    shape = np.linalg.lstsq(centered, log_ratio - log_ratio.mean(), rcond=None)[0]
+    return width_px, shape.astype(np.float64)
+
+
+def _overlap(points: np.ndarray, profile: np.ndarray, mask: MaskArray | None, config: BatchFitConfig, device: torch.device, image_shape: tuple[int, int]) -> tuple[np.ndarray, float, float]:
+    """``(crop, soft_dice_energy, iou)`` of the tube along ``points`` with diameters ``profile`` against ``mask`` (NaN overlap without a mask)."""
+
+    height, width = image_shape
+    if mask is None:
+        return np.asarray((0, width, 0, height), dtype=np.int64), float("nan"), float("nan")
+    crop = crop_window(mask, config.crop_padding, max(config.stage_downsample))
+    local = torch.as_tensor(points - np.array((crop.x0, crop.y0), dtype=np.float64), dtype=torch.float32, device=device)[None]
+    rendered = render_tube_segments(local, torch.as_tensor(profile, dtype=torch.float32, device=device)[None], crop.height, crop.width, edge_softness=config.edge_softness)
+    target = np.asarray(mask, dtype=bool)[crop.y0 : crop.y1, crop.x0 : crop.x1]
+    dice = float(soft_dice_energy(rendered, torch.as_tensor(target, device=device))[0])
+    iou = hard_iou((rendered[0] >= config.hard_threshold).cpu().numpy(), target)
+    return np.asarray((crop.x0, crop.x1, crop.y0, crop.y1), dtype=np.int64), dice, iou
+
+
+class FixedBodySmoother(_RegionAlgorithm):
+    id = "fixed_body_smoother"
+    label = "Fixed-body temporal smoother"
+    description = (
+        "No mask fitting: the current poses are re-expressed as one fixed-length, fixed-width body and smoothed together "
+        "across the region under a first-order motion prior on head position and bending, calibrated from the workspace's "
+        "trusted frames. Trusted frames keep their pose; low-overlap or ambiguous frames are bridged from their neighbours. "
+        "Head-to-tail orientation follows the anchor before the region, else its first frame; correct flipped anchors first."
+    )
+    parameters = [
+        Parameter("min_iou", "float", 0.9, "Frames with at least this overlap and an ambiguity score below 2 are trusted: they calibrate the body and its motion, and keep their full data weight.", minimum=0.0, maximum=1.0),
+        Parameter("untrusted_weight", "float", 0.0, "Data weight of frames that are not trusted, relative to a trusted frame (0 = shaped by the neighbours alone). A hundred points pull hard, so keep this near zero.", minimum=0.0, maximum=1.0),
+        Parameter("data_sigma_px", "float", 1.0, "Pixel scale of the pull toward a trusted frame's current pose; larger values let the prior move trusted frames more.", minimum=0.05),
+        Parameter("motion_tolerance", "float", 2.0, "Prior sigma as a multiple of the typical frame-to-frame motion of trusted frames; larger values smooth less.", minimum=0.1),
+        Parameter("min_calibration_frames", "int", 3, "Trusted, fully visible frames needed to calibrate the body length and width profile.", minimum=1),
+    ]
+
+    def run(self, ctx: RegionContext, params: dict[str, Any], progress: Progress | None = None) -> CandidateSet:
+        params = self.resolve(params)
+        if ctx.image_shape is None:
+            raise ValueError("The fixed-body smoother requires the recording's image dimensions.")
+        state, config, shape = ctx.state, ctx.config, ctx.image_shape
+        frames = np.asarray(state["frame_index"], dtype=np.int64)
+        fitted = np.asarray(state["fitted"], dtype=bool)
+        curves = np.asarray(state["centerline_xy"], dtype=np.float64)
+        rows = [r for r in ctx.rows if fitted[r]]
+        if not rows:
+            raise ValueError("No fitted poses in this region; run a fitting method first.")
+        segments = config.n_points - 1
+        _report(progress, 0.05, f"{self.id}: calibrating the body from trusted frames")
+        calibration, length, profile = calibrate_body(
+            ctx.workspace, state, samples=config.n_points, min_iou=params["min_iou"], min_anchors=params["min_calibration_frames"],
+            near=(ctx.first + ctx.last) // 2, limit=CALIBRATION_LIMIT,
+        )
+        step = length / segments
+        basis = cubic_bspline_basis(segments, config.coefficients)
+        _report(progress, 0.2, f"{self.id}: calibrating the motion prior")
+        whole = np.flatnonzero(trusted_rows(state, params["min_iou"]) & whole_body_rows(state, shape))
+        scales = motion_scales([initial_chain(curves[r], length, segments) for r in whole], frames[whole], basis, max_gap=2 * frame_step(frames))
+        nodes = ([ctx.anchor_before] if ctx.anchor_before is not None else []) + rows + ([ctx.anchor_after] if ctx.anchor_after is not None else [])
+        fixed = np.array([node in ctx.anchors for node in nodes])
+        # Orientation follows the chain from its first node; anchors are trusted and never reoriented.
+        oriented: dict[int, np.ndarray] = {}
+        flips, previous = 0, None
+        for node in nodes:
+            curve = curves[node]
+            if previous is not None:
+                same = np.linalg.norm(curve[0] - previous[0]) + np.linalg.norm(curve[-1] - previous[-1])
+                swapped = np.linalg.norm(curve[0] - previous[-1]) + np.linalg.norm(curve[-1] - previous[0])
+                if swapped < same and node in ctx.anchors:
+                    raise ValueError(f"The anchor at frame {frames[node]} is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor.")
+                if swapped < same:
+                    curve, flips = curve[::-1], flips + 1
+            oriented[node] = curve
+            previous = curve
+        trusted = trusted_rows(state, params["min_iou"])
+        count = len(nodes)
+        initial = np.stack([initial_chain(oriented[node], length, segments) for node in nodes])
+        targets, weights = initial.copy(), np.zeros((count, segments + 1))
+        without_targets = 0
+        for k, node in enumerate(nodes):
+            sampled = chain_targets(oriented[node], length, segments, shape, stop_at_exit=True)
+            if "status" in sampled:
+                without_targets += int(not fixed[k])
+                continue
+            supported = int(sampled["count"])
+            targets[k, : supported + 1] = sampled["targets"]
+            weights[k, : supported + 1] = 1.0 if trusted[node] else params["untrusted_weight"]
+        problem = SmoothingProblem(targets, weights, np.diff(frames[nodes]), fixed, initial, step, config.coefficients)
+        _report(progress, 0.3, f"{self.id}: smoothing {len(rows)} frames jointly")
+        chains, solver = smooth_chains(problem, scales, data_sigma_px=params["data_sigma_px"], tolerance=params["motion_tolerance"])
+        width_px, width_shape = _width_parameters(profile, ctx.width_template, config)
+        candidates: dict[int, list[CandidatePose]] = {}
+        for k, node in enumerate(nodes):
+            if fixed[k]:
+                continue
+            points = chains[k]
+            crop, dice, iou = _overlap(points, profile, ctx.masks.get(node), config, ctx.device, shape)
+            body_length = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+            energy = dice + prior_penalty(config, body_length, width_px, width_shape) if math.isfinite(dice) else float("nan")
+            in_fov = int(np.sum((points[:, 0] >= 0) & (points[:, 0] < shape[1]) & (points[:, 1] >= 0) & (points[:, 1] < shape[0])))
+            candidates[node] = [CandidatePose(
+                centerline_xy=points, latent=encode_centerline(points, config.coefficients), width_px=width_px, width_shape=width_shape,
+                width_profile=np.asarray(profile, dtype=np.float64), body_length_px=body_length, points_in_fov=in_fov, crop=crop,
+                energy=float(energy), soft_dice=dice, iou=iou, source="smoothed", start="fixed_body",
+            )]
+            _report(progress, 0.6 + 0.35 * (k + 1) / count, f"{self.id}: overlap of frame {frames[node]} ({k + 1}/{count})")
+        head_steps = np.linalg.norm(np.diff(chains[:, 0], axis=0), axis=1) / np.maximum(np.diff(frames[nodes]), 1) if count > 1 else np.zeros(0)
+        # The chain fixes the orientation; a later orientation search must not reverse it.
+        candidate_set = _assemble(ctx, self.id, params, candidates, _path_config({}, path_mirrors=False))
+        candidate_set.metrics.update({
+            "fixed_body": {"length_px": length, "segment_length_px": step, "calibration_frames": [int(frames[r]) for r in calibration], "motion_scales": scales.to_dict()},
+            "solver": solver, "orientation_flips_applied": flips, "frames_without_targets": without_targets,
+            "max_head_step_px_per_frame": float(head_steps.max()) if len(head_steps) else 0.0,
+        })
+        return candidate_set
+
+
 REGISTRY: dict[str, Algorithm] = {
-    algorithm.id: algorithm for algorithm in (IndependentMultistart(), ChainForward(), ChainBackward(), BeamPath(), SlowRefit(), Mirror())
+    algorithm.id: algorithm for algorithm in (IndependentMultistart(), ChainForward(), ChainBackward(), BeamPath(), SlowRefit(), TrackedHead(), FixedBodySmoother(), Mirror())
 }
 
 
@@ -1116,7 +1381,7 @@ def _segment_params(workspace: Any) -> SegmentParams:
         values["checkpoint"] = None
     elif isinstance(fingerprint, dict) and fingerprint.get("path"):
         values["checkpoint"] = str(fingerprint["path"])
-    elif isinstance(fingerprint, str):
+    elif isinstance(fingerprint, str) and fingerprint != "unset":
         values["checkpoint"] = fingerprint
     if "threshold" in summary:
         values["threshold"] = float(summary["threshold"])
@@ -1187,15 +1452,20 @@ def build_context(
     device: torch.device | str | None = None,
     *,
     segment_missing: bool = True,
+    fill_holes: str = "workspace",
 ) -> RegionContext:
     """The ``RegionContext`` of rows ``first..last`` with these anchors.
 
     Masks come from the workspace (overrides first); rows without a stored
     mask are segmented from the recording with the workspace's segment
     settings when ``segment_missing`` is set (an imported run has no masks).
+    Explicit hole filling affects this run only. Off resegments unedited rows
+    because stored masks may already contain filled pixels; manual masks stay
+    authoritative. On fills narrow holes but never includes ignored pixels.
     Anchors must be fitted rows outside the region.
     """
 
+    fill_holes = _FILL_HOLES.coerce(fill_holes)
     setup = workspace_setup(workspace)
     with workspace_lock(workspace):
         state = workspace_arrays(workspace, setup.config)
@@ -1219,12 +1489,19 @@ def build_context(
     masks = workspace_masks_of(workspace, max(1, min_pixels))(wanted)
     missing = [r for r in wanted if r not in masks and r not in set(workspace.mask_rows().tolist())]
     fresh: dict[int, MaskArray] = {}
-    if missing and segment_missing:
+    if fill_holes == "off":
+        # Filled pixels cannot be recovered from stored binary masks. Recreate
+        # unedited targets from the recording, keeping manual labels authoritative.
+        unedited = [row for row in wanted if workspace.get_override_mask(row) is None]
+        fresh = segment_rows(workspace, unedited, resolved, replace(_segment_params(workspace), fill_holes=False))
+    elif missing and segment_missing:
         fresh = segment_rows(workspace, missing, resolved)
         masks.update(fresh)
         # Keep them: the next region run on these frames (another algorithm to
         # compare, a wider region) reads them instead of loading the segmenter again.
-        store_masks(workspace, fresh)
+        if fill_holes == "workspace":
+            store_masks(workspace, fresh)
+    hole_radius = _segment_params(workspace).hole_radius if fill_holes == "on" else 0
     # Capture target pixels and their fingerprints under the same writer lock.
     # A direct client can edit while missing masks are segmented above.
     with workspace_lock(workspace):
@@ -1236,9 +1513,16 @@ def build_context(
                 raise ValueError(f"anchor row {anchor} changed while loading the region; choose anchors again")
         masks = {}
         for row in wanted:
+            override = workspace.get_override_mask(row)
             mask = workspace.effective_mask(row)
-            if mask is None:
+            if fill_holes == "off" and override is None:
                 mask = fresh.get(row)
+            elif mask is None:
+                mask = fresh.get(row)
+            if mask is not None and fill_holes == "on":
+                mask, _ = fill_narrow_holes(mask, hole_radius, device=resolved)
+                if override is not None:
+                    mask = mask & (override != 255)
             if mask is not None and int(np.asarray(mask).sum()) >= max(1, min_pixels):
                 masks[row] = mask
         mask_revisions = {str(row): workspace.mask_revision(row) for row in wanted}
@@ -1421,8 +1705,9 @@ def run_region(
     algorithm = get_algorithm(algorithm_id)
     resolved = algorithm.resolve(params)  # type: ignore[attr-defined]
     algorithm.check_anchors(anchor_before, anchor_after)  # type: ignore[attr-defined]
-    _report(progress, 0.0, f"{algorithm.id}: loading the region")
-    ctx = build_context(workspace, first, last, anchor_before, anchor_after, device)
+    preparation = "resegmenting unedited masks without hole filling" if resolved.get("fill_holes") == "off" else "loading region masks"
+    _report(progress, 0.0, f"{algorithm.id}: {preparation}")
+    ctx = build_context(workspace, first, last, anchor_before, anchor_after, device, fill_holes=resolved.get("fill_holes", "workspace"))
     mask_revisions = dict(ctx.mask_revisions)
     before = region_metrics(ctx.state, ctx.rows, ctx.image_shape)
     started = time.perf_counter()

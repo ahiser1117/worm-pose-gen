@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import FileResponse
+from urllib.parse import quote
+
+from ...pipeline import workspace_lock
+from ..exporting import export_workspace, exported_file
 
 from . import get_state, query_flag, query_float
 from ..state import AppState
@@ -50,5 +55,23 @@ def starts(name: str, frame: int, threshold: str | None = None, app: AppState = 
 @router.post("/{name}/snapshot")
 def snapshot(name: str, payload: dict[str, Any] = Body(default={}), app: AppState = Depends(get_state)) -> dict[str, Any]:
     workspace = app.workspace(name)
-    path = workspace.snapshot(str(payload.get("label") or "snapshot"))
+    app.check_writable(name)
+    with workspace_lock(workspace, timeout=0):
+        path = workspace.snapshot(str(payload.get("label") or "snapshot"))
     return {"path": str(path), "name": path.name, "snapshots": workspace.snapshots()}
+
+
+@router.post("/{name}/export")
+def export(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    result = export_workspace(app, name, str(payload.get("name") or ""))
+    result["download_url"] = f"/api/workspaces/{quote(name, safe='')}/exports/{quote(result['snapshot'], safe='')}/{quote(result['name'], safe='')}.parquet"
+    return result
+
+
+@router.get("/{name}/exports/{snapshot_name}/{filename}")
+def download(name: str, snapshot_name: str, filename: str, app: AppState = Depends(get_state)):
+    try:
+        path = exported_file(app.workspace(name), snapshot_name, filename)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return FileResponse(path, filename=filename, media_type="application/vnd.apache.parquet")

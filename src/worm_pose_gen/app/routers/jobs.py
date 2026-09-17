@@ -11,6 +11,7 @@ region job names its candidate set after the job id).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
@@ -80,7 +81,19 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
         spec, command = command_job(payload)
     else:
         raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region, fine_tune or command")
+    spec.gpu = payload.get("gpu")
     return app.runner.submit(spec, command).to_dict()
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str, payload: dict[str, Any] = Body(default={}), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    previous = _record(app, job_id)
+    if not previous.finished:
+        raise ValueError("wait for the job to finish or cancel it before retrying")
+    spec = deepcopy(previous.spec)
+    # Omission preserves the previous device; explicit null opts back into auto.
+    spec.gpu = payload["gpu"] if "gpu" in payload else (spec.gpu if spec.gpu is not None else previous.gpu)
+    return app.runner.submit(spec, list(previous.command)).to_dict()
 
 
 @router.get("/jobs/{job_id}")

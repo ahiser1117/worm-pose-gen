@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, replace
 import math
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -134,10 +134,12 @@ def warm_schedule(
     against 60 and 100) could not keep up with the change between two frames
     of a forming coil and lost to the poor independent fit on energy.
     ``length_sigma`` tightens the length prior when one is set.
+    Whole-energy compilation is disabled for these sequential refits.
     """
 
     warm = replace(
-        config, stage_steps=tuple(max(minimum_steps, int(round(fraction * steps))) for steps in config.stage_steps)
+        config, stage_steps=tuple(max(minimum_steps, int(round(fraction * steps))) for steps in config.stage_steps),
+        compile_energy=False,
     )
     if length_sigma is not None and config.length_prior_px is not None:
         warm = replace(warm, length_prior_log_sigma=min(config.length_prior_log_sigma, length_sigma))
@@ -342,12 +344,14 @@ def slow_schedule(config: BatchFitConfig, preset: BatchFitConfig, length_sigma: 
     Only the step counts, learning-rate scales and decay are taken from
     ``preset``; the stage rasters and point strides stay the fit's, so the
     candidates' energies are measured where the independent fits' were.
+    Whole-energy compilation is disabled for these second-pass refits.
     """
 
     if preset.stage_downsample != config.stage_downsample or preset.stage_point_stride != config.stage_point_stride:
         raise ValueError("the refit preset must share the fit's stage rasters and point strides")
     slow = replace(
-        config, stage_steps=preset.stage_steps, stage_lr_scale=preset.stage_lr_scale, within_stage_decay=preset.within_stage_decay
+        config, stage_steps=preset.stage_steps, stage_lr_scale=preset.stage_lr_scale, within_stage_decay=preset.within_stage_decay,
+        compile_energy=False,
     )
     if length_sigma is not None and config.length_prior_px is not None:
         slow = replace(slow, length_prior_log_sigma=min(config.length_prior_log_sigma, length_sigma))
@@ -379,6 +383,7 @@ def propagate(
     width_template: NDArray[np.generic] | None = None,
     propagation: PropagationConfig = PropagationConfig(),
     warm_config: BatchFitConfig | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> tuple[dict[int, list[Candidate]], dict[str, Any]]:
     """Carry the anchor poses through every stretch in lockstep; returns candidates per row and diagnostics.
 
@@ -400,6 +405,9 @@ def propagate(
     for a, b in stretches:
         in_stretch[a : b + 1] = True
     warm = warm_schedule(config, length_sigma=propagation.chain_length_sigma) if warm_config is None else warm_config
+    # Also cover callers providing their own warm schedule: independent refits
+    # inside a chain need the same stable renderer path as its temporal fits.
+    warm = replace(warm, compile_energy=False)
     beam = max(1, int(propagation.beam))
 
     def anchor_length(row: int) -> float | None:
@@ -462,6 +470,8 @@ def propagate(
                 reference = decode_centerline(predicted, config.coefficients)
             jobs.append((chain, anchor, starts, reference))
         if jobs:
+            if progress is not None:
+                progress(0.0, f"propagation: refitting {len(jobs)} anchors")
             sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([j[0]["states"][0]["pose"][1] for j in jobs]))
             anchor_config = _chain_config(warm, None, sigma_px, propagation.temporal_prior_weight)
             results = fit_masks(
@@ -480,6 +490,8 @@ def propagate(
     # schedule with the stretch's anchor length prior (the anchors know the
     # body's length; the recording prior at 5% let these refits step the
     # length where the path switched to them).  One batch per stretch.
+    if progress is not None:
+        progress(0.1, f"propagation: {anchor_refits} anchor refits complete; refitting stored poses")
     if propagation.refit_independent:
         for a, b in stretches:
             rows = [r for r in range(a, b + 1) if fitted[r] and r in masks and np.asarray(masks[r]).any()]
@@ -491,6 +503,9 @@ def propagate(
             independent_config = _chain_config(warm, length)
             for chunk_start in range(0, len(rows), max(1, config.max_rows)):
                 chunk = rows[chunk_start : chunk_start + max(1, config.max_rows)]
+                if progress is not None:
+                    progress(0.1 + 0.2 * independent_refits / max(int(in_stretch.sum()), 1),
+                             f"propagation: {independent_refits} stored poses refit; fitting frames {chunk[0]}–{chunk[-1]}")
                 starts = [[warm_initialization(*_pose_of(arrays, r), "independent_refit")] for r in chunk]
                 results = fit_masks([np.asarray(masks[r], dtype=bool) for r in chunk], starts, width_template=width_template, config=independent_config, device=device)
                 for r, result in zip(chunk, results, strict=True):
@@ -552,6 +567,9 @@ def propagate(
                         batch_starts.append([start])
                         batch_references.append(reference if propagation.temporal_prior_weight > 0 else None)
                         owners.append((chain, row, state, prediction_xy))
+            if progress is not None:
+                progress(0.3 + 0.7 * k / max(longest, 1),
+                         f"propagation: chain step {k + 1}/{longest}; {rows_fit} fits complete; fitting {len(batch_masks)} starts")
             results = fit_masks(
                 batch_masks, batch_starts, width_template=width_template, config=group_config, device=device, references=batch_references
             )
@@ -581,6 +599,8 @@ def propagate(
                     )
                     new_states.append({"pose": (result.latent, result.width_px, result.width_shape), "previous": state["pose"][0]})
                 chain["states"] = new_states
+    if progress is not None:
+        progress(1.0, f"propagation: {rows_fit} chain fits and {independent_refits} stored-pose refits complete")
     info = {
         "stretches": [[int(a), int(b)] for a, b in stretches],
         "frames_in_stretches": int(in_stretch.sum()),
@@ -626,6 +646,43 @@ def _oriented_curve(candidate: Candidate, mirrored: bool) -> np.ndarray:
     return curve[::-1] if mirrored else curve
 
 
+_PathGeometry = tuple[np.ndarray, int, float, float]
+
+
+def _path_edge_costs(
+    previous: Sequence[_PathGeometry],
+    current: Sequence[_PathGeometry],
+    propagation: PropagationConfig,
+    n_points: int,
+    image_shape: tuple[int, int] | None,
+) -> np.ndarray:
+    """All edges between two rows, sharing camera tests and NumPy reductions."""
+
+    a = np.stack([node[0] for node in previous])
+    b = np.stack([node[0] for node in current])
+    distance = np.linalg.norm(a[:, None] - b[None, :], axis=-1)
+    if image_shape is None:
+        distance = distance.mean(axis=-1) if a.shape[1] >= 2 else np.zeros(distance.shape[:2])
+    else:
+        height, width = image_shape
+        a_inside = (a[..., 0] >= 0) & (a[..., 0] < width) & (a[..., 1] >= 0) & (a[..., 1] < height)
+        b_inside = (b[..., 0] >= 0) & (b[..., 0] < width) & (b[..., 1] >= 0) & (b[..., 1] < height)
+        inside = a_inside[:, None] & b_inside[None, :]
+        count = inside.sum(axis=-1)
+        distance = np.where(inside, distance, 0.0).sum(axis=-1) / np.maximum(count, 1)
+        distance[count < 2] = 0.0
+    distance[~np.isfinite(distance)] = 0.0
+    a_stats = np.asarray([node[1:] for node in previous], dtype=np.float64)
+    b_stats = np.asarray([node[1:] for node in current], dtype=np.float64)
+    width = np.maximum(0.5 * (a_stats[:, None, 1] + b_stats[None, :, 1]), 1.0)
+    length_change = np.log(np.maximum(b_stats[None, :, 2], 1.0) / np.maximum(a_stats[:, None, 2], 1.0)) / propagation.path_length_sigma
+    return (
+        propagation.path_distance_weight * (distance / width) ** 2
+        + propagation.path_inview_weight * np.abs(a_stats[:, None, 0] - b_stats[None, :, 0]) / n_points
+        + propagation.path_length_weight * length_change**2
+    )
+
+
 def select_path(
     candidates: dict[int, list[Candidate]],
     arrays: dict[str, np.ndarray],
@@ -653,7 +710,7 @@ def select_path(
     n_points = int(arrays["centerline_xy"].shape[1])
     chosen: dict[int, PathChoice] = {}
 
-    Geometry = tuple[np.ndarray, int, float, float]  # centerline, points in view, width, body length
+    Geometry = _PathGeometry  # centerline, points in view, width, body length
 
     def stored_node(row: int) -> Geometry | None:
         if not fitted[row]:
@@ -719,19 +776,18 @@ def select_path(
             costs.append(first)
             back.append([-1] * len(piece[0]))
             for k in range(1, len(piece)):
-                current = []
-                pointers = []
-                for node in piece[k]:
-                    best_cost = math.inf
-                    best_j = -1
-                    for j, prev_node in enumerate(piece[k - 1]):
-                        total = costs[k - 1][j] + edge_cost(prev_node[0], node[0])
-                        if total < best_cost:
-                            best_cost, best_j = total, j
-                    current.append(best_cost + node[1])
-                    pointers.append(best_j)
-                costs.append(current)
-                back.append(pointers)
+                edges = _path_edge_costs(
+                    [node[0] for node in piece[k - 1]], [node[0] for node in piece[k]],
+                    propagation, n_points, image_shape,
+                )
+                totals = np.asarray(costs[k - 1])[:, None] + edges
+                # Match the scalar strict comparison: ignore NaNs and keep
+                # the first predecessor in a tie (or -1 if none is finite).
+                totals = np.where(totals < math.inf, totals, math.inf)
+                pointers = np.argmin(totals, axis=0)
+                best = totals[pointers, np.arange(len(piece[k]))]
+                costs.append((best + np.asarray([node[1] for node in piece[k]])).tolist())
+                back.append(np.where(best < math.inf, pointers, -1).tolist())
             final = [c + (edge_cost(node[0], anchor_after) if anchor_after is not None else 0.0) for c, node in zip(costs[-1], piece[-1], strict=True)]
             j = int(np.argmin(final))
             for k in range(len(piece) - 1, -1, -1):

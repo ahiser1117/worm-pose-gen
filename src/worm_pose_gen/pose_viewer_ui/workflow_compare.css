@@ -1,0 +1,11 @@
+#workflow-compare {padding:10px;border-bottom:1px solid var(--border,#444)}
+#workflow-compare [aria-pressed="true"] {border-color:#00dcff;background:#17333b}
+#compare-side:not([hidden]) {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));flex:1;align-items:center;gap:6px;margin-top:8px}
+#workspace-main.compare-side-active #stage {display:none}
+#compare-side figure[hidden] {display:none}
+#compare-side figure {margin:0;min-width:0} #compare-side canvas {width:100%;background:#000} #compare-side span {font-size:11px}
+
+.cand-set .meta .params {color:var(--muted);font-size:11px;white-space:normal;overflow-wrap:anywhere}
+#compare-side canvas {height:auto;aspect-ratio:4/3}
+
+.cand-set .params pre {white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}

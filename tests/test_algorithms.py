@@ -52,7 +52,7 @@ PRISTINE = ("state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "ed
 class RegistryTests(unittest.TestCase):
     def test_registry_lists_the_contract_algorithms_with_parameter_dicts(self) -> None:
         listed = list_algorithms()
-        self.assertEqual([a["id"] for a in listed], ["independent_multistart", "chain_forward", "chain_backward", "beam_path", "slow_refit", "mirror"])
+        self.assertEqual([a["id"] for a in listed], ["independent_multistart", "chain_forward", "chain_backward", "beam_path", "slow_refit", "tracked_head", "fixed_body_smoother", "mirror"])
         for entry in listed:
             self.assertEqual(set(entry), {"id", "label", "scope", "description", "parameters", "needs_anchor"})
             self.assertEqual(entry["scope"], "region")
@@ -66,6 +66,11 @@ class RegistryTests(unittest.TestCase):
             self.assertIn(name, beam)
         self.assertEqual(beam["preset"]["choices"], ["fast", "balanced", "reference"])
         self.assertEqual(set(REGISTRY), {a["id"] for a in listed})
+        self.assertEqual(algorithms.get_algorithm("tracked_head").resolve({}), {
+            "preset": "fast", "tracking_weight": 0.2, "previous_pose_weight": 0.005,
+            "previous_head_weight": 0.5, "head_sigma_px": 6.0, "max_head_step_px": 8.0,
+            "keep_head_in_frame": True, "fill_holes": "off",
+        })
         # The chains declare the anchor they start from; a request without it is refused before anything runs.
         needs = {a["id"]: a["needs_anchor"] for a in listed}
         self.assertEqual((needs["chain_forward"], needs["chain_backward"], needs["mirror"], needs["beam_path"]), (["before"], ["after"], [], []))

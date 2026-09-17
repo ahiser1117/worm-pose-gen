@@ -64,6 +64,8 @@ class AppState:
         self._lock = threading.Lock()
         self._recordings_lock = threading.Lock()
         self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
+        from .labeling import LabelingService
+        self.labeling = LabelingService(self)
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -334,6 +336,7 @@ class AppState:
             "gpus": list(self.config.gpus),
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),
+            "labeling_manifests": self.labeling.list_manifests(),
         }
 
     # --------------------------------------------------------------------- notes

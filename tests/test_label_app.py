@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
+
 import base64
 import io
 import json
@@ -145,6 +148,79 @@ class LabelAppTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 state.close()
+
+    def test_flat_field_concurrent_writers_use_independent_temporary_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "new.h5"
+            _write_recording(str(recording), frames=4)
+            cache = Path(directory) / "fields"
+            sources = [RecordingSource(recording, cache) for _ in range(2)]
+            barrier = threading.Barrier(2)
+            save = np.savez_compressed
+
+            def overlapping_save(handle, **values):
+                save(handle, **values)
+                barrier.wait(timeout=10)  # Both writes finish before either rename.
+
+            try:
+                with mock.patch("worm_pose_gen.label_app.np.savez_compressed", side_effect=overlapping_save):
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        results = list(pool.map(lambda source: source.flat_field(), sources))
+                with np.load(cache / "new.npz") as saved:
+                    np.testing.assert_allclose(saved["gain"], results[0].gain)
+                self.assertEqual(list(cache.glob("*.partial")), [])
+                self.assertTrue(all(source.preparation["stage"] == "ready" for source in sources))
+            finally:
+                for source in sources:
+                    source.close()
+
+    def test_flat_field_shared_source_calculates_once_and_reports_progress(self) -> None:
+        from worm_pose_gen.label_app import estimate_flat_field
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "new.h5"
+            _write_recording(str(recording), frames=4)
+            source = RecordingSource(recording, Path(directory) / "fields")
+            started, release = threading.Event(), threading.Event()
+
+            def calculate(*args, **kwargs):
+                started.set()
+                if not release.wait(timeout=10):
+                    raise TimeoutError("test did not release calculation")
+                return estimate_flat_field(*args, **kwargs)
+
+            try:
+                with mock.patch("worm_pose_gen.label_app.estimate_flat_field", side_effect=calculate) as fit:
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        first = pool.submit(source.flat_field)
+                        second = pool.submit(source.flat_field)
+                        try:
+                            self.assertTrue(started.wait(timeout=10))
+                            self.assertEqual(source.preparation["stage"], "calculating")
+                        finally:
+                            release.set()
+                        self.assertIs(first.result(timeout=10), second.result(timeout=10))
+                    self.assertEqual(fit.call_count, 1)
+                self.assertEqual(source.preparation["stage"], "ready")
+            finally:
+                source.close()
+
+    def test_flat_field_failed_save_can_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "new.h5"
+            _write_recording(str(recording), frames=4)
+            cache = Path(directory) / "fields"
+            source = RecordingSource(recording, cache)
+            try:
+                with mock.patch("worm_pose_gen.label_app.np.savez_compressed", side_effect=OSError("disk full")):
+                    with self.assertRaisesRegex(OSError, "disk full"):
+                        source.flat_field()
+                self.assertEqual(source.preparation["stage"], "error")
+                self.assertFalse((cache / "new.npz").exists())
+                self.assertEqual(list(cache.glob("*.partial")), [])
+                source.flat_field()
+                self.assertEqual(source.preparation["stage"], "ready")
+            finally:
+                source.close()
 
     def test_recording_source_reads_and_corrects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

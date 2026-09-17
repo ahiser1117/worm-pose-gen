@@ -13,7 +13,14 @@ const overlayCtx = overlayCanvas.getContext("2d");
 
 function layer(id) { return LAYERS.find((l) => l.id === id); }
 
+function rasterLayersDeferred() { return !!state.playing || !!state.timeline?.dragging || state.frame?.detail === "light"; }
+
 function buildOverlay() {
+  if (rasterLayersDeferred()) {
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    renderLegend();
+    return;
+  }
   const d = state.decoded;
   if (!d || !d.width) return;
   const W = d.width, H = d.height, N = W * H;
@@ -61,8 +68,11 @@ function renderLegend() {
   const parts = [];
   for (const l of LAYERS) {
     if (!l.on || l.kind === "base") continue;
+    if (l.kind === "pixel" && rasterLayersDeferred()) continue;
+    if (l.id === "editable_mask" && (l.alpha <= 0 || typeof maskEditor === "undefined" || !maskEditor.displayAvailable())) continue;
     if (l.id === "independent" && !(state.decoded && state.decoded.tube_independent) && !(state.frame && state.frame.pose && state.frame.pose.independent)) continue;
     if (l.id === "compare" && !state.comparePose) continue;
+    if (l.id === "fixed_body" && !state.frame?.fixed_body?.centerline_xy) continue;
     if (l.id === "starts" && !state.starts) continue;
     if (l.id.startsWith("hyp_") && !(state.frame && state.frame.pose && state.frame.pose.hypotheses && state.frame.pose.hypotheses.some((h) => h.source === l.id.slice(4)))) continue;
     if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.prediction_xy)) continue;
@@ -154,6 +164,34 @@ function drawWidthTicks(points, profile, color, every = 4) {
   ctx.restore();
 }
 
+function drawFixedBody(body) {
+  const l = layer("fixed_body");
+  if (!l?.on || l.alpha <= 0 || body?.stale || !body?.centerline_xy) return;
+  const points = body.centerline_xy, widths = body.width_profile;
+  const color = `rgb(${l.color.join(",")})`;
+  const sides = [-1, 1].map(sign => points.map((point, i) => {
+    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
+    const dx = b[0] - a[0], dy = b[1] - a[1], norm = Math.hypot(dx, dy) || 1;
+    const radius = sign * widths[i] / 2;
+    return [point[0] - dy / norm * radius, point[1] + dx / norm * radius];
+  }));
+  const firstExtra = body.extrapolated.findIndex(Boolean);
+  const solidEnd = firstExtra < 0 ? points.length : firstExtra;
+  for (const [i, curve] of [points, ...sides].entries()) {
+    drawCurve(curve.slice(0, solidEnd), color, i ? 1 : 2, null, l.alpha);
+    if (firstExtra >= 0) drawCurve(curve.slice(Math.max(0, firstExtra - 1)), color, i ? 1 : 2, [5, 4], l.alpha * .7);
+  }
+  ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1 / state.view.scale;
+  for (let i = 0; i < points.length; i++) {
+    ctx.globalAlpha = l.alpha * (body.extrapolated[i] ? .45 : .8);
+    ctx.beginPath(); ctx.arc(points[i][0], points[i][1], 1.5 / state.view.scale, 0, 2 * Math.PI); ctx.fill();
+    if (i % 4 === 0) {
+      ctx.beginPath(); ctx.moveTo(...sides[0][i]); ctx.lineTo(...sides[1][i]); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 function draw() {
   if (typeof maskEditor !== "undefined" && maskEditor.drawCorpus()) return;
   const ratio = window.devicePixelRatio || 1;
@@ -168,8 +206,8 @@ function draw() {
   const image = state.showRaw && state.imageRaw ? state.imageRaw : state.image;
   if (base.on && image) { ctx.globalAlpha = base.alpha; ctx.drawImage(image, 0, 0); ctx.globalAlpha = 1; }
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, d.width, d.height); }
-  ctx.drawImage(overlayCanvas, 0, 0);
-  if (typeof maskEditor !== "undefined") maskEditor.draw();
+  if (!rasterLayersDeferred()) ctx.drawImage(overlayCanvas, 0, 0);
+  if (typeof maskEditor !== "undefined" && !state.playing && !state.timeline.dragging) maskEditor.draw();
   const pose = state.frame && state.frame.pose;
   if (pose) {
     if (layer("crop").on && pose.crop) {
@@ -178,10 +216,10 @@ function draw() {
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.restore();
     }
     const indep = layer("independent");
-    if (indep.on && pose.independent) {
+    if (indep.on && pose.independent && (!window.workflowCompare || window.workflowCompare.visible("Current"))) {
       drawCurve(pose.independent.centerline_xy, `rgb(${indep.color.join(",")})`, 2, [8, 5], indep.alpha);
     }
-    if (pose.hypotheses) {
+    if (pose.hypotheses && (!window.workflowCompare || window.workflowCompare.visible("Current"))) {
       // Every candidate of the frame, by source; the path's choice wide underneath the centerline.
       for (const h of pose.hypotheses) {
         const l = layer(`hyp_${h.source}`);
@@ -204,13 +242,14 @@ function draw() {
     }
     // Phase 3: the chosen candidates of the shown candidate sets, under the centerline.
     if (typeof drawCandidateSetOverlays === "function") drawCandidateSetOverlays();
-    if (layer("width_ticks").on && pose.width_profile) drawWidthTicks(pose.centerline_xy, pose.width_profile, "rgba(255,80,165,0.9)");
+    if (layer("width_ticks").on && pose.width_profile && (!window.workflowCompare || window.workflowCompare.visible("Current"))) drawWidthTicks(pose.centerline_xy, pose.width_profile, "rgba(255,80,165,0.9)");
     const line = layer("centerline");
-    if (line.on && pose.centerline_xy) {
+    if (line.on && pose.centerline_xy && (!window.workflowCompare || window.workflowCompare.visible("Current"))) {
       drawCurve(pose.centerline_xy, `rgb(${line.color.join(",")})`, 2, null, line.alpha);
       drawEnds(pose.centerline_xy, `rgb(${line.color.join(",")})`);
     }
   }
+  drawFixedBody(state.frame?.fixed_body);
   const starts = layer("starts");
   if (starts.on && state.starts) {
     const palette = ["rgb(120,255,255)", "rgb(255,255,120)", "rgb(200,120,255)", "rgb(120,255,160)", "rgb(255,160,120)"];
@@ -223,6 +262,7 @@ function draw() {
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   renderCaption();
+  window.workflowCompare?.renderSide();
 }
 
 function renderCaption() {
@@ -230,6 +270,7 @@ function renderCaption() {
   if (!f || !state.run) { $("#caption").textContent = ""; return; }
   const s = f.stats || {};
   const parts = [`${state.run.entry.recording} · frame ${f.frame_index}`];
+  if (state.playing || state.timeline.dragging) parts.push("quick preview · detailed layers on pause");
   if (f.mask_stale) parts.push("mask changed · needs refit and candidate acceptance");
   else if (s.fitted) {
     parts.push(`IoU ${fmt(s.iou)}`);
@@ -241,6 +282,9 @@ function renderCaption() {
     if (s.ambiguity_score) parts.push(`score ${s.ambiguity_score}`);
   } else parts.push("no fit");
   if (f.threshold !== undefined && f.threshold !== state.run.threshold) parts.push(`threshold ${f.threshold} (override)`);
+  if (f.fixed_body?.stale) parts.push("fixed body outdated · rebuild after edits");
+  else if (f.fixed_body && !f.fixed_body.centerline_xy) parts.push(`fixed body: ${f.fixed_body.status.replaceAll("_", " ")}`);
+  else if (f.fixed_body?.centerline_xy && layer("fixed_body").on) parts.push(`fixed body RMS ${fmt(f.fixed_body.rms_px, 1)} px · dashed = extrapolated`);
   $("#caption").textContent = parts.join("  ");
 }
 
@@ -328,6 +372,18 @@ function renderDetails() {
   rows.push(row("length deviation (log)", fmt(s.length_deviation, 4)));
   rows.push(row("score", fmt(s.ambiguity_score)));
   if (s.score_independent !== undefined) rows.push(row("score independent", fmt(s.score_independent)));
+  const body = f.fixed_body;
+  if (body) {
+    rows.push(section("fixed body"));
+    rows.push(row("status", body.stale ? "Outdated · rebuild after edits" : escapeHtml(body.status.replaceAll("_", " "))));
+    rows.push(row("fixed length px", fmt(body.length_px, 2)), row("segment length px", fmt(body.segment_length_px, 2)));
+    rows.push(row("calibration frames", body.anchor_count));
+    if (!body.stale && body.centerline_xy) {
+      rows.push(row("midline RMS error px", fmt(body.rms_px, 2)));
+      rows.push(row("observed − fixed length px", fmt(body.length_error_px, 2)));
+      rows.push(row("extrapolated points", `${body.extrapolated.filter(Boolean).length}/${body.centerline_xy.length}`));
+    }
+  }
   $("#stats").innerHTML = f.mask_stale
     ? section("fit invalidated by mask edit") + row("status", "Needs refit", "diff")
       + row("next step", "Refit this frame or stretch, compare candidates, then Accept.", "wrap")
@@ -357,7 +413,7 @@ function renderDetails() {
     if (f.checkpoint && entry.checkpoint_path && !f.checkpoint.endsWith(entry.checkpoint_path.split("/").slice(-2).join("/")) && f.checkpoint !== entry.checkpoint_path) {
       mrows.push(`<tr><td colspan="3" class="diff">segmenter differs from the run's: ${escapeHtml(f.checkpoint)}</td></tr>`);
     }
-  } else if (f.detail === "light") mrows.push('<tr><td colspan="3">mask layers loading…</td></tr>');
+  } else if (f.detail === "light") mrows.push(`<tr><td colspan="3">${state.playing || state.timeline.dragging ? "Detailed layers appear when playback or scrubbing stops." : "Loading detailed layers…"}</td></tr>`);
   else mrows.push(`<tr><td colspan="3">no mask layers (${escapeHtml((f.errors || []).join("; ") || "recording or checkpoint unavailable")})</td></tr>`);
   $("#mask-stats").innerHTML = mrows.join("");
 
@@ -467,14 +523,17 @@ function renderLayers() {
     node.className = "layer";
     node.dataset.layer = l.id;
     const key = index < 9 ? `${index + 1}` : "";
-    node.innerHTML = `<input type="checkbox" ${l.on ? "checked" : ""} title="${key}"><span><span class="swatch" style="background:${l.color ? `rgb(${l.color.join(",")})` : "#888"}"></span>${l.name} <span class="key">${key}</span></span><input type="range" min="0" max="1" step="0.05" value="${l.alpha}" title="opacity">`;
+    node.innerHTML = `<input type="checkbox" ${l.on ? "checked" : ""} title="${key}" aria-label="${l.name}"><span><span class="swatch" style="background:${l.color ? `rgb(${l.color.join(",")})` : "#888"}"></span>${l.name} <span class="key">${key}</span></span><input type="range" min="0" max="1" step="0.05" value="${l.alpha}" title="opacity" aria-label="${l.name} opacity">`;
     node.querySelector("input[type=checkbox]").addEventListener("change", (e) => { l.on = e.target.checked; relayer(l); });
     node.querySelector("input[type=range]").addEventListener("input", (e) => { l.alpha = parseFloat(e.target.value); relayer(l); });
     box.appendChild(node);
   });
+  if (typeof maskEditor !== "undefined") maskEditor.syncDisplayControls();
 }
 
 function relayer(l) {
+  if (l.id === "editable_mask" && typeof maskEditor !== "undefined") { maskEditor.setDisplay(l); return; }
+  if (l.id === "starts") syncStartsToggle();
   if (l.kind === "pixel" || l.kind === "both") buildOverlay();
   renderLegend();
   draw();
@@ -492,13 +551,21 @@ function toggleLayer(index) {
 function renderLayerAvailability() {
   const d = state.decoded || {};
   const pose = state.frame && state.frame.pose;
+  const editable = typeof maskEditor !== "undefined" && maskEditor.displayAvailable();
+  for (const node of document.querySelectorAll(".layer")) {
+    const deferred = rasterLayersDeferred() && layer(node.dataset.layer)?.kind === "pixel";
+    node.classList.toggle("deferred", deferred);
+    node.title = node.dataset.layer === "editable_mask" ? "Editable labels shown in Paint: magenta is worm, yellow is ignored." : deferred ? "Shown when playback or scrubbing stops and detailed layers finish loading." : "";
+  }
   if (state.frame && state.frame.detail === "light") {
     const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);
-    const light = { independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy, cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1] };
+    const light = { fixed_body: !!state.frame?.fixed_body?.centerline_xy, editable_mask: editable, independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy, cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1] };
     for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
   const available = {
+    fixed_body: !!state.frame?.fixed_body?.centerline_xy,
+    editable_mask: editable,
     probability: !!d.probability, mask_raw: !!d.mask_raw, fill_adds: !!d.mask_filled, largest_drops: !!d.mask_largest,
     residual: !!(d.mask_final && d.tube), tube: !!d.tube, tube_fill: !!d.tube, final_outline: !!d.mask_final,
     centerline: !!pose, width_ticks: !!pose, crop: !!pose,

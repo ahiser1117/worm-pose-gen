@@ -231,7 +231,12 @@ class PropagationTests(unittest.TestCase):
         arrays["centerline_xy"] = np.stack([r.centerline_xy for r in results])
         arrays["points_in_fov"] = np.array([r.points_in_fov for r in results])
         propagation = PropagationConfig(pad=0, beam=2)
-        candidates, info = propagate(arrays, stretches, {k: masks[k] for k in range(n)}, config=SMALL, device="cpu", propagation=propagation)
+        reports = []
+        candidates, info = propagate(arrays, stretches, {k: masks[k] for k in range(n)}, config=SMALL, device="cpu", propagation=propagation,
+                                     progress=lambda fraction, message: reports.append((fraction, message)))
+        self.assertEqual([f for f, _ in reports], sorted(f for f, _ in reports))
+        self.assertEqual(reports[-1][0], 1.0)
+        self.assertTrue(any("chain step" in message for _, message in reports))
         self.assertEqual(info["chains"], 2)
         self.assertEqual(info["lockstep_steps"], 4)
         self.assertEqual(info["beam"], 2)

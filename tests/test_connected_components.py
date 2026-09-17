@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import unittest
 
 import numpy as np
@@ -51,7 +52,7 @@ class ConnectedComponentTests(unittest.TestCase):
         self.assertEqual(labels[0, 0], labels[1, 3])
         self.assertNotEqual(labels[2, 5], labels[1, 3])
 
-    def test_matches_breadth_first_reference(self) -> None:
+    def test_matches_classical_reference(self) -> None:
         for seed in range(6):
             mask = _blobs(seed)
             labels, count = label_components(mask)
@@ -61,12 +62,50 @@ class ConnectedComponentTests(unittest.TestCase):
             self.assertEqual(fast_count, ref_count)
             self.assertEqual(fast_area, area)
             self.assertTrue(np.array_equal(fast, largest), msg=f"seed {seed}")
-            # Every label is one 8-connected piece: its pixels match the BFS
-            # component grown from any of its pixels.
+            # Components partition the foreground without losing pixels.
             areas = component_areas(labels, count)
             self.assertEqual(int(areas[1:].sum()), int(mask.sum()))
             self.assertEqual(int(areas[0]), int((~mask).sum()))
             self.assertTrue(np.all((labels > 0) == mask))
+
+    def test_full_labels_match_independent_raster_flood_fill(self) -> None:
+        rng = np.random.default_rng(825)
+        for density in (0.0, 0.05, 0.3, 0.6, 1.0):
+            mask = rng.random((23, 29)) < density
+            expected = np.zeros(mask.shape, dtype=np.int32)
+            count = 0
+            for y, x in np.ndindex(mask.shape):
+                if not mask[y, x] or expected[y, x]:
+                    continue
+                count += 1
+                expected[y, x] = count
+                queue = deque([(y, x)])
+                while queue:
+                    cy, cx = queue.popleft()
+                    for ny in range(max(0, cy - 1), min(mask.shape[0], cy + 2)):
+                        for nx in range(max(0, cx - 1), min(mask.shape[1], cx + 2)):
+                            if mask[ny, nx] and not expected[ny, nx]:
+                                expected[ny, nx] = count
+                                queue.append((ny, nx))
+            labels, actual_count = label_components(mask)
+            np.testing.assert_array_equal(labels, expected)
+            self.assertEqual(actual_count, count)
+            self.assertEqual(labels.dtype, np.int32)
+            self.assertTrue(labels.flags.c_contiguous)
+
+    def test_equal_area_tie_and_zero_sized_inputs(self) -> None:
+        mask = np.zeros((8, 12), dtype=bool)
+        mask[1, 9] = mask[2, 10] = True
+        mask[5, 1:3] = True
+        largest, area, count = largest_component(mask)
+        expected = np.zeros_like(mask)
+        expected[1, 9] = expected[2, 10] = True
+        np.testing.assert_array_equal(largest, expected)
+        self.assertEqual((area, count), (2, 2))
+        for shape in ((0, 5), (5, 0)):
+            labels, count = label_components(np.zeros(shape, dtype=bool))
+            self.assertEqual(labels.shape, shape)
+            self.assertEqual(count, 0)
 
     def test_labels_are_dense_and_ordered(self) -> None:
         mask = _blobs(3)

@@ -117,11 +117,27 @@ class AppTests(unittest.TestCase):
 
     # ----- tests
 
+    def test_selected_checkpoint_availability(self) -> None:
+        endpoint = "/api/checkpoints/availability"
+        for value in ("", "base", str(self.root / "missing.ckpt"), str(self.root)):
+            result = self.client.get(endpoint, params={"checkpoint": value})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertFalse(result.json()["available"])
+            self.assertIn("Choose", result.json()["reason"])
+        custom = self.root / "availability-check.ckpt"
+        custom.write_bytes(b"checkpoint presence test")
+        result = self.client.get(endpoint, params={"checkpoint": str(custom)}).json()
+        self.assertEqual(result, {"available": True, "path": str(custom.resolve())})
+        with mock.patch.object(self.app.state.app_state.config, "checkpoint", custom):
+            self.assertEqual(self.client.get(endpoint, params={"checkpoint": "base"}).json(), result)
+        custom.unlink()
+        self.assertFalse(self.client.get(endpoint, params={"checkpoint": str(custom)}).json()["available"])
+
     def test_static_files_and_state(self) -> None:
         page = self.client.get("/")
         self.assertEqual(page.status_code, 200)
         self.assertIn("text/html", page.headers["content-type"])
-        self.assertIn("Pose viewer", page.text)
+        self.assertIn("Worm pose", page.text)
         script = self.client.get("/app.js")
         self.assertIn("javascript", script.headers["content-type"])
         self.assertIn("use strict", script.text)
@@ -144,7 +160,7 @@ class AppTests(unittest.TestCase):
         run = self.get(f"/api/run?name={RUN_NAME}")
         self.assertEqual(run["series"]["frame_index"], list(range(FRAMES)))
         frame = self.get(f"/api/frame?run={RUN_NAME}&frame=2&detail=light")
-        self.assertEqual(sorted(frame["layers"]), ["image", "tube"])
+        self.assertEqual(sorted(frame["layers"]), ["image"])
         self.assertEqual(self.get(f"/api/frame?run={RUN_NAME}&frame=2&detail=medium", 400)["error"], "detail must be 'full' or 'light'")
         self.assertIn("frame", self.get(f"/api/frame?run={RUN_NAME}&frame=x", 400)["error"])
         self.assertEqual(self.get("/api/run?name=missing", 404), {"error": "unknown workspace 'missing'"})
@@ -226,7 +242,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(frame["stats"]["source_name"], "forward")
         self.assertEqual([h["source"] for h in frame["pose"]["hypotheses"]], ["independent", "forward"])
         light = self.get(f"/api/workspaces/{RUN_NAME}/frame?frame=2&detail=light")
-        self.assertEqual(sorted(light["layers"]), ["image", "tube"])
+        self.assertEqual(sorted(light["layers"]), ["image"])
         self.assertEqual(light["errors"], [])
         self.assertEqual(self.get(f"/api/workspaces/{RUN_NAME}/frame?frame=99", 400)["error"], f"frame 99 is not in this run")
         pose = self.get(f"/api/workspaces/{RUN_NAME}/pose?frame=3")
@@ -286,7 +302,7 @@ class AppTests(unittest.TestCase):
         with mock.patch.object(pipeline, "stage_command", _cpu_stage_command):
             submitted = self.post("/api/jobs", {"kind": "stage", "workspace": "fresh", "stage": "segment", "params": SEGMENT_PARAMS, "label": "seg"})
         self.assertEqual(submitted["state"], "queued")
-        self.assertEqual(submitted["spec"], {"kind": "stage", "params": {"stage": "segment", "params": {**SEGMENT_PARAMS, "dataset_root": str(self.root / "dataset")}}, "workspace": "fresh", "frames": [0, FRAMES - 1], "gpus": 1, "label": "seg"})
+        self.assertEqual(submitted["spec"], {"kind": "stage", "params": {"stage": "segment", "params": {**SEGMENT_PARAMS, "dataset_root": str(self.root / "dataset")}}, "workspace": "fresh", "frames": [0, FRAMES - 1], "gpus": 1, "gpu": None, "label": "seg"})
         self.assertEqual(submitted["command"][0], sys.executable)
         self.assertIn("--stage', 'segment'", submitted["command"][-1])
         record = self.wait_for_job(submitted["id"])
@@ -356,6 +372,11 @@ class AppTests(unittest.TestCase):
         self.assertIn("cam", [r["name"] for r in self.get("/api/recordings")])
         self.assertTrue(self.get(f"/api/recordings/datasets?path={outside}")["registered"])
         self.assertTrue(self.get(f"/api/files?path={outside.parent}")["entries"][0]["registered"])
+        self.assertEqual(self.get(f"/api/recordings/preparation?path={outside}")["stage"], "idle")
+        prepared = self.post("/api/recordings/prepare", {"path": str(outside)})
+        self.assertEqual(prepared["stage"], "ready")
+        self.assertTrue((self.root / "dataset" / "flat_fields" / "cam.npz").exists())
+        self.assertEqual(self.get(f"/api/recordings/preparation?path={outside}")["stage"], "ready")
         thumb = self.client.get(f"/api/recordings/thumbnail?path={outside}&frame=1&scale=0.5")
         self.assertEqual(thumb.status_code, 200, thumb.text)
         self.assertEqual(Image.open(io.BytesIO(thumb.content)).size, (WIDTH // 2, HEIGHT // 2))
@@ -450,7 +471,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(change["after"]["job"], "edit:e000001")
         frame = picked["frame"]
         self.assertEqual(frame["stats"]["frame_index"], last)
-        self.assertEqual(sorted(frame["layers"]), ["image", "tube"])  # detail=light
+        self.assertEqual(sorted(frame["layers"]), ["image"])  # detail=light
         self.assertEqual([h["chosen"] for h in frame["pose"]["hypotheses"]], [True, False])
         self.assertEqual(frame["pose"]["centerline_xy"], frame["pose"]["hypotheses"][0]["centerline_xy"])
         self.assertEqual((frame["stats"]["iou"], frame["stats"]["source_name"]), (0.8, "independent"))
@@ -750,10 +771,10 @@ class RegionTests(unittest.TestCase):
         self.assertEqual(set(full["chosen_iou"]), {"1", "2", "3", "4"})
         self.assertEqual(full["current_metrics"]["median_iou"], full["metrics_before"]["median_iou"])
         self.assertEqual(full["current_metrics"]["frames"], 4)
-        frame = self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=light")
+        frame = self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=full")
         self.assertEqual([(s["id"], s["algorithm"], s["index"], s["mirrored"], s["candidates"]) for s in frame["candidate_sets"]], [(job_id, "mirror", 0, False, 2)])
         self.assertEqual(frame["pose"]["candidate_sets"][0]["centerline_xy"], row["chosen_centerline_xy"])
-        self.assertEqual(self.get(f"/api/workspaces/{self.WS}/frame?frame=5&detail=light")["candidate_sets"], [])
+        self.assertEqual(self.get(f"/api/workspaces/{self.WS}/frame?frame=5&detail=full")["candidate_sets"], [])
         self.assertEqual(self.get(f"/api/workspaces/{self.WS}/pose?frame=3")["pose"]["candidate_sets"][0]["id"], job_id)
         outcome = self.get(f"/api/outcomes?workspace={self.WS}")[0]
         self.assertEqual((outcome["candidate_set"], outcome["algorithm"], outcome["accepted"], outcome["first"], outcome["last"]), (job_id, "mirror", False, 1, 4))
@@ -765,7 +786,7 @@ class RegionTests(unittest.TestCase):
         second = self.wait_for_job(self.region_job({"algorithm": "independent_multistart", "first": 2, "last": 3, "anchor_before": 1, "anchor_after": 4})["id"])
         self.assertEqual(second["state"], "done", second)
         self.assertEqual([e["id"] for e in self.get(f"/api/workspaces/{self.WS}/candidates")], [second["id"], job_id])
-        both = self.get(f"/api/workspaces/{self.WS}/frame?frame=3&detail=light")["candidate_sets"]
+        both = self.get(f"/api/workspaces/{self.WS}/frame?frame=3&detail=full")["candidate_sets"]
         self.assertEqual([s["id"] for s in both], [second["id"], job_id])
         self.assertGreater(both[0]["candidates"], 1)
         self.assertEqual(len(self.get("/api/outcomes")), 2)
@@ -794,8 +815,8 @@ class RegionTests(unittest.TestCase):
         self.assertEqual([str(a) for a in provenance["algorithm"][1:5]], ["independent_fit", "mirror", "mirror", "independent_fit"])
         self.assertEqual(str(provenance["job"][2]), f"candidates:{job_id}")
         self.assertEqual(self.get(f"/api/workspaces/{self.WS}")["provenance_counts"], {"independent_fit": n - 2, "mirror": 2})
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=light")["candidate_sets"]], [second["id"]])
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=light")["candidate_sets"]], [job_id])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=full")["candidate_sets"]], [second["id"]])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=full")["candidate_sets"]], [job_id])
         self.assertFalse(self.get(f"/api/workspaces/{self.WS}/candidates/{job_id}")["accepted"])
         outcomes = self.get(f"/api/outcomes?workspace={self.WS}")
         self.assertEqual([(o["candidate_set"], o["accepted"], o["accepted_rows"]) for o in outcomes], [(second["id"], False, []), (job_id, False, [2, 3])])
@@ -810,7 +831,7 @@ class RegionTests(unittest.TestCase):
         # The rest of the path completes the set; the hypotheses table shows its candidates with the chosen one current.
         rest = self.post(f"/api/workspaces/{self.WS}/candidates/{job_id}/accept", {})
         self.assertEqual((rest["edit"]["rows"], rest["candidate_set"]["accepted"], rest["candidate_set"]["accepted_rows"]), ([1, 4], True, [1, 2, 3, 4]))
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=light")["candidate_sets"]], [])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=full")["candidate_sets"]], [])
         table = self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=light")["pose"]["hypotheses"]
         self.assertEqual([(h["source"], h["chosen"]) for h in table], [("current", True), ("mirrored", False)])
         self.assertTrue(self.get(f"/api/outcomes?workspace={self.WS}")[1]["accepted"])
@@ -821,13 +842,13 @@ class RegionTests(unittest.TestCase):
         self.assertNotIn("hypotheses", self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=light")["pose"])  # the rows had none before the accept
         reopened = self.get(f"/api/workspaces/{self.WS}/candidates/{job_id}")
         self.assertEqual((reopened["accepted"], reopened["accepted_rows"]), (False, [2, 3]))
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=light")["candidate_sets"]], [job_id])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=1&detail=full")["candidate_sets"]], [job_id])
         self.assertEqual([(o["candidate_set"], o["accepted"], o["accepted_rows"]) for o in self.get(f"/api/outcomes?workspace={self.WS}")], [(second["id"], False, []), (job_id, False, [2, 3])])
         undone = self.post(f"/api/workspaces/{self.WS}/edits", {"kind": "undo"})
         self.assertEqual(undone["edit"]["undone"], "e000001")
         self.assertEqual(self.get(f"/api/workspaces/{self.WS}")["provenance_counts"], {"independent_fit": n})
         self.assertEqual(self.get(f"/api/workspaces/{self.WS}/candidates/{job_id}")["accepted_rows"], [])
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=light")["candidate_sets"]], [second["id"], job_id])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=2&detail=full")["candidate_sets"]], [second["id"], job_id])
         # A job running on the workspace makes edits and accepts a 409 rather than a wait.
         blocker = self.post("/api/jobs", {"kind": "command", "workspace": self.WS, "command": [sys.executable, "-c", "import time; time.sleep(60)"], "label": "blocker"})
         deadline = time.monotonic() + 30
@@ -849,7 +870,7 @@ class RegionTests(unittest.TestCase):
         self.assertFalse((self.workspace.path / "candidates" / f"{second['id']}.npz").exists())
         self.assertEqual(self.client.delete(f"/api/workspaces/{self.WS}/candidates/{second['id']}").status_code, 404)
         # The mirror set, its accepts undone, overlays its frames again.
-        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=3&detail=light")["candidate_sets"]], [job_id])
+        self.assertEqual([s["id"] for s in self.get(f"/api/workspaces/{self.WS}/frame?frame=3&detail=full")["candidate_sets"]], [job_id])
         self.assertEqual(len(self.get("/api/outcomes")), 2)
 
 

@@ -30,16 +30,17 @@ class LabelLauncherTests(unittest.TestCase):
         run.assert_called_once_with(app, host="127.0.0.2", port=9001, log_level="info")
         state.close.assert_called_once()
 
-    def test_queue_explicitly_falls_back_without_losing_manifest_semantics(self):
+    def test_queue_loads_unified_manifest_without_legacy_fallback(self):
         argv = ["--queue", "/tmp/queue.json", "--dataset-root", "/tmp/labels", "--port", "9002"]
-        stderr = io.StringIO()
-        with mock.patch("worm_pose_gen.label_app.main") as legacy, mock.patch("worm_pose_gen.app.create_app") as create:
-            with contextlib.redirect_stderr(stderr):
+        state = mock.Mock()
+        app = SimpleNamespace(state=SimpleNamespace(app_state=state))
+        with mock.patch("worm_pose_gen.label_app.main") as legacy, mock.patch("worm_pose_gen.app.create_app", return_value=app), mock.patch("uvicorn.run") as run:
+            with contextlib.redirect_stdout(io.StringIO()):
                 unified_main(argv)
-        legacy.assert_called_once_with(argv)
-        create.assert_not_called()
-        self.assertIn("Deprecated standalone labeler", stderr.getvalue())
-        self.assertIn("manifest order and split pledges", stderr.getvalue())
+        legacy.assert_not_called()
+        state.labeling.load_manifest.assert_called_once_with(Path('/tmp/queue.json'))
+        run.assert_called_once()
+        state.close.assert_called_once()
 
     def test_registration_failure_closes_state_and_does_not_launch(self):
         state = mock.Mock()

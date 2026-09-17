@@ -47,7 +47,10 @@ function buildCharts() {
     node.addEventListener("pointerdown", (event) => {
       node.setPointerCapture(event.pointerId);
       if (event.shiftKey && typeof beginRangeSelection === "function") { beginRangeSelection(rowFromX(node, event.clientX)); return; }
-      state.timeline.dragging = true; seekFromEvent(node, event);
+      state.timeline.dragging = true;
+      if (state.playing) togglePlay();
+      beginPreviewMotion();
+      seekFromEvent(node, event);
     });
     node.addEventListener("pointermove", (event) => {
       if (state.rangeSelect) { updateRangeSelection(rowFromX(node, event.clientX)); return; }
@@ -55,12 +58,16 @@ function buildCharts() {
     });
     node.addEventListener("pointerup", (event) => {
       if (state.rangeSelect) { endRangeSelection(rowFromX(node, event.clientX)); return; }
+      const wasDragging = state.timeline.dragging;
       state.timeline.dragging = false;
+      if (wasDragging) settlePreview();
     });
     for (const type of ["pointercancel", "lostpointercapture"]) {
       node.addEventListener(type, () => {
         if (state.rangeSelect) { state.rangeSelect = null; drawCharts(); }
+        const wasDragging = state.timeline.dragging;
         state.timeline.dragging = false;
+        if (wasDragging) settlePreview();
       });
     }
     node.addEventListener("wheel", (event) => { event.preventDefault(); zoomTimeline(node, event); }, { passive: false });
@@ -256,20 +263,20 @@ function jump(kind, direction) {
 }
 
 function togglePlay() {
-  if (state.playing) { clearInterval(state.playing); state.playing = null; $("#play").textContent = "Play"; if (typeof maskEditor !== "undefined") maskEditor.onFrame(); return; }
+  if (state.playing) { clearInterval(state.playing); state.playing = null; $("#play").textContent = "Play"; $("#play").classList.remove("active"); $("#play").setAttribute("aria-pressed", "false"); settlePreview(); return; }
   if (!state.run) return;
   if (typeof maskEditor !== "undefined" && !maskEditor.beforeMutation()) return;
   const period = 1000 / Math.max(1, Math.min(30, parseInt($("#fps").value, 10) || 10));
-  // The cursor advances at the requested rate; frames whose full layers are
-  // already cached show them, the others show the light tier and the mask
-  // layers catch up when playback stops.
+  // Advance at the requested rate using only cheap previews. Pausing (including
+  // the end of the recording) restores detailed layers for the selected frame.
   state.playing = setInterval(() => {
     const n = state.run.series.frame_index.length;
     let next = state.row + 1;
-    const stretch = state.frame && state.frame.stats && state.frame.stats.stretch;
+    const stretch = state.region ? { rows: [state.region.first, state.region.last] } : state.frame && state.frame.stats && state.frame.stats.stretch;
     if ($("#loop-stretch").checked && stretch && next > stretch.rows[1]) next = stretch.rows[0];
     if (next >= n) { togglePlay(); return; }
-    showRow(next, { keepView: true, immediate: true });
+    showRow(next, { keepView: true });
   }, period);
-  $("#play").textContent = "Pause";
+  $("#play").textContent = "Pause"; $("#play").classList.add("active"); $("#play").setAttribute("aria-pressed", "true");
+  beginPreviewMotion();
 }

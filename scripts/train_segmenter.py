@@ -50,7 +50,10 @@ DEFAULT_CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints" / "segmenter"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
+    parser.add_argument(
+        "--dataset-root", type=Path, nargs="+", default=[DEFAULT_DATASET_ROOT],
+        help="one or more stores; training, validation, and test are their unions, and the first store's validation split decides promotion",
+    )
     parser.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_DIR)
     parser.add_argument("--name", default="run", help="run name, appended to the timestamped run directory")
     parser.add_argument("--train-labels", choices=LABEL_FILTERS, default="manual", help="which training labels to use")
@@ -78,7 +81,7 @@ def main() -> int:
         args.dataset_root, batch_size=args.batch_size, crop_size=args.crop_size,
         num_workers=args.num_workers, seed=args.seed, train_label_filter=args.train_labels,
     )
-    counts = data.store.counts()
+    counts = data.counts()
     train_records = data.train_records()
     counts["train_used"] = len(train_records)
     if not train_records or counts["val"] == 0:
@@ -114,8 +117,11 @@ def main() -> int:
         log_every_n_steps=5,
         enable_progress_bar=True,
     )
-    manifest = split_manifest(data.store)
-    manifest["train"] = [row for row in manifest["train"] if row["sample_id"] in {r.sample_id for r in train_records}]
+    train_ids = {r.sample_id for r in train_records}
+    manifest = {}
+    for store in data.stores:
+        manifest[str(store.root)] = split_manifest(store)
+        manifest[str(store.root)]["train"] = [row for row in manifest[str(store.root)]["train"] if row["sample_id"] in train_ids]
     trainer.fit(module, datamodule=data)
     # Lightning's save_last only writes when a top-k checkpoint is written, so
     # the final-epoch weights are saved explicitly here, before the test pass
@@ -127,10 +133,13 @@ def main() -> int:
         "started_at": started_at,
         "finished_at": None,
         "git": git_revision(PROJECT_ROOT),
-        "args": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(args).items()},
+        "args": {
+            key: ([str(v) for v in value] if isinstance(value, list) else str(value) if isinstance(value, Path) else value)
+            for key, value in vars(args).items()
+        },
         "train_labels": args.train_labels,
         "init_checkpoint": checkpoint_fingerprint(args.init),
-        "dataset_root": str(args.dataset_root),
+        "dataset_roots": [str(root) for root in args.dataset_root],
         "counts": counts,
         "splits": manifest,
         "best_val_loss": None if best.best_model_score is None else float(best.best_model_score),
@@ -153,7 +162,7 @@ def main() -> int:
     elif args.promote:
         results["promotion"] = {"promote": True, "reason": "--promote"}
     else:
-        results["promotion"] = compare_on_split(run_dir / "best.ckpt", promoted_path, data.store, "val")
+        results["promotion"] = compare_on_split(run_dir / "best.ckpt", promoted_path, data.stores[0], "val")
     if results["promotion"]["promote"]:
         shutil.copy2(run_dir / "best.ckpt", promoted_path)
         results["promotion"]["promoted_to"] = str(promoted_path)
