@@ -27,3 +27,7 @@ checkpoints/
 
 # Project-owned external artifact convenience link
 external_artifacts
+
+# Agent skills installed by tooling, not project code
+.agents/
+skills-lock.json
