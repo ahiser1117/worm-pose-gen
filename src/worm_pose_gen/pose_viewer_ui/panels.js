@@ -92,7 +92,7 @@ function initSplitters() {
 
 // ---------------------------------------------------------------- tabs
 
-const TABS = ["rerun", "inspect", "paint", "review", "export"];
+const TABS = ["rerun", "inspect", "masks", "review", "export"];
 const TAB_ALIASES = { view: "inspect", data: "open", pipeline: "rerun", run: "rerun", compare: "review", corpus: "labels" };
 
 const taskScrollPositions = new Map();
@@ -101,7 +101,7 @@ function showTab(name) {
   if (state.screen === "workspace") taskScrollPositions.set(previous, $("#sidebar").scrollTop);
   name = TAB_ALIASES[name] || name;
   if (["import", "open"].includes(name) && !["import", "open"].includes(previous)) state.panelReturn = previous;
-  const screen = ["import", "open", "labels", "training"].includes(name) ? name : "workspace";
+  const screen = ["import", "open", "paint", "labels", "bodyfields", "training"].includes(name) ? name : "workspace";
   if (state.run && previous !== name) state.userView = true;
   if (screen === "workspace" && !TABS.includes(name)) name = "inspect";
   if (screen === "workspace") state.activeTask = name;
@@ -129,14 +129,15 @@ function showTab(name) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const id of ["import", "open", "labels", "training"]) $(`#screen-${id}`).hidden = screen !== id;
-  const painting = screen === "workspace" && name === "paint";
-  $("#paint-tray").hidden = !painting;
-  $("#paint-display").hidden = !painting;
-  if (painting && state.playing) togglePlay();
-  if (typeof maskEditor !== "undefined" && maskEditor.setActive) maskEditor.setActive(painting);
+  for (const id of ["import", "open", "paint", "labels", "bodyfields", "training"]) $(`#screen-${id}`).hidden = screen !== id;
+  const masking = screen === "workspace" && name === "masks";
+  $("#paint-display").hidden = !masking;
+  if (masking && state.playing) togglePlay();
+  if (typeof maskEditor !== "undefined" && maskEditor.setActive) maskEditor.setActive(masking);
   writeStorage("poseApp.task", state.activeTask || "inspect");
   if ((name === "labels" || name === "training") && typeof corpusUI !== "undefined") corpusUI.refresh();
+  if (name === "bodyfields" && typeof bodyFields !== "undefined") bodyFields.show();
+  if (name === "paint" && typeof paintScreen !== "undefined") paintScreen.show();
   if (name === "import") {
     if (!state.recordings.length && serverIsApp()) loadRecordings(false);
     toggleExplorer(true);
@@ -151,7 +152,8 @@ function currentTab() { return state.screen && state.screen !== "workspace" ? st
 
 function initTabs() {
   for (const button of document.querySelectorAll("button[data-tab]")) button.addEventListener("click", () => showTab(button.dataset.tab));
-  showTab(readStorage("poseApp.task", "inspect"));
+  const task = readStorage("poseApp.task", "inspect");
+  showTab(TABS.includes(task) ? task : "inspect");
 }
 
 // ---------------------------------------------------------------- catalog
@@ -161,7 +163,6 @@ async function refreshCatalog(rescan = false) {
   const info = await api(rescan ? "/api/state?rescan=1" : "/api/state");
   state.info = info;
   renderJobGpuControls();
-  if (typeof paintNavigation !== "undefined" && paintNavigation.onCatalog) paintNavigation.onCatalog(info);
   renderServerNotice(info);
   state.runs = info.runs || [];
   state.workspaces = (info.workspaces || []).map((w) => (w.summary ? w : { ...w, summary: w.summary || {} }));

@@ -105,7 +105,7 @@ function resizeCanvas() {
 }
 
 function fitView() {
-  const d = (typeof maskEditor !== "undefined" && maskEditor.dimensions()) || state.decoded;
+  const d = state.decoded;
   if (!d || !d.width) return;
   const rect = canvas.getBoundingClientRect();
   const scale = Math.min(rect.width / d.width, rect.height / d.height) * 0.98;
@@ -193,7 +193,6 @@ function drawFixedBody(body) {
 }
 
 function draw() {
-  if (typeof maskEditor !== "undefined" && maskEditor.drawCorpus()) return;
   const ratio = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -555,7 +554,7 @@ function renderLayerAvailability() {
   for (const node of document.querySelectorAll(".layer")) {
     const deferred = rasterLayersDeferred() && layer(node.dataset.layer)?.kind === "pixel";
     node.classList.toggle("deferred", deferred);
-    node.title = node.dataset.layer === "editable_mask" ? "Editable labels shown in Paint: magenta is worm, yellow is ignored." : deferred ? "Shown when playback or scrubbing stops and detailed layers finish loading." : "";
+    node.title = node.dataset.layer === "editable_mask" ? "Editable workspace mask shown in Masks: magenta is worm, yellow is ignored." : deferred ? "Shown when playback or scrubbing stops and detailed layers finish loading." : "";
   }
   if (state.frame && state.frame.detail === "light") {
     const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);

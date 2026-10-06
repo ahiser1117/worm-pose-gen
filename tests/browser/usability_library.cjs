@@ -85,11 +85,12 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert(await page.locator('#right-jobs').isVisible());
     assert(await page.locator('#right-statistics').isHidden());
     await page.locator('#training-add-labels').click();
-    assert(await page.locator('#screen-labels').isVisible());
+    assert(await page.locator('#screen-paint').isVisible(), 'Add training labels opens Paint');
+    await page.locator('[data-main-tab="labels"]').click();
     await page.locator('#corpus-filter').fill('no-match');
     await page.getByRole('button', {name: 'Clear filters', exact: true}).click();
     assert.equal(await page.locator('#corpus-filter').inputValue(), '');
-    for (const screen of ['import', 'open', 'labels', 'training']) {
+    for (const screen of ['import', 'open', 'paint', 'labels', 'training']) {
       await page.setViewportSize({width: 320, height: 900});
       await page.evaluate(screen => showTab(screen), screen);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${screen} horizontal overflow`);

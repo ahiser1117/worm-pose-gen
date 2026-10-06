@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
     await page.setContent('<canvas id="canvas" width="200" height="200" style="position:absolute;left:0;top:0"></canvas>');
     await page.evaluate(() => {
       window.$ = selector => document.querySelector(selector);
-      for (const id of ['mask-enable','mask-visible','mask-predicted','mask-size','mask-size-value','mask-status','mask-save','mask-clear','mask-to-corpus','mask-refit-frame','mask-refit-stretch','mask-stroke-undo','mask-discard','mask-corpus-close','corpus-close']) {
+      for (const id of ['mask-enable','mask-visible','mask-predicted','mask-size','mask-size-value','mask-status','mask-save','mask-clear','mask-to-corpus','mask-refit-frame','mask-refit-stretch','mask-stroke-undo','mask-discard']) {
         const node=document.createElement(id==='mask-enable'||id==='mask-visible'?'input':'button');node.id=id;if(node.tagName==='INPUT')node.type='checkbox';document.body.append(node);
       }
       window.canvas=$('#canvas');window.ctx=canvas.getContext('2d');
@@ -20,12 +20,12 @@ const assert = require('node:assert/strict');
       window.toImage=(x,y)=>({x:(x-state.view.tx)/state.view.scale,y:(y-state.view.ty)/state.view.scale});
       window.draw=()=>{};
       const image=document.createElement('canvas');image.width=image.height=64;
-      window.api=async()=>({frame:5,width:64,height:64,image:'image',mask:'mask',has_override:false,revision:'r0'});
+      window.post=async()=>({frame:5,width:64,height:64,image:'image',mask:'mask',has_override:false,revision:'r0'});
       window.loadImage=async()=>image;
       window.decodeGray=async()=>new Uint8Array(64*64);
       window.corpusUI={refresh:async()=>{}};
     });
-    await page.addScriptTag({content:fs.readFileSync('src/worm_pose_gen/pose_viewer_ui/masks.js','utf8')});
+    for (const file of ['mask_tools.js','masks.js']) await page.addScriptTag({content:fs.readFileSync('src/worm_pose_gen/pose_viewer_ui/'+file,'utf8')});
     await page.evaluate(async()=>{maskEditor.init();await maskEditor.onFrame();$('#mask-enable').checked=true;$('#mask-visible').checked=true;});
     // Image pixel (10,10) maps to screen (40,50). A stroke marks the draft
     // and navigation refuses to discard it, regardless of zoom/translation.

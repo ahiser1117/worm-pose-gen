@@ -401,13 +401,11 @@ async function decodeFrame(payload) {
 // screen is dropped.
 async function applyPayload(payload, row, stale = false, controller = null) {
   const generation = loads.generation;
-  if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
   if (controller?.signal.aborted || (payload.detail === "full" && previewMoving())) return false;
   if (!payload._decoded) {
     const [decoded, image, imageRaw] = await Promise.all([decodeFrame(payload), loadImage(payload.layers && payload.layers.image), loadImage(payload.image_raw)]);
     payload._decoded = decoded; payload._image = image; payload._imageRaw = imageRaw;
   }
-  if (typeof maskEditor !== "undefined" && maskEditor.corpusActive()) return false;
   if (generation !== loads.generation || controller?.signal.aborted || (payload.detail === "full" && previewMoving())) return false;
   if (row !== state.row && !(stale && previewMoving())) return false;
   if (payload._seq !== undefined && payload._seq < loads.applied) return false;
@@ -517,7 +515,7 @@ async function showRow(row, options = {}) {
   if (!state.run || !state.run.series.frame_index.length) return Promise.resolve(false);
   const n = state.run.series.frame_index.length;
   row = Math.max(0, Math.min(n - 1, row));
-  if (!options.skipMaskGuard && typeof maskEditor !== "undefined" && (row !== state.row || maskEditor.corpusActive())) {
+  if (!options.skipMaskGuard && typeof maskEditor !== "undefined" && row !== state.row) {
     if (!await maskEditor.requestLeave({ destination: { kind: "frame", row } })) return false;
   }
   clearFieldError($("#frame-index"), "frame-error");

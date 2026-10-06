@@ -10,12 +10,15 @@ const assert=require('node:assert/strict');
     await page.evaluate(()=>{
       window.$=selector=>document.querySelector(selector);window.calls=[];
       window.state={screen:'workspace',run:{},activeTask:'inspect'};
-      window.currentTab=()=>state.activeTask;window.dirty=false;window.corpus=false;
+      window.currentTab=()=>state.screen==='workspace'?state.activeTask:state.screen;window.dirty=false;window.groupOpen=false;
       const record=name=>(...args)=>calls.push([name,...args]);
       window.togglePlay=record('play');window.step=record('step');window.jump=record('jump');window.toggleLayer=record('layer');window.fitView=record('fit');window.computeStarts=record('starts');window.showTab=record('tab');window.setStatus=record('error');window.undoEdit=record('saved-undo');
-      $('#toggle-raw').onclick=record('raw');
-      window.maskEditor={isDirty:()=>dirty,corpusActive:()=>corpus};
-      for(const action of ['cycleOpacity','setBrush','resizeBrush','selectProposal','applyProposal','refine','next','previous','save','saveNext','undoStroke'])maskEditor[action]=record(action);
+      $('#toggle-raw').onclick=()=>calls.push(['raw']);
+      // The workspace Masks editor and Paint record the same action names: one chord, one meaning.
+      window.maskEditor={isDirty:()=>dirty};window.paintScreen={isOpen:()=>state.screen==='paint'&&groupOpen};
+      for(const action of ['cycleOpacity','setBrush','resizeBrush','selectProposal','applyProposal','refine','save','undoStroke'])maskEditor[action]=paintScreen[action]=record(action);
+      for(const action of ['next','previous','saveNext'])paintScreen[action]=record(action);
+      paintScreen.toggleRaw=()=>calls.push(['raw']);paintScreen.fitView=()=>calls.push(['fit']);
       window.sendKey=async(spec,target='canvas')=>{calls=[];const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,...spec});document.getElementById(target).dispatchEvent(event);await Promise.resolve();await Promise.resolve();return{calls:[...calls],prevented:event.defaultPrevented};};
     });
     await page.addScriptTag({content:fs.readFileSync('src/worm_pose_gen/pose_viewer_ui/shortcuts.js','utf8')});
@@ -26,8 +29,8 @@ const assert=require('node:assert/strict');
     assert.equal(new Set(normalized).size,entries.length,'registered chords must be unique after normalization');
     assert.deepEqual(normalized,entries.map(entry=>entry.chord),'registered chords must already use canonical normalization');
     const meaning=new Map();
-    for(const task of ['rerun','inspect','paint','review','export']){
-      await page.evaluate(task=>{state.activeTask=task;state.screen='workspace';dirty=false;corpus=false;},task);
+    for(const task of ['rerun','inspect','masks','review','export','paint']){
+      await page.evaluate(task=>{if(task==='paint'){state.screen='paint';groupOpen=true;}else{state.activeTask=task;state.screen='workspace';groupOpen=false;}dirty=false;},task);
       for(const entry of entries){
         const result=await page.evaluate(spec=>sendKey(spec),eventFor(entry.chord));
         assert(result.calls.length<=1,`${entry.chord} dispatched multiple actions in ${task}`);
@@ -35,11 +38,12 @@ const assert=require('node:assert/strict');
       }
     }
     assert.equal(meaning.size,entries.length,'every listed shortcut should enable in at least one supported task');
-    for(const screen of ['import','open','labels','training']){
-      await page.evaluate(screen=>{state.screen=screen;state.activeTask='inspect';},screen);
+    assert.equal(meaning.get('f'),JSON.stringify(['raw']),'F keeps the workspace meaning');
+    for(const screen of ['import','open','labels','training','bodyfields','paint']){
+      await page.evaluate(screen=>{state.screen=screen;state.activeTask='inspect';groupOpen=false;},screen);
       for(const entry of entries)assert.deepEqual((await page.evaluate(spec=>sendKey(spec),eventFor(entry.chord))).calls,[],`accelerator ${entry.chord} active on ${screen}`);
     }
-    await page.evaluate(()=>{state.screen='workspace';state.activeTask='paint';});
+    await page.evaluate(()=>{state.screen='workspace';state.activeTask='masks';});
     for(const target of ['text','select','textarea','editable','editable-child']){
       for(const key of ['s','Enter','z','ArrowRight'])assert.deepEqual((await page.evaluate(({key,target})=>sendKey({key},target),{key,target})).calls,[],`typing in ${target} triggered ${key}`);
     }
@@ -52,22 +56,23 @@ const assert=require('node:assert/strict');
     for(const key of ['s','Enter','a','h','z'])assert.deepEqual((await page.evaluate(key=>sendKey({key,repeat:true}),key)).calls,[],`repeat editing ${key}`);
     assert.deepEqual((await page.evaluate(()=>sendKey({key:'=',repeat:true}))).calls,[['resizeBrush',1]]);
     assert.deepEqual((await page.evaluate(()=>sendKey({key:'ArrowRight',repeat:true}))).calls,[['step',1]]);
-    for(const task of ['rerun','inspect','paint','review','export']){
+    for(const task of ['rerun','inspect','masks','review','export']){
       await page.evaluate(task=>{state.activeTask=task;maskEditor.undoStroke=()=>{calls.push(['undoStroke']);return false;};},task);
       for(const modifier of ['ctrlKey','metaKey']){
         const result=await page.evaluate(modifier=>sendKey({key:'z',[modifier]:true}),modifier);
-        assert.deepEqual(result.calls,task==='paint'?[['undoStroke']]:[],`${modifier}+Z must only undo draft, never saved edit`);
+        assert.deepEqual(result.calls,task==='masks'?[['undoStroke']]:[],`${modifier}+Z must only undo draft, never saved edit`);
       }
     }
-    await page.evaluate(()=>{state.activeTask='paint';dirty=true;});
-    assert.deepEqual((await page.evaluate(()=>sendKey({key:' '}))).calls,[],'dirty Paint draft must disable playback');
+    await page.evaluate(()=>{state.activeTask='masks';dirty=true;});
+    assert.deepEqual((await page.evaluate(()=>sendKey({key:' '}))).calls,[],'dirty Masks draft must disable playback');
     assert.deepEqual((await page.evaluate(()=>sendKey({key:'s',isComposing:true}))).calls,[]);
     assert.deepEqual((await page.evaluate(async()=>{document.getElementById('canvas').addEventListener('keydown',event=>event.preventDefault(),{once:true});return sendKey({key:'s'});})).calls,[],'already-handled events must not trigger accelerators');
     assert.deepEqual((await page.evaluate(()=>sendKey({key:'B',shiftKey:true}))).calls,[['setBrush',255]],'plain shifted letters normalize case');
-    await page.evaluate(()=>{corpus=true;state.run=null;});
-    assert.deepEqual((await page.evaluate(()=>sendKey({key:'b'}))).calls,[['setBrush',255]],'corpus Paint works without an active workspace');
-    assert.deepEqual((await page.evaluate(()=>sendKey({key:'ArrowRight'}))).calls,[],'corpus editing must not seek the correction workspace');
-    await page.evaluate(()=>{corpus=false;state.run={};});
+    await page.evaluate(()=>{state.screen='paint';groupOpen=true;state.run=null;});
+    assert.deepEqual((await page.evaluate(()=>sendKey({key:'b'}))).calls,[['setBrush',255]],'Paint works without an active workspace');
+    assert.deepEqual((await page.evaluate(()=>sendKey({key:'f'}))).calls,[['raw']],'F toggles the Paint image');
+    assert.deepEqual((await page.evaluate(()=>sendKey({key:'ArrowRight'}))).calls,[],'Paint must not seek a workspace');
+    await page.evaluate(()=>{state.screen='workspace';groupOpen=false;state.run={};});
     // Browser/clipboard chords retain their native behavior, including redo.
     const conflicts=[];
     for(const modifier of ['ctrlKey','metaKey'])for(const key of ['w','t','c','v','s','n','p']){
@@ -80,6 +85,6 @@ const assert=require('node:assert/strict');
     }
     assert.deepEqual(errors,[]);
     assert.deepEqual(conflicts,[],'modified browser/clipboard shortcuts must not be reassigned');
-    console.log(`PASS: ${entries.length} canonical shortcuts across five tasks; focus/dialog/native controls; undo isolation; repeat restrictions; browser modifiers`);
+    console.log(`PASS: ${entries.length} canonical shortcuts across five tasks and Paint; focus/dialog/native controls; undo isolation; repeat restrictions; browser modifiers`);
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Worm pose</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/workflow_library.css"><link rel="stylesheet" href="/static/workflow_paint.css"><link rel="stylesheet" href="/static/workflow_run.css"><link rel="stylesheet" href="/static/workflow_inspect.css"><link rel="stylesheet" href="/static/workflow_compare.css"><link rel="stylesheet" href="/static/workflow_export.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Worm pose</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/workflow_library.css"><link rel="stylesheet" href="/static/workflow_paint.css"><link rel="stylesheet" href="/static/workflow_run.css"><link rel="stylesheet" href="/static/workflow_inspect.css"><link rel="stylesheet" href="/static/workflow_compare.css"><link rel="stylesheet" href="/static/workflow_export.css"><link rel="stylesheet" href="/static/body_fields.css"><link rel="stylesheet" href="/static/paint.css"></head>
 <body><div id="app" data-screen="workspace" data-task="inspect">
-<header id="app-header"><div class="file-actions" aria-label="File actions"><button aria-pressed="false" data-screen="import">Import</button><button aria-pressed="false" data-screen="open">Open</button></div><nav id="screen-tabs" role="tablist" aria-label="Main view"><button id="return-workspace" data-main-tab="workspace" role="tab" aria-selected="true" class="active">Workspace</button><button data-screen="labels" data-main-tab="labels" role="tab" aria-selected="false">Labels</button><button data-screen="training" data-main-tab="training" role="tab" aria-selected="false">Training</button></nav><button aria-pressed="true" aria-controls="details" id="toggle-inspector">Side panel</button><span id="workspace-menu" class="note"></span><span id="active-recording" class="note"></span><h1>Worm pose</h1><section id="workspace-context" aria-label="Current frame and operation selection"><span id="context-frame">No frame open</span><span id="selection-info" class="note"></span><span id="context-save" role="status"></span><div class="context-bounds"><label>First frame<input id="selection-first" type="number"></label><label>Last frame<input id="selection-last" type="number"></label><button id="selection-current">Use current frame</button><button id="selection-stretch">Use stretch</button></div></section></header>
-<aside id="sidebar"><nav id="tabs" aria-label="Workspace task"><button data-tab="rerun">Run</button><button data-tab="inspect">Inspect</button><button data-tab="paint">Paint</button><button data-tab="review">Compare</button><button data-tab="export">Export</button></nav>
+<header id="app-header"><div class="file-actions" aria-label="File actions"><button aria-pressed="false" data-screen="import">Import</button><button aria-pressed="false" data-screen="open">Open</button></div><nav id="screen-tabs" role="tablist" aria-label="Main view"><button id="return-workspace" data-main-tab="workspace" role="tab" aria-selected="true" class="active">Workspace</button><button data-screen="paint" data-main-tab="paint" role="tab" aria-selected="false">Paint</button><button data-screen="labels" data-main-tab="labels" role="tab" aria-selected="false">Labels</button><button data-screen="bodyfields" data-main-tab="bodyfields" role="tab" aria-selected="false">Body fields</button><button data-screen="training" data-main-tab="training" role="tab" aria-selected="false">Training</button></nav><button aria-pressed="true" aria-controls="details" id="toggle-inspector">Side panel</button><span id="workspace-menu" class="note"></span><span id="active-recording" class="note"></span><h1>Worm pose</h1><section id="workspace-context" aria-label="Current frame and operation selection"><span id="context-frame">No frame open</span><span id="selection-info" class="note"></span><span id="context-save" role="status"></span><div class="context-bounds"><label>First frame<input id="selection-first" type="number"></label><label>Last frame<input id="selection-last" type="number"></label><button id="selection-current">Use current frame</button><button id="selection-stretch">Use stretch</button></div></section></header>
+<aside id="sidebar"><nav id="tabs" aria-label="Workspace task"><button data-tab="rerun">Run</button><button data-tab="inspect">Inspect</button><button data-tab="masks">Masks</button><button data-tab="review">Compare</button><button data-tab="export">Export</button></nav>
 <div id="tab-inspect" class="tab"><section class="group">
           <h3>Jump to</h3>
           <span class="row wrap">
@@ -37,8 +37,8 @@
           <div id="note-list" class="list"></div>
           <div id="notes-path" class="note"></div>
         </section></div>
-<div id="tab-paint" class="tab" hidden><section id="paint-primary" aria-label="Save current Paint target"><div id="mask-target" class="target-banner">Open a workspace to paint a mask.</div><p class="note">Save updates this frame only. Save &amp; refit then opens Run for the selected range.</p><div class="row wrap"><button id="mask-save" class="primary">Save mask · S</button><button id="mask-save-next">Save + next · Enter</button><button id="mask-save-refit">Save &amp; refit selected range</button></div><div id="mask-save-status" class="note"></div><div class="row wrap"><button id="mask-refit-frame">Refit saved frame…</button><button id="mask-refit-stretch">Refit saved range…</button></div></section><section id="mask-editor" class="group"><div id="paint-quick-brush">
-<label><input id="mask-enable" type="checkbox" checked> Paint mask</label>
+<div id="tab-masks" class="tab" hidden><section id="paint-primary" aria-label="Save the current workspace mask"><div id="mask-target" class="target-banner">Open a workspace to correct its masks.</div><p class="note">Corrects the mask fitting reads for this workspace frame. Save updates this frame only; Save &amp; refit then opens Run for the selected range. Training labels are made in Paint.</p><div class="row wrap"><button id="mask-save" class="primary">Save mask · S</button><button id="mask-save-refit">Save &amp; refit selected range</button></div><div id="mask-save-status" class="note"></div><div class="row wrap"><button id="mask-refit-frame">Refit saved frame…</button><button id="mask-refit-stretch">Refit saved range…</button></div></section><section id="mask-editor" class="group"><div id="paint-quick-brush">
+<label><input id="mask-enable" type="checkbox" checked> Edit mask</label>
 <h3>Brush</h3><div class="row wrap"><button data-mask-brush="255">Worm · B</button><button data-mask-brush="0">Background · E</button><button data-mask-brush="127">Ignore · I</button></div>
 <label for="mask-size">Diameter <output id="mask-size-value">12 px</output><input id="mask-size" type="range" min="1" max="100" value="12"></label>
 </div><div class="group"><h3>Proposals</h3><div class="form-grid"><button data-mask-proposal="network">Network · W</button><button data-mask-proposal="classical">Classical · C</button><button data-mask-proposal="raw_threshold">Threshold · T</button><button data-mask-proposal="saved">Saved · V</button></div>
@@ -47,10 +47,9 @@
 <label>Combine<select id="mask-combine"><option value="replace">Replace</option><option value="union">Union</option><option value="intersect">Intersect</option><option value="subtract">Subtract</option></select></label></div>
 <div class="row wrap"><label><input id="mask-proposal-preview" type="checkbox" checked> Preview proposal</label><button id="mask-apply-proposal">Apply · A</button></div><div id="mask-proposal-status" class="note"></div></div>
 <div class="group"><h3>Refine</h3><div class="row wrap"><button data-mask-refine="fill_holes">Fill holes · H</button><button data-mask-refine="largest_component">Largest · L</button><button data-mask-refine="dilate">Grow · D</button><button data-mask-refine="erode">Shrink · R</button><button data-mask-refine="mask_fit">Tube fit · U</button></div><div id="mask-refine-status" class="note"></div></div>
+<div class="group"><h3>Save destinations</h3><label><input id="mask-also-corpus" type="checkbox"> Also save a training label</label><label>Corpus split<select id="mask-corpus-split"><option value="">Automatic</option><option value="train">Train</option><option value="val">Validation</option><option value="test">Test</option></select></label><div class="row wrap"><button id="mask-to-corpus">Save label to corpus</button><button id="mask-clear">Remove override</button></div></div>
 <div class="group"><h3>Draft</h3><div class="row wrap"><button id="mask-stroke-undo">Undo · Z</button><button id="mask-clear-draft">Clear draft</button><button id="mask-discard">Discard draft</button></div><div id="mask-status" class="note"></div></div></section>
-<section id="paint-tray" hidden><div class="paint-navigation"><h3>Next frame</h3><div class="form-grid"><label>Mode<select id="mask-next-mode"><option value="sequential">Sequential (stride)</option><option value="uncertain">Network-uncertain</option><option value="random">Random unlabeled</option><option value="queue">Queue (manifest)</option><option value="browse">Filtered saved labels</option></select></label><label>Pool<select id="mask-next-pool"><option value="workspace">Workspace</option><option value="selection">Selected range</option><option value="recordings">Recordings</option><option value="manifest">Manifest</option></select></label><label>Stride<input id="mask-stride" type="number" min="1" value="1"></label><label>Candidates<input id="mask-candidates" type="number" min="1" max="24" value="6"></label></div>
-<label>Recording paths<textarea id="mask-recordings" rows="1" placeholder="One recording path per line"></textarea></label><div class="row"><input id="mask-manifest" type="text" placeholder="Manifest path" aria-label="Manifest path"><button id="mask-manifest-load">Load</button></div><div class="row wrap"><button id="mask-prev">Previous · P</button><button id="mask-next">Next · N</button><button data-screen="labels">Label filters</button></div><div id="mask-next-status" class="note"></div></div>
-<div class="paint-saves"><h3>Save destinations &amp; saved labels</h3><label><input id="mask-also-corpus" type="checkbox"> Also save a training label</label><label>Corpus split<select id="mask-corpus-split"><option value="">Automatic</option><option value="train">Train</option><option value="val">Validation</option><option value="test">Test</option></select></label><div class="row wrap"><button id="mask-to-corpus">Save label to corpus</button><button id="mask-clear">Remove override</button><button id="mask-corpus-close" disabled>Return to workspace</button><button id="mask-delete-corpus">Delete corpus label</button></div></div></section>
+
 </div>
 <div id="tab-rerun" class="tab" hidden><div id="server-note-pipeline" class="server-note" hidden></div><label>Operation scope<select id="rerun-scope"><option value="current">Current frame</option><option value="selection" selected>Selected range</option><option value="workspace">Whole workspace</option></select></label><label>Job GPU<select id="job-gpu" aria-label="GPU for new jobs"><option value="">Automatic</option></select></label><div id="rerun-scope-info" class="note"></div><div id="rerun-current-anchors" class="form-grid" hidden><label>Anchor before<input id="rerun-current-before" type="number"></label><label>Anchor after<input id="rerun-current-after" type="number"></label></div><div id="whole-stages" hidden><section class="group">
           <h3>Stages <small id="stages-target"></small></h3>
@@ -282,6 +281,34 @@
 </details>          </div>
         </section></div>
       </div></section>
+<section id="screen-paint" class="app-screen" hidden>
+<div id="paint-chooser"><div class="panel-head"><h2>Paint</h2><button id="paint-refresh">Refresh</button></div>
+<p class="note">Label frames for the training corpus. Choose a group of frames to work through; saves go to the corpus with the group's split pledges, independent of any workspace.</p>
+<div class="paint-choices">
+<section class="group"><h3>Open groups</h3><div id="paint-groups" class="list"></div></section>
+<section class="group"><h3>Labeling manifests</h3><div id="paint-manifests" class="list"></div>
+<div class="row"><input id="paint-manifest-path" type="text" placeholder="Other manifest path" aria-label="Manifest path"><button id="paint-manifest-open">Open manifest</button></div></section>
+<section class="group"><h3>Relabel a recording section</h3><p class="note">A stretch of a recording to label frame by frame. Inspect in a workspace sends its selected range here with Label range in Paint.</p>
+<label>Recording<select id="paint-section-recording"></select></label><div class="form-grid"><label>Name<input id="paint-section-name" type="text" placeholder="optional"></label><label>First frame<input id="paint-section-first" type="number" min="0" value="0"></label><label>Last frame<input id="paint-section-last" type="number" min="0" value="0"></label><label>Step<input id="paint-section-step" type="number" min="1" value="1"></label></div>
+<button id="paint-section-create">Open section</button></section>
+</div><div id="paint-groups-status" class="note" role="status"></div></div>
+<div id="paint-workbench" hidden>
+<aside class="paint-panel">
+<section class="group paint-queue"><button id="paint-back">Label groups</button><div id="paint-group-name" class="paint-group-name"></div>
+<div class="row"><span id="paint-position"></span><progress id="paint-progress-bar" value="0" max="1"></progress></div><div id="paint-progress" class="note"></div><div id="paint-entry" class="target-banner"></div>
+<div class="row wrap"><button id="paint-prev">Previous · P</button><button id="paint-next">Next · N</button><button id="paint-next-unlabeled">Next unlabeled</button></div>
+<div class="row wrap"><button id="paint-save" class="primary">Save label · S</button><button id="paint-save-next">Save + next · Enter</button></div><div id="paint-status" class="note" role="status"></div></section>
+<section class="group"><h3>Brush</h3><div class="row wrap"><button data-paint-brush="255">Worm · B</button><button data-paint-brush="0">Background · E</button><button data-paint-brush="127">Ignore · I</button></div>
+<label for="paint-size">Diameter <output id="paint-size-value">12 px</output><input id="paint-size" type="range" min="1" max="100" value="12"></label></section>
+<section class="group"><h3>Proposals</h3><div class="form-grid"><button data-paint-proposal="network">Network · W</button><button data-paint-proposal="classical">Classical · C</button><button data-paint-proposal="raw_threshold">Threshold · T</button><button data-paint-proposal="saved">Saved · V</button></div>
+<label for="paint-threshold">Network threshold <output id="paint-threshold-value">0.50</output><input id="paint-threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5"></label>
+<label>Combine<select id="paint-combine"><option value="replace">Replace</option><option value="union">Union</option><option value="intersect">Intersect</option><option value="subtract">Subtract</option></select></label>
+<div class="row wrap"><label><input id="paint-preview" type="checkbox" checked> Preview proposal</label><button id="paint-apply">Apply · A</button></div><div id="paint-proposal-status" class="note"></div></section>
+<section class="group"><h3>Refine</h3><div class="row wrap"><button data-paint-refine="fill_holes">Fill holes · H</button><button data-paint-refine="largest_component">Largest · L</button><button data-paint-refine="dilate">Grow · D</button><button data-paint-refine="erode">Shrink · R</button><button data-paint-refine="mask_fit">Tube fit · U</button></div><div id="paint-refine-status" class="note"></div></section>
+<section class="group"><h3>Draft</h3><div class="row wrap"><button id="paint-undo">Undo · Z</button><button id="paint-clear">Clear draft</button><button id="paint-discard">Discard draft</button></div></section>
+</aside>
+<div class="paint-stage"><div class="paint-toolbar"><button id="paint-raw" aria-pressed="false">Raw / flat · F</button><button id="paint-fit">Fit view · 0</button><label><input id="paint-visible" type="checkbox" checked> Mask</label><label>Opacity<select id="paint-opacity"><option value="45">45%</option><option value="20">20%</option><option value="0">Off</option></select></label><span class="note">Left drag paints; right, middle or Shift drag pans; wheel zooms.</span></div><canvas id="paint-canvas" tabindex="0" aria-label="Frame being labeled"></canvas></div>
+</div></section>
 <section id="screen-labels" class="app-screen" hidden><h2>Labels</h2><section class="group"><h3>User segmentation corpus</h3>
           <span class="row"><input id="corpus-filter" aria-label="Filter saved labels" placeholder="filter saved labels…"><button id="corpus-refresh" title="Refresh corpus labels" aria-label="Refresh corpus labels">Refresh</button></span>
           <div class="form-grid corpus-filters">
@@ -289,9 +316,45 @@
 <label>Split<select id="corpus-split-filter"><option value="">All splits</option><option value="train">Train</option><option value="val">Validation</option><option value="test">Test</option></select></label>
 <label>Recording<select id="corpus-recording-filter"><option value="">All recordings</option></select></label>
 </div><button id="corpus-browse">Browse filtered labels</button><div id="corpus-counts" class="note"></div><div id="corpus-list" class="list"></div>
-          <p class="note">Open a label to inspect or repaint its independent copy. Workspace masks and accepted poses stay separate.</p>
-          <button id="corpus-close" hidden>Return to workspace</button>
-        </section><section class="group"><h3 id="corpus-new-title" tabindex="-1">Label new frames</h3><label>Recording<select id="corpus-new-recording"></select></label><label>Frame<input id="corpus-new-frame" type="number" min="0" value="0"></label><button id="corpus-new-open">Open for labeling</button><div id="corpus-new-status" class="note"></div></section></section>
+          <p class="note">Open a label, or browse the filtered labels, to repaint them in Paint. Workspace masks and accepted poses stay separate.</p>
+        </section></section>
+<section id="screen-bodyfields" class="app-screen" hidden><div class="bf-layout">
+<aside class="bf-browser"><div class="panel-head"><h2>Body fields</h2><button id="bf-refresh" title="Re-read the body-field records">Refresh</button></div>
+<p class="note">Targets of the body-field network, built from the corpus labels by fitting the tube. Check the head end, the A-P colours across touching body parts and the overlap; flip, accept or reject, or edit the mask and rebuild.</p>
+<div class="form-grid bf-filters">
+<label>Status<select id="bf-status"><option value="">All statuses</option><option value="current">Current</option><option value="stale">Stale (mask edited)</option><option value="missing">Missing</option></select></label>
+<label>Split<select id="bf-split"><option value="">All splits</option><option value="train">Train</option><option value="val">Validation</option><option value="test">Test</option></select></label>
+<label>Head from<select id="bf-orientation"><option value="">All orientations</option></select></label>
+<label>Fit method<select id="bf-method"><option value="">All fit methods</option></select></label>
+<label>Review<select id="bf-review"><option value="">All reviews</option><option value="unreviewed">Unreviewed</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option></select></label>
+<label>Self-contact<select id="bf-contact"><option value="">Any</option><option value="yes">Touching or crossing</option><option value="no">None</option></select></label>
+<label>Fit IoU at least<input id="bf-min-iou" type="number" min="0" max="1" step="0.01" placeholder="any"></label>
+<label>Fit IoU at most<input id="bf-max-iou" type="number" min="0" max="1" step="0.01" placeholder="any"></label>
+</div><div id="bf-counts" class="note" role="status"></div><div id="bf-list" class="list"></div></aside>
+<div class="bf-stage"><div class="bf-toolbar"><button id="bf-prev" title="Previous sample (P)">◀ Previous</button><button id="bf-next" title="Next sample (N)">Next ▶</button><span id="bf-caption" class="note"></span></div>
+<canvas id="bf-canvas" aria-label="Body-field targets over the frame"></canvas><div id="bf-readout" class="note"></div></div>
+<aside class="bf-controls">
+<section class="group"><h3>Sample</h3><div id="bf-summary" class="target-banner">Choose a sample from the list.</div></section>
+<section class="group"><h3>Edit</h3>
+<div class="row wrap"><button id="bf-flip" title="Swap head and tail: reverse the tube and set A-P to 1 − A-P (H)">Flip head/tail · H</button><button id="bf-trace" title="Click the midline head first and refit the body along it (T)">Trace midline · T</button></div>
+<div class="row wrap"><button id="bf-review-accepted" data-bf-review="accepted" title="Targets are right (A)">Accept · A</button><button id="bf-review-rejected" data-bf-review="rejected" title="Targets are wrong: the sample trains the mask only (R)">Reject · R</button><button data-bf-review="unreviewed">Unreviewed</button></div>
+<label><input id="bf-advance" type="checkbox" checked> Next sample after accept or reject</label>
+<div class="row wrap"><button id="bf-edit-mask" title="Open this corpus label in Paint">Edit mask in Paint</button><button id="bf-rebuild" title="Refit the tube to the current mask and re-render the targets (a GPU job)">Rebuild targets</button><button id="bf-jobs">Jobs</button></div>
+<div id="bf-edit-status" class="note" role="status"></div></section>
+<section class="group" id="bf-trace-panel" hidden><h3>Trace midline</h3><p class="note">Click from the head along the body to the tail, through crossings in the order the body goes; about 10 points, more around loops.</p>
+<div id="bf-trace-count" class="note"></div>
+<div class="row wrap"><button id="bf-trace-fit" class="primary">Fit · Enter</button><button id="bf-trace-undo">Remove last · Backspace</button><button id="bf-trace-cancel">Cancel · Esc</button></div>
+<div id="bf-trace-result" class="target-banner" hidden></div>
+<div class="row wrap"><button id="bf-trace-accept" class="primary" title="Write the previewed fit; the sample becomes accepted">Accept</button><button id="bf-trace-drawn" title="Preview the trace itself as the midline (a fallback; fits the mask worse)">Use trace as drawn</button><button id="bf-trace-discard" title="Drop the preview and keep editing the points">Discard</button></div></section>
+<section class="group"><h3>Temporal context</h3>
+<div class="row"><label class="inline"><input type="radio" name="bf-mode" value="frame" checked> Frames</label><label class="inline"><input type="radio" name="bf-mode" value="difference"> Difference · D</label></div>
+<label>Offset <output id="bf-offset-value">0</output><input id="bf-offset" type="range" min="-16" max="16" step="1" value="0" aria-label="Context frame offset"></label>
+<div class="row"><button id="bf-play" title="Play the context frames (Space)">Play</button><label class="inline">fps<select id="bf-fps"><option>5</option><option selected>10</option><option>20</option></select></label></div>
+<label>Lag <output id="bf-lag-value">±4</output><input id="bf-lag" type="range" min="1" max="16" step="1" value="4" aria-label="Difference lag"></label>
+<label>Difference gain<select id="bf-gain"><option>1</option><option selected>2</option><option>4</option><option>8</option></select></label>
+<div id="bf-context-status" class="note"></div></section>
+<section class="group"><h3>Layers</h3><div id="bf-layers"></div><p class="note">Drag to pan, wheel to zoom, double-click or 0 to fit. ←/→ step the offset (or the lag).</p></section>
+</aside></div></section>
 <section id="screen-training" class="app-screen" hidden><div class="panel-head"><h2>Training</h2><button id="training-jobs">View training jobs</button></div>
 <section class="group"><h3>1. Training data</h3><p id="training-counts" role="status">Loading label counts…</p><p id="training-readiness" class="note"></p><button id="training-add-labels">Add training labels</button></section>
 <section class="group"><h3>2. Fine-tune segmentation</h3><p class="note" id="training-base-model">Starting model: packaged checkpoint.</p><div class="form-grid">
@@ -317,9 +380,9 @@
 <script src="/static/edits.js"></script>
 <script src="/static/panels.js"></script>
 <script src="/static/regions.js"></script>
-<script src="/static/paint_navigation.js"></script>
-<script src="/static/masks.js"></script>
-<script src="/static/corpus.js"></script>
+
+<script src="/static/mask_tools.js"></script><script src="/static/masks.js"></script>
+<script src="/static/corpus.js"></script><script src="/static/paint.js"></script><script src="/static/body_fields.js"></script>
 <script src="/static/tasks.js"></script>
 <script src="/static/shortcuts.js"></script>
 <script src="/static/workflow_run.js"></script>

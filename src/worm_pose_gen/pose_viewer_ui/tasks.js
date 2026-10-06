@@ -102,16 +102,13 @@ function syncTaskSelection() {
 }
 
 function syncWorkspaceContext() {
-  const target = typeof maskEditor !== "undefined" && maskEditor.corpusActive() ? maskEditor.getTarget() : null;
-  const frame = target ? target.frame ?? target.frame_index : state.run?.series.frame_index[state.row];
-  $("#context-frame").textContent = frame == null ? "No frame open" : `${target ? "Corpus label" : "Viewing"} · frame ${frame}`;
+  const frame = state.run?.series.frame_index[state.row];
+  $("#context-frame").textContent = frame == null ? "No frame open" : `Viewing · frame ${frame}`;
   const dirty = typeof maskEditor !== "undefined" && maskEditor.isDirty();
   const save = $("#context-save");
-  const text = dirty ? "Unsaved mask draft" : target ? "Independent corpus copy" : isWorkspace() ? "Workspace saved" : state.run ? "Read-only run" : "";
+  const text = dirty ? "Unsaved mask draft" : isWorkspace() ? "Workspace saved" : state.run ? "Read-only run" : "";
   if (save.textContent !== text) save.textContent = text;
   save.classList.toggle("dirty", !!dirty);
-  $("#workspace-context").classList.toggle("corpus-context", !!target);
-  if (target) $("#selection-info").textContent = "Workspace selection retained";
   $("#workspace-menu").title = state.runName || "";
   $("#active-recording").title = state.run?.entry.recording || "";
 }
@@ -134,7 +131,7 @@ function taskShellChanged() {
 }
 
 function rememberViewContext() {
-  if (!state.run || (typeof maskEditor !== "undefined" && maskEditor.corpusActive())) return;
+  if (!state.run) return;
   const contexts = readStorage("poseApp.contexts", {});
   contexts[currentSourceKey()] = {
     frame: state.run.series.frame_index[state.row], view: { ...state.view },
@@ -177,7 +174,6 @@ function initTaskShell() {
   for (const button of document.querySelectorAll("[data-drawer]")) button.addEventListener("click", () => toggleDrawer(button.dataset.drawer));
   for (const button of document.querySelectorAll("[data-close-panel]")) button.onclick = () => showTab(state.panelReturn || state.activeTask || "inspect");
   $("#return-workspace").onclick = async () => {
-    if (typeof maskEditor !== "undefined" && maskEditor.corpusActive() && await maskEditor.returnToWorkspace() === false) return;
     showTab(state.activeTask || "inspect");
   };
   $("#toggle-inspector").onclick = () => togglePanel("right");
@@ -219,7 +215,7 @@ function initTaskShell() {
   window.addEventListener("workflow:mask-state", syncWorkspaceContext);
   const stickyHeight = () => {
     const navigation = $("#tabs").getBoundingClientRect().height;
-    const paint = state.screen === "workspace" && state.activeTask === "paint" ? $("#paint-primary").getBoundingClientRect().height : 0;
+    const paint = state.screen === "workspace" && state.activeTask === "masks" ? $("#paint-primary").getBoundingClientRect().height : 0;
     $("#sidebar").style.setProperty("--task-sticky-height", `${navigation + paint + 8}px`);
     $("#sidebar").style.setProperty("--task-nav-height", `${navigation}px`);
   };

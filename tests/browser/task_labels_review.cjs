@@ -12,9 +12,9 @@ const assert=require('node:assert/strict');
     await page.setContent('<div id="root"></div>');
     await page.evaluate(()=>{
       window.$=selector=>document.querySelector(selector);
-      const inputIds=['region-first','region-last','region-anchor-before','region-anchor-after','rerun-current-before','rerun-current-after','corpus-filter','corpus-new-frame'];
-      const selectIds=['rerun-scope','corpus-source-filter','corpus-split-filter','corpus-recording-filter','corpus-new-recording','seg-checkpoint'];
-      const otherIds=['region-info','region-target','region-run','region-run-note','rerun-scope-info','corpus-list','corpus-train','checkpoint-select','checkpoint-status','corpus-train-status','corpus-counts','corpus-new-open','corpus-new-status','corpus-refresh','checkpoint-refresh','corpus-close','corpus-browse','training-add-labels','training-jobs','training-counts','training-readiness','training-base-model'];
+      const inputIds=['region-first','region-last','region-anchor-before','region-anchor-after','rerun-current-before','rerun-current-after','corpus-filter'];
+      const selectIds=['rerun-scope','corpus-source-filter','corpus-split-filter','corpus-recording-filter','seg-checkpoint'];
+      const otherIds=['region-info','region-target','region-run','region-run-note','rerun-scope-info','corpus-list','corpus-train','checkpoint-select','checkpoint-status','corpus-train-status','corpus-counts','corpus-refresh','checkpoint-refresh','corpus-browse','training-add-labels','training-jobs','training-counts','training-readiness','training-base-model'];
       for(const id of [...inputIds,...selectIds,...otherIds]){const node=document.createElement(inputIds.includes(id)?'input':selectIds.includes(id)?'select':'div');node.id=id;document.body.append(node);}
       for(const scope of ['current','selection','workspace'])$('#rerun-scope').add(new Option(scope,scope));
       window.state={run:{series:{frame_index:[10,20,35,50,80]},selected_checkpoint:null},runName:'test',sourceKind:'workspace',row:2,region:{first:0,last:4,anchor_before:null,anchor_after:null},algorithms:[{id:'independent_multistart',parameters:[]}],algorithm:'independent_multistart',regionParams:{},recordings:[{path:'/pool/a/clip.h5',dataset:'/img_nir',frames:100,readable:true},{path:'/pool/b/clip.h5',dataset:'/frames',frames:100,readable:true}],stageValues:{},stages:[],frameCache:new Map(),candidateDetails:new Map(),candidateSets:[],shownSets:[null,null]};
@@ -22,7 +22,7 @@ const assert=require('node:assert/strict');
       window.setStatus=(message,kind)=>window.status={message,kind};window.setLoading=()=>{};window.drawCharts=()=>{};window.editsUrl=(endpoint,q)=>`/workspace/${endpoint}${q?'?'+q:''}`;
       window.showTab=name=>window.activeTab=name;window.loadJobs=async()=>{};
       window.submitted=[];window.post=async(url,body)=>{submitted.push({url,body});return{id:'job'};};
-      window.maskEditor={beforeMutation:()=>true,requestLeave:async()=>true,openTarget:async target=>{window.openedTarget=target;return true;},setNavigationPool:pool=>window.openedPool=pool,returnToWorkspace:()=>{window.returned=true;},openCorpus:id=>{window.openedSample=id;}};
+      window.maskEditor={beforeMutation:()=>true,requestLeave:async()=>true};window.paintScreen={openSamples:async(ids,options)=>{window.opened={ids,options};return true;}};window.selectedJobGpu=()=>null;
       window.api=async()=>({anchor_before:1,anchor_after:3});
     });
     await page.addScriptTag({content:fs.readFileSync('src/worm_pose_gen/pose_viewer_ui/regions.js','utf8')});
@@ -63,13 +63,10 @@ const assert=require('node:assert/strict');
     assert.match(await page.locator('#corpus-list').textContent(),/\/pool\/b\/clip.h5/);
     assert.match(await page.locator('#corpus-list').textContent(),/revision 7/);
     await page.evaluate(async()=>{await document.getElementById('corpus-browse').onclick();});
-    assert.equal(await page.evaluate(()=>openedSample),'sample-b','Browse filtered labels opens the first matching saved target');
-    await page.evaluate(async()=>{$('#corpus-new-recording').value=JSON.stringify(['/pool/b/clip.h5','/frames']);$('#corpus-new-frame').value='35';await corpusUI.openNewLabel();});
-    assert.deepEqual(await page.evaluate(()=>openedTarget),{recording:'/pool/b/clip.h5',dataset:'/frames',frame:35});
-    assert.deepEqual(await page.evaluate(()=>openedPool),{recordings:[{recording:'/pool/b/clip.h5',dataset:'/frames'}]});
+    assert.deepEqual(await page.evaluate(()=>opened),{ids:['sample-b'],options:{name:'Filtered saved labels',back:'labels'}},'Browse filtered labels opens them as a Paint group');
+    await page.evaluate(async()=>{await document.querySelector('#corpus-list .item button').onclick();});
+    assert.deepEqual(await page.evaluate(()=>opened),{ids:['sample-b'],options:{back:'labels'}},'Open edits one saved label in Paint');
     assert.equal(await page.evaluate(()=>state.runName),'test');
-    await page.evaluate(()=>{document.getElementById('corpus-close').onclick();});
-    assert.equal(await page.evaluate(()=>returned),true);
     // Later filter response must win even when an older request resolves last.
     await page.evaluate(async()=>{
       window.pendingCorpus=[];api=url=>url==='/api/checkpoints'?Promise.resolve({checkpoints:[]}):new Promise(resolve=>pendingCorpus.push(resolve));
@@ -88,11 +85,11 @@ const assert=require('node:assert/strict');
       window.frameOptions=[];window.showRow=async(row,options)=>frameOptions.push(options);
       await applyEditResponse({edits:[]},{preserveMaskDraft:true});
     });
-    assert.equal(await page.evaluate(()=>invalidations),0,'workspace save must retain the Paint transaction for its corpus destination');
+    assert.equal(await page.evaluate(()=>invalidations),0,'workspace save must retain the Masks transaction for its corpus destination');
     assert.equal(await page.evaluate(()=>frameOptions[0].skipMaskGuard),true);
     await page.evaluate(async()=>{await applyEditResponse({edits:[]});});
     assert.equal(await page.evaluate(()=>invalidations),1,'ordinary saved pose edits invalidate the mask cache');
     assert.deepEqual(errors,[]);
-    console.log('PASS: exact rerun scopes, preserved selection, stale anchors/candidates, canonical corpus filters/new labels, stale filter responses, corpus return adapter');
+    console.log('PASS: exact rerun scopes, preserved selection, stale anchors/candidates, canonical corpus filters, Paint hand-off, stale filter responses');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

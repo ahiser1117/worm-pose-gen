@@ -334,7 +334,6 @@ table.outcomes .ok { color: var(--accent); }
 .context-bounds label { display: flex; align-items: center; gap: 5px; margin: 0; }
 .context-bounds input { width: 78px; }
 .context-bounds button { font-size: 12px; padding: 4px 6px; }
-.corpus-context .context-bounds { display: none; }
 .field-error { display: block; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 #transport .field-error { flex-basis: 100%; order: 1; }
 input[aria-invalid=true] { border-color: var(--danger); }
@@ -351,23 +350,16 @@ input[aria-invalid=true] { border-color: var(--danger); }
 .target-banner { padding: 7px 9px; background: #0b0f12; border-left: 3px solid var(--accent); font-size: 12px; white-space: pre-line; overflow-wrap: anywhere; }
 #mask-editor { padding-top: 0; }
 #mask-editor .group { padding: 7px 0 0; margin-top: 7px; }
-#mask-editor button, #paint-tray button { padding: 4px 6px; font-size: 12px; }
-#mask-editor .note:empty, #paint-tray .note:empty { min-height: 0; }
+#mask-editor button { padding: 4px 6px; font-size: 12px; }
+#mask-editor .note:empty { min-height: 0; }
 #mask-editor label { margin: 3px 0; }
 #mask-editor .form-grid { gap: 5px; }
 #mask-editor .proposal-settings label { grid-column: auto; }
 #mask-editor .row { gap: 4px; }
-#mask-editor .note, #paint-tray .note { font-size: 11px; }
-#paint-tray { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 0; border-top: 1px solid var(--border); }
-#paint-tray .paint-saves { padding-top: 8px; border-top: 1px solid var(--border); }
-#paint-tray h3 { margin: 0 0 5px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-#paint-tray .form-grid { gap: 2px 8px; }
-#paint-tray label { margin: 2px 0; font-size: 12px; }
-#paint-tray .row { margin: 4px 0; gap: 4px; }
-#paint-tray textarea { height: 29px; min-height: 29px; resize: vertical; }
+#mask-editor .note { font-size: 11px; }
 textarea { width: 100%; min-width: 0; background: #0b0f12; color: var(--text); border: 1px solid var(--border); border-radius: 4px; font: inherit; padding: 4px 6px; }
 button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .48; cursor: not-allowed; }
-input, select, .form-grid > *, .row > *, .paint-navigation, .paint-saves { min-width: 0; }
+input, select, .form-grid > *, .row > * { min-width: 0; }
 .app-screen { grid-area: 2 / 1 / 5 / 6; padding: 20px; overflow: auto; background: var(--bg); }
 .app-screen h2 { margin-top: 0; }
 .file-actions { display: flex; gap: 6px; }

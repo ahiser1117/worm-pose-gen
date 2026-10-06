@@ -1,4 +1,21 @@
-"""Read-only labeling computations and explicit corpus traversal, independent of workspaces."""
+"""Mask labeling for the corpus and for workspace frames: frames, proposals, refinement, saves, and label groups.
+
+A *target* is a workspace frame (``workspace`` + ``frame``: the workspace's
+mask correction, which feeds fitting), a saved corpus label (``sample_id``),
+or a recording frame (``recording`` + ``dataset`` + ``frame``).  Paint, the
+corpus labeling section of the app, walks a *label group*: an ordered list of
+targets with optional split pledges.  A group is one of
+
+``manifest``  a labeling manifest file (``recordings`` aliases with split
+              pledges, ``frames``); the repository's ``docs/labeling_*/manifest.json``
+              are offered for loading;
+``section``   a stretch of one recording chosen for relabeling (``first``..``last``
+              by ``step``), usually sent from a workspace's Inspect selection;
+              sections persist in ``<workspaces_root>/label_sections.json``;
+``samples``   saved corpus labels (an opened label, the Labels filter, Body fields).
+
+Group progress counts the entries that have a corpus label.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -7,13 +24,14 @@ import binascii
 import json
 from pathlib import Path
 import threading
-from typing import Any
 
 import numpy as np
 
 from ..corpus import CorpusStore, recording_identity
-from ..label_app import Proposer, data_url, decode_mask_data_url, mask_to_png_values, probability_to_png, UNCERTAIN_BAND
+from ..label_app import Proposer, data_url, decode_mask_data_url, mask_to_png_values, probability_to_png
+from ..jobs import REPO_ROOT
 from ..pipeline import workspace_dataset
+from ..workspace import _write_json_atomic, utc_now
 from .state import NotFound, _integer
 
 
@@ -32,10 +50,15 @@ def key(target):
     return f"{recording_identity(target['recording'], target['dataset'])}:{target['frame']}"
 
 
+MANIFEST_GLOB = "docs/labeling_*/manifest.json"
+GROUP_KINDS = ('manifest', 'section', 'samples')
+
+
 class LabelingService:
     def __init__(self, app):
         self.app = app
-        self.manifests: dict[str, dict] = {}
+        self.groups: dict[str, dict] = {}
+        self.sections_path = app.config.workspaces_root / 'label_sections.json'
         self._lock = threading.Lock()
         self._fit_lock = threading.Lock()
 
@@ -95,7 +118,7 @@ class LabelingService:
     def matching(self, target):
         return self.store.find_frame(target['recording'], target['dataset'], target['frame'])
 
-    def frame(self, value):
+    def frame(self, value, group_id=None):
         target = self.target(value)
         raw, image = self.images(target)
         sample = self.matching(target)
@@ -112,20 +135,17 @@ class LabelingService:
             _, label, _ = self.store.load(sample.sample_id)
             mask = encoded(label)
         pledge = self.store.frame_pledge(target['recording'], target['dataset'], target['frame'])
-        manifest_id = value.get('manifest_id')
-        queue_entry = None
-        if manifest_id:
-            queue_entry = next((e for e in self.manifest(manifest_id)['entries'] if key(e['target']) == key(target)), None)
-            if queue_entry:
-                target['manifest_id'] = manifest_id
-                pledge = pledge or (None if queue_entry['split'] == 'auto' else queue_entry['split'])
+        entry = None
+        if group_id:
+            entry = self.entry(group_id, target)
+            pledge = pledge or (None if entry['split'] == 'auto' else entry['split'])
         return {'target': target, 'key': key(target), 'frame': target['frame'], 'width': image.shape[1], 'height': image.shape[0],
                 'image': data_url(image), 'image_raw': data_url(raw), 'mask': mask, 'base_mask': base,
                 'has_override': override, 'stale': stale, 'revision': revision,
                 'workspace_revision': revision if target.get('workspace') else None,
                 'corpus_revision': sample.revision if sample else 0, 'sample': asdict(sample) if sample else None,
                 'checkpoint': self.app.viewer.segmenters.signature(self.checkpoint(target)),
-                'pledged_split': pledge, 'queue_entry': queue_entry, 'capabilities': {'network': self.app.viewer.segmenters.resolve(self.checkpoint(target)) is not None,
+                'pledged_split': pledge, 'entry': entry, 'capabilities': {'network': self.app.viewer.segmenters.resolve(self.checkpoint(target)) is not None,
                     'classical': True, 'raw_threshold': True, 'saved_workspace': override, 'saved_corpus': sample is not None},
                 'encoding': {'background': 0, 'worm': 255, 'ignore': 128}}
 
@@ -186,12 +206,8 @@ class LabelingService:
         raw, image = self.images(target)
         mask = decoded(payload.get('mask'), image.shape)
         split = payload.get('split')
-        manifest_id = payload.get('manifest_id') or payload.get('target', {}).get('manifest_id')
-        if manifest_id:
-            manifest = self.manifest(manifest_id)
-            entry = next((e for e in manifest['entries'] if key(e['target']) == key(target)), None)
-            if entry is None:
-                raise ValueError('target is not in the selected manifest')
+        if payload.get('group_id'):
+            entry = self.entry(payload['group_id'], target)
             split = entry['split'] if entry['split'] != 'auto' else split
         if target.get('sample_id'):
             sample = self.store.update_label(target['sample_id'], mask, revision)
@@ -201,6 +217,141 @@ class LabelingService:
                 label_source='manual:workspace' if target.get('workspace') else 'manual:corpus')
         return {'target': target, 'key': key(target), 'sample': asdict(sample), 'revision': sample.revision,
                 'counts': self.store.counts(), 'root': str(self.store.root)}
+
+    # ----------------------------------------------------------------- groups
+
+    def entry(self, group_id, target):
+        entry = next((e for e in self._group(group_id)['entries'] if key(e['target']) == key(target)), None)
+        if entry is None:
+            raise ValueError('target is not in the selected label group')
+        return entry
+
+    def _group(self, group_id):
+        self._load_sections()
+        with self._lock:
+            group = self.groups.get(str(group_id))
+        if group is None:
+            raise NotFound('unknown label group; open it again')
+        return group
+
+    def _labeled(self):
+        return {f"{recording_identity(r.source_path, r.dataset_path)}:{r.frame_index}" for r in self.store.records()}
+
+    def _summary(self, group, labeled):
+        done = sum(key(e['target']) in labeled for e in group['entries'])
+        return {k: v for k, v in group.items() if k != 'entries'} | {
+            'progress': {'total': len(group['entries']), 'labeled': done, 'remaining': len(group['entries']) - done}}
+
+    def group(self, group_id):
+        """A group with every entry marked ``labeled`` and the position of its first unlabeled entry (or None)."""
+
+        group, labeled = self._group(group_id), self._labeled()
+        entries = [{**e, 'labeled': key(e['target']) in labeled} for e in group['entries']]
+        return {**self._summary(group, labeled), 'entries': entries,
+                'first_unlabeled': next((i for i, e in enumerate(entries) if not e['labeled']), None)}
+
+    def list_groups(self):
+        """Opened groups with progress, and the repository's manifests not yet opened."""
+
+        self._load_sections()
+        labeled = self._labeled()
+        with self._lock:
+            groups = list(self.groups.values())
+        opened = {g.get('path') for g in groups if g['kind'] == 'manifest'}
+        discovered = []
+        for path in sorted(REPO_ROOT.glob(MANIFEST_GLOB)):
+            if str(path.resolve()) in opened:
+                continue
+            try:
+                data = json.loads(path.read_text())
+                discovered.append({'path': str(path.resolve()), 'name': str(data.get('name', path.parent.name)),
+                                   'description': str(data.get('description', '')), 'frames': len(data.get('frames', []))})
+            except (OSError, ValueError) as error:
+                discovered.append({'path': str(path.resolve()), 'name': path.parent.name, 'error': str(error)})
+        return {'groups': [self._summary(g, labeled) for g in groups], 'discovered': discovered}
+
+    def open_group(self, payload):
+        kind = payload.get('kind')
+        if kind == 'manifest':
+            return self.load_manifest(str(payload.get('path') or ''))
+        if kind == 'section':
+            return self.create_section(payload)
+        if kind == 'samples':
+            return self.sample_group(payload.get('sample_ids'), str(payload.get('name') or ''))
+        raise ValueError(f'unknown label group kind {kind!r}; expected one of {GROUP_KINDS}')
+
+    def _register(self, group):
+        with self._lock:
+            self.groups[group['id']] = group
+        return self.group(group['id'])
+
+    def close_group(self, group_id):
+        """Forget a group; a section is also removed from the saved sections."""
+
+        group = self._group(group_id)
+        if group['kind'] == 'section':
+            with self._lock:
+                sections = self._read_sections()
+                sections.pop(group['id'], None)
+                _write_json_atomic(self.sections_path, sections)
+        with self._lock:
+            self.groups.pop(group['id'], None)
+        return {'closed': group['id']}
+
+    def sample_group(self, sample_ids, name=''):
+        if not isinstance(sample_ids, list) or not sample_ids:
+            raise ValueError('a samples group needs a non-empty sample_ids list')
+        entries = []
+        for index, sample_id in enumerate(dict.fromkeys(map(str, sample_ids))):
+            target = self.target({'sample_id': sample_id})
+            entries.append({'target': target, 'split': 'auto', 'position': index + 1, 'reasons': [], 'error': None})
+        group_id = 'smp_' + hashlib.sha256(json.dumps([e['target']['sample_id'] for e in entries]).encode()).hexdigest()[:20]
+        label = name or (entries[0]['target']['sample_id'] if len(entries) == 1 else f'{len(entries)} saved labels')
+        return self._register({'id': group_id, 'kind': 'samples', 'name': label, 'entries': entries, 'errors': []})
+
+    def _read_sections(self):
+        return json.loads(self.sections_path.read_text()) if self.sections_path.exists() else {}
+
+    def _section_group(self, section_id, section):
+        target = {'recording': section['recording'], 'dataset': section['dataset']}
+        entries = [{'target': {**target, 'frame': frame}, 'split': 'auto', 'position': index + 1, 'reasons': [], 'error': None}
+                   for index, frame in enumerate(range(section['first'], section['last'] + 1, section['step']))]
+        return {'id': section_id, 'kind': 'section', 'entries': entries, 'errors': [], **section}
+
+    def _load_sections(self):
+        with self._lock:
+            for section_id, section in self._read_sections().items():
+                if section_id not in self.groups:
+                    self.groups[section_id] = self._section_group(section_id, section)
+
+    def create_section(self, payload):
+        """Persist a recording stretch to relabel; the same recording, range and step give the same section."""
+
+        first, last = _integer(payload, 'first'), _integer(payload, 'last')
+        if payload.get('workspace'):
+            # A range selected in a workspace: its recording, dataset and frame stride; the workspace is not kept.
+            workspace = self.app.workspace(str(payload['workspace']))
+            frames = workspace.frame_index
+            stride = int(frames[1] - frames[0]) if len(frames) > 1 else 1
+            payload = {**payload, 'recording': str(workspace.recording), 'dataset': workspace_dataset(workspace),
+                       'step': payload.get('step') or stride, 'origin': payload.get('origin') or {'workspace': str(payload['workspace'])},
+                       'name': payload.get('name') or f"{payload['workspace']} frames {first}-{last}"}
+        step = _integer(payload, 'step', 1)
+        target = self.target({'recording': payload.get('recording'), 'dataset': payload.get('dataset'), 'frame': first})
+        frames = self.source(target).frame_count
+        if step < 1 or last < first or last >= frames:
+            raise ValueError(f'a section needs 0 <= first <= last < {frames} and a positive step')
+        identity = json.dumps([target['recording'], target['dataset'], first, last, step])
+        section_id = 'sec_' + hashlib.sha256(identity.encode()).hexdigest()[:20]
+        name = str(payload.get('name') or f"{Path(target['recording']).stem} frames {first}-{last}")
+        section = {'name': name, 'recording': target['recording'], 'dataset': target['dataset'], 'first': first,
+                   'last': last, 'step': step, 'origin': payload.get('origin'), 'created_at': utc_now()}
+        with self._lock:
+            sections = self._read_sections()
+            section = sections.setdefault(section_id, section)
+            _write_json_atomic(self.sections_path, sections)
+            self.groups[section_id] = self._section_group(section_id, section)
+        return self.group(section_id)
 
     def load_manifest(self, path):
         path = Path(path).expanduser().resolve()
@@ -254,136 +405,7 @@ class LabelingService:
             entries.append({'target': target, 'split': record['split'], 'position': index + 1,
                             'reasons': entry.get('reasons', []), 'error': record.get('error')})
         manifest_id = hashlib.sha256((str(path) + json.dumps(data, sort_keys=True)).encode()).hexdigest()[:24]
-        manifest = {'id': manifest_id, 'path': str(path), 'name': str(data.get('name', path.stem)),
-                    'recordings': recordings, 'entries': entries, 'errors': errors}
-        with self._lock:
-            self.manifests[manifest_id] = manifest
-        return self.manifest(manifest_id)
+        return self._register({'id': manifest_id, 'kind': 'manifest', 'path': str(path), 'name': str(data.get('name', path.stem)),
+                               'description': str(data.get('description', '')), 'recordings': recordings,
+                               'entries': entries, 'errors': errors})
 
-    def manifest(self, manifest_id):
-        with self._lock:
-            manifest = self.manifests.get(str(manifest_id))
-        if manifest is None:
-            raise NotFound('unknown manifest; load it again')
-        labeled_keys = {f"{recording_identity(r.source_path, r.dataset_path)}:{r.frame_index}" for r in self.store.records()}
-        labeled = sum(key(e['target']) in labeled_keys for e in manifest['entries'])
-        return {**manifest, 'progress': {'total': len(manifest['entries']), 'labeled': labeled,
-                                       'remaining': len(manifest['entries']) - labeled}}
-
-    def list_manifests(self):
-        with self._lock:
-            ids = list(self.manifests)
-        return [self.manifest(i) for i in ids]
-
-    def pool(self, payload):
-        pool = payload.get('pool') or {}
-        if pool.get('workspace'):
-            view = self.app.view(str(pool['workspace']))
-            frames = pool.get('frames', view.workspace.frame_index.tolist())
-            valid = set(map(int, view.workspace.frame_index))
-            if not isinstance(frames, (list, tuple)) or any(int(f) not in valid for f in frames):
-                raise ValueError('pool frames must be an explicit subset of the workspace')
-            return [self.target({'workspace': pool['workspace'], 'frame': int(f)}) for f in sorted(set(map(int, frames)))]
-        records = pool.get('recordings')
-        if not isinstance(records, list) or not records:
-            raise ValueError('declare a workspace or recording pool before navigating')
-        result = []
-        for record in records:
-            first = int(record.get('first', 0))
-            target = self.target({**record, 'frame': first})
-            last = int(record.get('last', self.source(target).frame_count - 1))
-            step = int(record.get('step', 1))
-            if step <= 0 or last < first or last >= self.source(target).frame_count:
-                raise ValueError('invalid recording pool bounds or step')
-            result.extend({**target, 'frame': f} for f in range(first, last + 1, step))
-        return list({key(t): t for t in result}.values())
-
-    def next(self, payload):
-        mode = payload.get('mode')
-        current = payload.get('current')
-        # A stable browse cursor remains valid even after its sample was deleted.
-        current = self.target(current) if current and not (mode == 'browse' and payload.get('cursor')) else None
-        current_key = key(current) if current else None
-        labeled = {f"{recording_identity(r.source_path, r.dataset_path)}:{r.frame_index}" for r in self.store.records()}
-        result: dict[str, Any] = {}
-        if mode == 'browse':
-            filters = payload.get('filters') or {}
-            allowed = {k: filters.get(k, '') for k in ('source', 'split', 'recording', 'q')}
-            records = self.store.filtered(**allowed)
-            pool = payload.get('pool') or {}
-            workspace_pool = None
-            if pool.get('workspace'):
-                workspace_pool = {key(t): t for t in self.pool(payload)}
-                records = [r for r in records if f"{recording_identity(r.source_path, r.dataset_path)}:{r.frame_index}" in workspace_pool]
-            elif pool.get('recordings'):
-                # Filter canonical identities without opening missing saved sources.
-                identities = {recording_identity(r['recording'], r.get('dataset', '/img_nir')) for r in pool['recordings']}
-                records = [r for r in records if recording_identity(r.source_path, r.dataset_path) in identities]
-            after = (payload.get('cursor') or {}).get('after')
-            if not after and current:
-                sample = self.matching(current)
-                if sample:
-                    after = [sample.source_path, sample.dataset_path, sample.frame_index, sample.sample_id]
-            record = next((r for r in records if not after or (r.source_path, r.dataset_path, r.frame_index, r.sample_id) > tuple(after)), None)
-            if record:
-                target = self.target({'sample_id': record.sample_id})
-                if workspace_pool is not None:
-                    target = workspace_pool[key(target)]
-                result = {'target': target,
-                          'cursor': {'after': [record.source_path, record.dataset_path, record.frame_index, record.sample_id]}}
-        elif mode == 'queue':
-            manifest = self.manifest(payload.get('manifest_id'))
-            entries = manifest['entries']
-            if (payload.get('pool') or {}).get('workspace'):
-                pool = {key(t): t for t in self.pool(payload)}
-                entries = [{**e, 'target': pool[key(e['target'])]} for e in entries if key(e['target']) in pool]
-            elif payload.get('pool'):
-                pool_keys = {key(t) for t in self.pool(payload)}
-                entries = [e for e in entries if key(e['target']) in pool_keys]
-            start = next((i + 1 for i, e in enumerate(entries) if key(e['target']) == current_key), 0)
-            pending = [e for e in entries[start:] if key(e['target']) not in labeled]
-            if pending:
-                entry = pending[0]
-                if entry.get('error'):
-                    return {'target': None, 'exhausted': False, 'blocked': True, 'reason': entry['error'], 'progress': manifest['progress']}
-                result = {'target': {**entry['target'], 'manifest_id': manifest['id']}, 'queue_entry': entry, 'pledged_split': entry['split'], 'progress': manifest['progress']}
-            else:
-                result['progress'] = manifest['progress']
-        elif mode in ('sequential', 'random', 'uncertain'):
-            pool = self.pool(payload)
-            if mode == 'sequential':
-                stride = _integer(payload, 'stride', 1)
-                if stride < 1:
-                    raise ValueError('stride must be positive')
-                index = next((i for i, t in enumerate(pool) if key(t) == current_key), None)
-                position = 0 if index is None else index + stride
-                if position < len(pool):
-                    result['target'] = pool[position]
-            else:
-                if mode == 'uncertain' and self.app.viewer.segmenters.resolve(self.checkpoint(pool[0] if pool else {})) is None:
-                    raise ValueError('Network-uncertain mode requires an available checkpoint')
-                pending = [t for t in pool if key(t) not in labeled and key(t) != current_key]
-                if pending:
-                    rng = np.random.default_rng()
-                    if mode == 'random':
-                        result['target'] = pending[int(rng.integers(len(pending)))]
-                    else:
-                        count = _integer(payload, 'candidates', 16)
-                        if not 1 <= count <= 256:
-                            raise ValueError('uncertainty candidate count must be between 1 and 256')
-                        best = None
-                        for i in rng.choice(len(pending), min(count, len(pending)), replace=False):
-                            target = pending[int(i)]
-                            _, image = self.images(target)
-                            probability, _ = self.app.viewer.segmenters.probability(self.checkpoint(target), image)
-                            if probability is None:
-                                raise ValueError('Network-uncertain mode requires an available checkpoint')
-                            score = float(((probability > UNCERTAIN_BAND[0]) & (probability < UNCERTAIN_BAND[1])).mean())
-                            if best is None or score > best[0]:
-                                best = score, target
-                        result.update(target=best[1], uncertainty=best[0])
-        else:
-            raise ValueError('unknown next-frame mode')
-        if result.get('target'):
-            return {**result, 'key': key(result['target']), 'exhausted': False}
-        return {**result, 'target': None, 'exhausted': True, 'reason': 'No more matching frames in the declared pool'}

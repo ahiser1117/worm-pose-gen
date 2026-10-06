@@ -515,7 +515,7 @@ async function runRegion() {
   const sourceKey = currentSourceKey(), scope = regions.rerunScope;
   if (typeof maskEditor !== "undefined") {
     const saved = typeof maskEditor.ensureSavedForRerun === "function" ? await maskEditor.ensureSavedForRerun() : maskEditor.beforeMutation();
-    if (!saved) { showTab("paint"); return; }
+    if (!saved) { showTab("masks"); return; }
   }
   const active = effectiveRerunRegion();
   if (sourceKey !== currentSourceKey() || scope !== regions.rerunScope || !active || active.first !== region.first || active.last !== region.last) { setStatus("Rerun target changed while saving. Check its bounds and run again.", "error"); return; }

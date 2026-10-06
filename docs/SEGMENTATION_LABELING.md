@@ -201,56 +201,56 @@ the better use of them.
 
 ## 5. Label with the app
 
+Labels are painted in **Paint**, a screen of the pose app that works on the
+segmentation store directly, without a workspace:
+
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
+scripts/project_env.sh uv run --no-sync python -m worm_pose_gen.app \
+  --corpus-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1 \
+  --dataset-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1
 ```
 
-Then open `http://127.0.0.1:8767`. The app opens the three default
-recordings read-only (`--recording` overrides), loads
-`checkpoints/segmenter/best.ckpt` if it exists, and caches one flat field
-per recording under the dataset root.
+Then open `http://127.0.0.1:8768` and choose **Paint**. The screen first
+lists the label groups to work from:
 
-Each frame arrives with proposals: the network mask (thresholded in the
-browser at an adjustable cutoff), the classical component, and the raw
-threshold, plus the saved label if the frame was labeled before. The editor
-starts from the saved label, else the network, else the classical mask.
+- **Labeling manifests**: `docs/labeling_round_2/manifest.json`,
+  `docs/labeling_round_3_contact/manifest.json` and any other
+  `docs/labeling_*/manifest.json`, plus a path field. A manifest names its
+  recordings with split pledges and lists frames with the reasons they were
+  picked.
+- **Recording sections**: a stretch of a recording to relabel (first, last,
+  step). In a workspace, select a poorly segmented range in Inspect and press
+  **Label range in Paint**; the section keeps the recording, dataset and range,
+  not the workspace, and stays listed across restarts.
+- **Saved labels**: one label or the filtered list from **Labels**, or a
+  sample from **Body fields**, with a button back.
 
-Throughput comes from keeping the hands on the keyboard:
+Opening a group shows its first unlabeled entry with its position, progress,
+reasons and split pledge. The editor starts from the saved label if there is
+one, else empty; proposals fill it.
 
 | Keys | Action |
 |---|---|
-| `1` `2` `4` `5` | Replace the mask with the network, classical, threshold, or saved proposal. `Shift` unions, `Alt` intersects, `Ctrl` subtracts. |
-| `3` | Replace with the mask-fit tube rendered from the current mask (about 20 s). |
-| `H` `L` `D` `S` | Fill narrow holes, keep the largest component, grow, shrink. |
-| `B` `E` `I` | Worm, erase, and ignore brushes. `[` `]` change size. |
-| `Z` | Undo (40 steps). |
-| `Space` or `Enter` | Save and move to the next frame. |
-| `N` `P` | Next without saving; previous in history. |
-| `F` `O` `0` | Toggle raw/flat-fielded view, cycle overlay opacity, fit view. |
-| Wheel; right or `Shift` drag | Zoom; pan. |
+| `W` `C` `T` `V` | Preview the network, classical, threshold or saved proposal |
+| `A` | Apply the preview with the Combine setting (Shift-, Alt- or Ctrl-click Apply to union, intersect or subtract) |
+| `H` `L` `D` `R` `U` | Fill holes, keep the largest component, grow, shrink, tube fit |
+| `B` `E` `I` | Worm, background and ignore brushes; `-` `=` change size |
+| `Z` | Undo |
+| `S` | Save the label |
+| `Enter` | Save and open the next unlabeled entry |
+| `N` `P` | Next and previous entry in the group |
+| `F` `O` `0` | Raw/flat-fielded view, overlay opacity, fit view |
+| Wheel; right, middle or `Shift` drag | Zoom; pan |
 
-The next-frame mode decides what you label. **Network-uncertain** draws a
-handful of random unlabeled frames, runs the network on each, and picks the
-one with the most pixels between `0.2` and `0.8` probability. That is the
-frame the current model needs most. Random and sequential (with a stride)
-are also available. A frame with no worm can be saved as all background
-(the browser asks for confirmation), which teaches the network that debris
-is not worm; the bootstrap skips such frames, so they only enter through
-the app.
+Each save writes the sample with the manifest's split pledge (a section or
+saved label keeps the store's balanced assignment or an existing pledge),
+archives a revision, and records `label_source` `manual:corpus`. A frame with
+no worm can be saved as all background, which teaches the network that debris
+is not worm.
 
-The **Saved labels** panel lists every sample in the store, filtered by
-source (bootstrap or hand-labeled), split, and recording. Clicking a row
-opens that frame with its saved label in the editor, and the fourth
-next-frame mode, **Browse saved labels**, makes Next and Save + next walk
-the filtered list in order. Revising a bootstrap label this way is the
-intended fix for the bootstrap's systematic errors: the frame keeps its
-split, its revision goes up, and its source becomes `network+manual`, so it
-leaves the bootstrap filter and counts as hand-refined in evaluation. The
-held-out bootstrap samples are the most valuable to revise first, since
-they grow the part of the evaluation that measures agreement with a human.
-
-Saving records `label_source` as `network+manual` or `classical+manual`, so
-evaluation can separate hand-refined labels from bootstrapped ones.
+The older standalone labeler, `python -m worm_pose_gen.label_app`, is still in
+the repository with its network-uncertain next-frame mode; Paint has no
+uncertainty-driven selection yet.
 
 ## 6. Run on an unseen recording
 

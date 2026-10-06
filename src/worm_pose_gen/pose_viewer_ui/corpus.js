@@ -26,32 +26,10 @@ const corpusUI = (() => {
     const recordings=(facets.recordings||[...new Set(samples.map(s=>s.source_path).filter(Boolean))]).map(item=>typeof item==='object'&&item.path===recording?{...item,label:`Current recording · ${item.path} · ${item.dataset||'/img_nir'}`}:item);
     fillOptions('corpus-recording-filter',recordings,'All recordings');
   }
-  function renderRecordings() {
-    const select=document.getElementById('corpus-new-recording');if(!select)return;
-    const previous=select.value;select.replaceChildren(new Option('Choose a recording',''));
-    for(const rec of state.recordings||[]){const option=new Option(`${rec.path} · ${rec.dataset||'/img_nir'}${rec.readable===false?' · unavailable':''}`,JSON.stringify([rec.path,rec.dataset||'/img_nir']));option.disabled=rec.readable===false;select.add(option);}
-    if([...select.options].some(o=>o.value===previous))select.value=previous;
-    const button=document.getElementById('corpus-new-open');if(button)button.disabled=!serverIsApp()||!select.value;
-  }
-  function getPool() {
-    const value=document.getElementById('corpus-new-recording')?.value;
-    if(!value)return null;
-    const [recording,dataset]=JSON.parse(value);
-    return {recordings:[{recording,dataset}]};
-  }
-  async function openNewLabel() {
-    const pool=getPool(),frame=Number(document.getElementById('corpus-new-frame')?.value);
-    if(!pool||!Number.isInteger(frame)||frame<0){setStatus('Choose a recording and a nonnegative frame number.','error');return;}
-    const target={...pool.recordings[0],frame};
-    const rec=(state.recordings||[]).find(r=>r.path===target.recording&&(r.dataset||'/img_nir')===target.dataset);
-    if(rec && Number.isInteger(rec.frames) && frame>=rec.frames){setStatus(`Frame must be less than ${rec.frames}.`,'error');return;}
-    try{const opened=await maskEditor.openTarget(target);if(opened===false)return;maskEditor.setNavigationPool(pool);const note=document.getElementById('corpus-new-status');if(note)note.textContent=`Labeling ${target.recording} · ${target.dataset}. Saves affect the corpus only.`;}
-    catch(error){setStatus(error.message,'error');}
-  }
   async function browseFiltered() {
     await refresh();
     if(!samples.length){setStatus('No saved labels match these filters.','error');return false;}
-    return maskEditor.openCorpus(samples[0].sample_id);
+    return paintScreen.openSamples(samples.map(s=>s.sample_id),{name:'Filtered saved labels',back:'labels'});
   }
   function render() {
     const box=$('#corpus-list');box.innerHTML='';
@@ -60,16 +38,16 @@ const corpusUI = (() => {
       const text=document.createElement('span');text.textContent=sampleLabel(sample);
       const metadata=document.createElement('div');metadata.className='meta';metadata.textContent=`${sample.source_path||'Source unavailable'} · ${sample.dataset_path||'/img_nir'} · ${sample.label_source||'saved label'}`;text.append(metadata);
       const actions=document.createElement('span');
-      const open=document.createElement('button');open.type='button';open.textContent='Open';open.onclick=()=>maskEditor.openCorpus(sample.sample_id);
+      const open=document.createElement('button');open.type='button';open.textContent='Open';open.onclick=()=>paintScreen.openSamples([sample.sample_id],{back:'labels'});
       const remove=document.createElement('button');remove.type='button';remove.textContent='Delete corpus label';remove.title='Delete this independent corpus sample';
-      remove.onclick=async()=>{if(!await maskEditor.requestLeave())return;if(!window.confirm(`Delete ${sampleLabel(sample)} from the corpus?`))return;try{await api(`/api/corpus/labels/${encodeURIComponent(sample.sample_id)}`,{method:'DELETE'});await refresh();}catch(e){setStatus(e.message,'error');}};
+      remove.onclick=async()=>{if(!window.confirm(`Delete ${sampleLabel(sample)} from the corpus?`))return;try{await api(`/api/corpus/labels/${encodeURIComponent(sample.sample_id)}`,{method:'DELETE'});await refresh();}catch(e){setStatus(e.message,'error');}};
       actions.append(open,remove);item.append(text,actions);box.append(item);
     }
     if(!box.children.length){
       const filtered=Object.keys(getFilters()).length>0;
-      const note=document.createElement('p');note.textContent=filtered?'No matching labels. Clear filters to browse saved labels.':'No labels yet. Choose a recording to label a new frame.';
-      const action=document.createElement('button');action.type='button';action.textContent=filtered?'Clear filters':'Label a new frame';
-      action.onclick=()=>{if(filtered){for(const id of ['corpus-filter','corpus-source-filter','corpus-split-filter','corpus-recording-filter'])$('#'+id).value='';refresh();}else $('#corpus-new-recording').focus();};
+      const note=document.createElement('p');note.textContent=filtered?'No matching labels. Clear filters to browse saved labels.':'No labels yet. Label frames in Paint.';
+      const action=document.createElement('button');action.type='button';action.textContent=filtered?'Clear filters':'Open Paint';
+      action.onclick=()=>{if(filtered){for(const id of ['corpus-filter','corpus-source-filter','corpus-split-filter','corpus-recording-filter'])$('#'+id).value='';refresh();}else showTab('paint');};
       box.append(note,action);
     }
     $('#corpus-browse').disabled=!samples.length;
@@ -99,8 +77,6 @@ const corpusUI = (() => {
       const total=Object.values(counts).filter(v=>typeof v==='number').reduce((a,v)=>a+v,0);
       $('#corpus-counts').textContent=`${samples.length} matching / ${total} total labels · ${Object.entries(counts).map(([k,v])=>`${k} ${v}`).join(' · ')} · ${payload.root||''}`;
       render();await refreshCheckpoints();
-      if(!(state.recordings||[]).length && serverIsApp())await loadRecordings(false);
-      renderRecordings();
     }catch(e){if(token!==request)return;$('#corpus-counts').textContent=serverIsApp()?e.message:'Corpus and training need the app server.';$('#corpus-train').disabled=true;}
   }
   async function train() {
@@ -134,19 +110,16 @@ const corpusUI = (() => {
       }
       rebuildStages();
     }
-    render();renderRecordings();
+    render();
   }
   function init(){
     $('#corpus-refresh').onclick=refresh;$('#corpus-filter').oninput=()=>{clearTimeout(filterTimer);filterTimer=setTimeout(refresh,180);};
     for(const id of ['corpus-source-filter','corpus-split-filter','corpus-recording-filter']){const node=document.getElementById(id);if(node)node.onchange=refresh;}
-    const recording=document.getElementById('corpus-new-recording');if(recording)recording.onchange=()=>{const button=document.getElementById('corpus-new-open');if(button)button.disabled=!recording.value;};
-    const newLabel=document.getElementById('corpus-new-open');if(newLabel)newLabel.onclick=openNewLabel;
     const browse=document.getElementById('corpus-browse');if(browse)browse.onclick=browseFiltered;
     $('#checkpoint-refresh').onclick=refreshCheckpoints;$('#checkpoint-select').onclick=selectCheckpoint;$('#corpus-train').onclick=train;
-    $('#corpus-close').onclick=()=>maskEditor.returnToWorkspace();
-    $('#training-add-labels').onclick=()=>{showTab('labels');$('#corpus-new-title').focus();};
+    $('#training-add-labels').onclick=()=>showTab('paint');
     $('#training-jobs').onclick=()=>{$('#jobs-mine').checked=false;openRightTab('jobs');};
     render();
   }
-  return {sampleLabel,init,refresh,refreshCheckpoints,onJobs,sourceChanged,getFilters,getPool,openNewLabel,renderRecordings,browseFiltered};
+  return {sampleLabel,init,refresh,refreshCheckpoints,onJobs,sourceChanged,getFilters,browseFiltered};
 })();

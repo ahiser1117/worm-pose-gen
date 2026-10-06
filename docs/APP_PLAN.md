@@ -382,7 +382,7 @@ retaining historical mask provenance and overrides. Model and frame caches
 notice checkpoint replacement. CPU fine-tunes do not reserve a GPU.
 
 The `worm-pose-labeler` launcher now opens the unified app with its legacy flags;
-`--queue` opens the manifest in unified Paint navigation. The old Python
+`--queue` opens Paint on the manifest. The old Python
 module/helper APIs remain available. Packaging the checkpoint and further audit
 integration remain Phase 6 work. The existing research training
 script keeps its historical promotion behavior; app jobs use the new worker.
@@ -408,3 +408,16 @@ history, manifests and Save + next. Its controls stay expanded; navigation guard
 preserve drafts and dual saves retry only unfinished destinations. A single
 shortcut registry prevents overlapping actions and keeps draft undo separate
 from saved edit history. See `UI_TASK_TABS_PLAN.md` for the implementation contract.
+
+Paint later became its own screen, independent of workspaces (2026-10-05).
+It opens on a chooser of label groups: labeling manifests
+(`docs/labeling_*/manifest.json` or any path), recording sections (a range sent
+from Inspect with **Label range in Paint**, persisted in
+`<workspaces>/label_sections.json`) and saved labels (from Labels or Body
+fields). A group opens on its first unlabeled entry with position and
+progress; Previous/Next walk it in order and saves carry the group's split
+pledges (`/api/labeling/groups`, `group_id` on frame and save). The workspace
+task that corrects the masks fitting reads is now **Masks**; it no longer
+traverses frames or opens corpus labels. The traversal modes of the old
+workspace Paint (sequential, random, network-uncertain, browse) and
+`/api/labeling/next` and `/api/labeling/manifests` were removed.

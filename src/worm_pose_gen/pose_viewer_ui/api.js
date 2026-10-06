@@ -34,7 +34,7 @@ const LAYERS = [
   // Phase 3: the chosen candidates of up to two shown candidate sets (regions.js fills the names in).
   { id: "cand_a", name: "Candidate set A", kind: "vector", on: true, alpha: 1.0, color: [0, 220, 255] },
   { id: "cand_b", name: "Candidate set B", kind: "vector", on: true, alpha: 1.0, color: [255, 110, 40] },
-  { id: "editable_mask", name: "Editable mask (Paint)", kind: "editor", on: true, alpha: 0.45, color: [255, 65, 155] },
+  { id: "editable_mask", name: "Editable mask (Masks)", kind: "editor", on: true, alpha: 0.45, color: [255, 65, 155] },
   { id: "fixed_body", name: "Fixed body (dashed = extrapolated)", kind: "vector", on: true, alpha: 0.9, color: [100, 235, 255] },
 ];
 

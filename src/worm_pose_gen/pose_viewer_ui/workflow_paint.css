@@ -12,6 +12,6 @@
 #paint-primary .note:empty { display: none; }
 #paint-quick-brush { padding-top: 8px; }
 @media (max-width: 800px) {
-  #app[data-screen="workspace"][data-task="paint"] > #workspace-main { order: -1; }
+  #app[data-screen="workspace"][data-task="masks"] > #workspace-main { order: -1; }
   #paint-primary { position: static; }
 }

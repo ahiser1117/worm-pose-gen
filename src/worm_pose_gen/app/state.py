@@ -66,6 +66,8 @@ class AppState:
         self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
         from .labeling import LabelingService
         self.labeling = LabelingService(self)
+        # A label group the launcher opened (``worm-pose-labeler --queue``); the UI starts in Paint on it.
+        self.startup_group: str | None = None
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -336,7 +338,7 @@ class AppState:
             "gpus": list(self.config.gpus),
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),
-            "labeling_manifests": self.labeling.list_manifests(),
+            "startup_group": self.startup_group,
         }
 
     # --------------------------------------------------------------------- notes

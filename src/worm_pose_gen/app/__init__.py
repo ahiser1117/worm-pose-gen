@@ -10,8 +10,10 @@ log with provenance per frame; and Phase 3: the algorithm registry run on a
 region between anchors as a job, the candidate sets it produces (compared,
 accepted or discarded) and the outcome log. Phase 4 adds reversible mask
 painting, a versioned user corpus, fine-tuning jobs on frozen labels and
-explicit checkpoint selection. Everything the UI does goes through these
-endpoints, so a script can drive the same work headless.
+explicit checkpoint selection. The Body fields screen reviews, flips and
+rebuilds the body-field targets built from the corpus labels. Everything the
+UI does goes through these endpoints, so a script can drive the same work
+headless.
 
 Errors come back as ``{"error": ...}`` with 400 for a bad request (unknown
 frame, bad parameter), 404 for a missing run, workspace, job or file
@@ -40,7 +42,7 @@ from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
-from .routers import algorithms, corpus, edits, jobs, masks, recordings, static, viewer, workspaces
+from .routers import algorithms, body_fields, corpus, edits, jobs, masks, recordings, static, viewer, workspaces
 from .routers import labeling as labeling_routes
 from .routers import inspection as inspection_routes
 
@@ -106,6 +108,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(edits.router)
     app.include_router(masks.router)
     app.include_router(corpus.router)
+    app.include_router(body_fields.router)
     app.include_router(labeling_routes.router)
     app.include_router(inspection_routes.router)
     app.include_router(algorithms.router)

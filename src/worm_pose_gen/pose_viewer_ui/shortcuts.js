@@ -4,15 +4,19 @@
 const shortcuts = (() => {
   const entries = [];
   const byChord = new Map();
-  const paint = () => currentTab() === "paint" && typeof maskEditor !== "undefined";
-  const viewer = () => state.screen === "workspace" && !!state.run && !maskEditor.corpusActive();
+  // Mask tools act on the workspace Masks task or on Paint, whichever is showing.
+  const masks = () => state.screen === "workspace" && currentTab() === "masks";
+  const labeling = () => paintScreen.isOpen();
+  const editing = () => masks() || labeling();
+  const editor = () => labeling() ? paintScreen : maskEditor;
+  const viewer = () => state.screen === "workspace" && !!state.run;
   function add(chords, label, run, enabled = viewer, repeat = false) {
     for (const chord of chords) {
       if (byChord.has(chord)) throw new Error(`Duplicate shortcut: ${chord}`);
       const entry = { chord, label, run, enabled, repeat }; entries.push(entry); byChord.set(chord, entry);
     }
   }
-  add(["space"], "Play / pause", togglePlay, () => viewer() && !(paint() && maskEditor.isDirty()));
+  add(["space"], "Play / pause", togglePlay, () => viewer() && !(masks() && maskEditor.isDirty()));
   for (const [prefix, amount] of [["", 1], ["shift+", 10], ["ctrl+", 100]]) {
     add([prefix + "arrowleft"], `Previous ${amount} frame${amount === 1 ? "" : "s"}`, () => step(-amount), viewer, true);
     add([prefix + "arrowright"], `Next ${amount} frame${amount === 1 ? "" : "s"}`, () => step(amount), viewer, true);
@@ -22,22 +26,22 @@ const shortcuts = (() => {
   add([","], "Previous low-IoU frame", () => jump("iou", -1));
   add(["."], "Next low-IoU frame", () => jump("iou", 1));
   for (let n = 1; n <= 9; n++) add([String(n)], `Toggle layer ${n}`, () => toggleLayer(n - 1));
-  add(["f"], "Raw / flat image", () => $("#toggle-raw").click(), () => viewer() || paint());
-  add(["o"], "Mask opacity", () => maskEditor.cycleOpacity(), paint);
-  add(["0"], "Fit view", fitView, () => viewer() || paint());
+  add(["f"], "Raw / flat image", () => labeling() ? paintScreen.toggleRaw() : $("#toggle-raw").click(), () => viewer() || labeling());
+  add(["o"], "Mask opacity", () => editor().cycleOpacity(), editing);
+  add(["0"], "Fit view", () => labeling() ? paintScreen.fitView() : fitView(), () => viewer() || labeling());
   add(["m"], "Review note", () => { showTab("inspect"); $("#note-comment").focus(); });
   add(["k"], "Fitter starts", computeStarts);
-  for (const [key, brush, label] of [["b",255,"Worm"],["e",0,"Background"],["i",127,"Ignore"]]) add([key], `${label} brush`, () => maskEditor.setBrush(brush), paint);
-  add(["-"], "Smaller brush", () => maskEditor.resizeBrush(-1), paint, true);
-  add(["="], "Larger brush", () => maskEditor.resizeBrush(1), paint, true);
-  for (const [key, name] of [["w","network"],["c","classical"],["t","raw_threshold"],["v","saved"]]) add([key], `Preview ${name.replaceAll("_", " ")} proposal`, () => maskEditor.selectProposal(name), paint);
-  add(["a"], "Apply proposal", () => maskEditor.applyProposal(), paint);
-  for (const [key, name] of [["h","fill_holes"],["l","largest_component"],["d","dilate"],["r","erode"],["u","mask_fit"]]) add([key], `Refine: ${name.replaceAll("_", " ")}`, () => maskEditor.refine(name), paint);
-  add(["n"], "Next labeling target", () => maskEditor.next(), paint);
-  add(["p"], "Previously visited labeling target", () => maskEditor.previous(), paint);
-  add(["s"], "Save mask / label", () => maskEditor.save(), paint);
-  add(["enter"], "Save + next", () => maskEditor.saveNext(), paint);
-  add(["z","ctrl+z","meta+z"], "Undo draft", () => maskEditor.undoStroke(), paint);
+  for (const [key, brush, label] of [["b",255,"Worm"],["e",0,"Background"],["i",127,"Ignore"]]) add([key], `${label} brush`, () => editor().setBrush(brush), editing);
+  add(["-"], "Smaller brush", () => editor().resizeBrush(-1), editing, true);
+  add(["="], "Larger brush", () => editor().resizeBrush(1), editing, true);
+  for (const [key, name] of [["w","network"],["c","classical"],["t","raw_threshold"],["v","saved"]]) add([key], `Preview ${name.replaceAll("_", " ")} proposal`, () => editor().selectProposal(name), editing);
+  add(["a"], "Apply proposal", () => editor().applyProposal(), editing);
+  for (const [key, name] of [["h","fill_holes"],["l","largest_component"],["d","dilate"],["r","erode"],["u","mask_fit"]]) add([key], `Refine: ${name.replaceAll("_", " ")}`, () => editor().refine(name), editing);
+  add(["n"], "Next entry in the label group", () => paintScreen.next(), labeling);
+  add(["p"], "Previous entry in the label group", () => paintScreen.previous(), labeling);
+  add(["s"], "Save mask / label", () => editor().save(), editing);
+  add(["enter"], "Save label + next unlabeled", () => paintScreen.saveNext(), labeling);
+  add(["z","ctrl+z","meta+z"], "Undo draft", () => editor().undoStroke(), editing);
   function chord(event) {
     let key = event.key === " " ? "space" : event.key.toLowerCase();
     // Shift for letter case is not a different accelerator; real modifiers are.
@@ -56,10 +60,13 @@ const shortcuts = (() => {
     Promise.resolve().then(action.run).catch(error => setStatus(error.message, "error"));
   }
   function labelControls() {
-    const controls = {"#toggle-raw":"f", "#fit-view":"0", "#starts":"k", "#play":"space", "#prev":"arrowleft", "#next":"arrowright", "#mask-opacity":"o", "#mask-apply-proposal":"a", "#mask-prev":"p", "#mask-next":"n", "#mask-save":"s", "#mask-save-next":"enter", "#mask-stroke-undo":"z"};
-    for (const [brush,key] of [[255,"b"],[0,"e"],[127,"i"]]) controls[`[data-mask-brush="${brush}"]`] = key;
-    for (const [source,key] of [["network","w"],["classical","c"],["raw_threshold","t"],["saved","v"]]) controls[`[data-mask-proposal="${source}"]`] = key;
-    for (const [method,key] of [["fill_holes","h"],["largest_component","l"],["dilate","d"],["erode","r"],["mask_fit","u"]]) controls[`[data-mask-refine="${method}"]`] = key;
+    const controls = {"#toggle-raw":"f", "#fit-view":"0", "#starts":"k", "#play":"space", "#prev":"arrowleft", "#next":"arrowright", "#mask-opacity":"o", "#mask-apply-proposal":"a", "#mask-save":"s", "#mask-stroke-undo":"z",
+      "#paint-raw":"f", "#paint-fit":"0", "#paint-opacity":"o", "#paint-apply":"a", "#paint-prev":"p", "#paint-next":"n", "#paint-save":"s", "#paint-save-next":"enter", "#paint-undo":"z"};
+    for (const prefix of ["mask", "paint"]) {
+      for (const [brush,key] of [[255,"b"],[0,"e"],[127,"i"]]) controls[`[data-${prefix}-brush="${brush}"]`] = key;
+      for (const [source,key] of [["network","w"],["classical","c"],["raw_threshold","t"],["saved","v"]]) controls[`[data-${prefix}-proposal="${source}"]`] = key;
+      for (const [method,key] of [["fill_holes","h"],["largest_component","l"],["dilate","d"],["erode","r"],["mask_fit","u"]]) controls[`[data-${prefix}-refine="${method}"]`] = key;
+    }
     for (const [selector,key] of Object.entries(controls)) {
       const action = byChord.get(key);
       for (const node of document.querySelectorAll(selector)) {

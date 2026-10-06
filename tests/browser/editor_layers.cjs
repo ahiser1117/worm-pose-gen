@@ -1,4 +1,4 @@
-// Real layer compositor and Paint controller; all image data is synthetic.
+// Real layer compositor and workspace Masks controller; all image data is synthetic.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -9,7 +9,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const page = await browser.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setContent('<canvas id="canvas" width="64" height="64" style="width:64px;height:64px"></canvas><div id="caption"></div><div id="legend"></div><div id="layers"></div><label><input id="mask-enable" type="checkbox" checked>Paint</label><label><input id="mask-visible" type="checkbox" checked>Editable mask</label><select id="mask-opacity"><option value="45">45%</option><option value="20">20%</option><option value="0">Off</option></select>');
-    for (const file of ['api.js', 'layers.js', 'masks.js']) {
+    for (const file of ['api.js', 'layers.js', 'mask_tools.js', 'masks.js']) {
       await page.addScriptTag({content: fs.readFileSync(`src/worm_pose_gen/pose_viewer_ui/${file}`, 'utf8')});
     }
     await page.evaluate(async () => {
@@ -31,8 +31,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       renderLayers(); maskEditor.init(); await maskEditor.onFrame(true); buildOverlay(); draw();
       window.pixel = (x = 15, y = 15) => Array.from(ctx.getImageData(x, y, 1, 1).data);
     });
-    const editable = page.getByRole('checkbox', {name: 'Editable mask (Paint)', exact: true});
-    const opacity = page.getByRole('slider', {name: 'Editable mask (Paint) opacity', exact: true});
+    const editable = page.getByRole('checkbox', {name: 'Editable mask (Masks)', exact: true});
+    const opacity = page.getByRole('slider', {name: 'Editable mask (Masks) opacity', exact: true});
     assert(await editable.isChecked());
     assert.match(await page.locator('#legend').innerText(), /Editable mask/);
     const magenta = await page.evaluate(() => pixel());
@@ -64,7 +64,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByRole('checkbox', {name: 'Raw mask (threshold)', exact: true}).uncheck();
     await editable.check();
 
-    // Leaving Paint must hide the mask without altering an unsaved stroke.
+    // Leaving Masks must hide the mask without altering an unsaved stroke.
     const canvas = await page.locator('#canvas').boundingBox();
     await page.mouse.click(canvas.x + 30, canvas.y + 30);
     assert.equal(await page.evaluate(() => maskEditor.isDirty()), true);
@@ -80,7 +80,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(await page.evaluate(() => pixel(30, 30)), draftPixel);
     assert(await editable.isChecked());
 
-    // Motion suppression still applies to Paint's separate canvas overlay.
+    // Motion suppression still applies to the Masks canvas overlay.
     await page.evaluate(() => { state.playing = 1; draw(); });
     assert.deepEqual(await page.evaluate(() => pixel(15, 15)), [0, 0, 0, 255]);
     await page.evaluate(() => { state.playing = null; state.timeline.dragging = true; draw(); });
@@ -94,6 +94,6 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('#mask-opacity').inputValue(), '65');
     assert.equal(await opacity.inputValue(), '0.65');
     assert.deepEqual(errors, []);
-    console.log('Editor layers: independent blue/magenta masks, synchronized visibility/opacity, Paint-only rendering, retained drafts, motion suppression and view restoration passed.');
+    console.log('Editor layers: independent blue/magenta masks, synchronized visibility/opacity, Masks-only rendering, retained drafts, motion suppression and view restoration passed.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

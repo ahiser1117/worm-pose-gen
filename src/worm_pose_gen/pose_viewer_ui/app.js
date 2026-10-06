@@ -29,7 +29,7 @@ function bindEvents() {
     const [kind, direction] = button.dataset.jump.split(":");
     button.addEventListener("click", () => jump(kind, parseInt(direction, 10)));
   }
-  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); $("#toggle-raw").setAttribute("aria-pressed", String(state.showRaw)); if (maskEditor.corpusActive()) draw(); else showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
+  $("#toggle-raw").addEventListener("click", () => { state.showRaw = !state.showRaw; $("#toggle-raw").classList.toggle("active", state.showRaw); $("#toggle-raw").setAttribute("aria-pressed", String(state.showRaw)); showRow(state.row, { keepView: true, keepStarts: true, immediate: true }); });
   $("#fit-view").addEventListener("click", fitView);
   $("#starts").addEventListener("click", computeStarts);
   $("#threshold").addEventListener("input", (e) => { $("#threshold-value").textContent = e.target.value; if ($("#threshold-on").checked) showRow(state.row, { keepView: true, keepStarts: true }); });
@@ -96,6 +96,8 @@ function bindEvents() {
   initPanels();
   maskEditor.init();
   corpusUI.init();
+  paintScreen.init();
+  bodyFields.init();
 
   initTaskShell();
   shortcuts.init();
@@ -148,8 +150,8 @@ async function boot() {
     const wanted = parseHash();
     const initial = initialSource(wanted);
     if (initial) await selectSource(initial.kind, initial.name, wanted.frame);
-    else if (!(state.info.labeling_manifests || []).length) { setStatus("No workspaces yet: import a recording to begin", "error"); showTab("import"); }
-    if ((state.info.labeling_manifests || []).length && paintNavigation.startStartupQueue) await paintNavigation.startStartupQueue();
+    else if (!state.info.startup_group) { setStatus("No workspaces yet: import a recording to begin", "error"); showTab("import"); }
+    if (state.info.startup_group) await paintScreen.openGroup(state.info.startup_group);
   } catch (error) {
     setStatus(error.message, "error");
   }

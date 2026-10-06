@@ -652,10 +652,10 @@ def unified_main(argv: list[str] | None = None) -> None:
         for path in args.recordings or []:
             state.register_recording({"path": str(path), "dataset": DATASET_PATH})
         if args.queue is not None:
-            state.labeling.load_manifest(args.queue)
+            state.startup_group = state.labeling.load_manifest(args.queue)['id']
         print(f"worm-pose-labeler now opens the unified pose app at http://{config.host}:{config.port}/", flush=True)
-        print(f"Corpus: {config.corpus_root}. Use Labels to label recordings or a manifest; "
-              "open a workspace to correct its masks.", flush=True)
+        print(f"Corpus: {config.corpus_root}. Paint labels manifests, recording sections and saved labels; "
+              "a workspace's Masks task corrects its own masks.", flush=True)
         uvicorn.run(app, host=config.host, port=config.port, log_level="info")
     finally:
         state.close()

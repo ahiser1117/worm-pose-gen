@@ -107,19 +107,19 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.waitForFunction(count => document.querySelector('#inspection-summary').textContent.includes(`${count} human reviewed`), reviewBounds.last - reviewBounds.first + 1);
     await page.locator('#inspection-show-reviewed').check();
     assert.match(await page.locator('.inspection-segment').first().textContent(), /Human reviewed/);
-    await page.evaluate(() => showTab('paint'));
+    await page.evaluate(() => showTab('masks'));
     for (const height of [800, 1000]) {
       await page.setViewportSize({width:1440,height});
       await page.locator('#sidebar').evaluate(n => n.scrollTop = n.scrollHeight);
       const save = await page.locator('#mask-save').boundingBox(), sidebar = await page.locator('#sidebar').boundingBox();
-      assert(save.y >= sidebar.y && save.y + save.height <= sidebar.y + sidebar.height, 'Save action stays within Paint pane');
+      assert(save.y >= sidebar.y && save.y + save.height <= sidebar.y + sidebar.height, 'Save action stays within the Masks pane');
     }
     await page.setViewportSize({width:390,height:844});
     const viewer = await page.locator('#workspace-main').boundingBox(), brush = await page.locator('#paint-quick-brush').boundingBox();
-    assert(viewer.y < brush.y, 'Narrow Paint shows viewer before long tools');
-    assert.equal(await page.locator('#tab-paint details').count(), 0);
+    assert(viewer.y < brush.y, 'Narrow Masks shows viewer before long tools');
+    assert.equal(await page.locator('#tab-masks details').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS import ranges, Run scope and checkpoint availability/recovery, real track pipeline, Inspect reasons and human review, pinned Paint saves and narrow viewer order');
+    console.log('PASS import ranges, Run scope and checkpoint availability/recovery, real track pipeline, Inspect reasons and human review, pinned Masks saves and narrow viewer order');
   } catch (error) { console.error(logs); throw error; }
   finally { if (browser) await browser.close(); server.kill('SIGTERM'); await sleep(400); fs.rmSync(root, {recursive:true, force:true}); }
 })();

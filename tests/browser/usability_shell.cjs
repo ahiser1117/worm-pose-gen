@@ -21,7 +21,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('#frame-index').getAttribute('aria-invalid'), 'true');
     assert.match(await page.locator('#frame-error').innerText(), /Enter a frame from 0 to 5/);
     assert.match(await page.locator('#frame-index').getAttribute('aria-describedby'), /frame-error/);
-    await page.locator('#tabs [data-tab="paint"]').click();
+    await page.locator('#tabs [data-tab="masks"]').click();
     assert(await page.locator('#frame-error').isHidden());
     await page.waitForFunction(() => !document.querySelector('#mask-clear-draft').disabled);
     assert.equal(await page.getByRole('slider', {name: /Diameter/}).count(), 1);
@@ -37,7 +37,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('#workflow-model-use').click();
     assert.equal(await page.evaluate(() => maskEditor.isDirty()), true, 'Changing a model must not discard an unsaved mask');
     assert.match(await page.locator('#toast').textContent(), /Save or discard the mask draft/);
-    await page.locator('#tabs [data-tab="paint"]').click();
+    await page.locator('#tabs [data-tab="masks"]').click();
     await page.locator('#mask-discard').click();
     await page.evaluate(() => openRightTab('layers'));
     assert.equal(await page.getByRole('slider', {name: /Threshold override/}).count(), 1);
@@ -65,22 +65,22 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(refreshGlyphs, 0);
     const out = process.env.UI_SCREENSHOTS;
     if (out) fs.mkdirSync(out, {recursive: true});
-    for (const task of ['inspect', 'paint', 'rerun', 'review', 'export']) {
+    for (const task of ['inspect', 'masks', 'rerun', 'review', 'export']) {
       await page.evaluate(task => showTab(task), task);
       if (out) await page.screenshot({path: `${out}/${task}.png`, fullPage: true});
     }
-    for (const screen of ['import', 'open', 'labels', 'training']) {
+    for (const screen of ['import', 'open', 'paint', 'labels', 'bodyfields', 'training']) {
       await page.evaluate(screen => showTab(screen), screen);
       if (out) await page.screenshot({path: `${out}/${screen}.png`, fullPage: true});
     }
     for (const width of [800, 390, 320]) {
       await page.setViewportSize({width, height: 900});
-      for (const task of ['inspect', 'paint', 'rerun', 'review', 'export', 'import', 'open', 'labels', 'training']) {
+      for (const task of ['inspect', 'masks', 'rerun', 'review', 'export', 'import', 'open', 'paint', 'labels', 'bodyfields', 'training']) {
         await page.evaluate(task => showTab(task), task);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${task} overflow at ${width}`);
       }
     }
     assert.deepEqual(errors, []);
-    console.log('PASS shared accessible names, context/draft/range retention, local frame errors, dismissible task errors, Training Jobs/inspector restoration, nine-screen narrow layouts.');
+    console.log('PASS shared accessible names, context/draft/range retention, local frame errors, dismissible task errors, Training Jobs/inspector restoration, eleven-screen narrow layouts.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

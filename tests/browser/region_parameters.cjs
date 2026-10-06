@@ -23,7 +23,7 @@ const tracked=JSON.parse(execFileSync('.venv/bin/python',['-c', 'import json; fr
       window.$=selector=>document.querySelector(selector);
       window.serverIsApp=()=>true;window.currentSourceKey=()=>"workspace:test";
       window.readCurrentAnchors=()=>true;window.dismissCandidateJobs=()=>{};
-      window.renderRegionInfo=()=>{};window.loadJobs=async()=>{};window.setStatus=()=>{};
+      window.renderRegionInfo=()=>{};window.loadJobs=async()=>{};window.selectedJobGpu=()=>null;window.setStatus=()=>{};
       window.post=async(url,body)=>{window.submitted={url,body};return{id:'job'};};
       renderAlgorithmForm();
     },tracked);

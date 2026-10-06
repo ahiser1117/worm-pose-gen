@@ -51,6 +51,9 @@ and their adjacent generated assets retain the evidence for each stage:
    learned-segmentation loop: bootstrap labels from the pipeline, fine-tune a
    pretrained ResNet-18 U-Net with Lightning, and refine labels in the
    browser app with the network proposing.
+9. [`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md) — the body-field network's
+   targets (A-P field, head/tail, overlap) built from the hand labels, and
+   their review and correction in the app's Body fields tab.
 
 ## Setup
 
@@ -130,28 +133,21 @@ matters for a fresh store: the bootstrapped labels of this one were retired
 on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
 hand-refined, and the promoted model is `r2-hand165` (see
 `docs/segmenter_model_names.json` for the model names the plots use). New
-labeling work uses the pose app at `http://127.0.0.1:8768`: paint masks in
-Paint, save labels, browse them in Labels, and fine-tune in Training (see
-[Segmentation corrections and corpus](#segmentation-corrections-and-corpus)).
-The `worm-pose-labeler` command now opens this unified interface while
-preserving its old recording, dataset-root, device and port flags.
-The launcher's `--queue` opens the manifest in unified Paint navigation.
+labeling work uses the pose app at `http://127.0.0.1:8768`: label frames in
+Paint, browse them in Labels, and fine-tune in Training (see
+[Paint: labeling the corpus](#paint-labeling-the-corpus)).
+The `worm-pose-labeler` command opens this interface while preserving its old
+recording, dataset-root, device and port flags; its `--queue` opens Paint on
+that manifest.
 The module `python -m worm_pose_gen.label_app` retains the legacy interface described in
 [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
 
 A targeted round (coils, self-contact, holes, fragments, camera-edge frames
 across 13 recordings, with some animals held out for validation or test only)
 is queued in `docs/labeling_round_2/manifest.json`, built by
-`scripts/build_labeling_manifest.py` from the clip-candidate scans. Open it
-with:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app \
-  --queue docs/labeling_round_2/manifest.json
-```
-
-The "Queue (manifest)" next mode walks the frames in order; each save
-pledges the recording's split.
+`scripts/build_labeling_manifest.py` from the clip-candidate scans, and 34
+held-out self-contact frames in `docs/labeling_round_3_contact/manifest.json`.
+Paint lists both; each save pledges the recording's split.
 
 ## Fit poses over a recording
 
@@ -325,7 +321,8 @@ The API accepts `"gpu": 3` on job submissions and
 `POST /api/jobs/{id}/retry`; `null` means automatic selection. Omitting the
 GPU on a retry preserves the previous job's device and parameters.
 
-The workspace UI follows **Run → Inspect → Paint → Compare → Export**.
+The workspace UI follows **Run → Inspect → Masks → Compare → Export**; Paint,
+Labels, Body fields and Training are separate screens.
 The selected frame, range, view and draft survive task changes. Import and Open
 are separate central panels. Statistics, Layers, Jobs and History are tabs in
 the resizable right panel; Shortcuts remains a toggleable drawer.
@@ -350,19 +347,21 @@ Training can open Jobs and restores the workspace's side-panel view on return.
   state. **Minimum segment length** defaults to **8 sampled frames** and is
   adjustable and remembered across reloads. The queue and next-segment actions
   honor this filter; shorter regions and their flags are preserved. Selecting a segment seeks
-  to it and sets the range for looping, painting, orientation correction and
-  another fit. **Mark reviewed & next** persists human review independently of automatic
+  to it and sets the range for looping, mask correction, orientation correction and
+  another fit. **Label range in Paint** sends the selected range to Paint as a
+  recording section to label into the corpus. **Mark reviewed & next** persists human review independently of automatic
   flags. Corrections preserve reviews of unchanged segments; changed frames and
   their neighbors need review again. Global input/configuration changes reset review.
-- **Paint** keeps its existing brush, proposal and refinement tools visible.
-  Save actions stay pinned in the tool pane; narrow layouts place the viewer first.
+- **Masks** corrects the workspace mask that fitting reads, with the same brush,
+  proposal and refinement tools as Paint. Save actions stay pinned in the tool
+  pane; narrow layouts place the viewer first.
   **Save & refit selected range** saves the current frame's mask before opening
   Run with the selected bounds. Refit candidates are never accepted automatically.
 - **Compare** switches the main viewer between Current/A/B overlays and synchronized
   side-by-side previews of selected options. One acceptance group shows exact bounds, changed mask
   inputs block stale candidates, and another attempt preserves the range.
 - Deleting a computed option requires confirmation naming its option and range.
-- **Export** uses a central checklist with links to Inspect, Paint and Jobs. It shows saved workspace scope, destination and outstanding review
+- **Export** uses a central checklist with links to Inspect, Masks and Jobs. It shows saved workspace scope, destination and outstanding review
   status, then writes named Parquet from a matching workspace snapshot. Names
   cannot overwrite prior exports. The download points to the captured result,
   so later corrections cannot change it. Export is separate from Run pipeline.
@@ -547,30 +546,52 @@ the generated OpenAPI page. The stdlib viewer,
 looking at runs read-only without the job runner; it serves the same UI on
 the same default port, so run only one of the two or pass `--port`.
 
-### Segmentation corrections and corpus
+### Paint: labeling the corpus
 
-In **Paint**, use Worm, Background or Ignore with the brush-size control.
-Network, Classical, raw Threshold and Saved proposals have explicit previews;
-Apply combines them by replace, union, intersection or subtraction. Fill holes,
+**Paint** is its own screen, independent of workspaces. It first lists label
+groups, each with its labeled / remaining progress:
+
+- **Labeling manifests**: the repository's `docs/labeling_*/manifest.json`
+  (round 2, round 3 contact), plus a path field for any other manifest;
+- **Recording sections**: a stretch of a recording to relabel frame by frame,
+  sent from a workspace's Inspect selection (**Label range in Paint**) or
+  entered here (recording, first, last, step). Sections are kept in
+  `<workspaces-root>/label_sections.json`, so they outlive the workspace and
+  the server; **Remove** forgets one, never its saved labels;
+- **Saved labels**: opened from Labels (one label, or the filtered list) or
+  from Body fields (**Edit mask in Paint**), with a button back to that screen.
+
+Opening a group shows its first unlabeled entry, the position (Entry *i* of
+*n*), progress, the entry's frame, reasons and split pledge. Previous / Next
+(P / N) walk the entries in order and **Next unlabeled** skips labeled ones;
+leaving an entry with an unsaved draft offers Save, Discard or Stay. **Save**
+(S) writes the label to `--corpus-root` with the group's split pledge; **Save +
+next** (Enter) then opens the next unlabeled entry. The frame, proposals and
+draft belong to the entry, never to a workspace.
+
+Use Worm, Background or Ignore with the brush-size control. Network,
+Classical, raw Threshold and Saved proposals have explicit previews; Apply
+combines them by replace, union, intersection or subtraction. Fill holes,
 largest component, grow, shrink and tube fit are undoable draft operations.
-All controls stay expanded, including inapplicable controls with disabled reasons.
-Right, middle, Shift or Alt drag pans. The Shortcuts drawer lists the single
-binding registry; no chord changes meaning between tasks. Z/Ctrl+Z/Cmd+Z only
-undo draft changes. Saved edits are undone explicitly in History.
+Left drag paints; right, middle or Shift drag pans. The Shortcuts drawer lists
+the single binding registry; a chord means the same in Paint and in a
+workspace's Masks task. Z/Ctrl+Z/Cmd+Z only undo draft changes.
 
-Next frame supports sequential stride, network uncertainty, random unlabeled,
-manifest queue and filtered saved labels. The declared workspace, selection,
-recording or manifest pool bounds traversal; P returns to visited targets.
-Changing frames or sources with an unsaved draft offers Save, Discard or Stay.
-Changing task tabs preserves the draft.
+A frame retains its pledge through edits, deletion and relabeling. Recording
+identity includes the full path and HDF5 dataset; same-named files do not
+collide. Each save archives an immutable revision. Pass an existing
+segmentation store to `--corpus-root` to continue using it.
 
-**Save mask** records a reversible workspace edit. **Also save a training label**
-is optional; Save + next advances only after all selected destinations succeed.
-Partial saves report each result and retry only the incomplete destination.
-The full label keeps ignore pixels, while the fitter uses only explicit worm
-pixels. Mask changes invalidate the old pose and mark it for refitting.
-**Remove override** restores the automatic segmentation and is undoable through
-History. Clear draft and Discard draft affect only the unsaved draft. Corpus
+### Workspace mask corrections
+
+The workspace **Masks** task edits the mask fitting reads on the current
+frame, with the same tools. **Save mask** records a reversible workspace edit.
+**Also save a training label** (or **Save label to corpus**) copies the draft
+and the raw/corrected source images into the corpus as well; partial saves
+report each result and retry only the incomplete destination. The full label
+keeps ignore pixels, while the fitter uses only explicit worm pixels. Mask
+changes invalidate the old pose and mark it for refitting. **Remove override**
+restores the automatic segmentation and is undoable through History. Corpus
 labels remain independent: undoing a workspace edit does not undo a corpus save.
 
 **Refit frame…** prepares an independent multi-start region run; **Refit
@@ -580,16 +601,8 @@ Accept. Neither button reruns the whole workspace. Candidate sets record the
 input masks, including anchors, and cannot be accepted after those masks
 change. A segmentation-stage rerun preserves overrides.
 
-**Save label to corpus** copies the current draft and raw/corrected source
-images into `--corpus-root` (default `<workspaces-root>/corpus`). Choose Auto
-for balanced 80/10/10 assignment or explicitly pledge a new label to train,
-validation or test. A frame retains its pledge through edits, deletion and
-relabeling. Recording identity includes the full path and HDF5 dataset;
-same-named files do not collide. Each app save archives an immutable revision.
-Pass an existing segmentation store to `--corpus-root` to continue using it.
-
-In **Labels**, filter by source, split and recording, open, repaint or delete
-saved labels, or open a new recording frame. Fine-tuning in **Training** needs
+In **Labels**, filter by source, split and recording, delete saved labels, or
+open one (or the filtered list) in Paint to repaint. Fine-tuning in **Training** needs
 at least one train and one validation label. **Start fine-tune job** snapshots
 the exact label revisions and configured worm checkpoint before queueing;
 later corpus edits cannot change the training inputs. Progress, logs and
@@ -613,15 +626,16 @@ The same operations are available through the API:
 | Undo saved override | `POST /api/workspaces/{name}/edits` with `kind: undo` |
 | Browse/save labels | `GET /api/corpus`, `POST /api/corpus/labels` with `workspace`, `frame`, optional `split` |
 | Read/edit/delete label | `GET/PUT/DELETE /api/corpus/labels/{sample_id}` |
-| Label draft/proposals/refinement/traversal | `POST /api/labeling/frame`, `/proposals`, `/refine`, `/save`, `/next` (under `/api/labeling`) |
-| Queue manifests | `GET/POST /api/labeling/manifests` |
+| Label draft/proposals/refinement/save | `POST /api/labeling/frame`, `/proposals`, `/refine`, `/save` (under `/api/labeling`; `group_id` applies a group's pledge) |
+| Label groups | `GET /api/labeling/groups`; `POST /api/labeling/groups` with `kind` `manifest` (`path`), `section` (`recording`, `dataset`, `first`, `last`, `step`, or `workspace` + range) or `samples` (`sample_ids`); `GET/DELETE /api/labeling/groups/{id}` |
 | Training schema/job | `GET /api/training`, `POST /api/jobs` with `kind: fine_tune` and `params` |
 | List/select checkpoint | `GET /api/checkpoints`, `POST /api/workspaces/{name}/checkpoint` with `checkpoint` ID or path |
+| Body-field targets | `GET /api/body-fields`, `GET /api/body-fields/{id}` and `/{id}/context`; `POST /api/body-fields/{id}/flip`, `/review`, `/rebuild` ([`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md)) |
 
-Browser regressions include `mask_editor.cjs`, `paint_tasks.cjs`,
+Browser regressions include `mask_editor.cjs`, `masks_task.cjs`, `paint_section.cjs`,
 `task_labels_review.cjs`, `task_shortcuts.cjs`, `workflow_run.cjs`,
-`workflow_compare_export.cjs`, `inspection_filter.cjs`, `usability_library.cjs`
-and `usability_shell.cjs` under `tests/browser`; the shell test uses a separately
+`workflow_compare_export.cjs`, `inspection_filter.cjs`, `usability_library.cjs`,
+`usability_shell.cjs` and `body_fields.cjs` under `tests/browser`; the shell test uses a separately
 started `phase4_fixture.py` at `UI_BASE_URL` (default `http://127.0.0.1:18770`). The complete workflow
 is `tests/browser/phase4_workflow.cjs`, which starts its own synthetic CPU app,
 trains for one epoch, accepts a regional refit, checks undo, records human
@@ -630,8 +644,8 @@ temporary labels/checkpoints on completion. Run either with `node` from the
 repository root; set
 `PLAYWRIGHT_MODULE` and `CHROMIUM_EXECUTABLE` if they are not installed in the
 default locations. Python coverage includes `test_mask_edits`, `test_mask_api`,
-`test_corpus`, `test_corpus_api`, `test_labeling_api`, `test_phase4_integration`
-and `test_label_launcher`. The approved design is in
+`test_corpus`, `test_corpus_api`, `test_labeling_api`, `test_phase4_integration`,
+`test_label_launcher` and `test_body_fields`. The approved design is in
 [`docs/UI_TASK_TABS_PLAN.md`](docs/UI_TASK_TABS_PLAN.md).
 
 ## Evaluate the frozen pipeline

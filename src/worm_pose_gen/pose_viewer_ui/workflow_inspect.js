@@ -37,7 +37,7 @@ const workflowInspect = (() => {
         show.textContent = 'Show shorter segments'; show.onclick = () => setMinimum(1); list.append(show);
       }
     }
-    for (const id of ['inspection-paint','inspection-orientation','inspection-fit','inspection-mark']) node(id).disabled = !supported() || !state.region || !payload;
+    for (const id of ['inspection-paint','inspection-label','inspection-orientation','inspection-fit','inspection-mark']) node(id).disabled = !supported() || !state.region || !payload;
     node('inspection-next').disabled = !eligible(payload?.segments).some(s => !s.reviewed);
     node('inspection-loop').checked = !!node('loop-stretch')?.checked;
   }
@@ -80,6 +80,12 @@ const workflowInspect = (() => {
     try { const result = await post(`${url()}/review`, {first:bounds.first,last:bounds.last,revision}); if (key !== currentSourceKey()) return; payload = result; render(); message('Selected range marked human reviewed. Automatic flags are unchanged.'); window.dispatchEvent(new CustomEvent('workflow:review')); await next(); }
     catch (error) { message(error.message); }
   }
+  // The selected range becomes a recording section in Paint, labeled into the corpus frame by frame.
+  async function labelRange() {
+    if (!state.region) return;
+    const frames = state.run.series.frame_index, reasons = (payload?.segments || []).filter(s => s.last >= state.region.first && s.first <= state.region.last).flatMap(s => s.reasons);
+    await paintScreen.openSection({workspace: state.runName, first: frames[state.region.first], last: frames[state.region.last], origin: {workspace: state.runName, reasons: [...new Set(reasons)]}});
+  }
   async function orientation() {
     if (!state.region || !maskEditor.beforeMutation()) return;
     const frames = state.run.series.frame_index.slice(state.region.first, state.region.last + 1);
@@ -89,7 +95,7 @@ const workflowInspect = (() => {
   function init() {
     if (initialized) return; initialized = true;
     const section = document.createElement('section'); section.className = 'group inspection-workflow';
-    section.innerHTML = `<h3>Segments needing attention</h3><p id="inspection-summary" class="note" aria-live="polite"></p><label for="inspection-min-frames">Minimum segment length (frames)</label><input id="inspection-min-frames" type="number" min="1" step="1" value="8" aria-describedby="inspection-min-help inspection-min-error"><p id="inspection-min-help" class="note">Counts sampled frames in each segment. Applies to this queue and next-segment navigation.</p><p id="inspection-min-error" class="note" aria-live="polite"></p><label><input id="inspection-show-reviewed" type="checkbox"> Include human reviewed segments</label><div id="inspection-segments" class="inspection-segments" aria-label="Segments needing attention"></div><p id="inspection-target" class="target-banner"></p><label><input id="inspection-loop" type="checkbox"> Loop selected range during playback</label><div class="inspection-actions"><button id="inspection-paint">Paint mask</button><button id="inspection-orientation">Correct orientation</button><button id="inspection-fit">Try another fit</button><button id="inspection-mark" class="primary">Mark reviewed &amp; next</button><button id="inspection-next">Skip to next unreviewed</button></div><p id="inspection-status" class="note" aria-live="polite"></p>`;
+    section.innerHTML = `<h3>Segments needing attention</h3><p id="inspection-summary" class="note" aria-live="polite"></p><label for="inspection-min-frames">Minimum segment length (frames)</label><input id="inspection-min-frames" type="number" min="1" step="1" value="8" aria-describedby="inspection-min-help inspection-min-error"><p id="inspection-min-help" class="note">Counts sampled frames in each segment. Applies to this queue and next-segment navigation.</p><p id="inspection-min-error" class="note" aria-live="polite"></p><label><input id="inspection-show-reviewed" type="checkbox"> Include human reviewed segments</label><div id="inspection-segments" class="inspection-segments" aria-label="Segments needing attention"></div><p id="inspection-target" class="target-banner"></p><label><input id="inspection-loop" type="checkbox"> Loop selected range during playback</label><div class="inspection-actions"><button id="inspection-paint">Correct masks</button><button id="inspection-label">Label range in Paint</button><button id="inspection-orientation">Correct orientation</button><button id="inspection-fit">Try another fit</button><button id="inspection-mark" class="primary">Mark reviewed &amp; next</button><button id="inspection-next">Skip to next unreviewed</button></div><p id="inspection-status" class="note" aria-live="polite"></p>`;
     node('tab-inspect').prepend(section);
     const savedMinimum = readStorage(minimumKey, 8);
     minimumFrames = Number.isSafeInteger(savedMinimum) && savedMinimum >= 1 ? savedMinimum : 8;
@@ -106,7 +112,8 @@ const workflowInspect = (() => {
     node('inspection-show-reviewed').onchange = render;
     node('inspection-loop').onchange = event => { if (node('loop-stretch')) node('loop-stretch').checked = event.target.checked; };
     node('inspection-next').onclick = next; node('inspection-mark').onclick = mark;
-    node('inspection-paint').onclick = () => showTab('paint');
+    node('inspection-paint').onclick = () => showTab('masks');
+    node('inspection-label').onclick = labelRange;
     node('inspection-fit').onclick = () => { setRerunScope('selection'); showTab('rerun'); };
     node('inspection-orientation').onclick = orientation;
     for (const event of ['workflow:source','workflow:changed']) window.addEventListener(event, refresh);
