@@ -148,6 +148,12 @@ LAYER_ARRAYS = ("context_valid", "centerline_xy", "width_profile", "ap", "overla
                 "diameter_px", "trace_xy")
 
 
+def _point(xy: np.ndarray) -> list[float] | None:
+    """A point as a list, or ``None`` for an end off camera (stored as NaN; NaN is not JSON)."""
+
+    return xy.tolist() if np.all(np.isfinite(xy)) else None
+
+
 def _layers(meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> dict[str, Any]:
     """A record's meta and drawable layers: the A-P field, overlap, tube, ends, nose and stored trace."""
 
@@ -158,7 +164,7 @@ def _layers(meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> dict[str, An
         result.update(
             ap=data_url(encoded), overlap=data_url(arrays["overlap"].astype(np.uint8) * 255),
             centerline_xy=arrays["centerline_xy"].tolist(), width_profile=arrays["width_profile"].tolist(),
-            head_xy=arrays["head_xy"].tolist(), tail_xy=arrays["tail_xy"].tolist(),
+            head_xy=_point(arrays["head_xy"]), tail_xy=_point(arrays["tail_xy"]),
             diameter_px=float(arrays["diameter_px"]),
             nose_xy=arrays["nose_xy"].tolist() if "nose_xy" in arrays else None,
             trace_xy=arrays["trace_xy"].tolist() if "trace_xy" in arrays else None,

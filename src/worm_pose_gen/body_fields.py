@@ -182,6 +182,8 @@ def flip(root: str | Path, sample_id: str) -> dict[str, Any]:
         arrays["head_xy"], arrays["tail_xy"] = arrays["tail_xy"], arrays["head_xy"]
         arrays["ap"] = (1 - arrays["ap"]).astype(arrays["ap"].dtype)
         meta["orientation"] = "manual"
+        if "tail_off_camera" in meta:
+            meta["head_off_camera"], meta["tail_off_camera"] = meta["tail_off_camera"], meta["head_off_camera"]
         if "orientation_margin" in meta:
             meta["orientation_margin"] = -meta["orientation_margin"]
 
@@ -238,6 +240,8 @@ def review_image(image: np.ndarray, ap: np.ndarray, overlap: np.ndarray, head: n
     rgb[body] = 0.35 * rgb[body] + 0.65 * colours[body]
     rgb[overlap] = 1.0
     for point, colour in ((head, (0.0, 1.0, 0.0)), (tail, (1.0, 0.0, 0.0))):
+        if not np.all(np.isfinite(point)):
+            continue  # an end off camera has no marker
         x, y = int(round(point[0])), int(round(point[1]))
         if not (0 <= x < rgb.shape[1] and 0 <= y < rgb.shape[0]):
             continue  # an end off camera has no marker
@@ -488,6 +492,93 @@ def _set_body(
     return targets
 
 
+# An end of a fit within this many body widths of mask pixels on the image
+# edge stops where the camera cuts the body off, not at the animal's end.
+EXIT_REACH_WIDTHS = 1.0
+
+
+def camera_exits(mask: NDArray[np.bool_], centerline: NDArray[np.generic], width_profile: NDArray[np.generic]) -> tuple[bool, bool]:
+    """Whether the head end and the tail end of a fit are where the body leaves the camera.
+
+    The fitter, given only the visible mask, ends a body that leaves the
+    camera at the image edge: stopping and continuing off camera cost about
+    the same.  An end inside the image within ``EXIT_REACH_WIDTHS`` median
+    widths of a mask pixel on the image border is such a cut.  An end already
+    off camera is not a cut (the fit continued the body).
+    """
+
+    height, width = mask.shape
+    ring = np.zeros_like(mask)
+    ring[[0, -1], :] = True
+    ring[:, [0, -1]] = True
+    edge = np.argwhere(mask & ring)[:, ::-1].astype(np.float64)  # (x, y)
+    if not len(edge):
+        return False, False
+    reach = EXIT_REACH_WIDTHS * float(np.median(width_profile))
+    curve = np.asarray(centerline, dtype=np.float64)
+
+    def cut(point: NDArray[np.float64]) -> bool:
+        inside = 0 <= point[0] <= width - 1 and 0 <= point[1] <= height - 1
+        return inside and float(np.min(np.linalg.norm(edge - point, axis=1))) <= reach
+
+    return cut(curve[0]), cut(curve[-1])
+
+
+def mark_exits(meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], length_px: float | None) -> bool:
+    """Make the targets of a fit cut off by the camera describe the whole animal; returns whether it was.
+
+    A cut end has no end in view: its point becomes NaN, which the network
+    trains as an all-zero heatmap (no head or tail in this frame).  With the
+    recording's length longer than the visible fit, the A-P field is
+    rescaled so the visible body covers only its share of the animal, the
+    missing share at the cut end (split between both when both are cut).
+    """
+
+    head_cut, tail_cut = camera_exits(mask, arrays["centerline_xy"], arrays["width_profile"])
+    meta["head_off_camera"], meta["tail_off_camera"] = head_cut, tail_cut
+    if not (head_cut or tail_cut):
+        return False
+    visible = float(np.linalg.norm(np.diff(arrays["centerline_xy"], axis=0), axis=1).sum())
+    share = min(1.0, visible / length_px) if length_px else 1.0
+    offset = (1.0 - share) * (0.5 if head_cut and tail_cut else 1.0 if head_cut else 0.0)
+    ap = arrays["ap"].astype(np.float32)
+    arrays["ap"] = (offset + share * ap).astype(np.float16)
+    meta["visible_share"] = share
+    if head_cut:
+        arrays["head_xy"] = np.full(2, np.nan)
+    if tail_cut:
+        arrays["tail_xy"] = np.full(2, np.nan)
+    return True
+
+
+def correct_exits(store: SegmentationStore, sample_id: str) -> dict[str, Any] | None:
+    """Apply :func:`mark_exits` to a stored, untraced record that does not have it yet; returns the meta when changed.
+
+    A rejected record whose targets change becomes unreviewed again with
+    ``exit_corrected`` set, since the rejection may have been for the cut-off
+    end this corrects.
+    """
+
+    record = store.get(sample_id)
+    path = field_path(store.root, sample_id)
+    if record is None or not path.exists():
+        raise KeyError(sample_id)
+    _, label, _ = store.load(sample_id)
+    with locked(store.root):
+        arrays, meta = load(path)
+        if (not meta.get("has_body") or meta.get("fit_method") in TRACE_METHODS or "tail_off_camera" in meta
+                or is_stale(meta, record)):
+            return None
+        if not mark_exits(meta, arrays, label == 1, recording_length(store, record)):
+            save(path, meta, arrays)  # record that it was checked
+            return None
+        if review_status(meta) == "rejected":
+            meta["review"] = "unreviewed"
+            meta["exit_corrected"] = True
+        save(path, meta, arrays)
+    return meta
+
+
 def _traced_body(
     meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], trace_xy: NDArray[np.generic],
     *, as_drawn: bool, length_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
@@ -662,6 +753,8 @@ def build(
                     meta, arrays, mask, result.centerline_xy, result.width_profile,
                     float(result.records[result.best_index]["final_iou"]),
                 )
+                if mark_exits(meta, arrays, mask, recording_length(store, record)):
+                    targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
                 summary[meta["orientation"]] += 1
                 if review:
                     review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(

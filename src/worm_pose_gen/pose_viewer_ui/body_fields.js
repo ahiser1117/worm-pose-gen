@@ -382,6 +382,7 @@ const bodyFields = (() => {
         g.globalAlpha = ends.alpha;
         const radius = Math.max(3, detail.diameter_px * 0.3);
         for (const [point, colour] of [[detail.head_xy, "#33ff33"], [detail.tail_xy, "#ff4444"]]) {
+          if (!point) continue; // end off camera
           g.beginPath(); g.arc(point[0], point[1], radius, 0, Math.PI * 2); g.fillStyle = colour; g.fill();
           g.lineWidth = line; g.strokeStyle = "#000"; g.stroke();
         }
@@ -393,6 +394,7 @@ const bodyFields = (() => {
       path(g, tubePolygon(preview.centerline_xy, preview.width_profile), true); g.stroke(); g.setLineDash([]);
       const radius = Math.max(3, preview.diameter_px * 0.3);
       for (const [point, colour] of [[preview.head_xy, "#33ff33"], [preview.tail_xy, "#ff4444"]]) {
+        if (!point) continue; // end off camera
         g.beginPath(); g.arc(point[0], point[1], radius, 0, Math.PI * 2); g.fillStyle = colour; g.fill();
         g.lineWidth = 2 * line; g.strokeStyle = "rgb(60,220,255)"; g.stroke();
       }

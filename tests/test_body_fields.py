@@ -222,6 +222,51 @@ class TraceTests(unittest.TestCase):
         np.testing.assert_allclose(arrays["centerline_xy"][[0, -1]], trace[[0, -1]], atol=1e-6)
 
 
+class CameraExitTests(unittest.TestCase):
+    def body(self, x_end):
+        centerline = np.stack((np.linspace(20, x_end, 50), np.full(50, 32.0)), 1)
+        yy, xx = np.mgrid[: SHAPE[0], : SHAPE[1]]
+        mask = (np.abs(yy - 32) <= 4) & (xx >= 20) & (xx <= min(x_end, SHAPE[1] - 1))
+        widths = np.full(50, 8.0)
+        targets = render_body_targets(mask, centerline, widths)
+        meta = {"has_body": True, "fit_iou": 0.97}
+        arrays = {"centerline_xy": centerline, "width_profile": widths, "ap": targets.ap.astype(np.float16),
+                  "head_xy": targets.head_xy, "tail_xy": targets.tail_xy}
+        return mask, meta, arrays
+
+    def test_a_tail_ending_at_the_edge_the_mask_reaches_is_cut(self):
+        mask, meta, arrays = self.body(95.0)
+        self.assertEqual(body_fields.camera_exits(mask, arrays["centerline_xy"], arrays["width_profile"]), (False, True))
+        self.assertTrue(body_fields.mark_exits(meta, arrays, mask, 150.0))
+        self.assertTrue(np.isnan(arrays["tail_xy"]).all())
+        self.assertFalse(np.isnan(arrays["head_xy"]).any())
+        # 75 px visible of a 150 px animal: the visible body spans A-P 0 to 0.5.
+        self.assertAlmostEqual(meta["visible_share"], 0.5, places=2)
+        self.assertLess(float(np.nanmax(arrays["ap"].astype(np.float32))), 0.52)
+
+    def test_a_whole_body_inside_the_image_is_not_cut(self):
+        mask, meta, arrays = self.body(80.0)
+        ap_before = arrays["ap"].copy()
+        self.assertFalse(body_fields.mark_exits(meta, arrays, mask, 150.0))
+        self.assertEqual((meta["head_off_camera"], meta["tail_off_camera"]), (False, False))
+        np.testing.assert_array_equal(arrays["ap"], ap_before)
+
+    def test_correct_exits_reopens_a_rejected_record(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        store = CorpusStore(root)
+        mask, meta, arrays = self.body(95.0)
+        record = store.save("rec", 3, np.full(SHAPE, 100, np.uint8), mask.astype(np.uint8),
+                            source_path="rec.h5", label_source="manual", split="train")
+        meta.update(sample_id=record.sample_id, mask_revision=record.revision, max_lag=0, review="rejected")
+        body_fields.fields_dir(root).mkdir(parents=True)
+        body_fields.save(body_fields.field_path(root, record.sample_id), meta, arrays)
+        changed = body_fields.correct_exits(store, record.sample_id)
+        self.assertEqual((changed["review"], changed["exit_corrected"], changed["tail_off_camera"]), ("unreviewed", True, True))
+        self.assertIsNone(body_fields.correct_exits(store, record.sample_id))  # already checked
+
+
 class BodyFieldApiTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
