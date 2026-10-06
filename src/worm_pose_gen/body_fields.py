@@ -643,6 +643,88 @@ def apply_trace(
     return meta, arrays
 
 
+PROPOSAL_ARRAYS = ("trace_xy", "centerline_xy", "width_profile", "ap", "overlap", "head_xy", "tail_xy", "diameter_px")
+
+
+def propose(store: SegmentationStore, sample_id: str, module: Any, *, device: Any = None) -> dict[str, Any]:
+    """Store a network-proposed trace and its fit beside a record's current targets; returns the meta.
+
+    The body-field network (``module``, :func:`body_net.load_body_net`)
+    predicts the record's fields from its stored context, a trace follows
+    from them (:func:`body_proposal.propose_trace`), and it is fit like a
+    hand trace.  The result is kept as ``proposal_*`` arrays and a
+    ``proposal`` meta entry (model, fit IoU, overlap, mask revision); the
+    targets do not change until :func:`accept_proposal`.  When the
+    prediction gives no usable trace, ``proposal`` records that and holds no
+    arrays.
+    """
+
+    from .body_proposal import predict_fields, propose_trace
+
+    record = store.get(sample_id)
+    path = field_path(store.root, sample_id)
+    if record is None or not path.exists():
+        raise KeyError(sample_id)
+    arrays, _ = load(path, ("context", "context_valid"))
+    _, label, _ = store.load(sample_id)
+    prediction = predict_fields(module, arrays["context"], arrays["context_valid"])
+    trace = propose_trace(prediction, label == 1)
+    proposal: dict[str, Any] = {
+        "model": str(getattr(module, "checkpoint_path", "")), "lags": list(module.lags),
+        "mask_revision": record.revision, "created_at": utc_now(),
+    }
+    fitted: dict[str, np.ndarray] = {}
+    if trace is None:
+        proposal["status"] = "no_trace"
+    else:
+        meta_fit, arrays_fit = apply_trace(store, sample_id, trace, device=device)
+        proposal.update(status="ready", fit_iou=meta_fit["fit_iou"], overlap_px=meta_fit["overlap_px"], points=len(trace))
+        fitted = {f"proposal_{name}": arrays_fit[name] for name in PROPOSAL_ARRAYS}
+    with locked(store.root):
+        arrays, meta = load(path)
+        arrays = {k: v for k, v in arrays.items() if not k.startswith("proposal_")}
+        arrays.update(fitted)
+        meta["proposal"] = proposal
+        save(path, meta, arrays)
+    return meta
+
+
+def accept_proposal(store: SegmentationStore, sample_id: str) -> dict[str, Any]:
+    """Make a record's stored proposal its targets, as an accepted trace with the network as its source.
+
+    No refit: the proposal's fit becomes the record's.  The proposal must
+    belong to the current mask revision.
+    """
+
+    record = store.get(sample_id)
+    path = field_path(store.root, sample_id)
+    if record is None or not path.exists():
+        raise KeyError(sample_id)
+    with locked(store.root):
+        arrays, meta = load(path)
+        proposal = meta.get("proposal") or {}
+        if proposal.get("status") != "ready":
+            raise ValueError(f"{sample_id} has no proposal to accept")
+        if proposal.get("mask_revision") != record.revision:
+            raise ValueError(f"{sample_id}: the mask changed after the proposal was made; propose again")
+        previous_iou = meta.get("auto_fit_iou", meta.get("fit_iou"))
+        for name in PROPOSAL_ARRAYS:
+            arrays[name] = arrays.pop(f"proposal_{name}")
+        meta.pop("proposal")
+        meta.update(
+            fit_method="traced", trace_source="network", orientation="manual", fit_iou=proposal["fit_iou"],
+            overlap_px=proposal["overlap_px"], auto_fit_iou=previous_iou, mask_revision=record.revision,
+            review="accepted", reviewed_at=utc_now(),
+        )
+        save(path, meta, arrays)
+    review_path = fields_dir(store.root) / REVIEW_DIR / f"{sample_id}.png"
+    if review_path.exists():
+        _, label, _ = store.load(sample_id)
+        review_image(arrays["context"][meta["max_lag"]], arrays["ap"].astype(np.float32), arrays["overlap"],
+                     arrays["head_xy"], arrays["tail_xy"], body_box(label == 1)).save(review_path)
+    return meta
+
+
 def build(
     store: SegmentationStore,
     records: Sequence[SampleRecord],

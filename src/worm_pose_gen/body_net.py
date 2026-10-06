@@ -395,5 +395,6 @@ def load_body_net(checkpoint_path: str | Path, device: torch.device | str | None
     module.to(resolved)
     module.eval()
     module.freeze()
+    module.checkpoint_path = str(checkpoint_path)
     return module
 
