@@ -61,7 +61,10 @@ Learning rates are scaled per stage and decayed within a stage, and the best
 full-resolution iterate is kept rather than the last one, because Adam's
 normalized steps random-walk around a flat optimum. Soft penalties keep
 length inside `250--750 px` and width inside `15--90 px`, and keep the body
-inside the crop except where the crop edge is the camera edge.
+inside the crop except where the crop edge is the camera edge. (The upper
+length bound was raised to 800 px on 2026-10-06: fits without a recording
+prior piled up at 750 px on the longest animals, e.g. 13 of 17 whole bodies
+in 2023-08-22-01, with their tails cut short.)
 
 Every frame is fit from several starts as one batch, and the start with the
 lowest final energy wins:

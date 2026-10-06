@@ -81,7 +81,7 @@ class MaskFitConfig:
     # symmetric template.  A recording prior (``recording_prior.py``) sets it.
     width_shape_prior_mean: tuple[float, ...] | None = None
     # Hard bounds, ``None`` to remove them.  Recording priors replace them.
-    length_bounds_px: tuple[float, float] | None = (250.0, 750.0)
+    length_bounds_px: tuple[float, float] | None = (250.0, 800.0)
     width_bounds_px: tuple[float, float] | None = (15.0, 90.0)
     # Gaussian priors on log body length and log width scale, centered on a
     # recording's values; ``None`` disables them.  ``prior_weight`` converts a
@@ -111,6 +111,16 @@ class MaskFitConfig:
     # summed over the body.  Zero weight disables it.
     min_bend_radius_widths: float = 0.5
     bend_weight: float = 0.002
+    # Non-interpenetration (``separation_penalty``): two parts of the body more
+    # than ``separation_arc_widths`` body widths apart along it may not come
+    # closer than ``separation_fraction`` of the sum of their radii.  A rendered
+    # union covers a pixel twice at no cost, so without it an end touching the
+    # body can slide onto it.  Pairs the fit's reference pose (a traced
+    # midline, the previous frame) itself puts on top of each other are a real
+    # crossing and exempt.  Zero weight disables it; only ``batch_fit`` uses it.
+    separation_weight: float = 0.0
+    separation_fraction: float = 0.9
+    separation_arc_widths: float = 2.0
     default_length_px: float = 600.0
     default_width_px: float = 45.0
     # Constant-curvature arcs (rad/px) used by the moment-based starts.
@@ -880,6 +890,42 @@ def bend_penalty(centerline: Tensor, length: Tensor, width: Tensor, config: Mask
     limit = 1.0 / (config.min_bend_radius_widths * width.clamp_min(1e-6))
     excess = (curvature / limit[:, None] - 1.0).clamp_min(0.0)
     return config.bend_weight * excess.square().sum(1)
+
+
+def separation_penalty(
+    centerline: Tensor, diameter: Tensor, config: MaskFitConfig, reference: Tensor | None = None,
+) -> Tensor:
+    """Penalty for parts of the body far apart along it sitting inside each other, per row.
+
+    ``centerline`` is ``[B, N, 2]`` and ``diameter`` ``[B, N]``.  Point pairs
+    more than ``config.separation_arc_widths`` median diameters apart in arc
+    length pay the squared shortfall of their distance below
+    ``config.separation_fraction`` times the sum of their radii, in units of
+    the median diameter, summed over pairs and divided by the point count.
+    With ``reference`` (``[B, N, 2]``), pairs that the reference places
+    within half that distance of each other are a deliberate crossing, and
+    they and every pair within one median diameter of them along both runs
+    pay nothing.
+    """
+
+    if config.separation_weight <= 0:
+        return torch.zeros(centerline.shape[0], dtype=centerline.dtype, device=centerline.device)
+    step = (centerline[:, 1:] - centerline[:, :-1]).norm(dim=-1)
+    arc = torch.cat((torch.zeros_like(step[:, :1]), step.cumsum(1)), dim=1)
+    scale = diameter.median(dim=1).values.clamp_min(1e-6)
+    far = (arc[:, :, None] - arc[:, None, :]).abs() > config.separation_arc_widths * scale[:, None, None]
+    needed = config.separation_fraction * 0.5 * (diameter[:, :, None] + diameter[:, None, :])
+    distance = (centerline[:, :, None, :] - centerline[:, None, :, :]).square().sum(-1).add(1e-9).sqrt()
+    if reference is not None:
+        crossed = (reference[:, :, None, :] - reference[:, None, :, :]).norm(dim=-1) < 0.5 * needed
+        # A crossing exempts its neighbourhood too: pairs within one body width
+        # along both runs, which approach each other just before and after it.
+        reach = int(torch.ceil((scale / step.median(dim=1).values.clamp_min(1e-6)).max()).item())
+        if reach > 0:
+            crossed = F.max_pool2d(crossed[:, None].to(centerline.dtype), 2 * reach + 1, stride=1, padding=reach)[:, 0] > 0
+        far = far & ~crossed
+    shortfall = ((needed - distance) / scale[:, None, None]).clamp_min(0.0) * far
+    return config.separation_weight * shortfall.square().sum((1, 2)) / centerline.shape[1]
 
 
 def max_bend_widths(centerline_xy: NDArray[np.generic], width_px: float) -> float:

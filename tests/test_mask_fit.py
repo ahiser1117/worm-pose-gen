@@ -7,6 +7,7 @@ import torch
 
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import (
+    separation_penalty,
     MaskFitConfig,
     crop_window,
     default_width_template,
@@ -217,6 +218,34 @@ class MaskFitTests(unittest.TestCase):
                 config=MaskFitConfig(stage_downsample=(2, 1), stage_steps=(1,), stage_lr_scale=(1.0, 1.0)),
                 device="cpu",
             )
+
+
+
+class SeparationPenaltyTests(unittest.TestCase):
+    @staticmethod
+    def hairpin(gap: float) -> torch.Tensor:
+        """Out along y=0, a tight turn, back along y=gap: the two runs are far apart in arc length."""
+
+        out = np.stack((np.linspace(0, 200, 45), np.zeros(45)), 1)
+        turn = np.stack((200 + 0.5 * gap * np.sin(np.linspace(0, np.pi, 10)), 0.5 * gap * (1 - np.cos(np.linspace(0, np.pi, 10)))), 1)
+        back = np.stack((np.linspace(200, 0, 45), np.full(45, gap)), 1)
+        return torch.as_tensor(np.concatenate((out, turn, back)), dtype=torch.float32)[None]
+
+    def test_runs_inside_each_other_pay_and_separate_runs_do_not(self):
+        config = MaskFitConfig(n_points=100, separation_weight=1.0, separation_fraction=1.0)
+        diameter = torch.full((1, 100), 20.0)
+        self.assertGreater(float(separation_penalty(self.hairpin(10.0), diameter, config)), 0.0)
+        self.assertEqual(float(separation_penalty(self.hairpin(25.0), diameter, config)), 0.0)
+
+    def test_a_crossing_in_the_reference_is_exempt(self):
+        config = MaskFitConfig(n_points=100, separation_weight=1.0, separation_fraction=1.0)
+        diameter = torch.full((1, 100), 20.0)
+        closed = self.hairpin(10.0)
+        self.assertEqual(float(separation_penalty(closed, diameter, config, reference=self.hairpin(2.0))), 0.0)
+        self.assertGreater(float(separation_penalty(closed, diameter, config, reference=self.hairpin(25.0))), 0.0)
+
+    def test_zero_weight_disables_it(self):
+        self.assertEqual(float(separation_penalty(self.hairpin(5.0), torch.full((1, 100), 20.0), MaskFitConfig(n_points=100))), 0.0)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ from .mask_fit import (
     hard_coverage,
     hard_iou,
     render_tube_segments,
+    separation_penalty,
     signed_edge_distance,
 )
 
@@ -387,6 +388,9 @@ def _fit_group(
         reference_t = torch.as_tensor(np.stack(reference_rows), device=device)
         reference_mask_t = torch.as_tensor(np.stack(reference_masks), device=device)
         temporal_scale = config.temporal_prior_weight / float(config.temporal_prior_sigma_px) ** 2
+        # Rows without a reference have no deliberate crossings: NaN compares false.
+        has_reference = reference_mask_t.sum(1, keepdim=True)[..., None] > 0
+        crossing_reference_t = torch.where(has_reference, reference_t, torch.full_like(reference_t, float("nan")))
 
     state = _MaskFitState(starts_flat, config, device)
     head_priors = None if head_constraints is None else HeadPriors(
@@ -418,7 +422,7 @@ def _fit_group(
             stage_cache[factor] = (soft, weight, (soft * weight).sum((1, 2)))
         return stage_cache[factor]
 
-    def regularization(centerline: Tensor) -> Tensor:
+    def regularization(centerline: Tensor, diameter: Tensor) -> Tensor:
         c = config
         smooth = c.shape_smoothness * (state.shape[:, 1:] - state.shape[:, :-1]).square().mean(1)
         below = ((edge_lo[:, None, :] - centerline).clamp_min(0).square() * lo_active[:, None, :]).sum(-1)
@@ -428,6 +432,7 @@ def _fit_group(
         escape = ((below + above) * inside_camera).mean(1)
         total = smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
         total = total + bend_penalty(centerline, state.log_length.exp(), state.log_width.exp(), c)
+        total = total + separation_penalty(centerline, diameter, c, crossing_reference_t if use_temporal else None)
         if use_temporal:
             squared = ((centerline - reference_t).square().sum(-1) * reference_mask_t).sum(1) / reference_mask_t.sum(1).clamp_min(1.0)
             total = total + temporal_scale * squared
@@ -450,7 +455,7 @@ def _fit_group(
         intersection = (rendered * soft * weight).sum((1, 2))
         denominator = (rendered * weight).sum((1, 2)) + target_mass
         dice = 1 - (2 * intersection + eps) / (denominator + eps)
-        return dice, dice + regularization(centerline)
+        return dice, dice + regularization(centerline, diameter)
 
     if compile_energy:
         # Mutating this dictionary after capture would invalidate Dynamo's
