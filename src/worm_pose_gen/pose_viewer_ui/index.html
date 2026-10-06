@@ -326,6 +326,7 @@
 <label>Split<select id="bf-split"><option value="">All splits</option><option value="train">Train</option><option value="val">Validation</option><option value="test">Test</option></select></label>
 <label>Head from<select id="bf-orientation"><option value="">All orientations</option></select></label>
 <label>Fit method<select id="bf-method"><option value="">All fit methods</option></select></label>
+<label>Proposal<select id="bf-proposal"><option value="">Any</option><option value="yes">Has a proposal</option><option value="no">No proposal</option></select></label>
 <label>Review<select id="bf-review"><option value="">All reviews</option><option value="unreviewed">Unreviewed</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option></select></label>
 <label>Self-contact<select id="bf-contact"><option value="">Any</option><option value="yes">Touching or crossing</option><option value="no">None</option></select></label>
 <label>Fit IoU at least<input id="bf-min-iou" type="number" min="0" max="1" step="0.01" placeholder="any"></label>
@@ -337,11 +338,12 @@
 <section class="group"><h3>Sample</h3><div id="bf-summary" class="target-banner">Choose a sample from the list.</div></section>
 <section class="group"><h3>Edit</h3>
 <div class="row wrap"><button id="bf-flip" title="Swap head and tail: reverse the tube and set A-P to 1 − A-P (H)">Flip head/tail · H</button><button id="bf-trace" title="Click the midline head first and refit the body along it (T)">Trace midline · T</button></div>
+<div class="row wrap"><button id="bf-proposal-accept" title="Make the network's proposed trace and fit the targets, without a refit (G)">Accept proposal · G</button><button id="bf-proposal-edit" title="Load the proposal's trace points into Trace midline to adjust them">Edit proposal</button><button id="bf-propose" title="Run the body-field network on this sample now">Propose</button></div>
 <div class="row wrap"><button id="bf-review-accepted" data-bf-review="accepted" title="Targets are right (A)">Accept · A</button><button id="bf-review-rejected" data-bf-review="rejected" title="Targets are wrong: the sample trains the mask only (R)">Reject · R</button><button data-bf-review="unreviewed">Unreviewed</button></div>
 <label><input id="bf-advance" type="checkbox" checked> Next sample after accept or reject</label>
 <div class="row wrap"><button id="bf-edit-mask" title="Open this corpus label in Paint">Edit mask in Paint</button><button id="bf-rebuild" title="Refit the tube to the current mask and re-render the targets (a GPU job)">Rebuild targets</button><button id="bf-jobs">Jobs</button></div>
 <div id="bf-edit-status" class="note" role="status"></div></section>
-<section class="group" id="bf-trace-panel" hidden><h3>Trace midline</h3><p class="note">Click from the head along the body to the tail, through crossings in the order the body goes; about 10 points, more around loops.</p>
+<section class="group" id="bf-trace-panel" hidden><h3>Trace midline</h3><p class="note">Click from the head along the body to the tail, through crossings in the order the body goes; about 10 points, more around loops. Drag a point to move it, click on the line to insert one, right-click a point to remove it.</p>
 <div id="bf-trace-count" class="note"></div>
 <div class="row wrap"><button id="bf-trace-fit" class="primary">Fit · Enter</button><button id="bf-trace-undo">Remove last · Backspace</button><button id="bf-trace-cancel">Cancel · Esc</button></div>
 <div id="bf-trace-result" class="target-banner" hidden></div>

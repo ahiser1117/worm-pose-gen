@@ -1,4 +1,9 @@
-"""Body-field targets of the corpus store: browse, view with their temporal context, flip, review, rebuild.
+"""Body-field targets of the corpus store: browse, view with their temporal context, flip, review, trace, rebuild.
+
+A record may also hold a trace proposed by the body-field network
+(:func:`body_fields.propose`, the app's ``--body-net``), shown beside the
+targets until it is accepted (:func:`body_fields.accept_proposal`) or
+edited as a hand trace.
 
 The records live in ``<corpus_root>/body_fields`` (:mod:`worm_pose_gen.body_fields`),
 so the masks they were built from are the corpus labels the Labels screen
@@ -35,7 +40,7 @@ STATUSES = ("current", "stale", "missing")
 # Summary of a record keyed by path, valid while its (mtime_ns, size) holds.
 _summaries: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
 _summaries_lock = threading.Lock()
-# One trace fit at a time: they share the app's device.
+# One fit at a time (traces and proposals): they share the app's device.
 _trace_lock = threading.Lock()
 
 
@@ -77,6 +82,15 @@ def _active_jobs(app: AppState) -> dict[str, str]:
             if job.spec.kind == JOB_KIND and not job.finished}
 
 
+def proposal_status(meta: dict[str, Any], record: SampleRecord) -> str | None:
+    """``ready``, ``no_trace``, ``stale`` (made for an older mask), or None without a proposal."""
+
+    proposal = meta.get("proposal")
+    if not proposal:
+        return None
+    return "stale" if proposal.get("mask_revision") != record.revision else proposal.get("status")
+
+
 def _row(store: CorpusStore, record: SampleRecord, jobs: dict[str, str]) -> dict[str, Any]:
     row = {"sample_id": record.sample_id, "recording": record.recording, "frame_index": record.frame_index,
            "split": record.split, "source_path": record.source_path, "mask_revision": record.revision,
@@ -84,7 +98,8 @@ def _row(store: CorpusStore, record: SampleRecord, jobs: dict[str, str]) -> dict
     summary = _fields_summary(body_fields.field_path(store.root, record.sample_id))
     if summary is None:
         return {**row, "status": "missing", "has_body": None, "orientation": None, "fit_iou": None, "fit_method": None,
-                "overlap_px": None, "self_contact": None, "review": None, "reviewed_at": None}
+                "overlap_px": None, "self_contact": None, "review": None, "reviewed_at": None,
+                "proposal": None, "proposal_fit_iou": None}
     meta = summary["meta"]
     return {**row, "status": "stale" if body_fields.is_stale(meta, record) else "current",
             "fields_revision": meta.get("mask_revision"), "has_body": bool(meta.get("has_body")),
@@ -92,13 +107,15 @@ def _row(store: CorpusStore, record: SampleRecord, jobs: dict[str, str]) -> dict
             "auto_fit_iou": meta.get("auto_fit_iou"),
             "overlap_px": meta.get("overlap_px"), "orientation_margin": meta.get("orientation_margin"),
             "nose_offset": meta.get("nose_offset"), "self_contact": summary["self_contact"],
-            "review": body_fields.review_status(meta), "reviewed_at": meta.get("reviewed_at")}
+            "review": body_fields.review_status(meta), "reviewed_at": meta.get("reviewed_at"),
+            "proposal": proposal_status(meta, record), "proposal_fit_iou": (meta.get("proposal") or {}).get("fit_iou")}
 
 
 def _keep(row: dict[str, Any], split: str, orientation: str, review: str, contact: str, status: str, method: str,
-          min_iou: float | None, max_iou: float | None) -> bool:
+          proposal: str, min_iou: float | None, max_iou: float | None) -> bool:
     iou = row["fit_iou"]
     return ((not split or row["split"] == split)
+            and (not proposal or (row["proposal"] == "ready") is (proposal == "yes"))
             and (not method or row["fit_method"] == method)
             and (not orientation or row["orientation"] == orientation)
             and (not review or row["review"] == review)
@@ -110,20 +127,23 @@ def _keep(row: dict[str, Any], split: str, orientation: str, review: str, contac
 
 @router.get("")
 def samples(split: str = "", orientation: str = "", review: str = "", contact: str = "", status: str = "", method: str = "",
-            min_iou: str | None = None, max_iou: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
+            proposal: str = "", min_iou: str | None = None, max_iou: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
     if review and review not in body_fields.REVIEW_STATES:
         raise ValueError(f"unknown review status {review!r}; expected one of {body_fields.REVIEW_STATES}")
     if contact not in ("", "yes", "no"):
         raise ValueError("contact must be yes or no")
+    if proposal not in ("", "yes", "no"):
+        raise ValueError("proposal must be yes or no")
     if status and status not in STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {STATUSES}")
     store, jobs = _store(app), _active_jobs(app)
     rows = [_row(store, record, jobs) for record in store.records()]
     low, high = query_float(min_iou), query_float(max_iou)
-    shown = [row for row in rows if _keep(row, split, orientation, review, contact, status, method, low, high)]
+    shown = [row for row in rows if _keep(row, split, orientation, review, contact, status, method, proposal, low, high)]
     count = lambda key, values: {value: sum(row[key] == value for row in rows) for value in values}
     return {"root": str(store.root), "total": len(rows), "samples": shown,
-            "counts": {"status": count("status", STATUSES), "review": count("review", body_fields.REVIEW_STATES)},
+            "counts": {"status": count("status", STATUSES), "review": count("review", body_fields.REVIEW_STATES),
+                       "proposal": count("proposal", ("ready", "no_trace", "stale"))},
             "facets": {"splits": ["train", "val", "test"], "statuses": list(STATUSES),
                        "reviews": list(body_fields.REVIEW_STATES),
                        "orientations": sorted({row["orientation"] for row in rows if row["orientation"]}),
@@ -140,8 +160,12 @@ def _detail(app: AppState, sample_id: str) -> dict[str, Any]:
     path = body_fields.field_path(store.root, sample_id)
     if not path.exists():
         return result
-    arrays, meta = body_fields.load(path, LAYER_ARRAYS)
-    return {**result, **_layers(meta, arrays)}
+    arrays, meta = body_fields.load(path, LAYER_ARRAYS + tuple(f"proposal_{name}" for name in body_fields.PROPOSAL_ARRAYS))
+    result.update(_layers(meta, arrays))
+    if proposal_status(meta, record) == "ready":
+        layers = _layers({**meta, "has_body": True}, {name: arrays[f"proposal_{name}"] for name in body_fields.PROPOSAL_ARRAYS} | {"context_valid": arrays["context_valid"]})
+        result["proposal"] = {key: layers[key] for key in ("ap", "overlap", "centerline_xy", "width_profile", "head_xy", "tail_xy", "diameter_px", "trace_xy")}
+    return result
 
 
 LAYER_ARRAYS = ("context_valid", "centerline_xy", "width_profile", "ap", "overlap", "head_xy", "tail_xy", "nose_xy",
@@ -236,6 +260,25 @@ def trace(sample_id: str, payload: dict[str, Any] = Body(...), app: AppState = D
     if result["committed"]:
         result["sample"] = _row(_store(app), _record(_store(app), sample_id), _active_jobs(app))
     return result
+
+
+@router.post("/{sample_id}/propose")
+def propose(sample_id: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Run the body-field network on the sample now and store its proposed trace and fit (the targets stay)."""
+
+    _check_editable(app, sample_id)
+    with _trace_lock:
+        body_fields.propose(_store(app), sample_id, app.body_net(), device=app.device)
+    return _detail(app, sample_id)
+
+
+@router.post("/{sample_id}/accept-proposal")
+def accept_proposal(sample_id: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Make the stored proposal the sample's targets: an accepted trace from the network, no refit."""
+
+    _check_editable(app, sample_id)
+    body_fields.accept_proposal(_store(app), sample_id)
+    return _detail(app, sample_id)
 
 
 @router.post("/{sample_id}/rebuild")

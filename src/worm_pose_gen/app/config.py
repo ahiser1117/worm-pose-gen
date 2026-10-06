@@ -11,10 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..jobs import REPO_ROOT
 from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
 from ..recordings import DEFAULT_PRIOR_CACHE, DEFAULT_RECORDING_ROOTS
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
 from ..workspace import DEFAULT_WORKSPACES_ROOT
+
+# The body-field network Body fields proposes traces with.
+DEFAULT_BODY_NET = REPO_ROOT / "checkpoints" / "body_net" / "best.ckpt"
 
 
 @dataclass
@@ -30,6 +34,7 @@ class AppConfig:
     corpus_root: Path | None = None
     checkpoints_root: Path | None = None
     checkpoint: Path | None = DEFAULT_CHECKPOINT
+    body_net: Path | None = DEFAULT_BODY_NET
     prior_cache: Path | None = DEFAULT_PRIOR_CACHE
     notes: Path = DEFAULT_NOTES
     gpus: tuple[int, ...] = (0,)
@@ -48,6 +53,7 @@ class AppConfig:
         self.corpus_root = self.workspaces_root / "corpus" if self.corpus_root is None else Path(self.corpus_root)
         self.checkpoints_root = self.workspaces_root / "checkpoints" if self.checkpoints_root is None else Path(self.checkpoints_root)
         self.checkpoint = None if self.checkpoint is None else Path(self.checkpoint)
+        self.body_net = None if self.body_net is None else Path(self.body_net)
         self.prior_cache = None if self.prior_cache is None else Path(self.prior_cache)
         self.notes = Path(self.notes)
         self.gpus = tuple(int(g) for g in self.gpus)

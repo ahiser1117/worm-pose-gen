@@ -68,6 +68,8 @@ class AppState:
         self.labeling = LabelingService(self)
         # A label group the launcher opened (``worm-pose-labeler --queue``); the UI starts in Paint on it.
         self.startup_group: str | None = None
+        self._body_net = None
+        self._body_net_lock = threading.Lock()
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -82,6 +84,19 @@ class AppState:
     @property
     def device(self) -> torch.device:
         return self.viewer.device
+
+    def body_net(self):
+        """The body-field network (``--body-net``), loaded on the app's device at first use."""
+
+        with self._body_net_lock:
+            if self._body_net is None:
+                path = self.config.body_net
+                if path is None or not path.is_file():
+                    raise ValueError(f"no body-field network checkpoint at {path}; pass --body-net")
+                from ..body_net import load_body_net
+
+                self._body_net = load_body_net(path, self.device)
+            return self._body_net
 
     # ---------------------------------------------------------------- workspaces
 

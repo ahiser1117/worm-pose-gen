@@ -39,7 +39,7 @@ from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
 from ..recordings import DEFAULT_RECORDING_ROOTS
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
 from ..workspace import DEFAULT_WORKSPACES_ROOT
-from .config import AppConfig
+from .config import DEFAULT_BODY_NET, AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
 from .routers import algorithms, body_fields, corpus, edits, jobs, masks, recordings, static, viewer, workspaces
@@ -137,6 +137,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--corpus-root", type=Path, default=None, help="user segmentation labels (default: <workspaces-root>/corpus; may point to an existing segmentation store)")
     parser.add_argument("--checkpoints-root", type=Path, default=None, help="fine-tuning runs and checkpoints (default: <workspaces-root>/checkpoints)")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="segmenter for on-demand probability maps")
+    parser.add_argument("--body-net", type=Path, default=DEFAULT_BODY_NET, help="body-field network for proposed traces in Body fields")
     parser.add_argument("--gpus", default=None, help="comma-separated GPU ids for jobs (default: all visible)")
     parser.add_argument("--max-concurrent", type=int, default=None, help="jobs running at once (default: one per GPU)")
     parser.add_argument("--device", default=None, help="device of the server's own segmenter (default: the first job GPU)")
@@ -149,7 +150,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
         host=args.host, port=args.port, workspaces_root=args.workspaces_root,
         recording_roots=tuple(args.recording_roots) if args.recording_roots else tuple(DEFAULT_RECORDING_ROOTS),
-        poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, notes=args.notes,
+        poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, body_net=args.body_net, notes=args.notes,
         corpus_root=args.corpus_root, checkpoints_root=args.checkpoints_root,
         gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent, extra_runs=tuple(args.runs or ()),
     )

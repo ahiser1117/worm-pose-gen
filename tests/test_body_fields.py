@@ -401,5 +401,96 @@ class BodyFieldApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/body-fields/{self.missing.sample_id}/trace", json={"points": points}).status_code, 404)
 
 
+
+class ProposalApiTests(unittest.TestCase):
+    """Proposed traces through the routes, with a stub network that predicts the true fields."""
+
+    def setUp(self):
+        from tests.test_body_proposal import StubModule, looped_body, prediction_from
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        checkpoint = self.root / "body_net.ckpt"
+        checkpoint.write_bytes(b"stub")
+        self.config = AppConfig(workspaces_root=self.root / "workspaces", recording_roots=(self.root,),
+                                poses_root=self.root / "poses", corpus_root=self.root / "corpus", body_net=checkpoint,
+                                dataset_root=self.root / "cache", checkpoint=None, prior_cache=None,
+                                notes=self.root / "notes.json", device="cpu", gpus=())
+        self.app = create_app(self.config)
+        self.client = TestClient(self.app, raise_server_exceptions=False)
+        self.addCleanup(self.client.close)
+        self.addCleanup(self.app.state.app_state.close)
+        centerline, mask = looped_body()
+        self.stub = StubModule(prediction_from(centerline, mask))
+        store = CorpusStore(self.config.corpus_root)
+        image = np.where(mask, 60, 200).astype(np.uint8)
+        self.record = store.save("rec", 3, image, mask.astype(np.uint8), source_path="rec.h5", label_source="manual", split="train")
+        straight = np.stack((np.linspace(80, 340, 100), np.full(100, 150.0)), 1)  # a wrong automatic fit
+        targets = render_body_targets(mask, straight, np.full(100, 28.0))
+        meta = {"sample_id": self.record.sample_id, "mask_revision": self.record.revision, "max_lag": 0,
+                "fit_preset": "reference", "has_body": True, "orientation": "nose", "fit_iou": 0.5, "overlap_px": 0}
+        arrays = {"context": image[None], "context_valid": np.array([True]), "centerline_xy": straight,
+                  "width_profile": np.full(100, 28.0), "ap": targets.ap.astype(np.float16), "overlap": targets.overlap,
+                  "head_xy": targets.head_xy, "tail_xy": targets.tail_xy, "diameter_px": np.float64(28.0)}
+        body_fields.fields_dir(self.config.corpus_root).mkdir(parents=True)
+        body_fields.save(body_fields.field_path(self.config.corpus_root, self.record.sample_id), meta, arrays)
+        self.url = f"/api/body-fields/{self.record.sample_id}"
+
+    def test_propose_on_demand_then_accept(self):
+        self.assertNotIn("proposal", self.client.get(self.url).json())
+        with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=self.stub) as load:
+            response = self.client.post(self.url + "/propose")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.client.post(self.url + "/propose")
+        load.assert_called_once()  # loaded once, at first use, on the app's device
+        detail = response.json()
+        self.assertEqual(detail["meta"]["proposal"]["status"], "ready")
+        proposal = detail["proposal"]
+        self.assertGreater(detail["meta"]["proposal"]["fit_iou"], 0.75)
+        self.assertEqual(detail["meta"]["fit_iou"], 0.5, "the targets stay until the proposal is accepted")
+        self.assertEqual(decode(proposal["ap"]).shape, (300, 420))
+        self.assertGreater(len(proposal["trace_xy"]), 2)
+        self.assertEqual(len(proposal["centerline_xy"]), len(proposal["width_profile"]))
+        listing = self.client.get("/api/body-fields", params={"proposal": "yes"}).json()
+        self.assertEqual([(r["proposal"], round(r["proposal_fit_iou"], 3)) for r in listing["samples"]],
+                         [("ready", round(detail["meta"]["proposal"]["fit_iou"], 3))])
+        self.assertEqual(listing["counts"]["proposal"]["ready"], 1)
+        self.assertEqual(self.client.get("/api/body-fields", params={"proposal": "no"}).json()["samples"], [])
+        accepted = self.client.post(self.url + "/accept-proposal")
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        body = accepted.json()
+        self.assertEqual((body["meta"]["fit_method"], body["meta"]["trace_source"], body["sample"]["review"]),
+                         ("traced", "network", "accepted"))
+        self.assertNotIn("proposal", body)
+        self.assertEqual(body["trace_xy"], proposal["trace_xy"])
+        self.assertEqual(self.client.post(self.url + "/accept-proposal").status_code, 400)
+
+    def test_stale_proposal_is_hidden_and_refused(self):
+        with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=self.stub):
+            self.client.post(self.url + "/propose")
+        store = CorpusStore(self.config.corpus_root)
+        _, label, _ = store.load(self.record.sample_id)
+        store.update_label(self.record.sample_id, label)
+        detail = self.client.get(self.url).json()
+        self.assertNotIn("proposal", detail)
+        self.assertEqual(detail["sample"]["proposal"], "stale")
+        response = self.client.post(self.url + "/accept-proposal")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("propose again", response.json()["error"])
+
+    def test_missing_network_and_pending_rebuild(self):
+        self.config.body_net.unlink()
+        response = self.client.post(self.url + "/propose")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("--body-net", response.json()["error"])
+        job = self.client.post(self.url + "/rebuild").json()
+        for path in ("/propose", "/accept-proposal"):
+            blocked = self.client.post(self.url + path)
+            self.assertEqual(blocked.status_code, 400, path)
+            self.assertIn("rebuild job", blocked.json()["error"])
+        self.app.state.app_state.runner.cancel(job["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -98,14 +98,24 @@ scripts/project_env.sh uv run --no-sync python -m worm_pose_gen.app \
   --corpus-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1
 ```
 
+`--body-net` names the body-field network that proposes traces (default
+`checkpoints/body_net/best.ckpt`); it is loaded on the app's device the first
+time a sample is proposed.
+
 The left column lists every sample with its status (current, stale, or
 missing), split, head source, fit IoU, self-contact and overlap, filtered by
-any of these, by review status and by fit method; a traced record carries a
-*traced* (or *trace as drawn*) badge and its automatic fit's IoU. The canvas shows the labeled frame with
+any of these, by review status, by fit method and by whether it has a
+proposal; a traced record carries a *traced* (or *trace as drawn*) badge and
+its automatic fit's IoU, and a record with a proposal a *proposal* badge and
+the proposal's fit IoU (*old proposal* when the mask changed after it was
+made). The canvas shows the labeled frame with
 toggleable layers: hand mask, A-P field (viridis, purple head to yellow
 tail), overlap pixels (white), fitted tube outline and centerline, head
 (green) and tail (red) markers, the acquisition nose (yellow cross), and a
-traced record's stored trace (dashed orange, numbered from the head).
+traced record's stored trace (dashed orange, numbered from the head), and
+the network's proposal: its tube dotted violet, its ends ringed violet and
+its trace points as violet dots. **Proposal A-P field** shows the proposal's
+A-P field and overlap in place of the record's (off by default).
 Hovering reports the label, A-P value and difference value under the
 cursor. **Temporal context** scrubs or plays the 33 context frames (a frame
 outside the recording repeats the nearest readable one and is marked), and
@@ -123,8 +133,9 @@ Corrections:
   crossing or contact. Click from the head along the body to the tail,
   through crossings in the order the body goes, about 10 points and more
   around loops; each click adds a numbered point (point 1, the head, is
-  green), Backspace removes the last and Esc leaves trace mode. Dragging and
-  the wheel still pan and zoom. **Fit** (Enter) refits along the trace on the
+  green), a drag moves a point, a click on the trace inserts one, a
+  right-click removes one, Backspace removes the last and Esc leaves trace
+  mode. Dragging elsewhere and the wheel still pan and zoom. **Fit** (Enter) refits along the trace on the
   app's device (a few seconds on a GPU, about 10 s on a CPU) and shows the
   preview's A-P field, cyan tube and head/tail markers over the frame next to
   the record's green tube, with *IoU new vs old*; hovering reads the
@@ -133,6 +144,17 @@ Corrections:
   (accepted, orientation manual, `auto_fit_iou` keeping the replaced fit);
   **Discard** drops the preview and keeps the points for adjusting. A later
   rebuild refits along the stored trace.
+- **Proposals.** `scripts/propose_traces.py` precomputes the network's
+  traces (by default for unreviewed samples), and **Propose** runs it on the
+  open sample (one at a time, on the app's device). The summary reads
+  *Proposal: IoU new vs current*. **Accept proposal** (G) makes the
+  proposal's fit the targets without a refit (a traced record with
+  `trace_source` `network`, accepted) and, like Accept, moves to the next
+  sample. **Edit proposal** loads the proposal's trace into Trace midline as
+  editable points: drag a point to move it, click on the trace to insert a
+  point there (a click elsewhere extends it at the tail), right-click a point
+  to remove it, then Fit and Accept as a hand trace. A proposal made for an
+  older mask is not shown and cannot be accepted; propose again.
 - **Edit mask in Paint** opens the sample in Paint (its **Return to Body
   fields** button comes back). Saving
   it raises the mask revision, which marks the record stale; return to Body
@@ -146,6 +168,7 @@ Corrections:
 | `H` | Flip head/tail |
 | `T` | Trace midline on / off; while tracing `Backspace` removes the last point, `Enter` fits, `Esc` cancels (other sample keys pause) |
 | `A` `R` | Accept / reject |
+| `G` | Accept the proposal (then the next sample) |
 | `D` | Frames / difference view |
 | `←` `→` | Step the context offset (frames) or the lag (difference) |
 | `Space` | Play the context frames |
@@ -153,14 +176,22 @@ Corrections:
 
 The same operations are available headless under `/api/body-fields`:
 `GET /api/body-fields` (filters `split`, `orientation`, `review`, `status`,
-`contact=yes|no`, `method` (fit method), `min_iou`, `max_iou`), `GET /api/body-fields/{id}` (layers
-as PNG data URLs), `GET /api/body-fields/{id}/context`, and `POST` to
-`/{id}/flip`, `/{id}/review` (`{"status": ...}`), `/{id}/rebuild` and
+`contact=yes|no`, `method` (fit method), `proposal=yes|no`, `min_iou`,
+`max_iou`; each row has `proposal` (`ready`, `no_trace`, `stale` or null) and
+`proposal_fit_iou`), `GET /api/body-fields/{id}` (layers
+as PNG data URLs, with a `proposal` object of the same layers when a ready
+proposal belongs to the current mask), `GET /api/body-fields/{id}/context`,
+and `POST` to `/{id}/flip`, `/{id}/review` (`{"status": ...}`),
+`/{id}/rebuild`, `/{id}/propose`, `/{id}/accept-proposal` and
 `/{id}/trace` (`{"points": [[x, y], ...], "as_drawn": false, "commit": false}`:
 the layers of the preview, or with `commit` of the written record; it runs in
-the request, one fit at a time, and returns 400 while the sample's rebuild job
-is pending).
+the request, one fit at a time). Every edit returns 400 while the sample's
+rebuild job is pending; `/propose` also when no network checkpoint is
+configured.
 
 Coverage: `tests/test_body_fields.py` (record edits, staleness, atomic
-writes, traces, routes) and `tests/browser/body_fields.cjs` (the screen end
-to end on a synthetic store, including a trace preview and accept).
+writes, traces, routes, proposals with a stub network),
+`tests/test_body_proposal.py`, `tests/browser/body_fields.cjs` (the screen
+end to end on a synthetic store, including a trace preview and accept) and
+`tests/browser/body_fields_proposal.cjs` (accepting with G, editing a
+proposal's points, Propose without a network).

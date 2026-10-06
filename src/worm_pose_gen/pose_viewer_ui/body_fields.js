@@ -4,8 +4,9 @@
 // (/api/body-fields, app/routers/body_fields.py), show them over the labeled
 // frame or its temporal context (the frames t-16..t+16 and the symmetric
 // differences the network sees), and correct them: flip head/tail, review,
-// trace the midline (clicked points, head first) to refit a wrong route, and
-// rebuild after a mask edit.  The mask itself is edited in Paint (paintScreen).
+// trace the midline (clicked points, head first) to refit a wrong route,
+// accept or edit the trace the body-field network proposed, and rebuild after
+// a mask edit.  The mask itself is edited in Paint (paintScreen).
 const bodyFields = (() => {
   const LAYER_DEFS = [
     {id: "mask", name: "Hand mask", on: false, alpha: 0.35, swatch: "rgb(255,65,155)"},
@@ -16,7 +17,10 @@ const bodyFields = (() => {
     {id: "ends", name: "Head (green) / tail (red)", on: true, alpha: 1.0, swatch: "linear-gradient(90deg,#3f3 50%,#f44 50%)"},
     {id: "nose", name: "Acquisition nose ✕", on: true, alpha: 1.0, swatch: "rgb(255,210,60)"},
     {id: "trace", name: "Stored trace (numbered clicks)", on: true, alpha: 0.9, swatch: "rgb(255,150,40)"},
+    {id: "proposal", name: "Proposal: tube, ends, trace", on: true, alpha: 0.9, swatch: "rgb(190,110,255)"},
+    {id: "proposal_ap", name: "Proposal A-P field (in place of the record's)", on: false, alpha: 0.65, swatch: "linear-gradient(90deg,#be6eff,#fde725)"},
   ];
+  const PROPOSAL = "rgb(190,110,255)";
   const TRACE_METHODS = {traced: "traced", trace_as_drawn: "trace as drawn"};
   const VIRIDIS = [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
   const layers = LAYER_DEFS.map(l => ({...l}));
@@ -46,7 +50,7 @@ const bodyFields = (() => {
   // ------------------------------------------------------------ list
 
   function filters() {
-    const ids = {split: "bf-split", orientation: "bf-orientation", method: "bf-method", review: "bf-review", status: "bf-status", contact: "bf-contact", min_iou: "bf-min-iou", max_iou: "bf-max-iou"};
+    const ids = {split: "bf-split", orientation: "bf-orientation", method: "bf-method", proposal: "bf-proposal", review: "bf-review", status: "bf-status", contact: "bf-contact", min_iou: "bf-min-iou", max_iou: "bf-max-iou"};
     return Object.fromEntries(Object.entries(ids).map(([key, n]) => [key, node(n)?.value.trim() || ""]).filter(([, v]) => v));
   }
   function fill(idName, values, label) {
@@ -62,6 +66,7 @@ const bodyFields = (() => {
     else bits.push(row.orientation, `IoU ${row.fit_iou.toFixed(3)}${row.auto_fit_iou != null && TRACE_METHODS[row.fit_method] ? ` (auto ${row.auto_fit_iou.toFixed(3)})` : ""}`);
     if (row.self_contact) bits.push("contact");
     if (row.overlap_px) bits.push(`overlap ${row.overlap_px} px`);
+    if (row.proposal === "ready") bits.push(`proposal IoU ${row.proposal_fit_iou.toFixed(3)}`);
     return bits.join(" · ");
   }
   function renderList() {
@@ -72,7 +77,7 @@ const bodyFields = (() => {
       const text = document.createElement("span"); text.textContent = row.recording;
       const meta = document.createElement("div"); meta.className = "meta"; meta.textContent = rowText(row); text.append(meta);
       const badges = document.createElement("span"); badges.className = "bf-badges";
-      for (const [label, kind] of [[row.status !== "current" ? row.status : "", row.status], [row.review && row.review !== "unreviewed" ? row.review : "", row.review], [TRACE_METHODS[row.fit_method] || "", "traced"], [row.job ? "rebuilding" : "", "job"]]) {
+      for (const [label, kind] of [[row.status !== "current" ? row.status : "", row.status], [row.review && row.review !== "unreviewed" ? row.review : "", row.review], [TRACE_METHODS[row.fit_method] || "", "traced"], [{ready: "proposal", stale: "old proposal"}[row.proposal] || "", "proposal"], [row.job ? "rebuilding" : "", "job"]]) {
         if (!label) continue;
         const badge = document.createElement("b"); badge.className = `bf-badge ${kind}`; badge.textContent = label; badges.append(badge);
       }
@@ -101,11 +106,15 @@ const bodyFields = (() => {
     const token = ++request;
     try {
       const payload = await api(`/api/body-fields/${encodeURIComponent(sampleId)}`);
-      const [mask, ap, overlap, image] = await Promise.all([decodeGray(payload.mask), decodeGray(payload.ap), decodeGray(payload.overlap), loadImage(payload.image)]);
+      const [mask, ap, overlap, image, proposalAp, proposalOverlap] = await Promise.all([decodeGray(payload.mask), decodeGray(payload.ap), decodeGray(payload.overlap), loadImage(payload.image),
+        decodeGray(payload.proposal?.ap), decodeGray(payload.proposal?.overlap)]);
       if (token !== request) return false;
       const sameSample = detail && detail.sample.sample_id === sampleId;
       const {width, height} = payload;
       detail = {...payload, _image: image, _mask: mask, _ap: ap, _overlap: overlap};
+      if (detail.proposal) detail.proposal = {...detail.proposal, _ap: proposalAp, _overlays: {
+        ap: paintCanvas(width, height, i => proposalAp[i] ? [...viridis((proposalAp[i] - 1) / 254), 255] : null),
+        overlap: paintCanvas(width, height, i => proposalOverlap[i] ? [255, 255, 255, 255] : null)}};
       overlays = {
         mask: paintCanvas(width, height, i => mask[i] === 255 ? [255, 65, 155, 255] : mask[i] === 128 ? [255, 205, 40, 255] : null),
         ap: ap && paintCanvas(width, height, i => ap[i] ? [...viridis((ap[i] - 1) / 254), 255] : null),
@@ -144,11 +153,19 @@ const bodyFields = (() => {
         if (TRACE_METHODS[m.fit_method]) lines.push(`Fit ${TRACE_METHODS[m.fit_method]} along ${detail.trace_xy?.length ?? "?"} clicked points${m.auto_fit_iou != null ? ` · automatic fit IoU was ${m.auto_fit_iou.toFixed(3)}` : ""}`);
         else if (m.fit_method) lines.push(`Fit: ${m.fit_method}`);
       }
+      if (m.has_body) lines.push(proposalLine());
       lines.push(`Review: ${s.review}${m.reviewed_at ? " at " + m.reviewed_at : ""}${s.review === "rejected" ? " (trains the mask only)" : ""}`);
     }
     const job = activeJob();
     if (job) lines.push(`Rebuild job ${job.id} ${job.state}…`);
     return lines;
+  }
+  function proposalLine() {
+    const p = detail.meta.proposal, status = detail.sample.proposal;
+    if (status === "ready") return `Proposal: IoU ${p.fit_iou.toFixed(3)} vs current ${detail.meta.fit_iou.toFixed(3)} · ${p.points} points · ${p.model.split("/").pop() || "network"}`;
+    if (status === "no_trace") return "Proposal: the network found no trace for this frame.";
+    if (status === "stale") return "Proposal: made for an older mask; Propose again.";
+    return "Proposal: none yet; Propose runs the network.";
   }
   function activeJob() {
     return (state.jobs || []).find(j => (j.spec || {}).kind === "body_fields" && j.spec.params?.sample_id === id() && jobActive(j)) || (detail?.sample.job ? {id: detail.sample.job, state: "queued"} : null);
@@ -160,6 +177,11 @@ const bodyFields = (() => {
     const has = !!detail?.meta, body = has && detail.meta.has_body, pending = !!activeJob();
     node("bf-flip").disabled = busy || pending || !body || !!trace;
     node("bf-trace").disabled = busy || pending || !body;
+    const ready = !!detail?.proposal;
+    node("bf-proposal-accept").disabled = busy || pending || !ready || !!trace;
+    node("bf-proposal-edit").disabled = busy || pending || !ready || !!trace;
+    node("bf-propose").disabled = busy || pending || !body || !!trace;
+    node("bf-propose").textContent = detail?.sample.proposal ? "Propose again" : "Propose";
     node("bf-trace").classList.toggle("active", !!trace);
     for (const button of document.querySelectorAll("[data-bf-review]")) {
       button.disabled = busy || pending || !has;
@@ -205,6 +227,24 @@ const bodyFields = (() => {
     if (typeof loadJobs === "function") await loadJobs();
     await refresh();
   });
+  const acceptProposal = () => edit("Accept the proposal", async () => {
+    await post(`/api/body-fields/${encodeURIComponent(id())}/accept-proposal`, {});
+    await open(id(), {keepView: true}); await refresh();
+    if (node("bf-advance").checked) step(1);
+  });
+  const propose = () => edit("Propose a trace", async () => {
+    await post(`/api/body-fields/${encodeURIComponent(id())}/propose`, {});
+    await open(id(), {keepView: true}); await refresh();
+  });
+  // The proposal's trace becomes editable trace points: move, add or remove them, then Fit and Accept as a hand trace.
+  function editProposal() {
+    if (!detail?.proposal || trace) return;
+    toggleTrace();
+    trace.points = detail.proposal.trace_xy.map(point => [...point]);
+    trace.fromProposal = true;
+    renderTrace(); draw();
+    status("Editing the proposal's trace: drag points, click to add, right-click a point to remove it, then Fit.");
+  }
   async function editMask() {
     if (!detail) return;
     const opened = await paintScreen.openSamples([id()], {back: "bodyfields"});
@@ -237,9 +277,30 @@ const bodyFields = (() => {
     if (mode !== "frame" || offset) { mode = "frame"; offset = 0; stopPlay(); renderBase(); syncContextControls(); }
     setTrace({points: [], preview: null});
   }
-  function addPoint(p) {
+  // A click on (near) a segment of the trace inserts a point there; elsewhere it extends the trace at the tail.
+  function addPoint(p, segment = -1) {
     if (p.x < 0 || p.y < 0 || p.x >= detail.width || p.y >= detail.height) return;
-    trace.points.push([Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10]); trace.preview = null; renderTrace(); draw();
+    const point = [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10];
+    if (segment >= 0) trace.points.splice(segment + 1, 0, point); else trace.points.push(point);
+    trace.preview = null; renderTrace(); draw();
+  }
+  const GRAB_PX = 9;
+  function nearestPoint(event) {
+    const p = toImage(event.clientX, event.clientY);
+    let best = -1, bestDistance = GRAB_PX / view.scale;
+    trace.points.forEach(([x, y], i) => { const d = Math.hypot(x - p.x, y - p.y); if (d <= bestDistance) { best = i; bestDistance = d; } });
+    return best;
+  }
+  function nearestSegment(event) {
+    const p = toImage(event.clientX, event.clientY);
+    let best = -1, bestDistance = 6 / view.scale;
+    for (let i = 0; i + 1 < trace.points.length; i++) {
+      const [ax, ay] = trace.points[i], [bx, by] = trace.points[i + 1], dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+      const d = Math.hypot(ax + t * dx - p.x, ay + t * dy - p.y);
+      if (d <= bestDistance) { best = i; bestDistance = d; }
+    }
+    return best;
   }
   function removePoint() { if (trace?.points.length) { trace.points.pop(); trace.preview = null; renderTrace(); draw(); } }
   function discardPreview() { if (trace) { trace.preview = null; renderTrace(); draw(); } }
@@ -367,7 +428,9 @@ const bodyFields = (() => {
     g.imageSmoothingEnabled = false;
     g.drawImage(baseCanvas, 0, 0);
     const layer = name => layers.find(l => l.id === name);
-    const shown = trace?.preview ? {...overlays, ...trace.preview._overlays} : overlays;
+    const proposal = detail.proposal, proposalLayer = layer("proposal");
+    const shown = trace?.preview ? {...overlays, ...trace.preview._overlays}
+      : proposal && layer("proposal_ap").on ? {...overlays, ...proposal._overlays} : overlays;
     for (const name of ["mask", "ap", "overlap"]) {
       const l = layer(name);
       if (l.on && shown[name]) { g.globalAlpha = l.alpha; g.drawImage(shown[name], 0, 0); }
@@ -399,6 +462,18 @@ const bodyFields = (() => {
         g.lineWidth = 2 * line; g.strokeStyle = "rgb(60,220,255)"; g.stroke();
       }
     }
+    if (proposal && proposalLayer.on && !trace?.preview) {
+      g.globalAlpha = proposalLayer.alpha * (trace ? 0.5 : 1); g.strokeStyle = PROPOSAL; g.lineWidth = 2 * line; g.setLineDash([2 * line, 3 * line]);
+      path(g, tubePolygon(proposal.centerline_xy, proposal.width_profile), true); g.stroke(); g.setLineDash([]);
+      const radius = Math.max(3, proposal.diameter_px * 0.3);
+      for (const [point, colour] of [[proposal.head_xy, "#33ff33"], [proposal.tail_xy, "#ff4444"]]) {
+        if (!point) continue; // end off camera
+        g.beginPath(); g.arc(point[0], point[1], radius, 0, Math.PI * 2); g.fillStyle = colour; g.fill();
+        g.lineWidth = 2 * line; g.strokeStyle = PROPOSAL; g.stroke();
+      }
+      if (!trace) for (const [x, y] of proposal.trace_xy) { g.beginPath(); g.arc(x, y, 3 * line, 0, Math.PI * 2); g.fillStyle = PROPOSAL; g.fill(); }
+      g.globalAlpha = 1;
+    }
     const stored = layer("trace");
     if (trace) drawPoints(g, trace.points, 1, line, true);
     else if (stored.on && detail.trace_xy) drawPoints(g, detail.trace_xy, stored.alpha, line, false);
@@ -429,8 +504,9 @@ const bodyFields = (() => {
     if (x < 0 || y < 0 || x >= detail.width || y >= detail.height) { node("bf-readout").textContent = ""; return; }
     const i = y * detail.width + x, bits = [`x ${x} y ${y}`];
     bits.push({255: "worm", 128: "ignore", 0: "background"}[detail._mask[i]] || "");
-    const apValues = trace?.preview?._ap || detail._ap;
-    if (apValues && apValues[i]) bits.push(`${trace?.preview ? "preview " : ""}A-P ${((apValues[i] - 1) / 254).toFixed(3)}`);
+    const proposalAp = !trace?.preview && detail.proposal && layers.find(l => l.id === "proposal_ap").on ? detail.proposal._ap : null;
+    const apValues = trace?.preview?._ap || proposalAp || detail._ap;
+    if (apValues && apValues[i]) bits.push(`${trace?.preview ? "preview " : proposalAp ? "proposal " : ""}A-P ${((apValues[i] - 1) / 254).toFixed(3)}`);
     if (detail._overlap && detail._overlap[i]) bits.push("overlap");
     if (context && mode === "difference") { const L = maxLag(); bits.push(`Δ ${context.gray[L + lag][i] - context.gray[L - lag][i]}`); }
     node("bf-readout").textContent = bits.filter(Boolean).join(" · ");
@@ -458,7 +534,7 @@ const bodyFields = (() => {
     // While tracing only the trace keys and the view keys act, so a stray key cannot leave the sample.
     const tracing = {t: toggleTrace, escape: () => { setTrace(null); status(""); }, backspace: removePoint, enter: () => fitTrace(), ...viewKeys};
     const actions = trace ? tracing : {
-      t: toggleTrace,
+      t: toggleTrace, g: () => !node("bf-proposal-accept").disabled && acceptProposal(),
       n: () => step(1), p: () => step(-1), h: () => !node("bf-flip").disabled && flip(),
       a: () => !node("bf-review-accepted").disabled && review("accepted"), r: () => !node("bf-review-rejected").disabled && review("rejected"),
       ...viewKeys, space: togglePlay,
@@ -470,14 +546,15 @@ const bodyFields = (() => {
   }
   function init() {
     renderLayers();
-    for (const n of ["bf-split", "bf-orientation", "bf-method", "bf-review", "bf-status", "bf-contact"]) node(n).onchange = refresh;
+    for (const n of ["bf-split", "bf-orientation", "bf-method", "bf-proposal", "bf-review", "bf-status", "bf-contact"]) node(n).onchange = refresh;
     for (const n of ["bf-min-iou", "bf-max-iou"]) node(n).onchange = refresh;
     node("bf-refresh").onclick = refresh;
     node("bf-prev").onclick = () => step(-1); node("bf-next").onclick = () => step(1);
     node("bf-flip").onclick = flip; node("bf-rebuild").onclick = rebuild; node("bf-edit-mask").onclick = editMask;
     node("bf-trace").onclick = toggleTrace; node("bf-trace-fit").onclick = () => fitTrace(); node("bf-trace-drawn").onclick = () => fitTrace(true);
     node("bf-trace-undo").onclick = removePoint; node("bf-trace-cancel").onclick = () => { setTrace(null); status(""); };
-    node("bf-trace-accept").onclick = acceptTrace; node("bf-trace-discard").onclick = discardPreview;
+    node("bf-trace-accept").onclick = acceptTrace;
+    node("bf-proposal-accept").onclick = acceptProposal; node("bf-proposal-edit").onclick = editProposal; node("bf-propose").onclick = propose; node("bf-trace-discard").onclick = discardPreview;
     for (const button of document.querySelectorAll("[data-bf-review]")) button.onclick = () => review(button.dataset.bfReview);
     for (const input of document.querySelectorAll("input[name=bf-mode]")) input.onchange = () => setMode(input.value);
     node("bf-offset").oninput = e => setOffset(Number(e.target.value));
@@ -494,16 +571,30 @@ const bodyFields = (() => {
       view.tx = event.clientX - rect.left - before.x * view.scale; view.ty = event.clientY - rect.top - before.y * view.scale;
       draw();
     }, {passive: false});
-    c.addEventListener("pointerdown", event => { drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, button: event.button}; c.setPointerCapture(event.pointerId); });
+    c.addEventListener("pointerdown", event => {
+      // In trace mode a left press on a point drags that point; any other press pans.
+      const grabbed = trace && event.button === 0 && !busy ? nearestPoint(event) : -1;
+      drag = {x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, button: event.button, point: grabbed, moved: false};
+      c.setPointerCapture(event.pointerId);
+    });
     c.addEventListener("pointermove", event => {
-      if (drag) { view.tx += event.clientX - drag.x; view.ty += event.clientY - drag.y; drag = {x: event.clientX, y: event.clientY}; draw(); }
+      if (drag && drag.point >= 0) {
+        const p = toImage(event.clientX, event.clientY);
+        trace.points[drag.point] = [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10]; trace.preview = null; drag.moved = true;
+        renderTrace(); draw();
+      } else if (drag) { view.tx += event.clientX - drag.x; view.ty += event.clientY - drag.y; drag.x = event.clientX; drag.y = event.clientY; draw(); }
       else readout(event);
     });
     // In trace mode a left click that did not pan adds a point; dragging still pans.
     c.addEventListener("pointerup", event => {
-      if (trace && drag && drag.button === 0 && !busy && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) addPoint(toImage(event.clientX, event.clientY));
+      const click = drag && !drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4;
+      if (trace && click && !busy) {
+        if (drag.button === 0 && drag.point < 0) addPoint(toImage(event.clientX, event.clientY), nearestSegment(event));
+        else if (drag.button === 2) { const hit = nearestPoint(event); if (hit >= 0) { trace.points.splice(hit, 1); trace.preview = null; renderTrace(); draw(); } }
+      }
       drag = null;
     });
+    c.addEventListener("contextmenu", event => { if (trace) event.preventDefault(); });
     for (const name of ["pointercancel", "lostpointercapture"]) c.addEventListener(name, () => { drag = null; });
     c.addEventListener("dblclick", () => { if (!trace) { fitView(); draw(); } });
     new ResizeObserver(resize).observe(c);
@@ -519,5 +610,5 @@ const bodyFields = (() => {
     else if (rows.length) await open(rows[0].sample_id);
   }
   return {init, show, refresh, open, flip, review, rebuild, step, setMode, setOffset, setLag, toggleTrace, fitTrace, acceptTrace,
-    trace: () => trace, current: () => detail, layers};
+    acceptProposal, propose, editProposal, trace: () => trace, current: () => detail, layers};
 })();
