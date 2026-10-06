@@ -1,0 +1,301 @@
+{
+ "name": "labeling_round_3_contact",
+ "description": "Held-out self-contact frames for evaluating the body-field network: closed loops, the head lying along or across the body, and tight coils, one frame per event, from the five recordings whose animals appear only in validation or test. Picked by eye from the round-2 clip-candidate frames flagged for enclosed holes or a short skeleton (contact_sheet.jpg).",
+ "candidates_dir": "docs/pose_pipeline_step4/clip_candidates",
+ "recordings": {
+  "2023-09-07-13": {
+   "path": "/store1/shared/all_data_raw/prj_aversion/2023-09-07/2023-09-07-13.h5",
+   "split": "val"
+  },
+  "2023-10-26-01": {
+   "path": "/store1/shared/all_data_raw/prj_aversion/2023-10-26/2023-10-26-01.h5",
+   "split": "test"
+  },
+  "2024-02-01-07": {
+   "path": "/store1/shared/all_data_raw/prj_aversion/2024-02-01/2024-02-01-07.h5",
+   "split": "val"
+  },
+  "2024-05-28-02": {
+   "path": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+   "split": "test"
+  },
+  "2024-06-18-12": {
+   "path": "/store1/shared/all_data_raw/prj_aversion/2024-06-18/2024-06-18-12.h5",
+   "split": "test"
+  }
+ },
+ "frames": [
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 520,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 940,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 1780,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 2940,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 4000,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 7140,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 12420,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-09-07-13",
+   "frame_index": 13100,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 400,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 1980,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 5220,
+   "reasons": [
+    "self_contact",
+    "window:holes"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 5660,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 6700,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 8780,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 8980,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 9480,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 14740,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 15560,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 17800,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 17920,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-02-01-07",
+   "frame_index": 18100,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2023-10-26-01",
+   "frame_index": 11400,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 1310,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 3240,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 8960,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 9080,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 13840,
+   "reasons": [
+    "self_contact",
+    "window:holes"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 15350,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-05-28-02",
+   "frame_index": 17250,
+   "reasons": [
+    "self_contact",
+    "window:holes"
+   ]
+  },
+  {
+   "recording": "2024-06-18-12",
+   "frame_index": 1760,
+   "reasons": [
+    "self_contact",
+    "window:fragments,holes"
+   ]
+  },
+  {
+   "recording": "2024-06-18-12",
+   "frame_index": 3660,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-06-18-12",
+   "frame_index": 8160,
+   "reasons": [
+    "self_contact",
+    "window:holes"
+   ]
+  },
+  {
+   "recording": "2024-06-18-12",
+   "frame_index": 14080,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  },
+  {
+   "recording": "2024-06-18-12",
+   "frame_index": 17340,
+   "reasons": [
+    "self_contact",
+    "window:holes,short_skeleton"
+   ]
+  }
+ ]
+}

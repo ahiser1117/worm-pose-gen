@@ -61,15 +61,26 @@ class _UpBlock(nn.Module):
 
 
 class ResNet18UNet(nn.Module):
-    """ResNet-18 encoder (ImageNet weights) with a light U-Net decoder."""
+    """ResNet-18 encoder (ImageNet weights) with a light U-Net decoder.
 
-    def __init__(self, pretrained: bool = True) -> None:
+    Channel 0 of the input is the frame; the stem's pretrained filters are
+    summed onto it.  Any further input channels (temporal differences) start
+    with zero stem weights, so an untrained model sees exactly what the
+    single-frame segmenter sees and learns how much to use them.
+    ``final_channels`` is the width of the full-resolution features the
+    output convolution reads; a model with several outputs needs more than
+    the segmenter's 16.
+    """
+
+    def __init__(self, pretrained: bool = True, in_channels: int = 1, out_channels: int = 1, final_channels: int = 16) -> None:
         super().__init__()
         weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = torchvision.models.resnet18(weights=weights)
-        stem = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.in_channels = in_channels
+        stem = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
         with torch.no_grad():
-            stem.weight.copy_(backbone.conv1.weight.sum(dim=1, keepdim=True))
+            stem.weight.zero_()
+            stem.weight[:, :1].copy_(backbone.conv1.weight.sum(dim=1, keepdim=True))
         self.stem = nn.Sequential(stem, backbone.bn1, backbone.relu)
         self.pool = backbone.maxpool
         self.layer1 = backbone.layer1
@@ -80,8 +91,8 @@ class ResNet18UNet(nn.Module):
         self.up3 = _UpBlock(256, 128, 128)
         self.up2 = _UpBlock(128, 64, 64)
         self.up1 = _UpBlock(64, 64, 32)
-        self.up0 = _UpBlock(32, 1, 16)
-        self.head = nn.Conv2d(16, 1, kernel_size=1)
+        self.up0 = _UpBlock(32, in_channels, final_channels)
+        self.head = nn.Conv2d(final_channels, out_channels, kernel_size=1)
 
     def encoder_parameters(self) -> list[nn.Parameter]:
         modules = (self.stem, self.layer1, self.layer2, self.layer3, self.layer4)
@@ -92,8 +103,8 @@ class ResNet18UNet(nn.Module):
         return [parameter for module in modules for parameter in module.parameters()]
 
     def forward(self, x: Tensor) -> Tensor:
-        if x.ndim != 4 or x.shape[1] != 1:
-            raise ValueError("input must have shape [B,1,H,W]")
+        if x.ndim != 4 or x.shape[1] != self.in_channels:
+            raise ValueError(f"input must have shape [B,{self.in_channels},H,W]")
         height, width = x.shape[-2:]
         pad_h = (-height) % PAD_MULTIPLE
         pad_w = (-width) % PAD_MULTIPLE
