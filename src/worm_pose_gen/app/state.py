@@ -16,6 +16,7 @@ from typing import Any
 import torch
 
 from ..jobs import JobRunner, LocalGPUBackend
+from ..library import Libraries
 from ..pose_viewer import ViewerState
 from ..pipeline import WorkspaceBusy, workspace_dataset
 from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
@@ -64,6 +65,7 @@ class AppState:
         self._lock = threading.Lock()
         self._recordings_lock = threading.Lock()
         self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
+        self.libraries = Libraries(config.lab_library, config.library)
         from .labeling import LabelingService
         self.labeling = LabelingService(self)
         # A label group the launcher opened (``worm-pose-labeler --queue``); the UI starts in Paint on it.

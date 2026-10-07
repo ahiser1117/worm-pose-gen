@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..jobs import REPO_ROOT
+from ..library.roots import default_lab_root, default_personal_root
 from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
 from ..recordings import DEFAULT_PRIOR_CACHE, DEFAULT_RECORDING_ROOTS
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -44,6 +45,9 @@ class AppConfig:
     max_concurrent: int | None = None
     job_interval: float = 1.0
     extra_runs: tuple[Path, ...] = field(default_factory=tuple)
+    # The lab library (read-only; None: the host's, from library.LAB_LIBRARY_BY_HOST) and the personal one (None: the host default).
+    lab_library: Path | None = None
+    library: Path | None = None
 
     def __post_init__(self) -> None:
         self.workspaces_root = Path(self.workspaces_root)
@@ -60,6 +64,8 @@ class AppConfig:
         self.jobs_root = self.workspaces_root if self.jobs_root is None else Path(self.jobs_root)
         self.recordings_cache = self.workspaces_root / "recordings_index.json" if self.recordings_cache is None else Path(self.recordings_cache)
         self.extra_runs = tuple(Path(p) for p in self.extra_runs)
+        self.lab_library = default_lab_root() if self.lab_library is None else Path(self.lab_library)
+        self.library = default_personal_root() if self.library is None else Path(self.library)
 
     @property
     def viewer_device(self) -> str | None:
