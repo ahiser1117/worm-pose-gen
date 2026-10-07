@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from collections import Counter
 import json
 import tempfile
 import unittest
 
 import numpy as np
-import torch
 
 from worm_pose_gen.segmentation_dataset import (
     SPLITS,
-    SegmentationDataModule,
-    SegmentationDataset,
     SegmentationStore,
     assign_split,
     make_sample_id,
-    matches_label_filter,
 )
 
 
@@ -100,42 +95,6 @@ class SegmentationDatasetTests(unittest.TestCase):
             self.assertEqual({k: v for k, v in registry.items() if k in expected}, expected)
             self.assertIn(make_sample_id("rec", 12), registry)
 
-    def test_train_label_filter_restricts_training_only(self) -> None:
-        self.assertTrue(matches_label_filter("bootstrap_classical", "bootstrap"))
-        self.assertFalse(matches_label_filter("bootstrap_classical", "manual"))
-        self.assertTrue(matches_label_filter("network+manual", "manual"))
-        self.assertTrue(matches_label_filter("network+manual", "all"))
-        with self.assertRaisesRegex(ValueError, "unknown label filter"):
-            matches_label_filter("x", "nope")
-        with tempfile.TemporaryDirectory() as directory:
-            store = SegmentationStore(directory)
-            image, mask = _sample(0)
-            for index in range(12):
-                source = "network+manual" if index % 3 == 0 else "bootstrap_classical"
-                store.save("rec", index, image, mask, source_path="/x.h5", label_source=source)
-            module = SegmentationDataModule(directory, batch_size=2, crop_size=32, num_workers=0, train_label_filter="manual")
-            module.setup()
-            self.assertTrue(all("manual" in r.label_source for d in module.train_set.datasets for r in d.records))
-            self.assertEqual(len(module.train_records()), len(module.train_set))
-            self.assertLess(len(module.train_set), store.counts()["train"])
-            self.assertEqual(len(module.val_set) + len(module.test_set), 2)  # held-out splits are unfiltered
-
-    def test_data_module_unions_several_stores(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            image, mask = _sample(0)
-            for name, count in (("a", 6), ("b", 4)):
-                store = SegmentationStore(f"{directory}/{name}")
-                for index in range(count):
-                    store.save(name, index, image, mask, source_path="/x.h5", label_source="network+manual")
-            module = SegmentationDataModule([f"{directory}/a", f"{directory}/b"], batch_size=2, crop_size=32, num_workers=0)
-            module.setup()
-            self.assertEqual(len(module.stores), 2)
-            self.assertEqual(sum(module.counts().values()), 10)
-            self.assertEqual(len(module.train_set), module.counts()["train"])
-            self.assertEqual(len(module.train_records()), len(module.train_set))
-            self.assertEqual(len(module.val_set) + len(module.test_set), 10 - module.counts()["train"])
-            self.assertEqual({r.recording for r in module.train_records()}, {"a", "b"})
-
     def test_store_rejects_bad_masks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SegmentationStore(directory)
@@ -144,29 +103,6 @@ class SegmentationDatasetTests(unittest.TestCase):
                 store.save("rec", 0, image, mask.astype(np.int32) + 3, source_path="/x", label_source="t")
             with self.assertRaisesRegex(ValueError, "shapes must match"):
                 store.save("rec", 0, image, mask[:10], source_path="/x", label_source="t")
-
-    def test_datasets_and_datamodule_produce_batches(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            store = SegmentationStore(directory)
-            for index in range(12):
-                image, mask = _sample(index)
-                store.save("rec", index, image, mask, source_path="/x.h5", label_source="bootstrap")
-            counts = store.counts()
-            self.assertEqual(counts, {"train": 10, "val": 1, "test": 1})
-            train = SegmentationDataset(store, "train", augment=True, crop_size=32, seed=1)
-            item = train[0]
-            self.assertEqual(tuple(item["image"].shape), (1, 32, 32))
-            self.assertEqual(tuple(item["mask"].shape), (32, 32))
-            self.assertTrue(torch.all((item["valid"] == 0) | (item["valid"] == 1)))
-            module = SegmentationDataModule(directory, batch_size=4, crop_size=32, num_workers=0)
-            module.setup()
-            batch = next(iter(module.train_dataloader()))
-            self.assertEqual(tuple(batch["image"].shape), (4, 1, 32, 32))
-            val_batch = next(iter(module.val_dataloader()))
-            self.assertEqual(tuple(val_batch["image"].shape[-2:]), (48, 64))
-            self.assertIsInstance(batch["sample_id"], list)
-            splits = Counter(record.split for record in store.records())
-            self.assertEqual(splits["train"], 10)
 
 
 if __name__ == "__main__":

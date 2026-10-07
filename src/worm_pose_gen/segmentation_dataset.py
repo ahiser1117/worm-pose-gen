@@ -1,4 +1,4 @@
-"""On-disk store and Lightning data module for worm segmentation labels.
+"""The old on-disk store of worm segmentation labels (``segmentation_v1`` and the app corpus).
 
 One sample is one ``.npz`` file under ``<root>/samples/`` holding the frame
 the network sees (``image``, flat-fielded uint8), the original frame
@@ -12,6 +12,10 @@ proportions hold even for a small set.  The assignment is pledged in
 deleting the sample, or labeling the same frame again later all keep the
 pledged split, so a frame that has ever been validation or test can never
 enter the training set.
+
+Models are no longer trained from this store: its labels were migrated into
+the library (``scripts/migrate_to_library.py``), which training and
+evaluation read (:mod:`model_training`, :mod:`model_eval`).
 """
 
 from __future__ import annotations
@@ -22,37 +26,22 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Iterator, Sequence
+from typing import Any
 
-import lightning as L
 import numpy as np
 from numpy.typing import NDArray
-import torch
-from torch import Tensor
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 from .library.datasets import SPLITS, assign_split
-from .segmenter import IGNORE_LABEL, normalize_frame
+from .segmenter import IGNORE_LABEL
 
 
 DEFAULT_DATASET_ROOT = Path(
     "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1"
 )
-LABEL_FILTERS = ("all", "bootstrap", "manual")
 
 
 def is_hand_labeled(label_source: str) -> bool:
     return "manual" in label_source
-
-
-def matches_label_filter(label_source: str, label_filter: str) -> bool:
-    """``all`` keeps everything; ``bootstrap`` and ``manual`` keep one origin."""
-
-    if label_filter not in LABEL_FILTERS:
-        raise ValueError(f"unknown label filter {label_filter!r}; expected one of {LABEL_FILTERS}")
-    if label_filter == "all":
-        return True
-    return is_hand_labeled(label_source) == (label_filter == "manual")
 
 
 def make_sample_id(recording: str, frame_index: int) -> str:
@@ -265,161 +254,3 @@ class SegmentationStore:
             if path.exists():
                 path.unlink()
         return True
-
-
-def _augment(image: NDArray[np.float32], mask: NDArray[np.uint8], rng: np.random.Generator, crop: int | None) -> tuple[NDArray[np.float32], NDArray[np.uint8]]:
-    height, width = image.shape
-    if crop is not None and (height > crop or width > crop):
-        size_h, size_w = min(crop, height), min(crop, width)
-        # Bias half the crops toward the worm so thin structures are seen often.
-        foreground = np.argwhere(mask == 1)
-        if len(foreground) and rng.random() < 0.5:
-            center_y, center_x = foreground[rng.integers(len(foreground))]
-            y0 = int(np.clip(center_y - size_h // 2 + rng.integers(-size_h // 4, size_h // 4 + 1), 0, height - size_h))
-            x0 = int(np.clip(center_x - size_w // 2 + rng.integers(-size_w // 4, size_w // 4 + 1), 0, width - size_w))
-        else:
-            y0 = int(rng.integers(0, height - size_h + 1))
-            x0 = int(rng.integers(0, width - size_w + 1))
-        image = image[y0 : y0 + size_h, x0 : x0 + size_w]
-        mask = mask[y0 : y0 + size_h, x0 : x0 + size_w]
-    if rng.random() < 0.5:
-        image, mask = image[:, ::-1], mask[:, ::-1]
-    if rng.random() < 0.5:
-        image, mask = image[::-1, :], mask[::-1, :]
-    if image.shape[0] == image.shape[1] and rng.random() < 0.5:
-        image, mask = np.rot90(image), np.rot90(mask)
-    gain = float(rng.uniform(0.8, 1.2))
-    offset = float(rng.uniform(-20.0, 20.0))
-    image = np.clip(image * gain + offset, 0.0, 255.0)
-    if rng.random() < 0.5:
-        image = np.clip(image + rng.normal(0.0, float(rng.uniform(1.0, 6.0)), image.shape), 0.0, 255.0)
-    return np.ascontiguousarray(image, dtype=np.float32), np.ascontiguousarray(mask)
-
-
-class SegmentationDataset(Dataset[dict[str, Tensor | str]]):
-    def __init__(
-        self,
-        store: SegmentationStore,
-        split: str,
-        *,
-        augment: bool = False,
-        crop_size: int | None = None,
-        seed: int = 0,
-        label_filter: str = "all",
-    ) -> None:
-        self.store = store
-        self.records = [r for r in store.records(split) if matches_label_filter(r.label_source, label_filter)]
-        self.augment = augment
-        self.crop_size = crop_size
-        self.seed = seed
-
-    def __len__(self) -> int:
-        return len(self.records)
-
-    def __getitem__(self, index: int) -> dict[str, Tensor | str]:
-        record = self.records[index]
-        image, mask, _ = self.store.load(record.sample_id)
-        frame = image.astype(np.float32)
-        if self.augment:
-            rng = np.random.default_rng((self.seed, index, int(torch.initial_seed()) % (1 << 31)))
-            frame, mask = _augment(frame, mask, rng, self.crop_size)
-        valid = mask != IGNORE_LABEL
-        return {
-            "image": normalize_frame(frame),
-            "mask": torch.as_tensor((mask == 1).astype(np.float32)),
-            "valid": torch.as_tensor(valid.astype(np.float32)),
-            "sample_id": record.sample_id,
-        }
-
-
-class SegmentationDataModule(L.LightningDataModule):
-    def __init__(
-        self,
-        roots: str | Path | Sequence[str | Path] = DEFAULT_DATASET_ROOT,
-        *,
-        batch_size: int = 4,
-        crop_size: int | None = 512,
-        num_workers: int = 4,
-        seed: int = 0,
-        train_label_filter: str = "all",
-        pad_batches: bool = False,
-    ) -> None:
-        """Train, validate, and test on the union of the stores at ``roots``;
-        each store keeps its own splits.  ``train_label_filter`` restricts the
-        training split only; validation and test always use every label they
-        hold."""
-
-        super().__init__()
-        self.stores = [SegmentationStore(r) for r in ([roots] if isinstance(roots, (str, Path)) else roots)]
-        self.batch_size = batch_size
-        self.crop_size = crop_size
-        self.num_workers = num_workers
-        self.seed = seed
-        self.train_label_filter = train_label_filter
-        self.pad_batches = pad_batches
-
-    def counts(self) -> dict[str, int]:
-        result = {name: 0 for name in SPLITS}
-        for store in self.stores:
-            for name, value in store.counts().items():
-                result[name] += value
-        return result
-
-    def train_records(self) -> list[SampleRecord]:
-        return [
-            r for store in self.stores for r in store.records("train")
-            if matches_label_filter(r.label_source, self.train_label_filter)
-        ]
-
-    def setup(self, stage: str | None = None) -> None:
-        self.train_set = ConcatDataset([
-            SegmentationDataset(
-                store, "train", augment=True, crop_size=self.crop_size, seed=self.seed, label_filter=self.train_label_filter,
-            )
-            for store in self.stores
-        ])
-        self.val_set = ConcatDataset([SegmentationDataset(store, "val") for store in self.stores])
-        self.test_set = ConcatDataset([SegmentationDataset(store, "test") for store in self.stores])
-
-    def _loader(self, dataset: Dataset[Any], shuffle: bool, batch_size: int) -> DataLoader[Any]:
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available(),
-            persistent_workers=self.num_workers > 0,
-            collate_fn=collate_segmentation if self.pad_batches else None,
-        )
-
-    def train_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.train_set, True, self.batch_size)
-
-    def val_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.val_set, False, max(1, self.batch_size // 2))
-
-    def test_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.test_set, False, max(1, self.batch_size // 2))
-
-
-def iter_split(store: SegmentationStore, split: str) -> Iterator[tuple[NDArray[np.uint8], NDArray[np.uint8], SampleRecord]]:
-    for record in store.records(split):
-        yield store.load(record.sample_id)
-
-
-def collate_segmentation(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Pad mixed recording sizes; padded pixels contribute no loss or metric.
-
-    A minimum of 64 pixels keeps the encoder's deepest batch normalization
-    valid even for a single small training example.
-    """
-    height = max(64, max(s["mask"].shape[-2] for s in samples))
-    width = max(64, max(s["mask"].shape[-1] for s in samples))
-    height, width = ((height + 31) // 32) * 32, ((width + 31) // 32) * 32
-    result = {"sample_id": [s["sample_id"] for s in samples]}
-    for name in ("image", "mask", "valid"):
-        result[name] = torch.stack([
-            torch.nn.functional.pad(s[name], (0, width - s[name].shape[-1], 0, height - s[name].shape[-2]))
-            for s in samples
-        ])
-    return result
