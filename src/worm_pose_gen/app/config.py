@@ -1,25 +1,21 @@
 """Configuration of the pose app: roots, hardware, and where its own files go.
 
 One dataclass so ``create_app`` can be called from tests with temporary
-directories and from ``main`` with the command line; every path has the
-project's default so a bare ``worm-pose-app`` serves the lab's recordings,
-runs and workspaces.
+directories and from ``main`` with the command line.  Recordings and models
+come from the libraries (a setup's recording roots and default models), so
+the configuration only says where the libraries, the workspaces and the
+flat-field cache are, and which hardware jobs and the server's own models
+use.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from ..jobs import REPO_ROOT
 from ..library.roots import default_lab_root, default_personal_root
-from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
-from ..recordings import DEFAULT_PRIOR_CACHE, DEFAULT_RECORDING_ROOTS
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
 from ..workspace import DEFAULT_WORKSPACES_ROOT
-
-# The body-field network Body fields proposes traces with.
-DEFAULT_BODY_NET = REPO_ROOT / "checkpoints" / "body_net" / "best.ckpt"
 
 
 @dataclass
@@ -29,21 +25,14 @@ class AppConfig:
     host: str = "127.0.0.1"
     port: int = 8768
     workspaces_root: Path = DEFAULT_WORKSPACES_ROOT
-    recording_roots: tuple[Path, ...] = tuple(DEFAULT_RECORDING_ROOTS)
-    poses_root: Path = DEFAULT_RUNS_ROOT
+    # Where the per-recording flat fields are cached (``<dataset_root>/flat_fields``).
     dataset_root: Path = DEFAULT_DATASET_ROOT
-    corpus_root: Path | None = None
-    checkpoint: Path | None = DEFAULT_CHECKPOINT
-    body_net: Path | None = DEFAULT_BODY_NET
-    prior_cache: Path | None = DEFAULT_PRIOR_CACHE
-    notes: Path = DEFAULT_NOTES
     gpus: tuple[int, ...] = (0,)
     device: str | None = None
     jobs_root: Path | None = None
     recordings_cache: Path | None = None
     max_concurrent: int | None = None
     job_interval: float = 1.0
-    extra_runs: tuple[Path, ...] = field(default_factory=tuple)
     # The lab library (read-only; None: the host's, from library.LAB_LIBRARY_BY_HOST) and the personal one (None: the host default).
     lab_library: Path | None = None
     library: Path | None = None
@@ -52,24 +41,16 @@ class AppConfig:
 
     def __post_init__(self) -> None:
         self.workspaces_root = Path(self.workspaces_root)
-        self.recording_roots = tuple(Path(p) for p in self.recording_roots)
-        self.poses_root = Path(self.poses_root)
         self.dataset_root = Path(self.dataset_root)
-        self.corpus_root = self.workspaces_root / "corpus" if self.corpus_root is None else Path(self.corpus_root)
-        self.checkpoint = None if self.checkpoint is None else Path(self.checkpoint)
-        self.body_net = None if self.body_net is None else Path(self.body_net)
-        self.prior_cache = None if self.prior_cache is None else Path(self.prior_cache)
-        self.notes = Path(self.notes)
         self.gpus = tuple(int(g) for g in self.gpus)
         self.jobs_root = self.workspaces_root if self.jobs_root is None else Path(self.jobs_root)
         self.recordings_cache = self.workspaces_root / "recordings_index.json" if self.recordings_cache is None else Path(self.recordings_cache)
-        self.extra_runs = tuple(Path(p) for p in self.extra_runs)
         self.lab_library = default_lab_root() if self.lab_library is None else Path(self.lab_library)
         self.library = default_personal_root() if self.library is None else Path(self.library)
 
     @property
-    def viewer_device(self) -> str | None:
-        """The device the server's own segmenter runs on: the first job GPU unless told otherwise."""
+    def server_device(self) -> str | None:
+        """The device of the server's own models (frame layers, Labeling proposals): the first job GPU unless told otherwise."""
 
         if self.device is not None:
             return self.device

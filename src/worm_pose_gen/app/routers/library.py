@@ -9,7 +9,7 @@ default model.  A write that names a lab item is refused with 403, since
 the app never writes the lab library.
 
 Images go to the browser as PNG data URLs: a mask as 0 background, 255
-worm, 128 excluded from the loss (:func:`label_app.mask_to_png_values`), and
+worm, 128 excluded from the loss (:func:`app.images.mask_to_png_values`), and
 the A-P field as 0 (undefined) or ``1 + round(254 * ap)``.
 """
 
@@ -24,7 +24,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from . import get_state
 from ... import library
-from ...label_app import data_url, decode_mask_data_url, mask_to_png_values
+from ..images import data_url, decode_mask_data_url, mask_to_png_values
 from ...recordings import list_recordings
 from ..state import AppState, NotFound, _integer
 
@@ -100,10 +100,7 @@ def setup_recordings(ref: str, app: AppState = Depends(get_state)) -> dict[str, 
     with _found():
         setup = library.get_setup(libraries, ref)
         sources = library.recording_sources(libraries, ref)
-    infos = list_recordings(
-        sources, poses_root=None, workspaces_root=app.config.workspaces_root, prior_cache=app.config.prior_cache,
-        cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]),
-    )
+    infos = list_recordings(sources, cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]))
     registered = library.setups.registered_recordings(libraries)
     rows = []
     for info in infos:

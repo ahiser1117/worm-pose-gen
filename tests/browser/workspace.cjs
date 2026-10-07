@@ -1,6 +1,6 @@
 // The Workspace page end to end on a synthetic CPU app (tests/browser/workspace_fixture.py):
-// Recordings -> Analyse -> issues -> Looks OK -> Flip -> Refit (preview, Keep) -> Undo ->
-// Edit mask (Save refits and keeps) -> Relabel round trip -> Export.
+// Recordings -> Analyse -> issues (and the left panel's layout with many of them) -> Looks OK ->
+// Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> Export.
 // Run from the repository root: node tests/browser/workspace.cjs
 // Environment: PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE (and LD_LIBRARY_PATH for its libraries) when
 // not installed in the default places; PYTHON (default .venv/bin/python); WS_SHOTS, a directory
@@ -76,6 +76,39 @@ const WS = '2026-03-14-01';
     await sleep(1500);
     await shot('03-issues');
 
+    // A real recording has dozens of issues: the list scrolls inside its panel, and the fix panel (here the
+    // mask tools) and the Fixes list stay in view in a smaller window, with no scrolling of the panel or page.
+    const real = await get(`/api/workspaces/${WS}/issues`);
+    const many = Array.from({length: 25}, (_, k) => ({...real.issues[k % real.issues.length], id: `many-${k}`}));
+    const manyIssues = `**/api/workspaces/${WS}/issues`;
+    await page.route(manyIssues, (route) => (route.request().method() === 'GET'
+      ? route.fulfill({json: {...real, issues: many, summary: {...real.summary, issues: 25, done: 0}}}) : route.continue()));
+    await page.setViewportSize({width: 1280, height: 720});
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll('.ws-issue').length === 25);
+    await page.keyboard.press('e');
+    await page.waitForSelector('.ws-mask-tools');
+    const layout = await page.evaluate(() => {
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const left = document.querySelector('.ws-left'), list = document.querySelector('.ws-issue-list');
+      return {
+        page: document.scrollingElement.scrollHeight - window.innerHeight, panel: left.scrollHeight - left.clientHeight,
+        listScrolls: list.scrollHeight > list.clientHeight + 1, leftBottom: box('.ws-left').bottom,
+        save: box('.ws-mask-tools button.primary').bottom, fixes: box('.ws-fixes .ws-panel-head').bottom, nav: box('.ws-issue-nav').bottom,
+      };
+    });
+    await shot('03b-many-issues');
+    assert.ok(layout.page <= 0, `the page scrolls: ${JSON.stringify(layout)}`);
+    assert.ok(layout.panel <= 1, `the left panel scrolls: ${JSON.stringify(layout)}`);
+    assert.ok(layout.listScrolls, `the issue list does not scroll: ${JSON.stringify(layout)}`);
+    for (const key of ['save', 'fixes', 'nav']) assert.ok(layout[key] <= layout.leftBottom, `${key} is out of view: ${JSON.stringify(layout)}`);
+    await page.keyboard.press('Escape');
+    await page.unroute(manyIssues);
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.reload();
+    await page.waitForSelector('.ws-issue', {timeout: 30000});
+    await sleep(1000);
+
     // The first issue to review is selected; Looks OK reviews it and moves on.
     const before = await issueSummary();
     assert.ok(before.issues >= 1, JSON.stringify(before));
@@ -132,7 +165,7 @@ const WS = '2026-03-14-01';
     await page.route('**/api/queues/q-test/stitch', async (route) => {
       const keyframes = [];
       for (const frame of queued.frames) {
-        const {pose} = await get(`/api/workspaces/${WS}/pose?frame=${frame}`);
+        const {pose} = await get(`/api/workspaces/${WS}/frame?frame=${frame}&detail=light`);
         keyframes.push({frame, centerline_xy: pose.centerline_xy, width_profile: pose.width_profile});
       }
       const response = await page.request.post(`${base}/api/workspaces/${WS}/fixes/stitch`, {data: {keyframes}});

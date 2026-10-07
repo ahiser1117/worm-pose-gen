@@ -1,22 +1,34 @@
-"""Reversible workspace mask overrides, using the labeler's PNG encoding."""
+"""Edit mask on the Workspace page: a frame's mask to paint on, and saving it as a reversible override (``app/images`` PNG encoding).
+
+``GET /api/workspaces/{name}/mask?frame=`` answers with the frame, its
+current mask (the override, else the stored mask) and the network's
+proposal; ``POST`` ``{frame, mask, revision}`` saves the override as one
+``set_mask`` edit (Undo in the fixes list removes it) and answers like an
+edit, plus the frame's new mask payload.
+"""
+
 from __future__ import annotations
 
 from typing import Any
+
 from fastapi import APIRouter, Body, Depends
+
 from . import get_state
-from ..state import AppState
 from ... import edits
-from ...label_app import decode_mask_data_url
+from ..images import decode_mask_data_url
+from ..state import AppState
 
 router = APIRouter(prefix="/api/workspaces")
 
 
 @router.get("/{name}/mask")
 def get_mask(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.view(name).mask_payload(frame, app.viewer.segmenters, app.device)
+    return app.view(name).mask_payload(frame, app.segmenters, app.device)
 
 
-def _edit(name: str, frame: int, encoded: str | None, revision: str | None, app: AppState) -> dict[str, Any]:
+@router.post("/{name}/mask")
+def set_mask(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    frame = int(payload["frame"])
     app.check_writable(name)
     view = app.view(name)
     view.refresh()
@@ -24,19 +36,9 @@ def _edit(name: str, frame: int, encoded: str | None, revision: str | None, app:
     shape = workspace.image_shape
     if shape is None:
         raise ValueError("recording image shape is unavailable")
-    labels = None if encoded is None else decode_mask_data_url(encoded, shape)
-    result = edits.set_mask(workspace, workspace.row_of(frame), labels, revision=revision)
+    labels = decode_mask_data_url(str(payload["mask"]), shape)
+    result = edits.set_mask(workspace, workspace.row_of(frame), labels, revision=payload.get("revision"))
     view.invalidate()
-    response = view.edit_response(result, frame, app.viewer.segmenters, app.device)
-    response["mask"] = view.mask_payload(frame, app.viewer.segmenters, app.device)
+    response = view.edit_response(result, frame, app.segmenters, app.device)
+    response["mask"] = view.mask_payload(frame, app.segmenters, app.device)
     return response
-
-
-@router.post("/{name}/mask")
-def set_mask(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return _edit(name, int(payload["frame"]), str(payload["mask"]), payload.get("revision"), app)
-
-
-@router.delete("/{name}/mask")
-def clear_mask(name: str, frame: int, revision: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return _edit(name, frame, None, revision, app)

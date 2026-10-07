@@ -35,7 +35,7 @@ import torch
 from worm_pose_gen.classical import _erode, _largest_component
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.mask_fit import fill_narrow_holes
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.run_records import checkpoint_fingerprint, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter

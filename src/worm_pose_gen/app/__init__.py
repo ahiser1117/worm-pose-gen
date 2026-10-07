@@ -1,28 +1,31 @@
-"""The pose app: a FastAPI front end for running the pose pipeline and auditing its results.
+"""The pose app: a FastAPI server and its browser UI (``worm_pose_gen.app_ui``) for analysing recordings, labeling frames and training models.
 
-It serves the viewer's browser UI and API (runs, frames, poses, notes) and
-adds what ``docs/APP_PLAN.md`` calls Phase 1: a catalog of the HDF5
-recordings under the configured roots, workspaces that hold a recording
-range's masks, poses, hypotheses and provenance, and a job queue that runs
-pipeline stages over a workspace on the local GPUs; Phase 2: manual
-interventions (hypothesis pick, orientation flip, undo) through the edit
-log with provenance per frame; and Phase 3: the algorithm registry run on a
-region between anchors as a job, the candidate sets it produces (compared,
-accepted or discarded) and the outcome log. Phase 4 adds reversible mask
-painting and a versioned user corpus; models are trained and evaluated on
-the library's datasets by ``train`` and ``evaluate`` jobs (the Training
-page, ``routers/training.py``). The Labeling page labels frames (mask and
-body) into the user's dataset from queues: a workspace's Relabel keyframes,
-frames a search picked, or existing labels. Everything the
-UI does goes through these endpoints, so a script can drive the same work
-headless.
+Three pages (``docs/APP_SIMPLIFICATION.md``):
+
+- **Workspace**: the Recordings screen (a setup's recordings with their
+  status; Analyse runs the pipeline over a whole recording with the setup's
+  default models as one job), and one workspace per recording with its
+  issues, the four fixes (Flip, Refit, Edit mask, Relabel), the fixes list
+  with Undo, the curvature kymograph and Export.
+- **Labeling**: one frame's label (mask, then body) saved into the user's
+  dataset, from queues: a workspace's Relabel keyframes, frames a search
+  picked, or existing labels.
+- **Training**: the model picker, the datasets with their benchmarks, and
+  the Train form; models train and are evaluated by ``train`` and
+  ``evaluate`` jobs.
+
+Models, datasets, setups and benchmarks live in the lab and personal
+libraries (``worm_pose_gen.library``); jobs run on this machine's GPUs or
+through SLURM (``worm_pose_gen.jobs``).  ``--dev`` also shows the research
+diagnostics.  Everything the UI does goes through these endpoints, so a
+script can drive the same work headless.
 
 Errors come back as ``{"error": ...}`` with 400 for a bad request (unknown
-frame, bad parameter), 404 for a missing run, workspace, job or file
-(``NotFound``), and 500 for anything unexpected, as the stdlib viewer did.
-Only the exceptions the endpoints raise for bad input map to 400: a
-``RuntimeError`` (a CUDA out-of-memory is one) or a ``TypeError`` is a
-server fault and reaches the 500 handler.
+frame, bad parameter), 404 for a missing workspace, job, queue or file
+(``NotFound``), 409 for a workspace a job is writing, and 500 for anything
+unexpected.  Only the exceptions the endpoints raise for bad input map to
+400: a ``RuntimeError`` (a CUDA out-of-memory is one) or a ``TypeError`` is
+a server fault and reaches the 500 handler.
 """
 
 from __future__ import annotations
@@ -38,18 +41,13 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..compute import local_gpus
-from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
-from ..recordings import DEFAULT_RECORDING_ROOTS
+from ..pipeline import WorkspaceBusy
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
 from ..workspace import DEFAULT_WORKSPACES_ROOT
-from .config import DEFAULT_BODY_NET, AppConfig
+from .config import AppConfig
 from .state import AppState, NotFound
-from ..pipeline import WorkspaceBusy
-from .routers import algorithms, analysis as analysis_routes, config as config_routes, corpus, edits, jobs, library, masks, queues, recordings, static, viewer, workspaces
-from .routers import training as training_routes
-from .routers import labeling as labeling_routes
-from .routers import inspection as inspection_routes
-from .routers import fixes as fixes_routes
+from .routers import algorithms, analysis as analysis_routes, config as config_routes, fixes as fixes_routes, jobs, library
+from .routers import labeling as labeling_routes, masks, queues, recordings, static, training as training_routes, workspaces
 
 __all__ = ["AppConfig", "AppState", "NotFound", "create_app", "main", "parse_args"]
 
@@ -106,16 +104,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app = FastAPI(title="worm-pose app", lifespan=lifespan)
     app.state.app_state = state
     install_error_handlers(app)
-    app.include_router(viewer.router)
     app.include_router(recordings.router)
     app.include_router(recordings.files_router)
     app.include_router(workspaces.router)
-    app.include_router(edits.router)
     app.include_router(masks.router)
-    app.include_router(corpus.router)
     app.include_router(labeling_routes.router)
     app.include_router(queues.router)
-    app.include_router(inspection_routes.router)
     app.include_router(fixes_routes.router)
     app.include_router(analysis_routes.router)
     app.include_router(algorithms.router)
@@ -137,33 +131,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
-    parser.add_argument("--workspaces-root", type=Path, default=DEFAULT_WORKSPACES_ROOT, help="where workspaces (and the job records) live")
-    parser.add_argument("--recording-root", action="append", type=Path, dest="recording_roots", help="HDF5 root to browse (repeatable)")
-    parser.add_argument("--poses-root", type=Path, default=DEFAULT_RUNS_ROOT, help="directory of fit_recording.py run directories")
-    parser.add_argument("--run", action="append", type=Path, dest="runs", help="extra run directory to serve (repeatable)")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
-    parser.add_argument("--corpus-root", type=Path, default=None, help="user segmentation labels (default: <workspaces-root>/corpus; may point to an existing segmentation store)")
-    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="segmenter for on-demand probability maps")
-    parser.add_argument("--body-net", type=Path, default=DEFAULT_BODY_NET, help="body-field network for proposed traces in Body fields")
+    parser.add_argument("--workspaces-root", type=Path, default=DEFAULT_WORKSPACES_ROOT, help="where workspaces, queues and the job records live")
+    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives (<dataset-root>/flat_fields)")
     parser.add_argument("--gpus", default=None, help="comma-separated GPU ids for jobs (default: all visible)")
     parser.add_argument("--max-concurrent", type=int, default=None, help="jobs running at once (default: one per GPU)")
-    parser.add_argument("--device", default=None, help="device of the server's own segmenter (default: the first job GPU)")
+    parser.add_argument("--device", default=None, help="device of the server's own models (default: the first job GPU)")
     parser.add_argument("--lab-library", type=Path, default=None, help="the lab's model library, read-only (default: by host name)")
     parser.add_argument("--library", type=Path, default=None, help="your personal library (default: by host name)")
     parser.add_argument("--dev", action="store_true", help="developer mode: also show the research diagnostics")
-    parser.add_argument("--notes", type=Path, default=DEFAULT_NOTES, help="JSON file review notes are appended to")
+    parser.add_argument("--queue", type=Path, default=None,
+                        help="a labeling manifest (scripts/build_labeling_manifest.py) to open as a Labeling queue; its recordings must belong to one setup")
     parser.add_argument("--log-level", default="info")
     return parser.parse_args(argv)
 
 
 def config_from_args(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
-        host=args.host, port=args.port, workspaces_root=args.workspaces_root,
-        recording_roots=tuple(args.recording_roots) if args.recording_roots else tuple(DEFAULT_RECORDING_ROOTS),
-        poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, body_net=args.body_net, notes=args.notes,
-        corpus_root=args.corpus_root,
+        host=args.host, port=args.port, workspaces_root=args.workspaces_root, dataset_root=args.dataset_root,
         lab_library=args.lab_library, library=args.library, dev=args.dev,
-        gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent, extra_runs=tuple(args.runs or ()),
+        gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent,
     )
 
 
@@ -174,10 +160,14 @@ def main(argv: list[str] | None = None) -> None:
     config = config_from_args(args)
     app = create_app(config)
     state: AppState = app.state.app_state
-    print(f"pose app at http://{config.host}:{config.port}/", flush=True)
+    page = ""
+    if args.queue is not None:
+        from .queues import manifest_queue
+
+        page = f"#labeling/queue/{manifest_queue(state, args.queue)['id']}"
+    print(f"pose app at http://{config.host}:{config.port}/{page}", flush=True)
     slurm = state.compute.slurm
-    print(f"{len(state.viewer.catalog)} runs, workspaces in {config.workspaces_root}, jobs on gpus {list(config.gpus)}, device {state.device}", flush=True)
+    print(f"workspaces in {config.workspaces_root}, jobs on gpus {list(config.gpus)}, server device {state.device}", flush=True)
+    print(f"libraries: lab {state.libraries.lab}, personal {state.libraries.personal}", flush=True)
     print(f"SLURM: {'available' if slurm.available else slurm.reason}; defaults {slurm.defaults}", flush=True)
-    for path, error in state.viewer.catalog_errors.items():
-        print(f"skipped {path}: {error}", flush=True)
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level)

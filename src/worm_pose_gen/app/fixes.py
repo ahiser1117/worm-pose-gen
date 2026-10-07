@@ -1,7 +1,7 @@
 """The fixes of the Workspace page spoken in frames: Flip, Refit, Relabel (keyframes and stitch), previews, the fixes list and Undo.
 
 ``worm_pose_gen.fixes`` works in workspace rows; requests and responses
-here carry frames (what the viewer shows), converted on the way in and out.
+here carry frames (what the page shows), converted on the way in and out.
 A refit or a stitch is a job of kind ``fix`` whose process writes a preview
 named in the request's answer; the browser waits for the job, shows the
 preview's before and after, and keeps or discards it.  Everything that
@@ -22,10 +22,38 @@ from .. import algorithms, edits, fixes
 from ..algorithms import Keyframe
 from ..jobs import JobSpec
 from ..pipeline import placed_rows
-from ..pose_viewer import Segmenters, _round
-from .regions import anchor_payload, frame_to_row, frames_of
+from .frame_view import Segmenters, _round
 from .state import NotFound
 from .workspace_view import WorkspaceView
+
+
+# ---------------------------------------------------------------------------
+# Frames and rows
+
+
+def frame_to_row(view: WorkspaceView, value: Any, name: str) -> int:
+    """The row of frame ``value`` (a request field called ``name``); a missing or malformed value is a bad request."""
+
+    if value is None or value == "":
+        raise ValueError(f"'{name}' is required")
+    try:
+        frame = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"'{name}' must be a frame number, got {value!r}") from error
+    return view.workspace.row_of(frame)
+
+
+def anchor_payload(view: WorkspaceView, row: int | None) -> dict[str, int] | None:
+    """An anchor as the API reports it: ``{"row", "frame"}`` or ``None``."""
+
+    if row is None:
+        return None
+    return {"row": int(row), "frame": int(view.workspace.frame_index[int(row)])}
+
+
+def frames_of(view: WorkspaceView, first: int, last: int) -> list[int]:
+    frame_index = view.workspace.frame_index
+    return [int(frame_index[int(first)]), int(frame_index[int(last)])]
 
 
 def _rows_of(view: WorkspaceView, payload: dict[str, Any]) -> tuple[int, int]:

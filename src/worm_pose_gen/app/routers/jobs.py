@@ -1,14 +1,14 @@
-"""The job queue: submit a stage or a region run over a workspace, list, inspect, cancel, read logs; the stage parameter schemas; where jobs can run.
+"""The job queue: submit a job, list, inspect, cancel, retry, read logs; where jobs can run.
 
-A stage job's command comes from ``pipeline.stage_command`` and a region
-job's (``kind: region``: an algorithm of the registry on frames between two
-anchors, Phase 3) from ``pipeline.region_command``, so the process that runs
-it is the same ``python -m worm_pose_gen.pipeline`` a script would start; the
-runner adds ``WORM_POSE_PROGRESS_FILE`` and ``WORM_POSE_JOB_ID`` to its
-environment, which is how progress and provenance find their way back (a
-region job names its candidate set after the job id).  ``train`` and
+A ``stage`` job runs one pipeline stage over a workspace; its command comes
+from ``pipeline.stage_command``, so the process is the same ``python -m
+worm_pose_gen.pipeline`` a script would start, and the runner adds
+``WORM_POSE_PROGRESS_FILE`` and ``WORM_POSE_JOB_ID`` to its environment,
+which is how progress and provenance find their way back.  ``train`` and
 ``evaluate`` jobs (the Training page, :mod:`.training`) run
-``model_training`` and ``model_eval`` the same way.
+``model_training`` and ``model_eval`` the same way; a ``command`` job runs
+any argv.  Analyse (``routers/analysis``), the fixes (``routers/fixes``) and
+Labeling (``routers/labeling``, ``routers/queues``) submit their own jobs.
 
 Every job is placed by the request: ``run_on`` (``local`` or ``slurm``;
 omitted, this machine when it has GPUs for jobs, else SLURM), ``slurm``
@@ -28,7 +28,6 @@ from fastapi import APIRouter, Body, Depends
 from . import get_state
 from ... import pipeline
 from ...jobs import STATES, JobRecord, JobSpec
-from .. import regions
 from .training import evaluation_job, training_job
 from ..state import AppState, NotFound
 
@@ -49,9 +48,8 @@ def stage_job(app: AppState, payload: dict[str, Any], stage: str) -> tuple[JobSp
     workspace = app.workspace(name)
     params = dict(payload.get("params") or {})
     if stage in ("segment", "prior", "fit"):
-        if "checkpoint" not in params:
-            selected = workspace.info.settings.get("checkpoint")
-            params["checkpoint"] = selected if selected is not None else (None if app.config.checkpoint is None else str(app.config.checkpoint))
+        # The segmenter the workspace was analysed with (Analyse records it).
+        params.setdefault("checkpoint", workspace.info.settings.get("checkpoint"))
         params.setdefault("dataset_root", str(app.config.dataset_root))
     spec = JobSpec(
         kind=str(payload.get("kind") or "stage"), params={"stage": stage, "params": params}, workspace=name,
@@ -142,10 +140,6 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
     kind = str(payload.get("kind") or "stage")
     if kind == "stage":
         spec, command = stage_job(app, payload, str(payload.get("stage") or ""))
-    elif kind == "export":
-        spec, command = stage_job(app, payload, "export")
-    elif kind == regions.REGION_JOB_KIND:
-        spec, command = regions.region_job(app.view(str(payload.get("workspace") or "")), payload)
     elif kind == "train":
         spec, command = training_job(app, payload)
     elif kind == "evaluate":
@@ -153,7 +147,7 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
     elif kind == "command":
         spec, command = command_job(payload)
     else:
-        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region, train, evaluate or command")
+        raise ValueError(f"unknown job kind {kind!r}; expected stage, train, evaluate or command")
     return app.runner.submit(place(app, spec, payload), command).to_dict()
 
 
@@ -186,8 +180,3 @@ def cancel_job(job_id: str, app: AppState = Depends(get_state)) -> dict[str, Any
 def job_log(job_id: str, tail: int | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
     _record(app, job_id)
     return {"id": job_id, "tail": tail, "log": app.runner.log(job_id, tail)}
-
-
-@router.get("/stages")
-def stages() -> list[dict[str, Any]]:
-    return [{"name": stage, "params": pipeline.stage_schema(stage)} for stage in pipeline.STAGES]

@@ -1,20 +1,17 @@
 """The algorithm registry: the pipeline's methods as plugins that run on a region of a workspace.
 
-Phase 3 of ``docs/APP_PLAN.md`` (sections 2 and 6).  A region is a run of
+Phase 3 of ``docs/APP_PLAN.md`` (sections 2 and 6), behind the Workspace page's
+Refit and Relabel fixes (``docs/APP_SIMPLIFICATION.md``).  A region is a run of
 rows ``first..last`` of a workspace between two anchors, rows outside it
 whose stored poses are trusted.  An algorithm takes the region's masks, the
 workspace's fit configuration and prior, and the anchors, and produces
 *candidate poses* per row; ``propagation.select_path`` then chooses one path
 through them (the anchors fix its ends and its orientation), exactly as the
-propagate stage does for a stretch.  Nothing here writes the state: the
-candidates are saved under ``<workspace>/candidates/<id>.npz`` (+ ``.json``)
-and become the frame's poses only when the user accepts them
-(``accept_candidates`` -> ``edits.accept_path``), so a region rerun that
-comes back worse than the current track can be discarded.  An accept puts
-the set's candidates into the rows' hypotheses inside the same edit, so an
-undo restores the previous candidates too and un-marks the set
-(``unaccept_candidates``); a set accepted on part of its path stays open for
-the rest (``CandidateSet.accepted_rows``).
+propagate stage does for a stretch.  Nothing here writes the state: a run
+returns a ``CandidateSet`` (candidates, path, metrics before and after),
+which the Refit and Relabel fixes (``worm_pose_gen.fixes``) save as a
+preview and install through the edit log only when the user keeps it, so a
+refit that comes back worse than the current track can be discarded.
 
 The algorithms share the batched mask fitter and candidate storage:
 
@@ -39,24 +36,16 @@ Anchors need not be adjacent to the region: the algorithms run on a *local*
 copy of the arrays in which the anchors sit right next to the region, so the
 chains and the path connect the region to the anchors the user chose.
 
-Every region run is one line in ``<workspaces root>/algorithm_outcomes.jsonl``
-with the region's metrics before and after (``region_metrics``), so the
-question of which defaults make manual work rare can be answered from the log.
-
-``run_algorithm`` is the run without the storage: the Refit fix
-(``worm_pose_gen.fixes``) previews its path and installs it through the
-edit log.  ``stitch`` serves the Relabel fix: it pins the poses of labeled
-keyframes and refits every gap between consecutive keyframes as a
-propagate stretch anchored on them.
+``run_algorithm`` runs one algorithm on a region (the Refit fix).
+``stitch`` serves the Relabel fix: it pins the poses of labeled keyframes
+and refits every gap between consecutive keyframes as a propagate stretch
+anchored on them.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
-import json
 import math
-import os
-from pathlib import Path
 import time
 from typing import Any, Callable, Protocol, Sequence
 
@@ -76,7 +65,6 @@ from .observation import soft_dice_energy
 from .pipeline import (
     SegmentParams,
     SOURCE_CODES,
-    empty_hypotheses,
     load_segmentation_model,
     read_summary,
     segment_frames,
@@ -104,15 +92,11 @@ from .workspace import utc_now
 MaskArray = NDArray[np.bool_]
 Progress = Callable[[float, str], None]
 
-CANDIDATES_DIR = "candidates"
-OUTCOMES_FILE = "algorithm_outcomes.jsonl"
 PARAMETER_TYPES = ("int", "float", "bool", "str", "choice")
-# The sources a path can attribute a chosen candidate to and the provenance
-# algorithm ids they map to when the set is accepted.
 METRIC_NAMES = ("median_iou", "p10_iou", "frames_below_0_9", "pose_jumps_over_width", "length_jumps_over_3pct", "orientation_flips", "seconds")
 SOURCE_DTYPE = "<U24"
 START_DTYPE = "<U48"
-# How far from a region ``propose_region`` looks for an anchor.
+# How far from a region ``propose_anchors`` looks for an anchor.
 ANCHOR_SEARCH_ROWS = 200
 # Trusted, fully visible frames nearest the region that calibrate the smoother's fixed body.
 CALIBRATION_LIMIT = 100
@@ -194,7 +178,7 @@ _PATH_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
-# Context, candidates, candidate sets
+# Context and candidates
 
 
 @dataclass
@@ -362,6 +346,9 @@ def _as_candidate(pose: CandidatePose, index: int) -> Candidate:
 class CandidateSet:
     """What one region run produced: candidates per row, the path through them, and the region's metrics.
 
+    ``mask_revisions`` records the masks the run fit, so whoever installs the
+    path can tell whether the workspace changed underneath it.
+
     ``path`` lists ``(row, candidate index, mirrored)`` for the rows the path
     chose a candidate on; ``metrics`` describes the region with the path
     applied, ``metrics_before`` the state at run time (``region_metrics``).
@@ -378,17 +365,8 @@ class CandidateSet:
     path: list[tuple[int, int, bool]]
     metrics: dict[str, Any]
     created_at: str = field(default_factory=utc_now)
-    id: str = ""
-    job: str = ""
     metrics_before: dict[str, Any] = field(default_factory=dict)
     frames: list[int] = field(default_factory=list)
-    # ``accepted`` means every row of the path is in the state; a partial
-    # accept lists the rows taken so far in ``accepted_rows`` (an undo takes
-    # them out again) and leaves the set open for the rest.
-    accepted: bool = False
-    accepted_at: str | None = None
-    accepted_edit: str | None = None
-    accepted_rows: list[int] = field(default_factory=list)
     workspace: str = ""
     recording: str = ""
     mask_revisions: dict[str, str] = field(default_factory=dict)
@@ -396,9 +374,6 @@ class CandidateSet:
     @property
     def path_by_row(self) -> dict[int, tuple[int, bool]]:
         return {int(row): (int(index), bool(mirrored)) for row, index, mirrored in self.path}
-
-    def row_accepted(self, row: int) -> bool:
-        return bool(self.accepted) or int(row) in {int(r) for r in self.accepted_rows}
 
     def chosen(self, row: int) -> CandidatePose | None:
         """The path's candidate of ``row`` (mirrored as the path presents it), ``None`` when the path skipped the row."""
@@ -409,133 +384,6 @@ class CandidateSet:
         index, mirrored = choice
         pose = self.candidates[int(row)][index]
         return pose.mirrored(len(pose.latent) - 4) if mirrored else pose
-
-    def summary(self) -> dict[str, Any]:
-        """The list entry: id, algorithm, params, rows, frames, anchors, metrics, state."""
-
-        return {
-            "id": self.id, "algorithm": self.algorithm, "params": self.params, "rows": [self.first, self.last],
-            "frames": list(self.frames) if self.frames else None, "anchor_before": self.anchor_before, "anchor_after": self.anchor_after,
-            "metrics": self.metrics, "metrics_before": self.metrics_before, "created_at": self.created_at, "accepted": self.accepted,
-            "accepted_at": self.accepted_at, "accepted_edit": self.accepted_edit, "accepted_rows": [int(r) for r in self.accepted_rows], "job": self.job,
-            "candidates": int(sum(len(v) for v in self.candidates.values())), "path_rows": len(self.path), "workspace": self.workspace,
-            "mask_revisions": dict(self.mask_revisions),
-        }
-
-    # ----- storage
-
-    def to_npz(self, path: Path | str) -> Path:
-        """Save under ``path`` (``.npz``) with the metadata beside it (``.json``); returns the ``.npz`` path."""
-
-        path = Path(path)
-        if path.suffix != ".npz":
-            path = path.with_suffix(".npz")
-        rows = [int(r) for r in self.rows]
-        counts = [len(self.candidates.get(r, [])) for r in rows]
-        width = max(counts, default=0)
-        sample = next((c for r in rows for c in self.candidates.get(r, [])), None)
-        n_points = int(sample.centerline_xy.shape[0]) if sample is not None else 0
-        latent_size = int(sample.latent.shape[0]) if sample is not None else 0
-        shape_size = int(sample.width_shape.shape[0]) if sample is not None else 0
-        R, C = len(rows), width
-        arrays: dict[str, np.ndarray] = {
-            "rows": np.asarray(rows, dtype=np.int64),
-            "count": np.asarray(counts, dtype=np.int64),
-            "centerline_xy": np.full((R, C, n_points, 2), np.nan),
-            "latent": np.full((R, C, latent_size), np.nan),
-            "width_px": np.full((R, C), np.nan),
-            "width_shape": np.full((R, C, shape_size), np.nan),
-            "width_profile": np.full((R, C, n_points), np.nan),
-            "body_length_px": np.full((R, C), np.nan),
-            "points_in_fov": np.zeros((R, C), dtype=np.int64),
-            "crop": np.zeros((R, C, 4), dtype=np.int64),
-            "energy": np.full((R, C), np.nan),
-            "soft_dice": np.full((R, C), np.nan),
-            "iou": np.full((R, C), np.nan),
-            "source": np.full((R, C), "", dtype=SOURCE_DTYPE),
-            "start": np.full((R, C), "", dtype=START_DTYPE),
-            "path_index": np.full(R, -1, dtype=np.int64),
-            "path_mirrored": np.zeros(R, dtype=bool),
-        }
-        by_row = self.path_by_row
-        for i, row in enumerate(rows):
-            for j, pose in enumerate(self.candidates.get(row, [])):
-                arrays["centerline_xy"][i, j] = pose.centerline_xy
-                arrays["latent"][i, j] = pose.latent
-                arrays["width_px"][i, j] = pose.width_px
-                if len(pose.width_shape) == shape_size:
-                    arrays["width_shape"][i, j] = pose.width_shape
-                arrays["width_profile"][i, j] = pose.width_profile
-                arrays["body_length_px"][i, j] = pose.body_length_px
-                arrays["points_in_fov"][i, j] = pose.points_in_fov
-                arrays["crop"][i, j] = pose.crop
-                arrays["energy"][i, j] = pose.energy
-                arrays["soft_dice"][i, j] = pose.soft_dice
-                arrays["iou"][i, j] = pose.iou
-                arrays["source"][i, j] = pose.source
-                arrays["start"][i, j] = pose.start
-            if row in by_row:
-                arrays["path_index"][i], arrays["path_mirrored"][i] = by_row[row]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name("." + path.name + ".tmp")
-        with open(tmp, "wb") as handle:
-            np.savez_compressed(handle, **arrays)
-        os.replace(tmp, path)
-        meta = {
-            "id": self.id, "algorithm": self.algorithm, "params": _json_safe(self.params), "first": self.first, "last": self.last,
-            "anchor_before": self.anchor_before, "anchor_after": self.anchor_after, "rows": rows, "frames": list(self.frames),
-            "path": [[int(r), int(i), bool(m)] for r, i, m in self.path], "metrics": _json_safe(self.metrics),
-            "metrics_before": _json_safe(self.metrics_before), "created_at": self.created_at, "job": self.job,
-            "accepted": self.accepted, "accepted_at": self.accepted_at, "accepted_edit": self.accepted_edit,
-            "accepted_rows": [int(r) for r in self.accepted_rows],
-            "workspace": self.workspace, "recording": self.recording, "candidates": int(sum(counts)),
-            "mask_revisions": self.mask_revisions,
-        }
-        _write_json_atomic(path.with_suffix(".json"), meta)
-        return path
-
-    @classmethod
-    def from_npz(cls, path: Path | str) -> "CandidateSet":
-        path = Path(path)
-        if path.suffix != ".npz":
-            path = path.with_suffix(".npz")
-        meta = json.loads(path.with_suffix(".json").read_text())
-        with np.load(path, allow_pickle=False) as archive:
-            arrays = {name: archive[name] for name in archive.files}
-        rows = [int(r) for r in arrays["rows"].tolist()]
-        candidates: dict[int, list[CandidatePose]] = {}
-        for i, row in enumerate(rows):
-            poses = []
-            for j in range(int(arrays["count"][i])):
-                poses.append(
-                    CandidatePose(
-                        centerline_xy=arrays["centerline_xy"][i, j].copy(), latent=arrays["latent"][i, j].copy(),
-                        width_px=float(arrays["width_px"][i, j]), width_shape=arrays["width_shape"][i, j].copy(),
-                        width_profile=arrays["width_profile"][i, j].copy(), body_length_px=float(arrays["body_length_px"][i, j]),
-                        points_in_fov=int(arrays["points_in_fov"][i, j]), crop=arrays["crop"][i, j].copy(),
-                        energy=float(arrays["energy"][i, j]), soft_dice=float(arrays["soft_dice"][i, j]), iou=float(arrays["iou"][i, j]),
-                        source=str(arrays["source"][i, j]), start=str(arrays["start"][i, j]),
-                    )
-                )
-            candidates[row] = poses
-        return cls(
-            algorithm=str(meta["algorithm"]), params=dict(meta.get("params") or {}), first=int(meta["first"]), last=int(meta["last"]),
-            anchor_before=meta.get("anchor_before"), anchor_after=meta.get("anchor_after"), rows=rows, candidates=candidates,
-            path=[(int(r), int(i), bool(m)) for r, i, m in meta.get("path") or []], metrics=dict(meta.get("metrics") or {}),
-            created_at=str(meta.get("created_at") or ""), id=str(meta.get("id") or path.stem), job=str(meta.get("job") or ""),
-            metrics_before=dict(meta.get("metrics_before") or {}), frames=[int(f) for f in meta.get("frames") or []],
-            accepted=bool(meta.get("accepted", False)), accepted_at=meta.get("accepted_at"), accepted_edit=meta.get("accepted_edit"),
-            accepted_rows=[int(r) for r in meta.get("accepted_rows") or []],
-            workspace=str(meta.get("workspace") or ""), recording=str(meta.get("recording") or ""),
-            mask_revisions=dict(meta.get("mask_revisions") or {}),
-        )
-
-
-def _write_json_atomic(path: Path, payload: Any) -> None:
-    tmp = path.with_name("." + path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=1))
-    os.replace(tmp, path)
-
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
@@ -549,115 +397,6 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
-
-
-# ---------------------------------------------------------------------------
-# Candidate set files in a workspace
-
-
-def candidates_dir(workspace: Any) -> Path:
-    return Path(workspace.path) / CANDIDATES_DIR
-
-
-def _validate_set_id(set_id: str) -> str:
-    if not set_id or "/" in set_id or "\\" in set_id or set_id in (".", ".."):
-        raise ValueError(f"invalid candidate set id {set_id!r}")
-    return set_id
-
-
-def next_candidate_id(workspace: Any) -> str:
-    """``c000001``, ``c000002``, ... from a counter file beside the sets (ids are never reused)."""
-
-    directory = candidates_dir(workspace)
-    directory.mkdir(parents=True, exist_ok=True)
-    counter = directory / "counter"
-    current = 0
-    if counter.exists():
-        text = counter.read_text().strip()
-        if text.isdigit():
-            current = int(text)
-    current += 1
-    tmp = counter.with_name("counter.tmp")
-    tmp.write_text(f"{current}\n")
-    os.replace(tmp, counter)
-    return f"c{current:06d}"
-
-
-def candidate_set_path(workspace: Any, set_id: str) -> Path:
-    return candidates_dir(workspace) / f"{_validate_set_id(str(set_id))}.npz"
-
-
-def save_candidate_set(workspace: Any, candidate_set: CandidateSet) -> Path:
-    if not candidate_set.id:
-        candidate_set.id = next_candidate_id(workspace)
-    return candidate_set.to_npz(candidate_set_path(workspace, candidate_set.id))
-
-
-def load_candidate_set(workspace: Any, set_id: str) -> CandidateSet:
-    path = candidate_set_path(workspace, set_id)
-    if not path.exists() or not path.with_suffix(".json").exists():
-        raise FileNotFoundError(f"workspace {workspace.info.name} has no candidate set {set_id!r}")
-    return CandidateSet.from_npz(path)
-
-
-def list_candidate_sets(workspace: Any) -> list[dict[str, Any]]:
-    """The ``summary()`` of every stored set, newest first (metadata only: the arrays are not read)."""
-
-    directory = candidates_dir(workspace)
-    if not directory.exists():
-        return []
-    out = []
-    for meta_path in sorted(directory.glob("*.json")):
-        if not meta_path.with_suffix(".npz").exists():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text())
-        except (OSError, ValueError):
-            continue
-        out.append(
-            {
-                "id": str(meta.get("id") or meta_path.stem), "algorithm": meta.get("algorithm"), "params": meta.get("params") or {},
-                "rows": [meta.get("first"), meta.get("last")], "frames": meta.get("frames") or None,
-                "anchor_before": meta.get("anchor_before"), "anchor_after": meta.get("anchor_after"),
-                "metrics": meta.get("metrics") or {}, "metrics_before": meta.get("metrics_before") or {},
-                "created_at": meta.get("created_at"), "accepted": bool(meta.get("accepted", False)), "accepted_at": meta.get("accepted_at"),
-                "accepted_edit": meta.get("accepted_edit"), "accepted_rows": [int(r) for r in meta.get("accepted_rows") or []],
-                "job": meta.get("job") or "", "candidates": meta.get("candidates"),
-                "path_rows": len(meta.get("path") or []), "workspace": meta.get("workspace") or workspace.info.name,
-                "mask_revisions": dict(meta.get("mask_revisions") or {}),
-            }
-        )
-    out.sort(key=lambda e: str(e.get("created_at") or ""), reverse=True)
-    return out
-
-
-def delete_candidate_set(workspace: Any, set_id: str) -> bool:
-    """Remove a set's files; whether there was one."""
-
-    path = candidate_set_path(workspace, set_id)
-    found = False
-    for target in (path, path.with_suffix(".json")):
-        if target.exists():
-            target.unlink()
-            found = True
-    return found
-
-
-def candidate_sets_covering(workspace: Any, row: int, *, include_accepted: bool = False) -> list[CandidateSet]:
-    """The stored sets whose region contains ``row``, newest first; sets accepted (as a whole, or on this row) are excluded unless asked."""
-
-    out = []
-    for entry in list_candidate_sets(workspace):
-        first, last = entry["rows"]
-        if first is None or last is None or not int(first) <= int(row) <= int(last):
-            continue
-        if not include_accepted and (entry["accepted"] or int(row) in {int(r) for r in entry.get("accepted_rows") or []}):
-            continue
-        try:
-            out.append(load_candidate_set(workspace, entry["id"]))
-        except (FileNotFoundError, ValueError, KeyError):
-            continue
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1480,7 +1219,7 @@ def build_context(
 
     Masks come from the workspace (overrides first); rows without a stored
     mask are segmented from the recording with the workspace's segment
-    settings when ``segment_missing`` is set (an imported run has no masks).
+    settings when ``segment_missing`` is set (a workspace fit before masks were stored has none).
     Explicit hole filling affects this run only. Off resegments unedited rows
     because stored masks may already contain filled pixels; manual masks stay
     authoritative. On fills narrow holes but never includes ignored pixels.
@@ -1556,32 +1295,7 @@ def build_context(
 
 
 # ---------------------------------------------------------------------------
-# Proposing a region
-
-
-def propose_region(workspace: Any, row: int, *, pad: int = 2) -> dict[str, Any]:
-    """A region around ``row`` with anchors: the propagation stretch containing it padded by ``pad``, else ten rows either side.
-
-    Anchors are the nearest fitted rows outside the region with ambiguity
-    score 0 and overlap at least 0.9 (``None`` when there is none within
-    ``ANCHOR_SEARCH_ROWS``).  Rows, not frames.
-    """
-
-    state = workspace.load_state()
-    n = int(len(state["frame_index"]))
-    row = int(row)
-    if not 0 <= row < n:
-        raise ValueError(f"row {row} outside 0..{n - 1}")
-    stretches = edits._stretches(workspace, state)
-    stretch = next(((int(a), int(b)) for a, b in stretches if a <= row <= b), None)
-    if stretch is not None:
-        first, last = max(0, stretch[0] - int(pad)), min(n - 1, stretch[1] + int(pad))
-        reason = f"propagation stretch rows {stretch[0]}-{stretch[1]} padded by {int(pad)}"
-    else:
-        first, last = max(0, row - 10), min(n - 1, row + 10)
-        reason = "no propagation stretch contains the frame: ten frames either side"
-    anchor_before, anchor_after = propose_anchors(state, first, last)
-    return {"first": first, "last": last, "anchor_before": anchor_before, "anchor_after": anchor_after, "reason": reason, "stretch": None if stretch is None else list(stretch)}
+# Anchors
 
 
 def propose_anchors(state: dict[str, np.ndarray], first: int, last: int, *, min_iou: float = 0.9, search: int = ANCHOR_SEARCH_ROWS) -> tuple[int | None, int | None]:
@@ -1601,146 +1315,7 @@ def propose_anchors(state: dict[str, np.ndarray], first: int, last: int, *, min_
 
 
 # ---------------------------------------------------------------------------
-# The outcome log
-
-
-def outcomes_root(workspace: Any) -> Path:
-    """The workspaces root a workspace lives in (where the shared outcome log is kept)."""
-
-    return Path(workspace.path).parent
-
-
-def outcomes_path(root: Path | str) -> Path:
-    return Path(root) / OUTCOMES_FILE
-
-
-def _append_line(path: Path, record: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as handle:
-        handle.write(json.dumps(_json_safe(record)) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def append_outcome(root: Path | str, record: dict[str, Any]) -> None:
-    _append_line(outcomes_path(root), {"kind": "run", **record})
-
-
-def mark_accepted(
-    root: Path | str, candidate_set_id: str, *, workspace: str = "", edit: str | None = None,
-    rows: Sequence[int] = (), accepted_rows: Sequence[int] = (), complete: bool = True,
-) -> None:
-    """Record that (part of) a candidate set was accepted: an ``accepted`` line with the rows this edit took, all rows taken so far, and whether the path is complete."""
-
-    _append_line(
-        outcomes_path(root),
-        {
-            "kind": "accepted", "candidate_set": str(candidate_set_id), "workspace": workspace, "edit": edit, "time": utc_now(),
-            "rows": [int(r) for r in rows], "accepted_rows": [int(r) for r in accepted_rows], "complete": bool(complete),
-        },
-    )
-
-
-def mark_unaccepted(
-    root: Path | str, candidate_set_id: str, *, workspace: str = "", edit: str | None = None, undoes: str | None = None,
-    rows: Sequence[int] = (), accepted_rows: Sequence[int] = (),
-) -> None:
-    """Record that an accept of a candidate set was undone (``undoes`` names the accept's edit); ``accepted_rows`` is what remains accepted."""
-
-    _append_line(
-        outcomes_path(root),
-        {
-            "kind": "unaccepted", "candidate_set": str(candidate_set_id), "workspace": workspace, "edit": edit, "undoes": undoes,
-            "time": utc_now(), "rows": [int(r) for r in rows], "accepted_rows": [int(r) for r in accepted_rows],
-        },
-    )
-
-
-def outcomes(root: Path | str) -> list[dict[str, Any]]:
-    """Every region run in the log, newest first, with the accept state folded in from the ``accepted`` and ``unaccepted`` lines in order.
-
-    ``accepted`` is true only while the whole path is in the state (an undone
-    accept clears it); ``accepted_rows`` lists the rows currently accepted,
-    ``accepted_at`` and ``accepted_edit`` the latest accept.
-    """
-
-    path = outcomes_path(root)
-    if not path.exists():
-        return []
-    runs: list[dict[str, Any]] = []
-    marks: dict[tuple[str, str], dict[str, Any]] = {}
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        kind = record.get("kind", "run")
-        key = (str(record.get("workspace") or ""), str(record.get("candidate_set") or ""))
-        if kind == "accepted":
-            # Lines from before partial accepts carry neither rows nor ``complete``: they accepted the whole path.
-            marks[key] = {
-                "accepted": bool(record.get("complete", True)), "accepted_at": record.get("time"), "accepted_edit": record.get("edit"),
-                "accepted_rows": [int(r) for r in record.get("accepted_rows") or record.get("rows") or []],
-            }
-        elif kind == "unaccepted":
-            remaining = [int(r) for r in record.get("accepted_rows") or []]
-            marks[key] = {"accepted": False, "accepted_at": None, "accepted_edit": None, "accepted_rows": remaining, "unaccepted_at": record.get("time")}
-        elif kind == "run":
-            runs.append(record)
-    for record in runs:
-        key = (str(record.get("workspace") or ""), str(record.get("candidate_set") or ""))
-        hit = marks.get(key)
-        if hit is not None:
-            record.update(hit)
-        else:
-            record.setdefault("accepted", False)
-            record.setdefault("accepted_rows", [])
-    runs.reverse()
-    return runs
-
-
-# ---------------------------------------------------------------------------
 # Running a region
-
-
-def run_region(
-    workspace: Any,
-    algorithm_id: str,
-    first: int,
-    last: int,
-    params: dict[str, Any] | None = None,
-    *,
-    anchor_before: int | None = None,
-    anchor_after: int | None = None,
-    device: torch.device | str | None = None,
-    progress: Progress | None = None,
-    job: str = "",
-) -> CandidateSet:
-    """Run ``algorithm_id`` on rows ``first..last`` with these anchors; saves the set under ``candidates/`` and logs the outcome.
-
-    The set's id is ``job`` when given (the job runner's id), else the next
-    ``c<6 digits>`` of the workspace's counter.  The state is not changed.
-    """
-
-    candidate_set = run_algorithm(workspace, algorithm_id, first, last, params, anchor_before=anchor_before, anchor_after=anchor_after, device=device, progress=progress)
-    candidate_set.job = str(job or "")
-    candidate_set.id = str(job) if job else next_candidate_id(workspace)
-    save_candidate_set(workspace, candidate_set)
-    append_outcome(
-        outcomes_root(workspace),
-        {
-            "time": utc_now(), "workspace": candidate_set.workspace, "recording": candidate_set.recording,
-            "first": candidate_set.first, "last": candidate_set.last, "frames": list(candidate_set.frames),
-            "anchors": {"before": candidate_set.anchor_before, "after": candidate_set.anchor_after}, "algorithm": candidate_set.algorithm,
-            "params": candidate_set.params, "metrics_before": candidate_set.metrics_before, "metrics_after": candidate_set.metrics,
-            "candidate_set": candidate_set.id, "job": candidate_set.job,
-            "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path), "accepted": False,
-        },
-    )
-    _report(progress, 1.0, f"{candidate_set.algorithm}: {len(candidate_set.path)} frames on the path, median IoU {candidate_set.metrics.get('median_iou')}")
-    return candidate_set
 
 
 def run_algorithm(
@@ -1906,194 +1481,25 @@ def stitch(
 
 
 # ---------------------------------------------------------------------------
-# Accepting a set
-
-
-def _grow_hypotheses(hyps: dict[str, np.ndarray], n: int, slots: int, config: BatchFitConfig) -> dict[str, np.ndarray]:
-    """The hypotheses arrays with at least ``slots`` candidates per row (existing candidates kept in place)."""
-
-    current = int(hyps["hypotheses_energy"].shape[1]) if "hypotheses_energy" in hyps else 0
-    if current >= slots and "hypotheses_energy" in hyps:
-        fresh = empty_hypotheses(n, config, max(1, (current - 1) // 2))
-        for key, value in fresh.items():
-            hyps.setdefault(key, value)
-        return hyps
-    beam = max(1, math.ceil((slots - 1) / 2))
-    fresh = empty_hypotheses(n, config, beam)
-    for key, value in fresh.items():
-        old = hyps.get(key)
-        if old is None:
-            continue
-        if old.ndim >= 2 and key.startswith("hypotheses_") and key != "hypotheses_count":
-            width = min(old.shape[1], value.shape[1])
-            if old.shape[0] == n and old.shape[2:] == value.shape[2:]:
-                value[:, :width] = old[:, :width]
-        elif old.shape == value.shape:
-            value[...] = old
-        fresh[key] = value
-    return fresh
-
-
-def install_into(hyps: dict[str, np.ndarray], n: int, candidate_set: CandidateSet, rows: Sequence[int], config: BatchFitConfig) -> dict[str, np.ndarray]:
-    """The hypotheses arrays with the set's candidates of ``rows`` in place of those rows' hypotheses (grown when a row has more candidates than slots).
-
-    A stored hypothesis is what ``edits.accept_path`` and a manual pick can
-    make a pose, and what the hypotheses table shows, so accepting a set
-    first makes its candidates the rows' hypotheses.  This runs inside the
-    accept's edit (``accept_path``'s ``install`` hook), after the snapshot of
-    the rows' previous candidates is taken, so an undo brings them back.
-    """
-
-    wanted = [int(r) for r in rows if candidate_set.candidates.get(int(r))]
-    if not wanted:
-        return hyps
-    slots = max(len(candidate_set.candidates[r]) for r in wanted)
-    hyps = _grow_hypotheses(hyps, n, slots, config)
-    for row in wanted:
-        poses = candidate_set.candidates[row]
-        for key, value in hyps.items():
-            if key.startswith("hypotheses_") and key != "hypotheses_count":
-                value[row] = np.nan if value.dtype.kind == "f" else (False if value.dtype.kind == "b" else (0 if value.dtype.kind in "iu" else ""))
-        hyps["hypotheses_beam"][row] = -1
-        for j, pose in enumerate(poses):
-            hyps["hypotheses_centerline_xy"][row, j] = pose.centerline_xy
-            hyps["hypotheses_energy"][row, j] = pose.energy
-            hyps["hypotheses_iou"][row, j] = pose.iou
-            hyps["hypotheses_source"][row, j] = pose.source
-            hyps["hypotheses_start"][row, j] = pose.start
-            hyps["hypotheses_beam"][row, j] = j
-            hyps["hypotheses_latent"][row, j] = pose.latent
-            hyps["hypotheses_width_px"][row, j] = pose.width_px
-            if len(pose.width_shape) == hyps["hypotheses_width_shape"].shape[2]:
-                hyps["hypotheses_width_shape"][row, j] = pose.width_shape
-            hyps["hypotheses_width_profile"][row, j] = pose.width_profile
-            hyps["hypotheses_body_length_px"][row, j] = pose.body_length_px
-            hyps["hypotheses_points_in_fov"][row, j] = pose.points_in_fov
-            hyps["hypotheses_crop"][row, j] = pose.crop
-            hyps["hypotheses_soft_dice"][row, j] = pose.soft_dice
-        hyps["hypotheses_count"][row] = len(poses)
-        hyps["path_index"][row] = -1
-        hyps["path_mirrored"][row] = False
-        hyps["path_override"][row] = False
-        hyps["path_energy_gap"][row] = np.nan
-        hyps["path_cost"][row] = np.nan
-    return hyps
+# Installing a result
 
 
 def validate_mask_revisions(workspace: Any, revisions: dict[str, str], rows: Sequence[int],
                             anchors: Sequence[int | None], set_id: str = "") -> None:
-    """Validate input metadata without reading candidate pose arrays."""
+    """``ValueError`` when the masks a result was fit to (``revisions``, by row) changed since: it must be rerun, not installed."""
     # Another workspace instance may have rewritten a chunk since it was cached.
     if hasattr(workspace, "clear_mask_cache"):
         workspace.clear_mask_cache()
     if revisions:
         changed = [int(row) for row, revision in revisions.items() if workspace.mask_revision(int(row)) != revision]
         if changed:
-            raise ValueError(f"candidate set {set_id} is stale: masks changed at rows {changed}; rerun the region")
+            raise ValueError(f"{set_id} is stale: masks changed at rows {changed}; run it again")
     else:
-        # Legacy sets have no input fingerprint. Once masks have been edited,
-        # their compatibility cannot be established, even after a later undo.
+        # Without fingerprints (no stored mask in the region) an edited mask
+        # cannot be ruled out, even after a later undo.
         affected = set(rows) | {r for r in anchors if r is not None}
         if affected.intersection(workspace.override_rows()) or any(
             e.get("kind") in ("set_mask", "clear_mask") and affected.intersection(e.get("payload", {}).get("rows", []))
             for e in workspace.edits()
         ):
-            raise ValueError(f"candidate set {set_id} has unversioned masks; rerun the region before accepting")
-
-
-def validate_candidate_masks(workspace: Any, candidate_set: CandidateSet) -> None:
-    """Reject paths whose masks (including anchors) differ from their recorded inputs."""
-    validate_mask_revisions(workspace, candidate_set.mask_revisions, candidate_set.rows,
-                            [candidate_set.anchor_before, candidate_set.anchor_after], candidate_set.id)
-
-
-def candidate_summary_stale(workspace: Any, entry: dict[str, Any]) -> bool:
-    """Whether list/detail metadata describes obsolete or unversioned mask inputs."""
-    first, last = entry.get("rows") or (None, None)
-    rows = [] if first is None or last is None else list(range(int(first), int(last) + 1))
-    try:
-        validate_mask_revisions(workspace, dict(entry.get("mask_revisions") or {}), rows,
-                                [entry.get("anchor_before"), entry.get("anchor_after")], str(entry.get("id") or ""))
-        return False
-    except ValueError:
-        return True
-
-
-def accept_candidates(workspace: Any, set_id: str, *, rows: Sequence[int] | None = None, use_path: bool = True, note: str = "") -> edits.EditResult:
-    """Make the set's path the poses of ``rows`` (default: every row of the path not yet accepted) as one ``accept_path`` edit.
-
-    The rows' hypotheses become the set's candidates inside the same edit
-    (``install_into``), so an undo restores both the poses and the previous
-    candidates.  Provenance of the rows becomes the set's algorithm id under
-    the job ``candidates:<id>``; the set's metadata records the rows accepted
-    and, once the whole path is in, ``accepted``; the outcome log gets an
-    ``accepted`` line with the same.  Rows already accepted are refused (an
-    accept repeated by a double click makes no second edit).  ``use_path``
-    must be true: accepting candidates other than the path's is a manual
-    pick per frame.
-    """
-
-    if not use_path:
-        raise ValueError("only the set's path can be accepted as a whole; pick other candidates per frame")
-    candidate_set = load_candidate_set(workspace, set_id)
-    if not candidate_set.path:
-        raise ValueError(f"candidate set {set_id} has an empty path")
-    if candidate_set.accepted:
-        raise ValueError(f"candidate set {set_id} is already accepted")
-    already = {int(r) for r in candidate_set.accepted_rows}
-    wanted = None if rows is None else {int(r) for r in rows}
-    on_path = [(int(r), int(i), bool(m)) for r, i, m in candidate_set.path if wanted is None or int(r) in wanted]
-    if not on_path:
-        raise ValueError("none of the requested rows is on the set's path")
-    choices = [c for c in on_path if c[0] not in already]
-    if not choices:
-        raise ValueError(f"the requested rows of candidate set {set_id} are already accepted")
-    chosen_rows = [r for r, _, _ in choices]
-    accepted_rows = sorted(already | set(chosen_rows))
-    complete = set(accepted_rows) >= {int(r) for r, _, _ in candidate_set.path}
-    config = workspace_setup(workspace).config
-    n = int(workspace.n)
-    job = f"candidates:{candidate_set.id}"
-    def install_checked(hyps: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        validate_candidate_masks(workspace, candidate_set)
-        return install_into(hyps, n, candidate_set, chosen_rows, config)
-
-    result = edits.accept_path(
-        workspace, choices, algorithm=candidate_set.algorithm, job=job, note=note or f"accept {candidate_set.algorithm} {candidate_set.id}",
-        install=install_checked,
-        extra={"candidate_set": candidate_set.id, "complete": complete},
-    )
-    candidate_set.accepted = complete
-    candidate_set.accepted_at = utc_now()
-    candidate_set.accepted_edit = result.edit_id
-    candidate_set.accepted_rows = accepted_rows
-    save_candidate_set(workspace, candidate_set)
-    mark_accepted(
-        outcomes_root(workspace), candidate_set.id, workspace=str(workspace.info.name), edit=result.edit_id, rows=chosen_rows,
-        accepted_rows=accepted_rows, complete=complete,
-    )
-    return result
-
-
-def unaccept_candidates(workspace: Any, set_id: str, *, rows: Sequence[int], edit: str | None = None, undoes: str | None = None) -> bool:
-    """Take ``rows`` out of a set's accepted rows after the accept that put them in was undone (``edits.undo`` calls this); whether the set was found.
-
-    The set is no longer ``accepted``, so the viewer shows it again and it
-    can be accepted anew; the outcome log gets an ``unaccepted`` line so the
-    run does not count as a success.
-    """
-
-    try:
-        candidate_set = load_candidate_set(workspace, set_id)
-    except FileNotFoundError:
-        # The set was discarded after the accept: only the log can record the undo.
-        mark_unaccepted(outcomes_root(workspace), set_id, workspace=str(workspace.info.name), edit=edit, undoes=undoes, rows=rows, accepted_rows=[])
-        return False
-    remaining = sorted({int(r) for r in candidate_set.accepted_rows} - {int(r) for r in rows})
-    candidate_set.accepted = False
-    candidate_set.accepted_rows = remaining
-    candidate_set.accepted_at = None
-    candidate_set.accepted_edit = None
-    save_candidate_set(workspace, candidate_set)
-    mark_unaccepted(outcomes_root(workspace), set_id, workspace=str(workspace.info.name), edit=edit, undoes=undoes, rows=rows, accepted_rows=remaining)
-    return True
+            raise ValueError(f"{set_id} has unversioned masks that were edited; run it again")

@@ -36,10 +36,8 @@ Each stage's parameters are a dataclass whose defaults match the script's
 flags; ``from_dict`` ignores unknown keys, so one parameter dict can drive
 every stage.  The command line runs one stage (``--stage``) or several in
 pipeline order in one process (``--stages``, the app's Analyse job, whose
-progress spans them all).  Besides the stages, it runs one region algorithm
-of ``worm_pose_gen.algorithms`` (``--region-run``, argv from
-``region_command``), which writes a candidate set rather than the state.  With ``checkpoint=None`` the segmenter is replaced by a
-threshold on dark pixels (below 128), which keeps the stages testable on a
+progress spans them all).  With ``checkpoint=None`` the segmenter is
+replaced by a threshold on dark pixels (below 128), which keeps the stages testable on a
 synthetic recording without the network.
 """
 
@@ -67,7 +65,7 @@ import torch
 
 from .ambiguity import FLAG_NAMES, compute_ambiguity, summarize_ambiguity
 from .batch_fit import PRESETS, BatchFitConfig, fit_masks
-from .label_app import DATASET_PATH, RecordingSource
+from .recordings import DATASET_PATH, RecordingSource
 from .mask_fit import (
     Initialization,
     MaskFitResult,
@@ -125,11 +123,12 @@ TRACK_ALGORITHM = "track_length_refit"
 # Provenance of poses a propagation pass put in place of the independent fit.
 PROPAGATION_ALGORITHMS = tuple(CANDIDATE_ALGORITHMS.values())
 # Every provenance algorithm the stages themselves write.  A fitted row whose
-# algorithm is anything else (a manual pick or flip, an accepted region run)
+# algorithm is anything else (a flip, a kept fix, a mask edit)
 # was put there on purpose: a propagate pass keeps it and works around it.
 PIPELINE_ALGORITHMS = frozenset((*SOURCE_ALGORITHMS.values(), *PROPAGATION_ALGORITHMS, TRACK_ALGORITHM, ""))
-# Jobs whose poses the user installed whatever their algorithm: an accepted
-# candidate set, and a kept fix (``worm_pose_gen.fixes``).
+# Jobs whose poses the user installed whatever their algorithm: a kept fix
+# (``worm_pose_gen.fixes``), and in workspaces made before the fixes an
+# accepted candidate set of the region runs they replaced.
 PLACED_JOB_PREFIXES = ("candidates:", "fix:")
 SUMMARY_FILE = "summary.json"
 WORKSPACE_LOCK_FILE = ".lock"
@@ -310,23 +309,6 @@ STAGE_PARAMS: dict[str, type[_Params]] = {
     "fixed_body": FixedBodyParams,
     "export": ExportParams,
 }
-
-
-def _type_name(annotation: Any) -> str:
-    text = str(annotation).replace("typing.", "")
-    text = text.split(" | None")[0] if text.endswith("| None") else text
-    return "dict" if text.startswith("dict") else text
-
-
-def stage_schema(stage: str) -> list[dict[str, Any]]:
-    """Parameter descriptions (name, type, default, help) of one stage, for forms and the API."""
-
-    cls = STAGE_PARAMS[stage]
-    defaults = cls()
-    return [
-        {"name": f.name, "type": _type_name(f.type), "default": getattr(defaults, f.name), "help": f.metadata.get("help", "")}
-        for f in dataclass_fields(cls)
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1082,7 +1064,7 @@ def propagation_pass(
     Requires the ambiguity arrays (``ambiguity_score``, ``score_independent``)
     and the independent copies.  The chosen poses replace the stored ones,
     ``source`` records where each came from, and the ambiguity is recomputed.
-    Rows flagged in ``fixed`` (manual edits, accepted region runs) are never
+    Rows flagged in ``fixed`` (manual edits, kept fixes) are never
     refit: the stretches are cut around them (``split_stretches``) so they
     anchor the chains instead.  With ``predictions_of`` (the body-field
     network, as in the fit) every fit of the pass is scored against the
@@ -1368,21 +1350,16 @@ def _device(device: torch.device | str | None) -> torch.device:
 
 
 def read_summary(workspace: Any) -> dict[str, Any]:
-    """The workspace's synthesised run summary (``summary.json``), falling back to an imported run's."""
+    """The workspace's synthesised run summary (``summary.json``; empty before the first stage)."""
 
-    for name in (SUMMARY_FILE, "imported_summary.json"):
-        path = Path(workspace.path) / name
-        if path.exists():
-            return json.loads(path.read_text())
-    return {}
+    path = Path(workspace.path) / SUMMARY_FILE
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def update_summary(workspace: Any, updates: dict[str, Any]) -> dict[str, Any]:
     """Merge ``updates`` into the workspace's ``summary.json`` (written atomically)."""
 
     path = Path(workspace.path) / SUMMARY_FILE
-    # Seeded from ``read_summary`` so the first stage on an imported workspace
-    # carries the imported run's fit configuration forward.
     summary = dict(read_summary(workspace))
     summary.update(updates)
     summary["finished_at"] = utc_now()
@@ -1786,7 +1763,7 @@ def run_ambiguity(workspace: Any, params: AmbiguityParams, *, device: torch.devi
 
 
 def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray, job: np.ndarray | None = None) -> NDArray[np.bool_]:
-    """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): manual picks and flips, accepted region runs."""
+    """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): flips and kept fixes."""
 
     names = np.asarray(algorithm).astype(str)
     accepted = np.zeros(len(names), dtype=bool) if job is None else placed_job(job)
@@ -1837,7 +1814,7 @@ def run_propagate(
     arrays = workspace_arrays(workspace, setup.config)
     if "iou_independent" not in arrays:
         independent_copies(arrays)
-    # Rows the user placed (picks, flips, accepted region runs) stay as they
+    # Rows the user placed (flips, kept fixes) stay as they
     # are and anchor the chains around them; their hypotheses survive too.
     provenance = workspace.load_provenance()
     fixed = placed_rows(arrays, provenance["algorithm"], provenance["job"])
@@ -1904,7 +1881,7 @@ def human_status(workspace: Any, provenance: dict[str, np.ndarray]) -> tuple[np.
     """Per row: whether a person fixed the pose, and whether a person's review of it still holds.
 
     A pose is fixed when its provenance is not one of the stages' own
-    algorithms (a pick, a flip, an accepted region run, a mask edit) or its
+    algorithms (a flip, a kept fix, a mask edit) or its
     mask is the user's override.  Reviews are the rows of
     ``human_review.json`` (``app/inspection.py``); every row there was
     current when the file was written (``reviewed_at``), so a review holds
@@ -2035,9 +2012,6 @@ def stage_command(workspace_path: Path | str, stage: str, params: dict[str, Any]
     ]
 
 
-REGION_SPEC_KEYS = ("algorithm", "first", "last", "params", "anchor_before", "anchor_after", "id")
-
-
 def stages_command(workspace_path: Path | str, stages: Sequence[str], params: dict[str, Any] | None) -> list[str]:
     """The argv that runs ``stages`` in pipeline order as one job, every stage reading ``params`` (``run_all``'s ``'*'``)."""
 
@@ -2048,53 +2022,6 @@ def stages_command(workspace_path: Path | str, stages: Sequence[str], params: di
         sys.executable, "-m", "worm_pose_gen.pipeline",
         "--workspace", str(workspace_path), "--stages", ",".join(stages), "--params", json.dumps(params or {}),
     ]
-
-
-def region_command(workspace_path: Path | str, spec: Any) -> list[str]:
-    """The argv that runs one region algorithm as a job (``worm_pose_gen.algorithms.run_region`` through this module).
-
-    ``spec`` is the region-run dictionary ``{algorithm, first, last, params,
-    anchor_before, anchor_after, id}`` with ``first``, ``last`` and the
-    anchors as workspace ROWS (a ``JobSpec`` is accepted too: its ``params``
-    is the dictionary).  ``id`` names the candidate set; when omitted the job
-    process uses ``WORM_POSE_JOB_ID``.
-    """
-
-    values = getattr(spec, "params", spec)
-    if not isinstance(values, dict):
-        raise ValueError("a region spec is a dict (or a JobSpec whose params is one)")
-    if not values.get("algorithm"):
-        raise ValueError("a region spec needs an algorithm")
-    if values.get("first") is None or values.get("last") is None:
-        raise ValueError("a region spec needs first and last rows")
-    payload = {k: values.get(k) for k in REGION_SPEC_KEYS if values.get(k) is not None}
-    payload.setdefault("params", {})
-    return [
-        sys.executable, "-m", "worm_pose_gen.pipeline",
-        "--workspace", str(workspace_path), "--region-run", json.dumps(_json_safe(payload)),
-    ]
-
-
-def run_region_spec(workspace: Any, spec: dict[str, Any], *, device: torch.device | str | None = None, progress: Progress | None = None) -> dict[str, Any]:
-    """Run a region spec (``region_command``'s dictionary) on the workspace; returns the job result (candidate set id and metrics)."""
-
-    from .algorithms import run_region
-
-    algorithm = str(spec["algorithm"])
-    job = str(spec.get("id") or os.environ.get("WORM_POSE_JOB_ID") or "")
-    candidate_set = run_region(
-        workspace, algorithm, int(spec["first"]), int(spec["last"]), dict(spec.get("params") or {}),
-        anchor_before=None if spec.get("anchor_before") is None else int(spec["anchor_before"]),
-        anchor_after=None if spec.get("anchor_after") is None else int(spec["anchor_after"]),
-        device=device, progress=progress, job=job,
-    )
-    return {
-        "candidate_set": candidate_set.id, "algorithm": candidate_set.algorithm, "params": candidate_set.params,
-        "rows": [candidate_set.first, candidate_set.last], "frames": list(candidate_set.frames),
-        "anchors": {"before": candidate_set.anchor_before, "after": candidate_set.anchor_after},
-        "metrics": candidate_set.metrics, "metrics_before": candidate_set.metrics_before,
-        "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path),
-    }
 
 
 def _report_progress(progress: float, message: str, result: dict[str, Any] | None = None) -> None:
@@ -2126,26 +2053,17 @@ def _json_safe(value: Any) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run one pipeline stage over a workspace.")
+    parser = argparse.ArgumentParser(description="Run one pipeline stage, or several in order, over a workspace.")
     parser.add_argument("--workspace", type=Path, required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stage", choices=STAGES)
     group.add_argument("--stages", default=None, help="comma-separated stages, run in pipeline order in this process with the same --params")
-    group.add_argument("--region-run", default=None, help="JSON region spec: algorithm, first, last (rows), params, anchor_before, anchor_after, id")
     parser.add_argument("--params", default="{}", help="JSON object of stage parameters")
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
     from .workspace import Workspace
 
     workspace = Workspace.open(args.workspace)
-    if args.region_run is not None:
-        spec = json.loads(args.region_run)
-        label = str(spec.get("algorithm", "region"))
-        _report_progress(0.0, f"{label}: starting")
-        result = run_region_spec(workspace, spec, device=args.device, progress=_report_progress)
-        _report_progress(1.0, f"{label}: done", _json_safe(result))
-        print(json.dumps(_json_safe(result), indent=1))
-        return 0
     params = json.loads(args.params)
     if args.stages is not None:
         stages = [stage for stage in args.stages.split(",") if stage]

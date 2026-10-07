@@ -8,7 +8,7 @@ import torch
 
 from worm_pose_gen.body_net import heatmap_focal_loss
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets, self_contact
-from worm_pose_gen.label_app import RecordingSource
+from worm_pose_gen.recordings import RecordingSource
 from worm_pose_gen.segmenter import INPUT_STD
 from worm_pose_gen.temporal_context import difference_channels, read_context
 

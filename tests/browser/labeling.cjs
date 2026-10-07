@@ -63,6 +63,14 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     };
     const click = async (x, y) => { const p = await at(x, y); await page.mouse.click(p.x, p.y); };
     const waitProposal = () => page.waitForFunction(() => /Proposal ready/.test(document.querySelector('.lb-body-note')?.textContent || ''), null, {timeout: 180000});
+    // The fixture's server has no GPU: the body proposal is computed only when asked (Propose).
+    const propose = async () => {
+      await page.waitForSelector('.lb-body-controls button:text-is("Propose"):visible');
+      assert.match(await page.locator('.lb-body-note').textContent(), /Propose computes the model's body/);
+      await button('Propose').click();
+      await waitProposal();
+      assert.equal(await button('Propose').isDisabled(), true);
+    };
 
     // Home: the setup's queues, with the Relabel queue from the workspace.
     await page.goto(base + '/#labeling');
@@ -79,12 +87,12 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await button('← Queues').click();
     await page.waitForSelector(`.lb-queue[data-queue="${relabel}"]`);
 
-    // The queue opens on its first frame; the mask comes from the model (the workspace has none) and the body proposal follows.
+    // The queue opens on its first frame; the mask comes from the model (the workspace has none); Propose computes the body proposal.
     await page.locator(`.lb-queue[data-queue="${relabel}"]`).click();
     await page.waitForFunction(() => /frame 10/.test(document.querySelector('.lb-status')?.textContent || ''));
     assert.equal(await page.evaluate(() => location.hash), `#labeling/queue/${relabel}/0`);
     assert.match(await status(), /2024-05-05-01 · frame 10 · split train · mask from the model/);
-    await waitProposal();
+    await propose();
     await shot('labeling-editor');
 
     // Paint worm in an empty corner: unsaved; Undo takes it back. A background stroke and a network proposal (A applies it).
@@ -118,8 +126,8 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     assert.match(await page.locator('#header-context').textContent(), /Saving to mine:nir-labels/);
     assert.doesNotMatch(await page.locator('#header-context').textContent(), /\(new\)/);
 
-    // Trace the midline by hand from head to tail: Fit, then Accept; S saves in place.
-    await waitProposal();
+    // Trace the midline by hand from head to tail: Fit, then Accept; S saves in place. No proposal was asked for on this frame.
+    assert.match(await page.locator('.lb-body-note').textContent(), /Propose computes the model's body/);
     await page.keyboard.press('t');
     for (const x of [62, 110, 160, 210, 258]) await click(x, midY(x, 20));
     assert.match(await page.locator('.lb-trace').textContent(), /5 points/);
@@ -181,7 +189,7 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await page.locator('.lb-entries .lb-entry').first().click();
     await page.waitForFunction(() => /frame 5 · split train · saved revision 1 \(lab:nir-labels\)/.test(document.querySelector('.lb-status')?.textContent || ''));
     assert.equal(await page.locator('.lb-maskonly input').isChecked(), false);
-    await waitProposal();
+    await propose();
     await button('A-P').click();
     assert.equal(await button('A-P').getAttribute('aria-pressed'), 'true');
     await shot('labeling-browse');
@@ -190,6 +198,19 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await drag([20, 20], [40, 30]);
     await page.keyboard.press('Shift+ArrowRight');
     await page.waitForFunction(() => /frame 25/.test(document.querySelector('.lb-status')?.textContent || ''));
+
+    // With a GPU for the server's models the proposal comes with the frame, and there is no Propose button.
+    await page.route('**/api/config', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({response, json: {...(await response.json()), gpu: true}});
+    });
+    await page.goto(base + '/#labeling/browse');
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 7);
+    await page.locator('.lb-entries .lb-entry').first().click();
+    await waitProposal();
+    assert.equal(await button('Propose').isHidden(), true);
+    await page.unroute('**/api/config');
 
     // The Training page's Datasets tab links one dataset's recording.
     await page.goto(base + '/#labeling/browse/lab:nir-labels/2024-05-05-01');

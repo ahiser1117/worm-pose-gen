@@ -125,8 +125,7 @@ def main():
     labeling_service.targets_command = lambda libraries, identities: [sys.executable, "-c", "pass"]
     Workspace.create(root / "workspaces", "ws", path, 0, FRAMES - 1)
     app = create_app(AppConfig(
-        workspaces_root=root / "workspaces", recording_roots=(recordings,), poses_root=root / "runs", dataset_root=root / "cache",
-        checkpoint=None, prior_cache=None, notes=root / "notes.json", gpus=(), device="cpu", job_interval=0.2, body_net=None,
+        workspaces_root=root / "workspaces", dataset_root=root / "cache", gpus=(), device="cpu", job_interval=0.2,
         lab_library=lab, library=personal, dev=args.dev,
     ))
     state = app.state.app_state

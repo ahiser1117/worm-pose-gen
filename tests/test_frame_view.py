@@ -1,28 +1,30 @@
+"""What the Workspace page shows of a frame (``app/frame_view.py``, ``app/workspace_view.py``), and the synthetic fitted workspace other tests build on.
+
+``_write_workspace`` makes a workspace holding the arrays and run summary the
+pipeline stages write for six straight frames of a synthetic recording; the
+last frame is a propagated, coil-like frame with a low overlap and step 6c
+hypotheses.
+"""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 import h5py
 import numpy as np
+import torch
 
 from worm_pose_gen.ambiguity import FLAG_NAMES
+from worm_pose_gen.app.frame_view import Segmenters, classify_frame, prior_width_profile, signed_curvature
+from worm_pose_gen.app.workspace_view import WorkspaceView
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import default_width_template
-from worm_pose_gen.pose_viewer import (
-    ViewerState,
-    classify_frame,
-    create_server,
-    prior_width_profile,
-    run_entry,
-    signed_curvature,
-)
+from worm_pose_gen.recordings import RecordingSource
+from worm_pose_gen.workspace import Workspace, split_arrays
 
 
 HEIGHT, WIDTH, FRAMES = 96, 128, 6
@@ -41,10 +43,14 @@ def _write_recording(path: Path) -> None:
         handle.create_dataset("/img_nir", data=stack)
 
 
-def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAMES, independent: bool = True) -> None:
-    """A run directory with the arrays the fitter stores, frames ``first`` onward."""
+# The provenance the fixture gives its fitted rows: the fit stage's, by ``source``.
+FIT_JOB = "stage:fit"
+SOURCE_ALGORITHMS = {0: "independent_fit", 1: "chain_forward", 2: "chain_backward"}
 
-    path.mkdir(parents=True)
+
+def _write_workspace(root: Path, name: str, recording: Path, *, first: int = 0, count: int = FRAMES, independent: bool = True) -> Workspace:
+    """A workspace on ``recording`` frames ``first`` onward with the arrays and summary the stages write (see the module docstring)."""
+
     n_points = 100
     frame_index = np.arange(first, first + count)
     latent = np.concatenate((np.zeros(16), [0.0, 100.0], [WIDTH / 2, HEIGHT / 2]))
@@ -89,8 +95,8 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         "track_length_px": np.full(count, 100.0),
         "length_refit": np.zeros(count, dtype=bool),
     }
-    for name in FLAG_NAMES:
-        arrays[f"flag_{name}"] = np.zeros(count, dtype=bool)
+    for flag in FLAG_NAMES:
+        arrays[f"flag_{flag}"] = np.zeros(count, dtype=bool)
     # Last frame: a propagated coil-like frame with a low overlap.
     arrays["flag_low_iou"][-1] = True
     arrays["flag_self_contact"][-1] = True
@@ -132,7 +138,6 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         arrays["centerline_xy_independent"][-1, :, 1] += 8.0
         arrays["width_profile_independent"] = arrays["width_profile"].copy()
         arrays["body_length_independent"] = arrays["body_length_px"].copy()
-    np.savez_compressed(path / "poses.npz", **arrays)
     summary = {
         "started_at": f"2026-09-06T1{first}:00:00+00:00",
         "recording": str(recording),
@@ -140,7 +145,7 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         "step": 1,
         "frame_count": count,
         "frames_fitted": count,
-        "checkpoint": {"path": str(path / "missing.ckpt"), "sha256": "abcdef0123456789"},
+        "checkpoint": {"path": str(Path(root) / "missing.ckpt"), "sha256": "abcdef0123456789"},
         "git": {"commit": "0123456789abcdef", "dirty": False},
         "threshold": 0.5,
         "mask_cleanup": {"fill_holes": True, "fill_holes_radius_px": 8, "largest_component": True, "min_worm_pixels": 500},
@@ -152,36 +157,81 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         "ambiguity": {"thresholds": {"low_iou": 0.9, "holes_px": 200}, "flag_counts": {name: 0 for name in FLAG_NAMES}, "frames_with_score_at_least_1": 1, "frames_with_score_at_least_2": 1},
         "propagation": {"stretches": [[count - 3, count - 1]], "frames_in_stretches": 3, "frames_replaced": 1, "replaced_by_source": {"forward": 1, "backward": 0}, "stretch_iou_median_before": 0.5, "stretch_iou_median_after": 0.85},
     }
-    (path / "summary.json").write_text(json.dumps(summary))
+    workspace = Workspace.create(root, name, recording, int(frame_index[0]), int(frame_index[-1]))
+    state, hypotheses = split_arrays(arrays)
+    workspace.save_state(state)
+    if hypotheses:
+        workspace.save_hypotheses(hypotheses)
+    for code, algorithm in SOURCE_ALGORITHMS.items():
+        rows = np.nonzero(arrays["source"] == code)[0]
+        if len(rows):
+            workspace.set_provenance(rows, algorithm, FIT_JOB, 1.0e9)
+    (workspace.path / "summary.json").write_text(json.dumps(summary))
+    return workspace
 
 
-class PoseViewerHelperTests(unittest.TestCase):
+def _view(workspace: Workspace, root: Path) -> tuple[WorkspaceView, RecordingSource]:
+    source = RecordingSource(workspace.recording, root / "fields")
+    return WorkspaceView(workspace, source, None), source
+
+
+class FrameViewHelperTests(unittest.TestCase):
     def test_light_frames_skip_expensive_layers_even_after_full_cache_hit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             recording = root / "recording.h5"
-            run = root / "run"
             _write_recording(recording)
-            _write_run(run, recording)
-            viewer = ViewerState([run], dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json")
+            view, source = _view(_write_workspace(root / "workspaces", "demo", recording), root)
+            segmenters = Segmenters(torch.device("cpu"))
             try:
                 for warm_cache in (False, True):
                     with self.subTest(warm_cache=warm_cache):
                         if warm_cache:
-                            full = viewer.frame_payload("run", FRAMES - 1, None, False)
+                            full = view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=False, detail="full")
                             self.assertIn("tube", full["layers"])
                             self.assertIn("tube_independent", full["layers"])
-                        with patch("worm_pose_gen.pose_viewer.render_tube", side_effect=AssertionError("tube rendering during motion")), patch.object(viewer.segmenters, "probability", side_effect=AssertionError("segmentation during motion")):
-                            light = viewer.frame_payload("run", FRAMES - 1, None, True, "light")
+                        with patch("worm_pose_gen.app.frame_view.render_tube", side_effect=AssertionError("tube rendering during motion")), patch.object(segmenters, "probability", side_effect=AssertionError("segmentation during motion")):
+                            light = view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=True, detail="light", segment=True)
                         self.assertEqual(light["detail"], "light")
                         self.assertEqual(list(light["layers"]), ["image"])
                         self.assertEqual(light["errors"], [])
                         self.assertTrue(light["image_raw"].startswith("data:image/jpeg"))
                         self.assertIn("centerline_xy", light["pose"])
                         self.assertIn("independent", light["pose"])
-                self.assertIn("tube", viewer.frame_payload("run", FRAMES - 1, None, False)["layers"])
+                self.assertIn("tube", view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=False, detail="full")["layers"])
             finally:
-                viewer.close()
+                source.close()
+
+    def test_the_segmenter_runs_only_for_the_developer_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "recording.h5"
+            _write_recording(recording)
+            workspace = _write_workspace(root / "workspaces", "demo", recording)
+            workspace.set_masks([0], [np.ones((HEIGHT, WIDTH), dtype=bool)])
+            view, source = _view(workspace, root)
+            segmenters = Segmenters(torch.device("cpu"))
+            checkpoint = root / "segmenter.ckpt"
+            checkpoint.write_bytes(b"")
+            settings = json.loads((workspace.path / "summary.json").read_text())
+            settings["checkpoint"] = {"path": str(checkpoint)}
+            (workspace.path / "summary.json").write_text(json.dumps(settings))
+            probability = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
+            probability[40:56, 20:100] = 0.9
+            try:
+                with patch.object(segmenters, "probability", side_effect=AssertionError("segmentation for an analyst")):
+                    analyst = view.frame(0, segmenters, torch.device("cpu"), raw=False, detail="full")
+                self.assertNotIn("probability", analyst["layers"])
+                self.assertEqual(analyst["mask_final_source"], "stored")
+                with patch.object(segmenters, "probability", return_value=(probability, str(checkpoint))) as segment:
+                    developer = view.frame(0, segmenters, torch.device("cpu"), raw=False, detail="full", segment=True)
+                self.assertEqual(segment.call_count, 1)
+                self.assertTrue(developer["layers"]["probability"].startswith("data:image/png"))
+                self.assertIn("mask_raw", developer["layers"])
+                self.assertEqual(developer["mask_final_source"], "stored")  # the stored mask still wins
+                self.assertGreater(developer["mask_stats"]["raw_worm_pixels"], 0)
+            finally:
+                source.close()
 
     def test_classification_separates_coils_edges_and_failures(self) -> None:
         clean = classify_frame(True, {}, 0, points_in_fov=100, n_points=100, mask_on_border=False)
@@ -225,134 +275,67 @@ class PoseViewerHelperTests(unittest.TestCase):
         np.testing.assert_allclose(np.mean(np.log(shaped / (10.0 * template))), 0.0, atol=1e-9)
 
 
-class PoseViewerServerTests(unittest.TestCase):
-    def test_catalog_series_frames_and_notes(self) -> None:
+class WorkspacePayloadTests(unittest.TestCase):
+    def test_series_frames_and_poses_of_a_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             recording = root / "rec-a.h5"
             _write_recording(recording)
-            _write_run(root / "runs" / "2026-09-06T10-00-00Z_demo", recording)
-            _write_run(root / "runs" / "2026-09-06T11-00-00Z_other", recording, first=2, count=3, independent=False)
-            (root / "runs" / "not_a_run").mkdir()
-            runs = ViewerState.discover(root / "runs")
-            self.assertEqual([p.name for p in runs], ["2026-09-06T10-00-00Z_demo", "2026-09-06T11-00-00Z_other"])
-            entry = run_entry(runs[0])
-            self.assertEqual(entry["mask_cleanup"], "fill + largest")
-            self.assertEqual(entry["frames_below_0.9"], 3)
-            state = ViewerState(runs, dataset_root=root / "dataset", checkpoint=None, device="cpu", notes=root / "notes.json", runs_root=root / "runs")
-            server = create_server(state, "127.0.0.1", 0)
-            port = server.server_address[1]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            base = f"http://127.0.0.1:{port}"
+            view, source = _view(_write_workspace(root / "workspaces", "demo", recording), root)
+            segmenters, cpu = Segmenters(torch.device("cpu")), torch.device("cpu")
             try:
-                info = json.loads(urlopen(f"{base}/api/state").read())
-                self.assertEqual(info["server"], "viewer")
-                self.assertEqual([r["name"] for r in info["runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T10-00-00Z_demo"])
-                self.assertEqual(info["flag_groups"]["coil"], ["self_contact", "holes", "area_deficit"])
-                _write_run(root / "runs" / "2026-09-06T13-00-00Z_late", recording, first=3, count=2, independent=False)
-                rescanned = json.loads(urlopen(f"{base}/api/state?rescan=1").read())
-                self.assertEqual(rescanned["added"], 1)
-                self.assertEqual(rescanned["runs"][0]["name"], "2026-09-06T13-00-00Z_late")
-                page = urlopen(f"{base}/").read().decode()
-                self.assertIn("Worm pose", page)
-                self.assertIn("Width along the body", page)
-                # The UI is split into plain scripts loaded in order; the stdlib server serves the entry script.
-                for name in ("api.js", "layers.js", "charts.js", "viewer.js", "panels.js", "app.js"):
-                    self.assertIn(f"/static/{name}", page)
-                script = urlopen(f"{base}/app.js").read().decode()
-                self.assertIn("bindEvents", script)
-                self.assertIn("drawCharts", script)
-                # ... and every module the page references under /static/, with the right content type.
-                with urlopen(f"{base}/static/layers.js") as response:
-                    self.assertIn("buildOverlay", response.read().decode())
-                    self.assertIn("javascript", response.headers["Content-Type"])
-                with urlopen(f"{base}/static/style.css") as response:
-                    self.assertIn("text/css", response.headers["Content-Type"])
-                with self.assertRaises(HTTPError) as missing:
-                    urlopen(f"{base}/static/nothing.js")
-                self.assertEqual(missing.exception.code, 404)
-
-                run = json.loads(urlopen(f"{base}/api/run?name=2026-09-06T10-00-00Z_demo").read())
-                self.assertTrue(run["recording_readable"])
-                self.assertEqual(run["image_shape"], [HEIGHT, WIDTH])
-                self.assertTrue(run["has_independent_pose"])
-                # Overlapping runs first: "other" covers frames 2-4 (overlap 3), "late" 3-4 (overlap 2).
-                self.assertEqual([r["name"] for r in run["compatible_runs"]], ["2026-09-06T11-00-00Z_other", "2026-09-06T13-00-00Z_late"])
-                self.assertEqual([r["overlap"] for r in run["compatible_runs"]], [3, 2])
-                series = run["series"]
+                payload = view.payload()
+                self.assertTrue(payload["recording_readable"])
+                self.assertEqual(payload["image_shape"], [HEIGHT, WIDTH])
+                self.assertTrue(payload["has_independent_pose"])
+                self.assertEqual(payload["provenance"]["job"][0], "stage:fit")
+                series = payload["series"]
                 self.assertEqual(series["frame_index"], list(range(FRAMES)))
                 self.assertEqual(series["classification"], ["clean"] * (FRAMES - 1) + ["ambiguous"])
                 self.assertEqual(series["flags"]["low_iou"], [0] * (FRAMES - 1) + [1])
                 self.assertEqual(len(series["tube_area_px"]), FRAMES)
-                self.assertEqual(run["stretches"], [[FRAMES - 3, FRAMES - 1]])
+                self.assertEqual(series["path_override"][-1], 1)
+                self.assertEqual(series["tube_coverage"][-1], 0.97)
+                self.assertEqual(payload["stretches"], [[FRAMES - 3, FRAMES - 1]])
 
-                frame = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame={FRAMES - 1}&raw=1").read())
+                frame = view.frame(FRAMES - 1, segmenters, cpu, raw=True, detail="full")
                 self.assertEqual((frame["height"], frame["width"]), (HEIGHT, WIDTH))
                 self.assertTrue(frame["layers"]["image"].startswith("data:image/jpeg"))
                 self.assertTrue(frame["image_raw"].startswith("data:image/jpeg"))
                 self.assertTrue(frame["layers"]["tube"].startswith("data:image/png"))
                 self.assertTrue(frame["layers"]["tube_independent"].startswith("data:image/png"))
-                self.assertNotIn("probability", frame["layers"])  # no checkpoint anywhere
-                self.assertTrue(any("checkpoint" in e for e in frame["errors"]))
+                self.assertNotIn("probability", frame["layers"])
+                self.assertEqual(frame["errors"], [])
+                self.assertEqual(frame["provenance"]["algorithm"], "chain_forward")
                 stats = frame["stats"]
                 self.assertEqual(stats["source_name"], "forward")
                 self.assertEqual(stats["classification"]["kind"], "ambiguous")
                 self.assertIn("coil / self-contact", stats["classification"]["tags"])
+                self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
                 self.assertEqual(stats["stretch"]["rows"], [FRAMES - 3, FRAMES - 1])
                 fired = {f["name"] for f in stats["flags"] if f["fired"]}
                 self.assertEqual(fired, {"low_iou", "self_contact"})
                 low = next(f for f in stats["flags"] if f["name"] == "low_iou")
                 self.assertEqual((low["threshold"], low["test"]), (0.9, "<"))
                 self.assertEqual(stats["length_vs_prior_sigmas"], 0.0)
+                self.assertEqual(stats["max_bend_widths"], 0.8)
                 pose = frame["pose"]
                 self.assertEqual(len(pose["centerline_xy"]), 100)
                 self.assertEqual(len(pose["curvature"]), 100)
                 self.assertEqual(len(pose["width_prior_profile"]), 100)
                 self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
-                self.assertEqual([h["source"] for h in pose["hypotheses"]], ["independent", "forward"])
-                self.assertEqual([h["chosen"] for h in pose["hypotheses"]], [False, True])
-                self.assertEqual(pose["path"], {"index": 1, "mirrored": False, "override": True, "energy_gap": 0.01, "cost": 12.5})
-                self.assertEqual(len(pose["prediction_xy"]), 100)
-                self.assertEqual(pose["prediction_distance_px"], 1.0)
-                self.assertTrue(run["has_hypotheses"])
-                self.assertEqual(series["prediction_distance_px"][-1], 1.0)
-                self.assertEqual(series["path_override"][-1], 1)
-                self.assertEqual(series["tube_coverage"][-1], 0.97)
-                self.assertEqual(stats["max_bend_widths"], 0.8)
-                self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
+                self.assertNotIn("hypotheses", pose)
 
-                light = json.loads(urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=light").read())
+                light = view.frame(2, segmenters, cpu, raw=False, detail="light")
                 self.assertEqual(light["detail"], "light")
                 self.assertEqual(sorted(light["layers"]), ["image"])
-                self.assertEqual(light["errors"], [])
                 self.assertEqual(light["stats"]["frame_index"], 2)
-                with self.assertRaises(Exception):
-                    urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=2&detail=medium")
-
-                other = json.loads(urlopen(f"{base}/api/pose?run=2026-09-06T11-00-00Z_other&frame=3").read())
-                self.assertTrue(other["present"])
-                self.assertNotIn("independent", other["pose"])
-                missing = json.loads(urlopen(f"{base}/api/pose?run=2026-09-06T11-00-00Z_other&frame=0").read())
-                self.assertFalse(missing["present"])
-
-                with self.assertRaises(Exception):
-                    urlopen(f"{base}/api/frame?run=2026-09-06T10-00-00Z_demo&frame=99")
-
-                body = json.dumps({"run": "2026-09-06T10-00-00Z_demo", "frame_index": 5, "tags": ["coil"], "comment": "gap closed"}).encode()
-                notes = json.loads(urlopen(Request(f"{base}/api/note", data=body, headers={"Content-Type": "application/json"})).read())["notes"]
-                self.assertEqual(notes[0]["recording"], "rec-a")
-                self.assertEqual(notes[0]["tags"], ["coil"])
-                listed = json.loads(urlopen(f"{base}/api/notes").read())
-                self.assertEqual(len(listed["notes"]), 1)
-                self.assertEqual(json.loads((root / "notes.json").read_text())["notes"][0]["frame_index"], 5)
-                body = json.dumps({"index": 0}).encode()
-                remaining = json.loads(urlopen(Request(f"{base}/api/note/delete", data=body, headers={"Content-Type": "application/json"})).read())["notes"]
-                self.assertEqual(remaining, [])
+                with self.assertRaisesRegex(ValueError, "detail"):
+                    view.frame(2, segmenters, cpu, raw=False, detail="medium")
+                with self.assertRaisesRegex(ValueError, "not in this workspace"):
+                    view.frame(99, segmenters, cpu, raw=False, detail="full")
             finally:
-                server.shutdown()
-                server.server_close()
-                state.close()
+                source.close()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,10 @@
 //           the targets builder orients it), "head" (a head end, from Flip or
 //           from accepting the shown body) or "trace" (a midline, head first,
 //           traced by hand or the proposal's). Its fit, when there is one, is
-//           what the Midline and A-P layers draw.
+//           what the Midline and A-P layers draw. The body model's proposal is
+//           computed as the frame opens when the server has a GPU; without one
+//           (15-20 s a frame on the CPU) only when asked: Propose, or Use
+//           proposal (G).
 //   context the frames t-16..t+16, loaded on first use: Frames (offset,
 //           Play at 10 fps) or Difference (frame[t+lag] - frame[t-lag],
 //           contrast set automatically).
@@ -142,6 +145,8 @@ export class FrameEditor {
     this.bodyNote = node("p", {class: "note lb-body-note"});
     this.bodyControls = node("div", {class: "lb-body-controls"});
     this.useButton = button("Use proposal", () => this.useProposal(), {class: "primary", title: "Use the model's body (G)"});
+    // Without a GPU the proposal is computed only on request (see the header).
+    this.proposeButton = button("Propose", () => this.requestProposal(), {title: "Compute the body model's proposal for the current mask (about 15-20 s without a GPU)"});
     this.flipButton = button("Flip head/tail", () => this.flip(), {title: "Swap head and tail (H)"});
     this.traceButton = button("Trace midline", () => this.startTrace(false), {title: "Click from head to tail (T)"});
     this.editButton = button("Edit proposal", () => this.startTrace(true), {title: "Trace, starting from the proposal's points"});
@@ -155,7 +160,7 @@ export class FrameEditor {
       node("div", {class: "row"}, this.fitButton, this.removeButton, this.cancelTraceButton, this.acceptButton, this.discardButton));
     this.maskOnly = node("input", {type: "checkbox", onchange: () => this._changed()});
     this.bodyControls.append(
-      node("div", {class: "row"}, this.useButton, this.flipButton),
+      node("div", {class: "row"}, this.useButton, this.proposeButton, this.flipButton),
       node("div", {class: "row"}, this.traceButton, this.editButton),
       this.tracePanel,
     );
@@ -294,7 +299,7 @@ export class FrameEditor {
     this._syncContext();
     this._syncControls();
     this.onChange();
-    if (frame.models.body) this.requestProposal();
+    if (frame.models.body && this.autoPropose) this.requestProposal();
     return true;
   }
 
@@ -351,7 +356,10 @@ export class FrameEditor {
       this.removeButton.disabled = !n;
     }
     const p = this.proposal;
-    this.useButton.disabled = tracing || !(p?.status === "ready" || p?.status === "loading");
+    const onRequest = !this.autoPropose && !!this.frame?.models.body;
+    this.proposeButton.hidden = !onRequest;
+    this.proposeButton.disabled = tracing || p?.status === "loading" || (p?.status === "ready" && !p.stale);
+    this.useButton.disabled = tracing || !(p?.status === "ready" || p?.status === "loading" || onRequest);
     this.editButton.disabled = tracing || p?.status !== "ready";
     this.traceButton.disabled = tracing;
     this.flipButton.disabled = tracing;
@@ -373,6 +381,7 @@ export class FrameEditor {
     if (p?.status === "ready") return `${text} Proposal ready (fit IoU ${p.fit_iou.toFixed(3)})${p.stale ? ", for an earlier mask" : ""}.`;
     if (p?.status === "no_trace") return `${text} The model found no body to propose.`;
     if (p?.status === "error") return `${text} Proposal failed: ${p.error}`;
+    if (!this.autoPropose) return `${text} Propose computes the model's body (slow without a GPU).`;
     return text;
   }
 
@@ -539,6 +548,9 @@ export class FrameEditor {
   }
 
   // ------------------------------------------------------------------ body
+
+  // The proposal opens with the frame only when the server's models run on a GPU.
+  get autoPropose() { return !!this.ctx.config?.gpu; }
 
   async requestProposal() {
     if (!this.frame?.models.body) return null;

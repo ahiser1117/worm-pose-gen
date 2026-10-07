@@ -11,7 +11,7 @@ import numpy as np
 
 from worm_pose_gen import library
 from worm_pose_gen.app import AppConfig, create_app
-from worm_pose_gen.label_app import data_url, mask_to_png_values
+from worm_pose_gen.app.images import data_url, mask_to_png_values
 from worm_pose_gen.library.targets import write_targets
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -25,8 +25,8 @@ class LibraryApiTests(unittest.TestCase):
         self.root = Path(directory.name)
         self.libraries = make_libraries(self.root)
         self.config = AppConfig(
-            workspaces_root=self.root / "workspaces", recording_roots=(self.root / "recordings",), poses_root=self.root / "poses",
-            dataset_root=self.root / "flat-field-cache", checkpoint=None, prior_cache=None, notes=self.root / "notes.json",
+            workspaces_root=self.root / "workspaces",
+            dataset_root=self.root / "flat-field-cache",
             device="cpu", gpus=(), lab_library=self.libraries.lab, library=self.libraries.personal,
         )
         app = create_app(self.config)

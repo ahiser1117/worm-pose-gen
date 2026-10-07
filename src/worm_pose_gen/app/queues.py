@@ -22,7 +22,7 @@ There are three kinds (``docs/APP_SIMPLIFICATION.md``, section 3):
     benchmark.
 ``manifest``
     the frames of a labeling manifest (``docs/labeling_*/manifest.json``),
-    made from the command line by ``worm-pose-labeler --queue`` for the
+    made from the command line by ``worm-pose-app --queue`` for the
     developer (:func:`manifest_queue`); targeted frames, origin ``fix``.
 
 An entry is done when it was saved through the queue: the save records the

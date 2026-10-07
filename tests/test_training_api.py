@@ -22,8 +22,8 @@ class TrainingApiTests(unittest.TestCase):
         self.root = Path(directory.name)
         self.libraries = make_library(self.root)
         config = AppConfig(
-            workspaces_root=self.root / "workspaces", recording_roots=(), poses_root=self.root / "poses",
-            dataset_root=self.root / "cache", checkpoint=None, prior_cache=None, notes=self.root / "notes.json",
+            workspaces_root=self.root / "workspaces",
+            dataset_root=self.root / "cache",
             device="cpu", gpus=(0,), lab_library=self.libraries.lab, library=self.libraries.personal,
         )
         app = create_app(config)

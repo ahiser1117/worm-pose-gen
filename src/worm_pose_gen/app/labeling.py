@@ -49,16 +49,18 @@ import numpy as np
 
 from .. import library
 from ..jobs import JobSpec
-from ..label_app import Proposer, data_url, decode_mask_data_url, mask_to_png_values, probability_to_png
 from ..library.datasets import assign_split
 from ..library.targets import recording_length, targets_command
+from .images import data_url, decode_mask_data_url, mask_to_png_values, probability_to_png
 from .routers.jobs import place
 from .routers.library import label_row, targets_layers
 from .state import NotFound, _integer
 
 # Recording captures kept in memory: each holds the 33 context frames of one frame.
 CAPTURES = 4
-REFINE_METHODS = {"fill_holes": "fill_holes", "largest": "largest_component", "grow": "dilate", "shrink": "erode"}
+REFINE_METHODS = ("fill_holes", "largest", "grow", "shrink")
+# The widest hole Fill holes closes, as the pipeline's mask cleanup does.
+HOLE_FILL_RADIUS_PX = 8
 TARGETS_JOB_KIND = "body_targets"
 
 
@@ -71,6 +73,35 @@ def decode_mask(value: Any, shape: tuple[int, int]) -> np.ndarray:
         return decode_mask_data_url(str(value or ""), shape)
     except (OSError, binascii.Error) as error:
         raise ValueError("mask must contain a readable base64 PNG image") from error
+
+
+def refine_mask(mask: np.ndarray, method: str, device: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    """One of the mask tools on labels (0/1/255): Fill holes, Largest (component), Grow or Shrink by a pixel; ignore pixels stay."""
+
+    from ..classical import _dilate, _erode, _largest_component
+    from ..mask_fit import fill_narrow_holes
+    from ..segmenter import IGNORE_LABEL
+
+    worm = mask == 1
+    ignore = mask == IGNORE_LABEL
+    info: dict[str, Any] = {}
+    if method == "fill_holes":
+        worm, added = fill_narrow_holes(worm, HOLE_FILL_RADIUS_PX, device=device)
+        info["pixels_added"] = int(added)
+    elif method == "largest":
+        if worm.any():
+            worm, _, count = _largest_component(worm)
+            info["components_removed"] = int(count - 1)
+    elif method == "grow":
+        worm = _dilate(worm, 1)
+    elif method == "shrink":
+        worm = _erode(worm, 1)
+    else:
+        raise ValueError(f"unknown refinement {method!r}; expected one of {REFINE_METHODS}")
+    out = np.zeros(mask.shape, dtype=np.uint8)
+    out[worm] = 1
+    out[ignore & ~worm] = IGNORE_LABEL
+    return out, info
 
 
 def encode_ap(ap: np.ndarray) -> str:
@@ -331,7 +362,7 @@ class Labeling:
         width, height = _integer(payload, "width"), _integer(payload, "height")
         mask = decode_mask(payload.get("mask"), (height, width))
         with self.fit_lock:
-            refined, info = Proposer.refine(mask, REFINE_METHODS[method], self.app.device)
+            refined, info = refine_mask(mask, method, self.app.device)
         return {"mask": encode_mask(refined), "info": info}
 
     # ------------------------------------------------------------------ bodies

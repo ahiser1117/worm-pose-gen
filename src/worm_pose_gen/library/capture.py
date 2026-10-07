@@ -37,7 +37,7 @@ def read_label_inputs(
     """The keyword arguments of :meth:`.datasets.Dataset.save` that come from the recording."""
 
     from ..head_tracking import read_head_tracking
-    from ..label_app import RecordingSource
+    from ..recordings import RecordingSource
     from ..temporal_context import read_context
 
     path = Path(path).expanduser().resolve()

@@ -44,8 +44,7 @@ class FixesApiTests(unittest.TestCase):
         cls.workspace = posed_workspace(root, WS)
         (root / "runs").mkdir()
         config = AppConfig(
-            workspaces_root=root / "workspaces", recording_roots=(root,), poses_root=root / "runs", dataset_root=root / "dataset",
-            checkpoint=None, prior_cache=None, notes=root / "notes.json", gpus=(0,), device="cpu", job_interval=0.1,
+            workspaces_root=root / "workspaces", dataset_root=root / "dataset", gpus=(0,), device="cpu", job_interval=0.1,
         )
         cls.client = TestClient(create_app(config), raise_server_exceptions=False)
         cls.client.__enter__()

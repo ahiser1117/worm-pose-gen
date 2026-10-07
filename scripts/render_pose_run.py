@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 from worm_pose_gen.segmenter import load_segmenter

@@ -128,8 +128,8 @@ def main():
     worm_pose_gen.body_net.load_body_net = lambda path, device=None: stub
 
     app = create_app(AppConfig(
-        workspaces_root=root / "workspaces", recording_roots=(), poses_root=root / "runs", checkpoint=None, body_net=None,
-        dataset_root=root / "cache", prior_cache=None, notes=root / "notes.json", gpus=(0,), device="cpu", job_interval=0.2,
+        workspaces_root=root / "workspaces",
+        dataset_root=root / "cache", gpus=(0,), device="cpu", job_interval=0.2,
         lab_library=lab, library=root / "mine", dev=args.dev,
     ))
     app.state.app_state.runner.gpus = None  # a GPU for the UI's Run on, none for the jobs

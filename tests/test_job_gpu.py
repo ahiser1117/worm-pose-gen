@@ -64,9 +64,8 @@ class JobGpuTests(unittest.TestCase):
         self.assertIsNone(restored.pid)
 
     def test_submission_and_retry_api_device_choices(self):
-        config = AppConfig(workspaces_root=self.root/'ws', recording_roots=(), poses_root=self.root/'poses',
-                           dataset_root=self.root/'dataset', notes=self.root/'notes.json', checkpoint=None,
-                           prior_cache=None, gpus=(0, 3), device='cpu')
+        config = AppConfig(workspaces_root=self.root/'ws',
+                           dataset_root=self.root/'dataset', gpus=(0, 3), device='cpu')
         app = create_app(config)
         runner = app.state.app_state.runner
         client = TestClient(app)

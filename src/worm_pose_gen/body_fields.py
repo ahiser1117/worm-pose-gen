@@ -1,4 +1,10 @@
-"""Body-field records of a segmentation store: build, load, review and correct them.
+"""Body-field targets of one labeled frame (:func:`fit_targets`), and the records of the old segmentation store.
+
+The library's target cache (:mod:`library.targets`) builds each label's
+targets with :func:`fit_targets`.  The rest of this module is the old
+store's record format, which ``scripts/migrate_to_library.py`` reads the
+human body fields from and ``scripts/build_body_fields.py`` and
+``scripts/evaluate_field_fitting.py`` still build and read.
 
 For each hand-labeled frame ``<root>/body_fields/<sample_id>.npz`` holds:
 
@@ -21,13 +27,14 @@ For each hand-labeled frame ``<root>/body_fields/<sample_id>.npz`` holds:
     how the head was chosen: ``nose`` (acquisition nose landmark on this
     frame), ``nose_nearby`` (the nearest valid landmark within the context;
     ``nose_offset`` says which frame), ``taper`` (no landmark; the thinner
-    end is the tail), or ``manual`` (flipped by hand, :func:`flip`).
+    end is the tail), or ``manual`` (flipped by hand in the old Body fields
+    screen).
     ``orientation_margin`` is ``(d_tail - d_head) / diameter`` for the nose
     cases.
 
 ``meta`` is a JSON string.  Besides the build fields it may hold ``review``
 (:data:`REVIEW_STATES`; absent means ``unreviewed``) and ``reviewed_at``
-(UTC ISO), written by :func:`set_review`.  A rejected sample trains the mask
+(UTC ISO), written by the old Body fields screen.  A rejected sample trains the mask
 only.  The record is *stale* when the store's mask revision differs from
 ``meta["mask_revision"]``: the mask was edited after the targets were built,
 and :func:`build` must refit it.  Building replaces the whole record, so a
@@ -60,7 +67,7 @@ from .body_targets import render_body_targets, self_contact
 from .classical import resample_centerline
 from .head_fit import HeadConstraint
 from .head_tracking import HeadTracking, read_head_tracking
-from .label_app import RecordingSource
+from .recordings import RecordingSource
 from .mask_fit import (
     MaskFitResult, decode_centerline, default_width_template, hard_iou, init_from_centerline, orient_tail_last,
     reverse_initialization, reverse_result,
@@ -152,60 +159,6 @@ def is_current(path: Path, revision: int, max_lag: int) -> bool:
         return False
     meta = read_meta(path)
     return meta.get("mask_revision") == revision and meta.get("max_lag") == max_lag
-
-
-# --------------------------------------------------------------------------- edits
-
-
-def _edit(root: str | Path, sample_id: str, change: Callable[[dict[str, np.ndarray], dict[str, Any]], None]) -> dict[str, Any]:
-    path = field_path(root, sample_id)
-    with locked(root):
-        if not path.exists():
-            raise FileNotFoundError(f"{sample_id} has no body fields; build them first")
-        arrays, meta = load(path)
-        change(arrays, meta)
-        save(path, meta, arrays)
-    return meta
-
-
-def flip(root: str | Path, sample_id: str) -> dict[str, Any]:
-    """Swap head and tail: reverse the tube, swap the end points, ``ap -> 1 - ap``; orientation becomes ``manual``.
-
-    The review PNG, when there is one, is redrawn to match.
-    """
-
-    def change(arrays: dict[str, np.ndarray], meta: dict[str, Any]) -> None:
-        if not meta.get("has_body"):
-            raise ValueError(f"{sample_id} has no body to flip")
-        arrays["centerline_xy"] = arrays["centerline_xy"][::-1].copy()
-        arrays["width_profile"] = arrays["width_profile"][::-1].copy()
-        arrays["head_xy"], arrays["tail_xy"] = arrays["tail_xy"], arrays["head_xy"]
-        arrays["ap"] = (1 - arrays["ap"]).astype(arrays["ap"].dtype)
-        meta["orientation"] = "manual"
-        if "tail_off_camera" in meta:
-            meta["head_off_camera"], meta["tail_off_camera"] = meta["tail_off_camera"], meta["head_off_camera"]
-        if "orientation_margin" in meta:
-            meta["orientation_margin"] = -meta["orientation_margin"]
-
-    meta = _edit(root, sample_id, change)
-    review = fields_dir(root) / REVIEW_DIR / f"{sample_id}.png"
-    if review.exists():
-        arrays, _ = load(field_path(root, sample_id), ("context", "ap", "overlap", "head_xy", "tail_xy"))
-        body = np.isfinite(arrays["ap"]) | arrays["overlap"]
-        centre = arrays["context"][meta["max_lag"]]
-        review_image(centre, arrays["ap"], arrays["overlap"], arrays["head_xy"], arrays["tail_xy"], body_box(body)).save(review)
-    return meta
-
-
-def set_review(root: str | Path, sample_id: str, status: str) -> dict[str, Any]:
-    if status not in REVIEW_STATES:
-        raise ValueError(f"unknown review status {status!r}; expected one of {REVIEW_STATES}")
-
-    def change(arrays: dict[str, np.ndarray], meta: dict[str, Any]) -> None:
-        meta["review"] = status
-        meta["reviewed_at"] = utc_now()
-
-    return _edit(root, sample_id, change)
 
 
 # --------------------------------------------------------------------------- build
@@ -551,34 +504,6 @@ def mark_exits(meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArra
     return True
 
 
-def correct_exits(store: SegmentationStore, sample_id: str) -> dict[str, Any] | None:
-    """Apply :func:`mark_exits` to a stored, untraced record that does not have it yet; returns the meta when changed.
-
-    A rejected record whose targets change becomes unreviewed again with
-    ``exit_corrected`` set, since the rejection may have been for the cut-off
-    end this corrects.
-    """
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    _, label, _ = store.load(sample_id)
-    with locked(store.root):
-        arrays, meta = load(path)
-        if (not meta.get("has_body") or meta.get("fit_method") in TRACE_METHODS or "tail_off_camera" in meta
-                or is_stale(meta, record)):
-            return None
-        if not mark_exits(meta, arrays, label == 1, recording_length(store, record)):
-            save(path, meta, arrays)  # record that it was checked
-            return None
-        if review_status(meta) == "rejected":
-            meta["review"] = "unreviewed"
-            meta["exit_corrected"] = True
-        save(path, meta, arrays)
-    return meta
-
-
 def _traced_body(
     meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], trace_xy: NDArray[np.generic],
     *, as_drawn: bool, length_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
@@ -591,138 +516,6 @@ def _traced_body(
     )
     arrays["trace_xy"] = np.asarray(trace_xy, dtype=np.float64)
     return _set_body(meta, arrays, mask, centerline, profile, iou)
-
-
-def apply_trace(
-    store: SegmentationStore,
-    sample_id: str,
-    trace_xy: NDArray[np.generic],
-    *,
-    as_drawn: bool = False,
-    commit: bool = False,
-    device: Any = None,
-) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-    """Refit a sample's body along a traced midline (clicked points, head first).
-
-    Returns the new record's meta and arrays.  With ``commit`` it replaces
-    the stored record (and its review PNG, when there is one); otherwise it
-    is a preview and nothing is written.  The trace is kept in the record
-    (``trace_xy``), so a rebuild after a mask edit refits along it.  A
-    committed trace is a reviewed correction: ``review`` becomes
-    ``accepted`` and ``auto_fit_iou`` keeps the replaced fit's overlap.
-    """
-
-    record = store.get(sample_id)
-    if record is None:
-        raise KeyError(sample_id)
-    path = field_path(store.root, sample_id)
-    if not path.exists():
-        raise FileNotFoundError(f"{sample_id} has no body fields; build them first")
-    _, label, _ = store.load(sample_id)
-    mask = label == 1
-    if not mask.any():
-        raise ValueError(f"{sample_id} has no worm in its mask")
-    points = np.asarray(trace_xy, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2 or not np.all(np.isfinite(points)):
-        raise ValueError("a trace needs at least two finite (x, y) points")
-    arrays, meta = load(path)
-    previous_iou = meta.get("auto_fit_iou", meta.get("fit_iou"))
-    device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
-    config = fit_config()
-    targets = _traced_body(
-        meta, arrays, mask, points, as_drawn=as_drawn, length_px=recording_length(store, record),
-        config=config, template=default_width_template(config.n_points), device=device,
-    )
-    meta.update(has_body=True, mask_revision=record.revision, auto_fit_iou=previous_iou, review="accepted", reviewed_at=utc_now())
-    if commit:
-        with locked(store.root):
-            save(path, meta, arrays)
-        review_path = fields_dir(store.root) / REVIEW_DIR / f"{sample_id}.png"
-        if review_path.exists():
-            review_image(arrays["context"][meta["max_lag"]], targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(review_path)
-    return meta, arrays
-
-
-PROPOSAL_ARRAYS = ("trace_xy", "centerline_xy", "width_profile", "ap", "overlap", "head_xy", "tail_xy", "diameter_px")
-
-
-def propose(store: SegmentationStore, sample_id: str, module: Any, *, device: Any = None) -> dict[str, Any]:
-    """Store a network-proposed trace and its fit beside a record's current targets; returns the meta.
-
-    The body-field network (``module``, :func:`body_net.load_body_net`)
-    predicts the record's fields from its stored context, a trace follows
-    from them (:func:`body_proposal.propose_trace`), and it is fit like a
-    hand trace.  The result is kept as ``proposal_*`` arrays and a
-    ``proposal`` meta entry (model, fit IoU, overlap, mask revision); the
-    targets do not change until :func:`accept_proposal`.  When the
-    prediction gives no usable trace, ``proposal`` records that and holds no
-    arrays.
-    """
-
-    from .body_proposal import predict_fields, propose_trace
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    arrays, _ = load(path, ("context", "context_valid"))
-    _, label, _ = store.load(sample_id)
-    prediction = predict_fields(module, arrays["context"], arrays["context_valid"])
-    trace = propose_trace(prediction, label == 1)
-    proposal: dict[str, Any] = {
-        "model": str(getattr(module, "checkpoint_path", "")), "lags": list(module.lags),
-        "mask_revision": record.revision, "created_at": utc_now(),
-    }
-    fitted: dict[str, np.ndarray] = {}
-    if trace is None:
-        proposal["status"] = "no_trace"
-    else:
-        meta_fit, arrays_fit = apply_trace(store, sample_id, trace, device=device)
-        proposal.update(status="ready", fit_iou=meta_fit["fit_iou"], overlap_px=meta_fit["overlap_px"], points=len(trace))
-        fitted = {f"proposal_{name}": arrays_fit[name] for name in PROPOSAL_ARRAYS}
-    with locked(store.root):
-        arrays, meta = load(path)
-        arrays = {k: v for k, v in arrays.items() if not k.startswith("proposal_")}
-        arrays.update(fitted)
-        meta["proposal"] = proposal
-        save(path, meta, arrays)
-    return meta
-
-
-def accept_proposal(store: SegmentationStore, sample_id: str) -> dict[str, Any]:
-    """Make a record's stored proposal its targets, as an accepted trace with the network as its source.
-
-    No refit: the proposal's fit becomes the record's.  The proposal must
-    belong to the current mask revision.
-    """
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    with locked(store.root):
-        arrays, meta = load(path)
-        proposal = meta.get("proposal") or {}
-        if proposal.get("status") != "ready":
-            raise ValueError(f"{sample_id} has no proposal to accept")
-        if proposal.get("mask_revision") != record.revision:
-            raise ValueError(f"{sample_id}: the mask changed after the proposal was made; propose again")
-        previous_iou = meta.get("auto_fit_iou", meta.get("fit_iou"))
-        for name in PROPOSAL_ARRAYS:
-            arrays[name] = arrays.pop(f"proposal_{name}")
-        meta.pop("proposal")
-        meta.update(
-            fit_method="traced", trace_source="network", orientation="manual", fit_iou=proposal["fit_iou"],
-            overlap_px=proposal["overlap_px"], auto_fit_iou=previous_iou, mask_revision=record.revision,
-            review="accepted", reviewed_at=utc_now(),
-        )
-        save(path, meta, arrays)
-    review_path = fields_dir(store.root) / REVIEW_DIR / f"{sample_id}.png"
-    if review_path.exists():
-        _, label, _ = store.load(sample_id)
-        review_image(arrays["context"][meta["max_lag"]], arrays["ap"].astype(np.float32), arrays["overlap"],
-                     arrays["head_xy"], arrays["tail_xy"], body_box(label == 1)).save(review_path)
-    return meta
 
 
 def fit_targets(

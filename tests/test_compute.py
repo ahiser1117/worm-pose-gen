@@ -116,8 +116,7 @@ class ComputeApiTest(unittest.TestCase):
     def _client(self, gpus: tuple[int, ...]) -> TestClient:
         root = self.root / f"app{len(list(self.root.glob('app*')))}"
         config = AppConfig(
-            workspaces_root=root / "ws", recording_roots=(), poses_root=root / "poses", dataset_root=root / "dataset",
-            notes=root / "notes.json", checkpoint=None, prior_cache=None, gpus=gpus, device="cpu",
+            workspaces_root=root / "ws", dataset_root=root / "dataset", gpus=gpus, device="cpu",
         )
         app = create_app(config)
         state = app.state.app_state

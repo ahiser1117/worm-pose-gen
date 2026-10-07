@@ -1,4 +1,4 @@
-# Body-field targets: build, review, correct
+# Body-field targets: build and correct
 
 The body-field network (`src/worm_pose_gen/body_net.py`) predicts, besides
 the worm mask, a per-pixel A-P field (normalized arc length, 0 at the head,
@@ -8,12 +8,20 @@ plus symmetric difference channels `frame[t+lag] - frame[t-lag]`. A hand
 label only says which pixels are worm, so the other targets come from
 fitting the tube model to the hand mask and orienting it head first
 (`body_targets.py`). A wrong head end or a bad fit silently teaches the
-network the wrong thing, so every record can be inspected and corrected in
-the app. The pose fitter can score its fits against the network's
+network the wrong thing, so every label's body can be confirmed or corrected
+on the pose app's Labeling page. The pose fitter can score its fits against the network's
 predictions and start them from its traces
 ([Body-field evidence in the pose fitter](#body-field-evidence-in-the-pose-fitter)).
 
 ## Records
+
+The targets of a library label are built by `body_fields.fit_targets` into
+the personal library's target cache, keyed by the label revision and the
+model that built them (`worm_pose_gen.library.targets`; a job after every
+Labeling save, and before training). The human body fields (orientation, a
+traced midline, mask only) are part of the label itself. The records below
+are those of the old segmentation store, which `scripts/migrate_to_library.py`
+read the human body fields from.
 
 `<store>/body_fields/<sample_id>.npz`, one per sample of a segmentation
 store, is described in `src/worm_pose_gen/body_fields.py`: the 33 context
@@ -28,7 +36,7 @@ so a frame that fits below IoU 0.93 or touches itself is also fit by a
 chain from the nearest clear context frame on each side (the context frames
 are segmented with the promoted segmenter); the better fit is kept, and
 `fit_method` is `chain` with `chain_anchor_offset` and
-`independent_fit_iou`. Edits in the app add or change:
+`independent_fit_iou`. Edits in the old Body fields screen added or changed:
 
 | Field | Written by | Meaning |
 |---|---|---|
@@ -45,7 +53,7 @@ unless the record holds a trace: then the body is refit along the stored
 trace to the current mask and stays accepted.
 Every write goes to a temporary file that replaces the record.
 
-Build or refresh the records of a store (samples whose record is current
+Build or refresh the records of an old store (samples whose record is current
 are skipped; `--force` rebuilds them, `--samples` limits the run):
 
 ```bash
@@ -56,7 +64,8 @@ scripts/project_env.sh uv run --no-sync python scripts/build_body_fields.py --re
 
 Where the mask is right but the fitted body takes the wrong route through a
 crossing or contact, the head, tail and A-P targets are all wrong with it.
-`body_fields.apply_trace(store, sample_id, points)` takes points clicked
+A trace (Labeling's **Trace midline**; `body_fields.trace_fit`, and
+`fit_targets(..., trace=...)` for the stored targets) takes points clicked
 along the body from head to tail, through the crossing in the order the
 body actually goes, and refits the tube from them: the trace is the start,
 every point of the fit is pulled toward the same-numbered point of the
@@ -76,10 +85,10 @@ whose last point is within 8 px of the image border is continued straight
 off camera to the recording's typical body length (the median of its whole,
 well-fit records from the same recording file), so a body leaving the
 camera is not squeezed into view.
-`as_drawn=True` keeps the trace itself as the midline with a template width
-scaled to the mask; it fits the mask much worse (median IoU about 0.26 below
-the refit on the chain-fit frames) and is a fallback only. Without `commit=True` the
-result is a preview and nothing is written.
+Keeping the trace itself as the midline with a template width scaled to the
+mask (`as_drawn`) fits the mask much worse (median IoU about 0.26 below the
+refit on the chain-fit frames); the Labeling page does not offer it, and
+only old records that used it keep it.
 
 On the 16 chain-fit frames, simulated traces of 10 clicks with a quarter
 body width of click noise recovered the poses to 0.17 body widths (median)
@@ -90,133 +99,60 @@ ten points, more around loops, and check the preview's IoU.
 A part of the body that leaves the camera and re-enters cannot be traced
 through; its pixels take the A-P value of the nearest traced segment.
 
-## Review in the app
+## Correct on the Labeling page
 
-The **Body fields** tab of the pose app shows the records of the app's
-corpus store, so point `--corpus-root` at the segmentation store:
+The Labeling page's body tools work on the frame's current mask
+([`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md), section 3):
 
-```bash
-scripts/project_env.sh uv run --no-sync python -m worm_pose_gen.app \
-  --corpus-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1
-```
-
-`--body-net` names the body-field network that proposes traces (default
-`checkpoints/body_net/best.ckpt`); it is loaded on the app's device the first
-time a sample is proposed.
-
-The left column lists every sample with its status (current, stale, or
-missing), split, head source, fit IoU, self-contact and overlap, filtered by
-any of these, by review status, by fit method and by whether it has a
-proposal; a traced record carries a *traced* (or *trace as drawn*) badge and
-its automatic fit's IoU, and a record with a proposal a *proposal* badge and
-the proposal's fit IoU (*old proposal* when the mask changed after it was
-made). The canvas shows the labeled frame with
-toggleable layers: hand mask, A-P field (viridis, purple head to yellow
-tail), overlap pixels (white), fitted tube outline and centerline, head
-(green) and tail (red) markers, the acquisition nose (yellow cross), and a
-traced record's stored trace (dashed orange, numbered from the head), and
-the network's proposal: its tube dotted violet, its ends ringed violet and
-its trace points as violet dots. **Proposal A-P field** shows the proposal's
-A-P field and overlap in place of the record's (off by default).
-Hovering reports the label, A-P value and difference value under the
-cursor. **Temporal context** scrubs or plays the 33 context frames (a frame
-outside the recording repeats the nearest readable one and is marked), and
-**Difference** shows the channel the network sees for a lag of 1 to 16,
-grey at zero with an adjustable gain; a lag with an invalid end is a zero
-channel.
-
-Corrections:
-
-- **Flip head/tail** reverses the tube, swaps the end points and replaces
-  `ap` by `1 - ap`.
-- **Accept** and **Reject** record the review and, by default, move to the
-  next sample in the filtered list.
-- **Trace midline** (T) corrects a fit that takes the wrong route through a
-  crossing or contact. Click from the head along the body to the tail,
+- **Proposal.** The setup's body-field model predicts the frame's fields
+  from its context frames, a trace follows from them
+  (`body_proposal.propose_trace`) and is fit like a hand trace; it is drawn
+  as the Proposal layer. When the server has a GPU it is computed as the
+  frame opens; without one (15–20 s on the CPU) only on **Propose**.
+  **Use proposal** (G) takes it. A proposal made for an earlier mask is
+  recomputed first.
+- **Flip head/tail** (H) swaps the ends of the shown body.
+- **Trace midline** (T): click from the head along the body to the tail,
   through crossings in the order the body goes, about 10 points and more
-  around loops; each click adds a numbered point (point 1, the head, is
-  green), a drag moves a point, a click on the trace inserts one, a
-  right-click removes one, Backspace removes the last and Esc leaves trace
-  mode. Dragging elsewhere and the wheel still pan and zoom. **Fit** (Enter) refits along the trace on the
-  app's device (a few seconds on a GPU, about 10 s on a CPU) and shows the
-  preview's A-P field, cyan tube and head/tail markers over the frame next to
-  the record's green tube, with *IoU new vs old*; hovering reads the
-  preview's A-P values. **Use trace as drawn** previews the trace itself as
-  the midline (the fallback above). **Accept** writes the previewed fit
-  (accepted, orientation manual, `auto_fit_iou` keeping the replaced fit);
-  **Discard** drops the preview and keeps the points for adjusting. A later
-  rebuild refits along the stored trace.
-- **Proposals.** `scripts/propose_traces.py` precomputes the network's
-  traces (by default for unreviewed samples), and **Propose** runs it on the
-  open sample (one at a time, on the app's device). The summary reads
-  *Proposal: IoU new vs current*. **Accept proposal** (G) makes the
-  proposal's fit the targets without a refit (a traced record with
-  `trace_source` `network`, accepted) and, like Accept, moves to the next
-  sample. **Edit proposal** loads the proposal's trace into Trace midline as
-  editable points: drag a point to move it, click on the trace to insert a
-  point there (a click elsewhere extends it at the tail), right-click a point
-  to remove it, then Fit and Accept as a hand trace. A proposal made for an
-  older mask is not shown and cannot be accepted; propose again.
-- **Edit mask in Paint** opens the sample in Paint (its **Return to Body
-  fields** button comes back). Saving
-  it raises the mask revision, which marks the record stale; return to Body
-  fields and **Rebuild targets**, which queues a job (shown in Jobs) that
-  refits the tube to the current mask, about 10-40 s on a GPU. Edits to a
-  sample wait until its rebuild job finishes.
+  around loops; **Fit** (Enter) refits along the trace and shows its A-P
+  field and fit IoU, then **Accept** or **Discard**; Backspace removes the
+  last point and Esc cancels. **Edit proposal** starts the trace from the
+  proposal's points.
+- **Mask only**: the body is unclear and the label trains the mask only.
 
-| Keys | Action |
-|---|---|
-| `N` `P` | Next / previous sample in the filtered list |
-| `H` | Flip head/tail |
-| `T` | Trace midline on / off; while tracing `Backspace` removes the last point, `Enter` fits, `Esc` cancels (other sample keys pause) |
-| `A` `R` | Accept / reject |
-| `G` | Accept the proposal (then the next sample) |
-| `D` | Frames / difference view |
-| `←` `→` | Step the context offset (frames) or the lag (difference) |
-| `Space` | Play the context frames |
-| `0`, double-click | Fit view |
+Layers are the Mask, the A-P field (the body's, else the proposal's), the
+Midline with head and tail (and the acquisition nose), and the Proposal;
+`--dev` adds the overlap, the tube outline and a stored trace. The temporal
+context shows the 33 context frames (Frames, with an offset and Play) or
+the Difference channel the network sees for a lag of 1 to 16.
 
-The same operations are available headless under `/api/body-fields`:
-`GET /api/body-fields` (filters `split`, `orientation`, `review`, `status`,
-`contact=yes|no`, `method` (fit method), `proposal=yes|no`, `min_iou`,
-`max_iou`; each row has `proposal` (`ready`, `no_trace`, `stale` or null) and
-`proposal_fit_iou`), `GET /api/body-fields/{id}` (layers
-as PNG data URLs, with a `proposal` object of the same layers when a ready
-proposal belongs to the current mask), `GET /api/body-fields/{id}/context`,
-and `POST` to `/{id}/flip`, `/{id}/review` (`{"status": ...}`),
-`/{id}/rebuild`, `/{id}/propose`, `/{id}/accept-proposal` and
-`/{id}/trace` (`{"points": [[x, y], ...], "as_drawn": false, "commit": false}`:
-the layers of the preview, or with `commit` of the written record; it runs in
-the request, one fit at a time). Every edit returns 400 while the sample's
-rebuild job is pending; `/propose` also when no network checkpoint is
-configured.
+Saving writes a label revision with the body as decided (a trace, a head
+end, or the automatic orientation) and starts a job that builds its targets.
+The same operations are available headless: `POST /api/labeling/proposal`,
+`/api/labeling/fit` and `/api/labeling/save` (`app/labeling.py`).
 
-Coverage: `tests/test_body_fields.py` (record edits, staleness, atomic
-writes, traces, routes, proposals with a stub network),
-`tests/test_body_proposal.py`, `tests/browser/body_fields.cjs` (the screen
-end to end on a synthetic store, including a trace preview and accept) and
-`tests/browser/body_fields_proposal.cjs` (accepting with G, editing a
-proposal's points, Propose without a network).
+Coverage: `tests/test_body_fields.py` (record staleness, nose choice,
+traces through a crossing, camera exits), `tests/test_body_proposal.py`,
+`tests/test_library_targets.py`, `tests/test_queues.py` (the Labeling
+backend, proposals with a stub network) and `tests/browser/labeling.cjs`.
 
 ## Body-field evidence in the pose fitter
 
 To see what the network tells the fitter on a workspace's frames, turn on
-**Network A-P field** and **Network head / tail** in the workspace viewer's
-Layers panel (README, "Fit poses over a recording", where the viewer's layers are listed). The frame is predicted as the fit
+the **A-P field** layer of the Workspace page (key 4; with `--dev` the layer
+menu also has the network's crossings). The frame is predicted as the fit
 stage predicts it (`GET /api/workspaces/{name}/network-fields`,
 `app/network_fields.py`: `pipeline.workspace_frames` with the app's flat-field
 cache, neighbours outside the recording as zero lag channels), and the ends
 are judged by `body_proposal.field_evidence` against the row's current mask,
-so an end the layer leaves out is one the fit does not use. The header and
-the workspace list mark whether a workspace's current poses were fit with the
-network (`fit_network` in `GET /api/workspaces`: `with`, `without` or
-`not_fitted`).
+so an end the layer leaves out is one the fit does not use. The network is
+the body model the workspace was analysed with; a workspace analysed without
+one has no A-P layer.
 
 The network's predictions also steer the tube fit of a recording. With
 `--body-net <checkpoint>` (`scripts/fit_recording.py`) or the fit stage's
-`body_net` parameter (`pipeline.FitParams`; in the pose app, the **Body-field
-network** checkbox of the Run panel, which sets it to the app's `--body-net`
-and is on by default when that file exists), every fitted frame is predicted
+`body_net` parameter (`pipeline.FitParams`; in the pose app, Analyse sets it
+to the weights of the setup's body model), every fitted frame is predicted
 from its flat-fielded neighbours at the checkpoint's lags
 (`body_proposal.RecordingFieldPredictor`, slab by slab), and the prediction
 enters the fit three ways:
@@ -224,7 +160,7 @@ enters the fit three ways:
 ```bash
 scripts/project_env.sh uv run --no-sync --frozen python scripts/fit_recording.py \
   --recording /store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5 \
-  --start 0 --frames 1200 --body-net checkpoints/body_net/best.ckpt
+  --start 0 --frames 1200 --body-net <library>/models/nir-body-lags3/weights.ckpt
 ```
 
 - **Evidence terms** (`batch_fit.fit_masks(fields=...)` with the

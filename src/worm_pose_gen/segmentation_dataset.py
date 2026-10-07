@@ -40,10 +40,6 @@ DEFAULT_DATASET_ROOT = Path(
 )
 
 
-def is_hand_labeled(label_source: str) -> bool:
-    return "manual" in label_source
-
-
 def make_sample_id(recording: str, frame_index: int) -> str:
     return f"{recording}_f{int(frame_index):06d}"
 

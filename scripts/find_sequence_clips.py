@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.mask_fit import MaskFitConfig, init_from_skeleton
 from worm_pose_gen.pose_run import boundary, clean_mask, touches_border
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT

@@ -18,6 +18,8 @@ def config(app: AppState = Depends(get_state)) -> dict[str, Any]:
     libraries = app.libraries
     return {
         "dev": app.config.dev,
+        # Whether the server's own models run on a GPU: without one, Labeling proposes bodies only when asked.
+        "gpu": app.device.type == "cuda",
         "user": getpass.getuser(),
         "libraries": {
             "lab": None if libraries.lab is None else str(libraries.lab),
