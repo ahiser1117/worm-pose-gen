@@ -15,7 +15,8 @@ from typing import Any
 
 import torch
 
-from ..jobs import JobRunner, LocalGPUBackend
+from ..compute import detect_compute
+from ..jobs import JobRunner, LocalGPUBackend, SlurmBackend
 from ..pose_viewer import ViewerState
 from ..pipeline import WorkspaceBusy, workspace_dataset
 from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
@@ -59,7 +60,10 @@ class AppState:
             runs, dataset_root=config.dataset_root, checkpoint=config.checkpoint, device=config.viewer_device, notes=config.notes,
             runs_root=config.poses_root,
         )
-        self.runner = JobRunner(config.jobs_root, LocalGPUBackend(list(config.gpus)), max_concurrent=config.max_concurrent)
+        # Where jobs can run, found once at startup (``GET /api/compute``).
+        self.compute = detect_compute()
+        slurm = SlurmBackend(self.compute.slurm.defaults) if self.compute.slurm.available else None
+        self.runner = JobRunner(config.jobs_root, LocalGPUBackend(list(config.gpus)), slurm, max_concurrent=config.max_concurrent)
         self._views: dict[str, WorkspaceView] = {}
         self._lock = threading.Lock()
         self._recordings_lock = threading.Lock()
