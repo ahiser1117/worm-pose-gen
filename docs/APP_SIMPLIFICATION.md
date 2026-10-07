@@ -25,7 +25,7 @@ page, and the research diagnostics appear only when the app is started with
 ### Two libraries with the same layout
 
 - **Lab library**: a shared directory on the lab file system,
-  `/store1/shared/worm-pose-models` on the flv-c machines. It will be copied
+  `/storage/fs/store1/shared/worm-pose-models` on the flv-c machines (the NFS path; `/store1` is only a symlink on some hosts). It will be copied
   to the Engaging cluster, where the path will differ. The app looks up the
   path by hostname (the convention used elsewhere in the lab's code), and
   `--lab-library` overrides it. It holds the models and datasets the

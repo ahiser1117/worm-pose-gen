@@ -46,7 +46,7 @@ class RootTests(unittest.TestCase):
         for bad in ("nir", "other:x", "lab:", "lab:a/b", "mine:a.b", "lab:../x"):
             with self.assertRaises(ValueError):
                 parse_ref(bad)
-        self.assertEqual(default_lab_root("flv-c3"), Path("/store1/shared/worm-pose-models"))
+        self.assertEqual(default_lab_root("flv-c3"), Path("/storage/fs/store1/shared/worm-pose-models"))
         self.assertIsNone(default_lab_root("laptop"))
         self.assertEqual(default_personal_root("flv-c2", "kim"), Path("/temp_data4/kim/worm-pose-library"))
         self.assertEqual(default_personal_root("laptop", "kim"), Path("~/worm-pose-library").expanduser())

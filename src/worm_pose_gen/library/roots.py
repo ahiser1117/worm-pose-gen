@@ -28,7 +28,8 @@ from typing import Any, Iterator
 import numpy as np
 
 
-LAB_ROOT_FLV = Path("/store1/shared/worm-pose-models")
+# The NFS path itself: flv-c2 has no /store1 symlink.
+LAB_ROOT_FLV = Path("/storage/fs/store1/shared/worm-pose-models")
 LAB_LIBRARY_BY_HOST: dict[str, Path] = {
     "flv-c2": LAB_ROOT_FLV,
     "flv-c3": LAB_ROOT_FLV,

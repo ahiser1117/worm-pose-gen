@@ -345,7 +345,7 @@ Models, labels, setups and benchmarks live in two libraries with the same
 layout (`worm_pose_gen.library`):
 
 - the **lab library**, read-only to the app:
-  `/store1/shared/worm-pose-models` on flv-c2, flv-c3 and flv-c4
+  `/storage/fs/store1/shared/worm-pose-models` on flv-c2, flv-c3 and flv-c4
   (`library.LAB_LIBRARY_BY_HOST`, `--lab-library`);
 - your **personal library**, where everything the app makes goes:
   `/temp_data4/<user>/worm-pose-library` on the flv machines, else

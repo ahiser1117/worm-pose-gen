@@ -2,7 +2,7 @@
 """Build the first lab library from the segmentation store, the app corpus and two trained models.
 
 Writes into a fresh ``--out`` directory (the real run into
-``/store1/shared/worm-pose-models`` happens after review):
+``/storage/fs/store1/shared/worm-pose-models`` happens after review):
 
 - setup ``nir-flv``: ``/img_nir`` flat-fielded, the frame rate measured from
   the recordings' frame timestamps, the pixel size left null (no recording
