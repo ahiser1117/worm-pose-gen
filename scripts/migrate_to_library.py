@@ -71,6 +71,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SETUP_ID, DATASET_ID, BENCHMARK_ID = "nir-flv", "nir-labels", "nir-v1"
 SETUP, DATASET = f"lab:{SETUP_ID}", f"lab:{DATASET_ID}"
 RECORDING_ROOTS = ("/store1/shared/all_data_raw/prj_aversion", "/storage/fs/data2/prj_aversion/data_raw")
+# The NIR camera (FLIR BFS behind the 10x objective): 791 px per mm, the lab's
+# FLIR_BFS_PIX_SIZE in BehaviorDataNIR.jl (src/unit.jl).
+PIXEL_SIZE_UM = 1000 / 791
 # Copied from the source records into the target cache when seeding.
 TARGET_ARRAYS = ("centerline_xy", "width_profile", "ap", "overlap", "head_xy", "tail_xy", "diameter_px", "nose_xy")
 TARGET_META = ("has_body", "fit_method", "orientation", "nose_offset", "fit_iou", "overlap_px", "orientation_margin",
@@ -259,7 +262,7 @@ def migrate_model(out: Path, model_id: str, run_dir: Path, *, kind: str, outputs
                if k not in ("dataset_root", "checkpoint_dir", "name", "num_workers", "promote", "no_promote", "train_labels", "init")}
     test = {k.removeprefix("test_"): v for k, v in (run.get("test") or {}).items()}
     card = {
-        "name": model_id, "kind": kind, "setup": SETUP, "inputs": make_inputs(lags, fps=fps, pixel_size_um=None),
+        "name": model_id, "kind": kind, "setup": SETUP, "inputs": make_inputs(lags, fps=fps, pixel_size_um=PIXEL_SIZE_UM),
         "outputs": outputs, "trained_on": [trained_on], "parent": None, "hparams": hparams, "author": author,
         "created_at": run.get("finished_at") or run.get("started_at"),
         "notes": (f"Run {run['name']} ({run_dir.name}), trained before the library on segmentation_v1 with per-frame "
@@ -311,8 +314,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"frame rate {fps} fps (from the frame timestamps)", flush=True)
     write_setup(
         out, SETUP_ID, name="NIR behaviour camera (flv rigs)",
-        description="The 850 nm NIR camera of the lab's tracking rigs; 732x968 frames in /img_nir. Pixel size not yet known.",
-        fps=fps, pixel_size_um=None, recording_roots=list(RECORDING_ROOTS),
+        description="The 850 nm NIR camera of the lab's tracking rigs; 732x968 frames in /img_nir.",
+        fps=fps, pixel_size_um=PIXEL_SIZE_UM, recording_roots=list(RECORDING_ROOTS),
         defaults={"mask": f"lab:{args.segmenter_name}", "body": f"lab:{body_id}"},
     )
     log_default(out, SETUP, "mask", f"lab:{args.segmenter_name}", previous=None, who=args.author,
