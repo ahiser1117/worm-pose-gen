@@ -93,7 +93,7 @@ class RegionMaskTests(unittest.TestCase):
     def test_registry_exposes_option_only_for_fitting(self):
         for entry in algorithms.list_algorithms():
             params = {p["name"]: p for p in entry["parameters"]}
-            if entry["id"] == "mirror":
+            if entry["id"] in algorithms.NO_FITTING:
                 self.assertNotIn("fill_holes", params)
             else:
                 self.assertEqual(params["fill_holes"]["choices"], ["workspace", "on", "off"])
