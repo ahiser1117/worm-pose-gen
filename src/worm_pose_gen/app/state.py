@@ -1,14 +1,15 @@
-"""The application's shared state: the run catalog, workspaces, recordings and the job queue.
+"""The application's shared state: workspaces, recordings, models, the libraries and the job queue.
 
-One instance per server, attached to the FastAPI app.  It owns the viewer's
-``ViewerState`` (run directories, recordings opened read-only, segmenters
-loaded once), a ``WorkspaceView`` per opened workspace, and the ``JobRunner``
-whose background thread starts stage processes on the configured GPUs.
+One instance per server, attached to the FastAPI app.  It owns the
+recordings opened read-only (one ``RecordingSource`` each, shared by every
+workspace on it), the segmenters and body-field networks loaded once on the
+app's device, a ``WorkspaceView`` per opened workspace, the libraries, the
+Labeling page's services and queues, and the ``JobRunner`` whose background
+thread starts job processes on the local GPUs or submits them to SLURM.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 from pathlib import Path
 import threading
 from typing import Any
@@ -19,16 +20,16 @@ from ..compute import detect_compute
 from ..jobs import JobRunner, LocalGPUBackend, SlurmBackend
 from .. import library
 from ..library import Libraries
-from ..pose_viewer import ViewerState
 from ..pipeline import WorkspaceBusy, workspace_dataset
-from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
+from ..recordings import DATASET_PATH, RecordingSource, list_directory, thumbnail_png
 from ..workspace import Workspace, list_workspaces, read_recording_shape
 from .config import AppConfig
+from .frame_view import Segmenters
 from .workspace_view import WorkspaceView
 
 
 class NotFound(LookupError):
-    """A run, workspace, job or file the request named does not exist."""
+    """A workspace, job, queue or file the request named does not exist."""
 
 
 def _validate_name(name: str) -> str:
@@ -57,19 +58,17 @@ class AppState:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         config.workspaces_root.mkdir(parents=True, exist_ok=True)
-        runs = [p for p in config.extra_runs] + [p for p in ViewerState.discover(config.poses_root) if p not in config.extra_runs]
-        self.viewer = ViewerState(
-            runs, dataset_root=config.dataset_root, checkpoint=config.checkpoint, device=config.viewer_device, notes=config.notes,
-            runs_root=config.poses_root,
-        )
+        device = config.server_device
+        self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.segmenters = Segmenters(self.device)
+        self._sources: dict[str, tuple[RecordingSource | None, str | None]] = {}
+        self._sources_lock = threading.Lock()
         # Where jobs can run, found once at startup (``GET /api/compute``).
         self.compute = detect_compute()
         slurm = SlurmBackend(self.compute.slurm.defaults) if self.compute.slurm.available else None
         self.runner = JobRunner(config.jobs_root, LocalGPUBackend(list(config.gpus)), slurm, max_concurrent=config.max_concurrent)
         self._views: dict[str, WorkspaceView] = {}
         self._lock = threading.Lock()
-        self._recordings_lock = threading.Lock()
-        self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
         self.libraries = Libraries(config.lab_library, config.library)
         # The Labeling page: its frame services and the queues it walks (``<workspaces_root>/queues``).
         from .labeling import Labeling
@@ -90,28 +89,35 @@ class AppState:
     def close(self) -> None:
         self.runner.stop()
         self.network_fields.close()
-        self.viewer.close()
+        with self._sources_lock:
+            for source, _ in self._sources.values():
+                if source is not None:
+                    source.close()
 
-    @property
-    def device(self) -> torch.device:
-        return self.viewer.device
+    def body_net(self, path: Path) -> Any:
+        """The body-field network at ``path`` (a workspace's body model), loaded on the app's device at first use."""
 
-    def body_net(self, path: Path | None = None):
-        """A body-field network loaded on the app's device at first use: ``path``, else ``--body-net``.
-
-        The Workspace's network layers pass the body model the workspace was
-        analysed with; a workspace analysed without one falls back to the app's.
-        """
-
-        path = self.config.body_net if path is None else Path(path)
+        path = Path(path)
         with self._body_net_lock:
             if path not in self._body_nets:
-                if path is None or not path.is_file():
-                    raise ValueError(f"no body-field network checkpoint at {path}; pass --body-net")
+                if not path.is_file():
+                    raise ValueError(f"no body-field network checkpoint at {path}")
                 from ..body_net import load_body_net
 
                 self._body_nets[path] = load_body_net(path, self.device)
             return self._body_nets[path]
+
+    def source(self, recording: str | Path, dataset: str = DATASET_PATH) -> tuple[RecordingSource | None, str | None]:
+        """The shared read-only source of a recording (flat fields cached under ``<dataset_root>/flat_fields``), or why it cannot be read."""
+
+        key = f"{recording}#{dataset}"
+        with self._sources_lock:
+            if key not in self._sources:
+                try:
+                    self._sources[key] = (RecordingSource(Path(recording), self.config.dataset_root / "flat_fields", dataset=dataset), None)
+                except (OSError, ValueError, KeyError) as error:
+                    self._sources[key] = (None, f"{type(error).__name__}: {error}")
+            return self._sources[key]
 
     # ---------------------------------------------------------------- workspaces
 
@@ -135,7 +141,7 @@ class AppState:
                     self._views.pop(name, None)
                 raise NotFound(f"unknown workspace {name!r}")
             workspace = Workspace.open(path)
-            source, error = self.viewer._source(str(workspace.recording), workspace_dataset(workspace))
+            source, error = self.source(str(workspace.recording), workspace_dataset(workspace))
             view = WorkspaceView(workspace, source, error)
             with self._lock:
                 view = self._views.setdefault(name, view)
@@ -147,45 +153,20 @@ class AppState:
         except ValueError:
             return False
 
-    def workspace_names(self) -> list[str]:
-        return [info.name for info in list_workspaces(self.config.workspaces_root)]
-
-    def workspace_rows(self) -> list[dict[str, Any]]:
-        """``WorkspaceInfo`` plus summary of every workspace, newest first."""
-
-        rows = []
-        for name in self.workspace_names():
-            try:
-                rows.append(self.view(name).info())
-            except (NotFound, OSError, ValueError, KeyError) as error:
-                rows.append({"name": name, "path": str(self.workspace_path(name)), "kind": "workspace", "error": f"{type(error).__name__}: {error}"})
-        return rows
-
-    def catalog_entries(self) -> list[dict[str, Any]]:
-        """Run and workspace catalog rows together, for the compatible-runs lists."""
-
-        entries = list(self.viewer.catalog.values())
-        for name in self.workspace_names():
-            try:
-                entries.append(self.view(name).entry())
-            except (NotFound, OSError, ValueError, KeyError):
-                continue
-        return entries
-
     def create_workspace(self, payload: dict[str, Any]) -> WorkspaceView:
         """A new workspace on ``recording``: the whole recording, named by the recording's id.
 
-        ``first``, ``last``, ``step`` and ``name`` narrow it (a developer's
-        range; the Workspace page always takes the whole recording).  An
-        existing name gets a numbered suffix.
+        ``first``, ``last`` and ``step`` narrow it (a developer's range; the
+        Workspace page always takes the whole recording).  An existing name
+        gets a numbered suffix.
         """
 
         recording = self.recording_path(str(payload["recording"]))
         if not recording.is_file():
             raise ValueError(f"recording {recording} does not exist")
-        settings = dict(payload.get("settings") or {})
-        # The recording's own dataset (its setup's, or a registration's); /img_nir needs no setting.
-        dataset = settings.get("dataset") or self.recording_dataset(recording)
+        settings: dict[str, Any] = {}
+        # The recording's own dataset (its setup's); /img_nir needs no setting.
+        dataset = self.recording_dataset(recording)
         if dataset != DATASET_PATH:
             settings["dataset"] = dataset
         shape = read_recording_shape(recording, dataset)
@@ -193,10 +174,8 @@ class AppState:
             raise ValueError(f"{recording} cannot be read as a recording with dataset {dataset}")
         first, last = _integer(payload, "first", 0), _integer(payload, "last", shape[0] - 1)
         step = _integer(payload, "step", 1)
-        name = str(payload.get("name") or "")
-        if not name:
-            base = recording.stem if (first, last, step) == (0, shape[0] - 1, 1) else f"{recording.stem}_f{first}-{last}"
-            name = next(candidate for candidate in (base, *(f"{base}-{k}" for k in range(2, 1000))) if not self.workspace_path(candidate).exists())
+        base = recording.stem if (first, last, step) == (0, shape[0] - 1, 1) else f"{recording.stem}_f{first}-{last}"
+        name = next(candidate for candidate in (base, *(f"{base}-{k}" for k in range(2, 1000))) if not self.workspace_path(candidate).exists())
         Workspace.create(self.config.workspaces_root, _validate_name(name), recording, first, last, step, settings=settings or None)
         return self.view(name)
 
@@ -209,114 +188,40 @@ class AppState:
                 return info.name
         return None
 
-    def import_workspace(self, payload: dict[str, Any]) -> WorkspaceView:
-        run_dir = self.resolve_run(str(payload["run"]))
-        name = payload.get("name")
-        workspace = Workspace.import_run(self.config.workspaces_root, run_dir, None if name in (None, "") else _validate_name(str(name)))
-        return self.view(workspace.info.name)
-
-    def resolve_run(self, run: str) -> Path:
-        """A run directory by catalog name, by name under the poses root, or by path."""
-
-        candidates = []
-        if run in self.viewer.catalog:
-            candidates.append(Path(self.viewer.catalog[run]["path"]))
-        if "/" not in run:
-            candidates.append(self.config.poses_root / run)
-        candidates.append(Path(run))
-        for candidate in candidates:
-            if (candidate / "summary.json").exists() and (candidate / "poses.npz").exists():
-                return candidate
-        raise NotFound(f"unknown run {run!r}")
-
     # ---------------------------------------------------------------- recordings
 
-    def recordings(self, rescan: bool = False) -> list[RecordingInfo]:
-        cache = self.config.recordings_cache
-        # One listing at a time: a rescan unlinks the cache another listing may be writing.
-        with self._recordings_lock:
-            if rescan and cache is not None and cache.exists():
-                cache.unlink()
-            return list_recordings(
-                self.config.recording_roots, poses_root=self.config.poses_root, workspaces_root=self.config.workspaces_root,
-                prior_cache=self.config.prior_cache, cache=cache, registry=self.registry,
-            )
-
     def recording_path(self, path: str) -> Path:
-        """``path`` as a recording under one of the configured roots or registered by hand; ``NotFound`` for anything else."""
+        """``path`` as a recording of a setup (under its roots or registered to it); ``NotFound`` for anything else."""
 
         recording = Path(path).expanduser()
         try:
             resolved = recording.resolve()
         except OSError as error:
             raise NotFound(f"no recording at {path}") from error
-        if self.registry.dataset_of(resolved) is not None or library.setup_for_recording(self.libraries, resolved) is not None:
-            return resolved
-        if not any(resolved.is_relative_to(root.resolve()) for root in self.config.recording_roots):
-            raise NotFound(f"{path} is not under the configured recording roots and does not belong to a setup")
-        return recording
+        if library.setup_for_recording(self.libraries, resolved) is None:
+            raise NotFound(f"{path} does not belong to a setup; add it to one first")
+        return resolved
 
     def recording_dataset(self, path: Path) -> str:
-        """The HDF5 dataset of a recording's frames: its registration's, else its setup's video dataset, else ``/img_nir``."""
+        """The HDF5 dataset of a recording's frames: its setup's video dataset."""
 
-        registered = self.registry.dataset_of(path)
-        if registered is not None:
-            return registered
         setup = library.setup_for_recording(self.libraries, path)
         return str(library.get_setup(self.libraries, setup).video["dataset_path"]) if setup is not None else DATASET_PATH
 
-    # ----------------------------------------------------------------- file explorer
-
     def browse(self, path: str | None, all_files: bool = False) -> dict[str, Any]:
-        """Directories and HDF5 files under ``path`` (the first recording root when none is given), with the roots as shortcuts."""
+        """Directories and HDF5 files under ``path`` (the first setup's first root when none is given), with the setups' roots as shortcuts."""
 
-        start = Path(path).expanduser() if path else (self.config.recording_roots[0] if self.config.recording_roots else Path.home())
+        roots = [Path(root) for setup in library.list_setups(self.libraries) for root in setup.recording_roots]
+        roots = [root for root in dict.fromkeys(roots) if root.is_dir()]
+        start = Path(path).expanduser() if path else (roots[0] if roots else Path.home())
         try:
             listing = list_directory(start, all_files=all_files)
         except FileNotFoundError as error:
             raise NotFound(str(error)) from error
         except (NotADirectoryError, PermissionError) as error:
             raise ValueError(str(error)) from error
-        listing["shortcuts"] = [{"name": p.name or str(p), "path": str(p)} for p in (*self.config.recording_roots, Path.home()) if p.exists()]
-        registered = {str(p) for p in self.registry.paths()}
-        for entry in listing["entries"]:
-            entry["registered"] = entry["path"] in registered
+        listing["shortcuts"] = [{"name": p.name or str(p), "path": str(p)} for p in (*roots, Path.home())]
         return listing
-
-    def datasets(self, path: str) -> dict[str, Any]:
-        """The datasets of one HDF5 file and the one a recording would read by default."""
-
-        file = Path(path).expanduser()
-        if not file.is_file():
-            raise NotFound(f"no file at {path}")
-        try:
-            datasets = hdf5_datasets(file)
-        except OSError as error:
-            raise ValueError(f"{path}: not an HDF5 file ({error})") from error
-        return {"path": str(file.resolve()), "datasets": datasets, "default": default_video_dataset(datasets), "registered": self.registry.dataset_of(file) is not None}
-
-    def register_recording(self, payload: dict[str, Any]) -> RecordingInfo:
-        """Add a recording by path (any readable HDF5 file) with the dataset holding its frames."""
-
-        file = Path(str(payload["path"])).expanduser()
-        if not file.is_file():
-            raise NotFound(f"no file at {file}")
-        dataset = str(payload.get("dataset") or "").strip()
-        if not dataset:
-            dataset = default_video_dataset(hdf5_datasets(file)) or ""
-            if not dataset:
-                raise ValueError("this file has several video-like datasets; name the one to use")
-        facts = probe_recording(file, dataset)
-        if not facts["readable"]:
-            raise ValueError(f"{file} cannot be read as a recording with dataset {dataset}: {facts['error']}")
-        self.registry.add(file, dataset)
-        rec = next((r for r in self.recordings(rescan=False) if Path(r.path).resolve() == file.resolve()), None)
-        if rec is None:
-            raise RuntimeError("the registered recording did not appear in the catalog")
-        return rec
-
-    def unregister_recording(self, payload: dict[str, Any]) -> bool:
-        return self.registry.remove(Path(str(payload["path"])))
 
     def thumbnail(self, path: str, frame: int, scale: float) -> bytes:
         recording = self.recording_path(path)
@@ -329,31 +234,6 @@ class AppState:
             )
         except OSError as error:
             raise ValueError(f"{recording.name} cannot be read as a recording") from error
-
-    # -------------------------------------------------------------------- viewer
-
-    def is_run(self, name: str) -> bool:
-        return name in self.viewer.catalog
-
-    def run_or_workspace_payload(self, name: str) -> dict[str, Any]:
-        if self.is_run(name):
-            return self.viewer.run_payload(name)
-        return self.view(name).payload(self.catalog_entries())
-
-    def frame_payload(self, name: str, frame: int, threshold: float | None, raw: bool, detail: str) -> dict[str, Any]:
-        if self.is_run(name):
-            return self.viewer.frame_payload(name, frame, threshold, raw, detail)
-        return self.view(name).frame(frame, self.viewer.segmenters, threshold, self.device, raw=raw, detail=detail)
-
-    def pose_payload(self, name: str, frame: int) -> dict[str, Any]:
-        if self.is_run(name):
-            return self.viewer.pose_payload(name, frame)
-        return self.view(name).pose(frame)
-
-    def starts_payload(self, name: str, frame: int, threshold: float | None) -> dict[str, Any]:
-        if self.is_run(name):
-            return self.viewer.starts_payload(name, frame, threshold)
-        return self.view(name).starts(frame, self.viewer.segmenters, threshold, self.device)
 
     # --------------------------------------------------------------------- edits
 
@@ -370,51 +250,3 @@ class AppState:
         if running:
             job = running[0]
             raise WorkspaceBusy(f"job {job.id} ({job.spec.label or job.spec.kind}) is writing workspace {name}; wait for it to finish or cancel it")
-
-    def apply_edit(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Apply one manual edit to a workspace (``WorkspaceView.edit``); runs are read-only and cannot be edited, a workspace with a running job is busy (409)."""
-
-        if not self.has_workspace(name) and self.is_run(name):
-            raise ValueError(f"{name!r} is a run directory; import it as a workspace to edit it")
-        view = self.view(name)
-        self.check_writable(name)
-        return view.edit(payload, self.viewer.segmenters, self.device)
-
-    def state_payload(self, rescan: bool = False) -> dict[str, Any]:
-        added = self.viewer.rescan() if rescan else 0
-        return {
-            **self.viewer.state(),
-            "server": "app",  # the viewer's state() says "viewer"; the UI shows which one it reached
-            "added": added,
-            "workspaces": self.workspace_rows(),
-            "workspaces_root": str(self.config.workspaces_root),
-            "recording_roots": [str(p) for p in self.config.recording_roots],
-            "poses_root": str(self.config.poses_root),
-            "corpus_root": str(self.config.corpus_root),
-            "gpus": list(self.config.gpus),
-            "jobs_running": len(self.runner.list("running")),
-            "jobs_queued": len(self.runner.list("queued")),
-            # The body-field network the Run panel's checkbox fits with (the fit stage's ``body_net``).
-            "body_net": {"path": None if self.config.body_net is None else str(self.config.body_net.resolve()),
-                         "exists": self.config.body_net is not None and self.config.body_net.is_file()},
-        }
-
-    # --------------------------------------------------------------------- notes
-
-    def add_note(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        """A review note on a run (as the viewer does) or on a workspace (``workspace`` names one explicitly)."""
-
-        name = str(payload.get("workspace") or payload.get("run") or "")
-        if not payload.get("workspace") and self.is_run(name):
-            return self.viewer.add_note(payload)
-        view = self.view(name)
-        note = {
-            "time": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "run": name,
-            "workspace": name,
-            "recording": view.workspace.recording.stem,
-            "frame_index": int(payload["frame_index"]),
-            "tags": [str(t) for t in payload.get("tags", [])],
-            "comment": str(payload.get("comment", "")),
-        }
-        return self.viewer.notes.add(note)

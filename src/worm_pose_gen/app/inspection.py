@@ -2,10 +2,10 @@
 
 A reviewed row is stored with a fingerprint of its content and its
 neighbours' (``row_fingerprints``), so any change near it (a fix, a mask
-edit) drops the review.  Two views read it: ``issues`` (the Issues panel,
-``worm_pose_gen.fixes.issue_report``: stretches with plain-language
-reasons, each unreviewed, reviewed or fixed) and ``inspection`` (the
-attention segments of the older Inspect task).
+edit) drops the review.  ``issues`` reads it for the Issues panel
+(``worm_pose_gen.fixes.issue_report``: stretches with plain-language
+reasons, each unreviewed, reviewed or fixed), and ``review_issue`` (Looks
+OK) adds an issue's rows to it.
 
 Every computation of the issues also writes their counts with the review
 token to ``issues_summary.json`` (``ISSUES_SUMMARY``), so the Recordings
@@ -101,11 +101,6 @@ def row_fingerprints(view: WorkspaceView, rows: list[int]) -> dict[str, str]:
     return {str(row): cached[str(row)] for row in rows}
 
 
-def inspection(view: WorkspaceView) -> dict[str, Any]:
-    with _REVIEW_LOCK, workspace_lock(view.workspace, timeout=0):
-        return _inspection(view)
-
-
 def _reviewed(view: WorkspaceView) -> set[int]:
     """The rows whose review still holds: stored with a fingerprint that matches the row now."""
 
@@ -161,53 +156,12 @@ def review_issue(view: WorkspaceView, first_frame: int, last_frame: int, expecte
         return _issues(view)
 
 
-def _inspection(view: WorkspaceView) -> dict[str, Any]:
-    with _REVIEW_LOCK:
-        run = view.run
-        token = revision(view)
-        reviewed = _reviewed(view)
-        segments: list[dict[str, Any]] = []
-        counts = dict(unprocessed_frames=0, flagged_frames=0, unreviewed_flagged_frames=0, reviewed_frames=len(reviewed), attention_segments=0, stale_frames=0)
-        stale_rows = run.arrays.get("mask_stale")
-        for row, frame in enumerate(run.frame_index):
-            fitted = bool(run.arrays["fitted"][row])
-            flags = [str(k) for k, value in run._flags(row).items() if value]
-            stale = stale_rows is not None and bool(stale_rows[row])
-            if stale:
-                flags.append("mask_changed_refit_required")
-                counts["stale_frames"] += 1
-            kind = "unprocessed" if not fitted else "flagged" if flags else "clean"
-            if kind == "unprocessed":
-                counts["unprocessed_frames"] += 1
-            if kind == "flagged":
-                counts["flagged_frames"] += 1
-                counts["unreviewed_flagged_frames"] += int(row not in reviewed)
-            if kind == "clean":
-                continue
-            is_reviewed = row in reviewed
-            if segments and segments[-1]["last"] == row - 1 and segments[-1]["kind"] == kind and segments[-1]["reviewed"] == is_reviewed:
-                segment = segments[-1]
-                segment["last"] = row
-                segment["frames"][1] = int(frame)
-                segment["reasons"] = sorted(set(segment["reasons"] + flags))
-            else:
-                segments.append(dict(id=f"{row}:{kind}", first=row, last=row, frames=[int(frame), int(frame)], kind=kind, reasons=flags, reviewed=is_reviewed))
-        counts["attention_segments"] = sum(not s["reviewed"] for s in segments)
-        return dict(revision=token, summary=counts, segments=segments, reviewed_rows=sorted(reviewed))
-
-
-def mark_reviewed(view: WorkspaceView, first: int, last: int, expected_revision: str) -> dict[str, Any]:
-    with _REVIEW_LOCK, workspace_lock(view.workspace, timeout=0):
-        _mark(view, first, last, expected_revision)
-        return _inspection(view)
-
-
 def _mark(view: WorkspaceView, first: int, last: int, expected_revision: str) -> None:
     """Add rows ``first..last`` to the stored review (caller holds the locks); 409 when the workspace changed since ``expected_revision``."""
 
     token = revision(view)
     if expected_revision != token:
-        raise HTTPException(409, "Workspace changed. Refresh inspection before marking reviewed.")
+        raise HTTPException(409, "Workspace changed. Refresh the issues before marking them reviewed.")
     if first < 0 or last < first or last >= view.workspace.n:
         raise ValueError("Review bounds must be valid inclusive workspace rows.")
     rows = sorted(_reviewed(view).union(range(first, last + 1)))

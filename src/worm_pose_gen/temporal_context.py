@@ -19,7 +19,7 @@ from typing import Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from .label_app import RecordingSource
+from .recordings import RecordingSource
 from .segmenter import INPUT_STD
 
 

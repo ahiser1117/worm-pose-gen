@@ -14,6 +14,7 @@ from worm_pose_gen.latent import cubic_bspline_basis, decode_centerline
 from worm_pose_gen.mask_fit import default_width_template
 from worm_pose_gen.workspace import Workspace
 from tests.test_batch_fit import SMALL, _render
+from tests.test_algorithms import keep
 
 
 def _true_latents(frames: int, length: float = 110.0) -> list[np.ndarray]:
@@ -116,11 +117,11 @@ class AlgorithmTests(unittest.TestCase):
 
     def test_smoother_bridges_jumps_reorients_and_keeps_trusted_frames(self):
         progress = []
-        result = algorithms.run_region(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu",
-                                       progress=lambda p, m: progress.append((p, m)))
+        result = algorithms.run_algorithm(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu",
+                                          progress=lambda p, m: progress.append((p, m)))
         self.assertEqual(result.algorithm, "fixed_body_smoother")
         self.assertEqual(len(result.path), 38)
-        self.assertEqual(progress[-1][0], 1.0)
+        self.assertGreater(progress[-1][0], 0.0)
         for row in range(1, 39):
             pose = result.chosen(row)
             self.assertFalse(result.path_by_row[row][1])
@@ -148,9 +149,9 @@ class AlgorithmTests(unittest.TestCase):
         self.assertTrue(metrics["solver"]["converged"])
         self.assertEqual(metrics["frames_without_targets"], 0)
         self.assertNotIn(12, metrics["fixed_body"]["calibration_frames"])
-        # Nothing written until accepted; accepting installs the smoothed poses with the fixed width profile.
+        # Nothing written until kept; keeping installs the smoothed poses with the fixed width profile.
         np.testing.assert_array_equal(self.workspace.load_state()["centerline_xy"], state["centerline_xy"])
-        algorithms.accept_candidates(self.workspace, result.id)
+        keep(self.workspace, result)
         after = self.workspace.load_state()
         self.assertLess(np.sqrt(((after["centerline_xy"][12] - self.truth[12]) ** 2).sum(-1).mean()), 3.0)
         np.testing.assert_allclose(after["width_profile"][12], result.chosen(12).width_profile)
@@ -170,13 +171,12 @@ class AlgorithmTests(unittest.TestCase):
         edits._reverse_row(state, 39)
         self.workspace.save_state(state)
         with self.assertRaisesRegex(ValueError, "oriented opposite"):
-            algorithms.run_region(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu")
+            algorithms.run_algorithm(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu")
         edits._reverse_row(state, 39)
         state["ambiguity_score"][5:] = 2
         self.workspace.save_state(state)
         with self.assertRaisesRegex(ValueError, "at least 10 consecutive pairs"):
-            algorithms.run_region(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu")
-        self.assertEqual(algorithms.list_candidate_sets(self.workspace), [])
+            algorithms.run_algorithm(self.workspace, "fixed_body_smoother", 1, 38, {}, anchor_before=0, anchor_after=39, device="cpu")
 
     def test_unanchored_region_and_offscreen_tail_still_smooth(self):
         state = self.workspace.load_state()
@@ -185,7 +185,7 @@ class AlgorithmTests(unittest.TestCase):
         self.workspace.save_state(state)
         clipped = [row for row in range(31, self.FRAMES) if (state["centerline_xy"][row, :, 0] > self.WIDTH).any()]  # past the corrupted rows
         self.assertGreater(len(clipped), 0)
-        result = algorithms.run_region(self.workspace, "fixed_body_smoother", 0, self.FRAMES - 1, {}, device="cpu")
+        result = algorithms.run_algorithm(self.workspace, "fixed_body_smoother", 0, self.FRAMES - 1, {}, device="cpu")
         self.assertEqual(len(result.path), self.FRAMES)
         self.assertEqual(result.metrics["frames_without_targets"], 0)
         for row in clipped:

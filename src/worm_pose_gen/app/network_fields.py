@@ -1,12 +1,12 @@
-"""Body-field network predictions on workspace frames, for the viewer's network layers.
+"""Body-field network predictions on workspace frames, for the Workspace page's A-P layer and the developer's crossings.
 
 The network is the body model the workspace was analysed with
-(:func:`analysis.workspace_body_net`), else the app's ``--body-net``
-(``AppState.body_net``, shared with Body fields).  A frame is predicted from its flat-fielded recording frame and
+(:func:`analysis.workspace_body_net`, loaded once by ``AppState.body_net``);
+a workspace analysed without one has no network layers.  A frame is predicted from its flat-fielded recording frame and
 lag neighbours exactly as the fit stage reads them (:func:`pipeline.workspace_frames`
 with the app's flat-field cache, :class:`body_proposal.RecordingFieldPredictor`);
 a neighbour outside the recording gives a zero lag channel.  The response
-encodes the A-P field as Body fields does (``0`` undefined, else
+encodes the A-P field as the library API does (``0`` undefined, else
 ``1 + round(254 * ap)``), defined where the predicted mask is above 0.5 and
 the pixel is not a predicted crossing; the overlap pixels as 0/255; and the
 head and tail as the fitter would score them (:func:`body_proposal.field_evidence`
@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 
-from ..label_app import data_url
+from .images import data_url
 from ..pipeline import SegmentParams, workspace_dataset, workspace_frames
 
 # Cached predictions; each holds two full-frame PNGs (a few hundred kB).
@@ -35,7 +35,7 @@ OPEN_RECORDINGS = 4
 
 
 def encode_prediction(prediction: Any, mask: np.ndarray | None) -> dict[str, Any]:
-    """The viewer's layers of one ``FieldPrediction``; ``mask`` is the workspace's current mask of the row, if any."""
+    """The page's layers of one ``FieldPrediction``; ``mask`` is the workspace's current mask of the row, if any."""
 
     from ..body_proposal import END_THRESHOLD, OVERLAP_THRESHOLD, field_evidence
 
@@ -101,7 +101,10 @@ class NetworkFields:
         row = workspace.row_of(frame)
         from .analysis import workspace_body_net
 
-        module = self.app.body_net(workspace_body_net(workspace))
+        path = workspace_body_net(workspace)
+        if path is None:
+            raise ValueError(f"workspace {name} was analysed without a body-field model")
+        module = self.app.body_net(path)
         model = str(getattr(module, "checkpoint_path", ""))
         key = (name, str(workspace.recording), row, workspace.mask_revision(row), model)
         hit = self._cached(key)

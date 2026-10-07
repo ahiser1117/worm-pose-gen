@@ -24,7 +24,8 @@ from worm_pose_gen import body_fields, fixes, frame_search, library
 from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.app import labeling as labeling_service
 from worm_pose_gen.batch_fit import PRESETS
-from worm_pose_gen.label_app import data_url, mask_to_png_values
+from worm_pose_gen.app.images import data_url, decode_mask_data_url, mask_to_png_values, png_values_to_mask
+from worm_pose_gen.segmenter import IGNORE_LABEL
 from worm_pose_gen.library.inference import LoadedModel
 from worm_pose_gen.library.targets import write_targets
 from worm_pose_gen.mask_fit import default_width_template
@@ -40,6 +41,38 @@ def mask_url(mask: np.ndarray) -> str:
 
 def fast_fit_config():
     return replace(PRESETS["fast"], length_bounds_px=body_fields.FIT_LENGTH_BOUNDS_PX)
+
+
+class MaskToolTests(unittest.TestCase):
+    def test_png_label_conventions_round_trip(self) -> None:
+        mask = np.array([[0, 1, IGNORE_LABEL]], dtype=np.uint8)
+        png = mask_to_png_values(mask)
+        self.assertEqual(png.tolist(), [[0, 255, 128]])
+        self.assertTrue(np.array_equal(png_values_to_mask(png), mask))
+        decoded = decode_mask_data_url(data_url(png), (1, 3))
+        self.assertTrue(np.array_equal(decoded, mask))
+        with self.assertRaisesRegex(ValueError, "shape"):
+            decode_mask_data_url(data_url(png), (2, 3))
+
+    def test_refinements_preserve_ignore_and_change_worm(self) -> None:
+        mask = np.zeros((40, 60), dtype=np.uint8)
+        mask[10:30, 10:50] = 1
+        mask[18:22, 28:32] = 0  # small hole
+        mask[2:4, 2:4] = 1  # debris
+        mask[35, 35] = IGNORE_LABEL
+        filled, info = labeling_service.refine_mask(mask, "fill_holes", "cpu")
+        self.assertTrue(filled[18:22, 28:32].all())
+        self.assertEqual(filled[35, 35], IGNORE_LABEL)
+        self.assertEqual(info["pixels_added"], 16)
+        largest, info = labeling_service.refine_mask(mask, "largest", "cpu")
+        self.assertFalse(largest[2:4, 2:4].any())
+        self.assertEqual(info["components_removed"], 1)
+        grown, _ = labeling_service.refine_mask(mask, "grow", "cpu")
+        self.assertGreater(int((grown == 1).sum()), int((mask == 1).sum()))
+        shrunk, _ = labeling_service.refine_mask(mask, "shrink", "cpu")
+        self.assertLess(int((shrunk == 1).sum()), int((mask == 1).sum()))
+        with self.assertRaisesRegex(ValueError, "unknown refinement"):
+            labeling_service.refine_mask(mask, "nope", "cpu")
 
 
 class FrameSearchTests(unittest.TestCase):
@@ -121,8 +154,8 @@ class LabelingApiBase(unittest.TestCase):
 
     def make_app(self):
         config = AppConfig(
-            workspaces_root=self.root / "workspaces", recording_roots=(self.recordings,), poses_root=self.root / "poses",
-            dataset_root=self.root / "cache", checkpoint=None, prior_cache=None, notes=self.root / "notes.json", device="cpu",
+            workspaces_root=self.root / "workspaces",
+            dataset_root=self.root / "cache", device="cpu",
             gpus=self.gpus, job_interval=0.1, lab_library=Path("/nonexistent-lab"), library=self.libraries.personal,
         )
         self.app = create_app(config)
@@ -212,6 +245,26 @@ class LabelingApiTests(LabelingApiBase):
         self.assertEqual((again["created"], again["label"]["revision"], again["label"]["status"]), (False, 2, "mask_only"))
         self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(6, path=False)}, 404)
 
+    def test_a_labeling_manifest_becomes_a_queue(self):
+        from worm_pose_gen.app.queues import manifest_queue
+
+        manifest = self.root / "round" / "manifest.json"
+        manifest.parent.mkdir()
+        manifest.write_text(json.dumps({
+            "name": "round 9", "recordings": {"a": {"path": str(self.path), "split": "val"}},
+            "frames": [{"recording": "a", "frame_index": 7, "reasons": ["window:holes"]}, {"recording": "a", "frame_index": 3}],
+        }))
+        queue = manifest_queue(self.state, manifest)
+        self.assertEqual((queue["kind"], queue["name"], queue["setup"], queue["origin"]), ("manifest", "round 9", "mine:rig", "fix"))
+        listed = self.call("GET", f"/api/queues/{queue['id']}")
+        self.assertEqual([(e["recording"], e["frame"]) for e in listed["entries"]], [("2024-05-05-01", 7), ("2024-05-05-01", 3)])
+        outside = self.root.parent / f"{self.root.name}-outside.h5"
+        write_recording(outside, frames=4)
+        self.addCleanup(outside.unlink)
+        manifest.write_text(json.dumps({"recordings": {"a": {"path": str(self.path)}, "b": {"path": str(outside)}}, "frames": []}))
+        with self.assertRaisesRegex((ValueError, LookupError), "setup"):
+            manifest_queue(self.state, manifest)
+
     def test_a_new_queue_finds_frames_in_a_job(self):
         other = self.recordings / "2024-05-05-02.h5"
         write_recording(other, frames=20)
@@ -271,8 +324,8 @@ class ProposalTests(unittest.TestCase):
             dataset = library.create_dataset(libraries, "rig-labels", setup="mine:rig")
             dataset.save(recording="rec", frame=3, image=image, image_raw=image, mask=mask.astype(np.uint8), context=context,
                          context_valid=np.ones(5, bool), origin="spread")
-            app = create_app(AppConfig(workspaces_root=root / "workspaces", recording_roots=(root,), poses_root=root / "poses",
-                                       dataset_root=root / "cache", checkpoint=None, prior_cache=None, notes=root / "notes.json",
+            app = create_app(AppConfig(workspaces_root=root / "workspaces",
+                                       dataset_root=root / "cache",
                                        device="cpu", gpus=(), lab_library=root / "nolab", library=libraries.personal))
             service = app.state.app_state.labeling
             card = library.get_card(libraries, "mine:body")

@@ -27,7 +27,7 @@ the shorter of the two segments is the suspect (both on a tie).  The whole
 segment becomes the issue, so Flip on the issue turns all of it.
 
 Rows with a reason, and rows a person placed (``pipeline.placed_rows``:
-flips, picks, kept fixes), are grouped into issues: runs of such rows
+flips and kept fixes), are grouped into issues: runs of such rows
 closer than ``MIN_ISSUE_FRAMES`` (8) sampled frames merge into one issue,
 together with the clean rows between them.  Nothing is hidden, so a short
 issue on its own stays a short issue.  An issue is
@@ -234,11 +234,25 @@ def refit_algorithm(codes: Sequence[str]) -> str:
 # Issues
 
 
+def runs(flags: BoolArray) -> list[tuple[int, int]]:
+    """Maximal runs of consecutive true entries as inclusive ``(first, last)`` pairs."""
+
+    out: list[tuple[int, int]] = []
+    start: int | None = None
+    for row, on in enumerate(np.asarray(flags, dtype=bool).tolist() + [False]):
+        if on and start is None:
+            start = row
+        elif not on and start is not None:
+            out.append((start, row - 1))
+            start = None
+    return out
+
+
 def issue_spans(rows: BoolArray, gap: int = MIN_ISSUE_FRAMES) -> list[tuple[int, int]]:
     """Runs of true rows as inclusive ``(first, last)`` pairs, runs fewer than ``gap`` rows apart merged."""
 
     spans: list[tuple[int, int]] = []
-    for first, last in edits._runs(rows):
+    for first, last in runs(rows):
         if spans and first - spans[-1][1] - 1 < gap:
             spans[-1] = (spans[-1][0], last)
         else:

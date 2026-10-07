@@ -1,4 +1,10 @@
-"""Workspaces: create, import a run, list, open, frames, network predictions, snapshots and exports (the edits live in ``routers/edits``)."""
+"""A workspace's payloads: the whole workspace (developer tools), one frame, the network's fields on a frame, and exports.
+
+Analyse makes workspaces (``routers/analysis``); the fixes and the issues
+live in ``routers/fixes`` and mask edits in ``routers/masks``.  A frame's
+full detail runs the segmenter for the probability layers only in developer
+mode (``--dev``): analysts see the stored mask.
+"""
 
 from __future__ import annotations
 
@@ -8,63 +14,28 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import FileResponse
 from urllib.parse import quote
 
-from ...pipeline import workspace_lock
 from ..exporting import export_workspace, exported_file, list_exports
 
-from . import get_state, query_flag, query_float
+from . import get_state, query_flag
 from ..state import AppState
 
 router = APIRouter(prefix="/api/workspaces")
 
 
-@router.get("")
-def list_all(app: AppState = Depends(get_state)) -> list[dict[str, Any]]:
-    return app.workspace_rows()
-
-
-@router.post("")
-def create(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.create_workspace(payload).info()
-
-
-@router.post("/import")
-def import_run(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.import_workspace(payload).info()
-
-
 @router.get("/{name}")
 def open_workspace(name: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.view(name).payload(app.catalog_entries())
+    return app.view(name).payload()
 
 
 @router.get("/{name}/frame")
-def frame(name: str, frame: int, detail: str = "full", threshold: str | None = None, raw: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.view(name).frame(frame, app.viewer.segmenters, query_float(threshold), app.device, raw=query_flag(raw), detail=detail)
+def frame(name: str, frame: int, detail: str = "full", raw: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    return app.view(name).frame(frame, app.segmenters, app.device, raw=query_flag(raw), detail=detail, segment=app.config.dev)
 
 
 @router.get("/{name}/network-fields")
 def network_fields(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
     """The body-field network's A-P field, crossings and head/tail on one frame (``app/network_fields.py``)."""
     return app.network_fields.frame(name, frame)
-
-
-@router.get("/{name}/pose")
-def pose(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.view(name).pose(frame)
-
-
-@router.get("/{name}/starts")
-def starts(name: str, frame: int, threshold: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return app.view(name).starts(frame, app.viewer.segmenters, query_float(threshold), app.device)
-
-
-@router.post("/{name}/snapshot")
-def snapshot(name: str, payload: dict[str, Any] = Body(default={}), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    workspace = app.workspace(name)
-    app.check_writable(name)
-    with workspace_lock(workspace, timeout=0):
-        path = workspace.snapshot(str(payload.get("label") or "snapshot"))
-    return {"path": str(path), "name": path.name, "snapshots": workspace.snapshots()}
 
 
 def _with_urls(name: str, export: dict[str, Any]) -> dict[str, Any]:

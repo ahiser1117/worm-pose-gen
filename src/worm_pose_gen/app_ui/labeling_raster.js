@@ -4,7 +4,7 @@
 // A mask is a Uint8Array of store labels, one per pixel: 0 background,
 // 1 worm, 255 excluded from the loss (only migrated labels have those; no
 // brush makes them). The server sends and takes masks as PNG data URLs with
-// 0 background, 255 worm and 128 excluded (label_app.mask_to_png_values).
+// 0 background, 255 worm and 128 excluded (app/images.py, mask_to_png_values).
 
 export const WORM = 1, BACKGROUND = 0, IGNORE = 255;
 

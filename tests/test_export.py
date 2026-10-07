@@ -2,7 +2,7 @@
 
 Pure parts on synthetic arrays (geometry, status, the feature list), the
 recording reader on a synthetic acquisition file with camera timestamps and
-a tracking stage, and whole exports of a synthetic imported workspace through
+a tracking stage, and whole exports of a synthetic fitted workspace through
 the pipeline stage and the API.
 """
 
@@ -25,8 +25,7 @@ from worm_pose_gen import export_table, pipeline
 from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.app.exporting import export_workspace, exported_file, list_exports
 from worm_pose_gen.export_table import MIDLINE_POINTS, Meta, body_geometry, build_table, frame_status, read_recording_motion
-from worm_pose_gen.workspace import Workspace
-from tests.test_pose_viewer import FRAMES, _write_recording, _write_run
+from tests.test_frame_view import FRAMES, _write_recording, _write_workspace
 
 
 def _arc(radius: float, center: tuple[float, float], start: float, span: float, points: int = 100) -> np.ndarray:
@@ -183,7 +182,7 @@ class RecordingMotionTests(unittest.TestCase):
 
 
 class WorkspaceExportTests(unittest.TestCase):
-    """Whole exports of an imported synthetic workspace (no camera metadata, no stage)."""
+    """Whole exports of a synthetic fitted workspace (no camera metadata, no stage)."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -191,12 +190,11 @@ class WorkspaceExportTests(unittest.TestCase):
         root = Path(self.tmp.name)
         recording = root / "rec.h5"
         _write_recording(recording)
-        _write_run(root / "run", recording)
-        self.workspace = Workspace.import_run(root / "workspaces", root / "run", "test")
+        self.workspace = _write_workspace(root / "workspaces", "test", recording)
         self.app = mock.Mock(workspace=lambda name: self.workspace, device="cpu")
 
     def test_stage_writes_documented_table_and_metadata(self) -> None:
-        summary = (self.workspace.path / "imported_summary.json").read_text()
+        summary = (self.workspace.path / "summary.json").read_text()
         result = pipeline.run_stage(self.workspace, "export", {"pixel_size_um": 2.0, "fps": 20.0, "setup": "lab:nir-flv"}, device="cpu")
         directory = Path(result["path"]).parent
         self.assertEqual(directory.parent, self.workspace.path / "exports")
@@ -222,9 +220,7 @@ class WorkspaceExportTests(unittest.TestCase):
         state = self.workspace.load_state()
         np.testing.assert_allclose(rows[0]["head_x"], 2.0 * state["centerline_xy"][0, 0, 0], rtol=1e-5)
         # The export reads the workspace and writes only under exports/.
-        self.assertFalse((self.workspace.path / "summary.json").exists())
-        self.assertEqual((self.workspace.path / "imported_summary.json").read_text(), summary)
-        self.assertEqual(self.workspace.snapshots(), [])
+        self.assertEqual((self.workspace.path / "summary.json").read_text(), summary)
 
     def test_status_from_reviews_fixes_and_flags(self) -> None:
         n = self.workspace.n
@@ -282,13 +278,12 @@ class ExportApiTests(unittest.TestCase):
             recording = root / "recordings" / "rec-a.h5"
             recording.parent.mkdir()
             _write_recording(recording)
-            _write_run(root / "runs" / "demo", recording)
+            name = _write_workspace(root / "workspaces", "demo", recording).info.name
             config = AppConfig(
-                workspaces_root=root / "workspaces", recording_roots=(root / "recordings",), poses_root=root / "runs",
-                dataset_root=root / "dataset", checkpoint=None, prior_cache=None, notes=root / "notes.json", gpus=(0,), device="cpu",
+                workspaces_root=root / "workspaces", dataset_root=root / "dataset", gpus=(0,), device="cpu",
+                lab_library=root / "lab", library=root / "mine",
             )
             with TestClient(create_app(config), raise_server_exceptions=False) as client:
-                name = client.post("/api/workspaces/import", json={"run": "demo"}).json()["name"]
                 response = client.post(f"/api/workspaces/{name}/export", json={"pixel_size_um": 1.25})
                 self.assertEqual(response.status_code, 200, response.text)
                 result = response.json()

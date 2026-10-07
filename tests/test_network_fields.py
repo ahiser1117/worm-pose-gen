@@ -1,4 +1,4 @@
-"""The workspace viewer's body-field network layers: GET /api/workspaces/{name}/network-fields with a stub network."""
+"""The Workspace page's body-field network layers: GET /api/workspaces/{name}/network-fields with a stub network."""
 
 import base64
 import io
@@ -69,9 +69,12 @@ class NetworkFieldsApiTests(unittest.TestCase):
         self.workspace = Workspace.create(self.root / "workspaces", "demo", self.recording, 0, FRAMES - 1, 1)
 
     def client(self, body_net):
-        config = AppConfig(workspaces_root=self.root / "workspaces", recording_roots=(self.root,), poses_root=self.root / "poses",
-                           corpus_root=self.root / "corpus", dataset_root=self.root / "cache", checkpoint=None, body_net=body_net,
-                           prior_cache=None, notes=self.root / "notes.json", device="cpu", gpus=())
+        """The app, with ``body_net`` as the body model the workspace was analysed with (``None``: none)."""
+
+        self.workspace.info.settings["body_net"] = None if body_net is None else str(body_net)
+        self.workspace.save_info()
+        config = AppConfig(workspaces_root=self.root / "workspaces", dataset_root=self.root / "cache", device="cpu", gpus=(),
+                           lab_library=self.root / "lab", library=self.root / "mine")
         app = create_app(config)
         client = TestClient(app, raise_server_exceptions=False)
         self.addCleanup(client.close)
@@ -85,9 +88,9 @@ class NetworkFieldsApiTests(unittest.TestCase):
 
     def test_without_a_network_the_route_says_so(self):
         _, client = self.client(None)
-        self.assertIn("--body-net", self.get(client, 1, 400)["error"])
+        self.assertIn("without a body-field model", self.get(client, 1, 400)["error"])
         _, client = self.client(self.root / "absent.ckpt")
-        self.assertIn("--body-net", self.get(client, 1, 400)["error"])
+        self.assertIn("without a body-field model", self.get(client, 1, 400)["error"])
 
     def test_encoding_ends_and_cache(self):
         app, client = self.client(self.checkpoint)

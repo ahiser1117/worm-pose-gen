@@ -22,7 +22,7 @@ import h5py
 import numpy as np
 
 from worm_pose_gen.ambiguity import FLAG_NAMES, AmbiguityThresholds, compute_ambiguity, summarize_ambiguity
-from worm_pose_gen.label_app import DATASET_PATH
+from worm_pose_gen.recordings import DATASET_PATH
 
 
 def parse_args() -> argparse.Namespace:

@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from worm_pose_gen import edits, fixes, library, pipeline
 from worm_pose_gen.app import AppConfig, analysis, create_app
 from worm_pose_gen.library import Libraries
+from worm_pose_gen.workspace import list_workspaces
 
 from tests.test_fixes import posed_workspace
 from tests.test_fixes_api import _cpu_fix_command
@@ -67,9 +68,8 @@ class WorkspacePageTests(unittest.TestCase):
         _write_recording(cls.recording)
         cls.libraries = write_library(root, recordings)
         config = AppConfig(
-            workspaces_root=root / "workspaces", recording_roots=(), poses_root=root / "runs", dataset_root=root / "dataset",
-            checkpoint=None, prior_cache=None, notes=root / "notes.json", gpus=(), device="cpu", job_interval=0.1,
-            lab_library=cls.libraries.lab, library=cls.libraries.personal, body_net=None,
+            workspaces_root=root / "workspaces", dataset_root=root / "dataset", gpus=(), device="cpu", job_interval=0.1,
+            lab_library=cls.libraries.lab, library=cls.libraries.personal,
         )
         cls.client = TestClient(create_app(config), raise_server_exceptions=False)
         cls.client.__enter__()
@@ -107,7 +107,7 @@ class WorkspacePageTests(unittest.TestCase):
         self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"mask": "lab:body"}}, 400)
         self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"body": "lab:seg"}}, 400)
         self.call("POST", "/api/analyse", {"path": str(self.root / "elsewhere.h5")}, 404)
-        self.assertEqual(self.call("GET", "/api/workspaces"), [])
+        self.assertEqual(list_workspaces(self.root / "workspaces"), [])
 
         started = self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"body": "lab:body"}})
         name = started["workspace"]
@@ -187,8 +187,7 @@ class MaskRefitKeepTests(unittest.TestCase):
                 edits._reverse_row(state, row)
             workspace.save_state(state)
             config = AppConfig(
-                workspaces_root=root / "workspaces", recording_roots=(root,), poses_root=root / "runs", dataset_root=root / "dataset",
-                checkpoint=None, prior_cache=None, notes=root / "notes.json", gpus=(), device="cpu", job_interval=0.1,
+                workspaces_root=root / "workspaces", dataset_root=root / "dataset", gpus=(), device="cpu", job_interval=0.1,
                 lab_library=root / "lab", library=root / "mine",
             )
             with TestClient(create_app(config), raise_server_exceptions=False) as client, mock.patch.object(fixes, "fix_command", _cpu_fix_command):

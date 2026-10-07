@@ -1,10 +1,11 @@
-"""Mask edits preserve labels, invalidate fits, and restore exact before slices."""
+"""Mask edits preserve labels, invalidate fits, restore exact before slices, and make results fit to the old masks stale."""
 import unittest
 from unittest.mock import patch
 import numpy as np
+from tests.test_algorithms import keep
 from tests.test_edits import EditFixture
-from tests.test_pose_viewer import HEIGHT, WIDTH
-from worm_pose_gen import edits, algorithms
+from tests.test_frame_view import HEIGHT, WIDTH
+from worm_pose_gen import edits, algorithms, fixes
 
 
 class MaskEditTests(EditFixture):
@@ -48,17 +49,14 @@ class MaskEditTests(EditFixture):
                 edits.set_mask(self.workspace, 1, bad)
         np.testing.assert_array_equal(self.workspace.get_override_mask(1), labels)
 
-    def test_candidate_mask_versions_include_anchors(self):
-        candidate = algorithms.CandidateSet(algorithm='mirror', params={}, first=2, last=3,
-            anchor_before=1, anchor_after=4, rows=[2, 3], candidates={}, path=[], metrics={})
-        candidate.mask_revisions = {str(r): self.workspace.mask_revision(r) for r in range(1, 5)}
-        algorithms.validate_candidate_masks(self.workspace, candidate)
+    def test_result_mask_versions_include_anchors(self):
+        revisions = {str(r): self.workspace.mask_revision(r) for r in range(1, 5)}
+        algorithms.validate_mask_revisions(self.workspace, revisions, [2, 3], [1, 4], 'test')
         edits.set_mask(self.workspace, 1, np.zeros((HEIGHT, WIDTH), np.uint8))
         with self.assertRaisesRegex(ValueError, 'stale'):
-            algorithms.validate_candidate_masks(self.workspace, candidate)
-        candidate.mask_revisions = {}
+            algorithms.validate_mask_revisions(self.workspace, revisions, [2, 3], [1, 4], 'test')
         with self.assertRaisesRegex(ValueError, 'unversioned'):
-            algorithms.validate_candidate_masks(self.workspace, candidate)
+            algorithms.validate_mask_revisions(self.workspace, {}, [2, 3], [1, 4], 'test')
 
     def test_write_failure_rolls_back_and_keeps_label_artifact(self):
         labels = np.ones((HEIGHT, WIDTH), np.uint8)
@@ -81,48 +79,46 @@ class MaskEditTests(EditFixture):
         with np.load(self.workspace.path / "edits" / "e000001.npz") as saved:
             np.testing.assert_array_equal(saved["mask:after_labels"], labels)
 
-    def test_accept_rejects_changed_mask_without_mutating_state(self):
+    def _single_row_result(self, anchor_before=None):
         from worm_pose_gen.pipeline import workspace_setup
         pose = algorithms.CandidatePose.from_state(self.workspace.load_state(), 5, workspace_setup(self.workspace).config)
         candidate = algorithms.CandidateSet(algorithm="slow_refit", params={}, first=5, last=5,
-            anchor_before=None, anchor_after=None, rows=[5], candidates={5: [pose]}, path=[(5, 0, False)], metrics={}, id="test")
-        candidate.mask_revisions = {"5": self.workspace.mask_revision(5)}
-        algorithms.save_candidate_set(self.workspace, candidate)
+            anchor_before=anchor_before, anchor_after=None, rows=[5], candidates={5: [pose]}, path=[(5, 0, False)], metrics={})
+        candidate.mask_revisions = {str(r): self.workspace.mask_revision(r) for r in (anchor_before, 5) if r is not None}
+        preview = fixes.preview_from(self.workspace, fixes.next_preview_id(self.workspace), "refit", candidate, self.workspace.load_state())
+        fixes.save_preview(self.workspace, preview)
+        return preview
+
+    def test_keep_rejects_changed_mask_without_mutating_state(self):
+        preview = self._single_row_result()
         edits.set_mask(self.workspace, 5, np.ones((HEIGHT, WIDTH), np.uint8))
         before = self.workspace.load_arrays()
-        with self.assertRaisesRegex(ValueError, "stale"):
-            algorithms.accept_candidates(self.workspace, "test")
+        with self.assertRaisesRegex(ValueError, "mask changed"):
+            fixes.keep(self.workspace, preview.id)
         for key, value in before.items():
             np.testing.assert_array_equal(self.workspace.load_arrays()[key], value)
 
-    def test_accept_checks_anchor_revision_after_edit_lock_acquisition(self):
-        from worm_pose_gen.pipeline import workspace_setup
-        pose = algorithms.CandidatePose.from_state(self.workspace.load_state(),5,workspace_setup(self.workspace).config)
-        candidate = algorithms.CandidateSet(algorithm="slow_refit",params={},first=5,last=5,
-            anchor_before=4,anchor_after=None,rows=[5],candidates={5:[pose]},path=[(5,0,False)],metrics={},id="race")
-        candidate.mask_revisions = {str(r):self.workspace.mask_revision(r) for r in (4,5)}
-        algorithms.save_candidate_set(self.workspace,candidate)
-        original_accept = edits.accept_path
-        def race(*args,**kwargs):
-            self.workspace.set_override_mask(4,np.ones((HEIGHT,WIDTH),np.uint8))
-            return original_accept(*args,**kwargs)
+    def test_keep_checks_anchor_revision_after_edit_lock_acquisition(self):
+        preview = self._single_row_result(anchor_before=4)
+        original_set_poses = edits.set_poses
+        def race(*args, **kwargs):
+            self.workspace.set_override_mask(4, np.ones((HEIGHT, WIDTH), np.uint8))
+            return original_set_poses(*args, **kwargs)
         before = self.workspace.load_arrays()
-        with patch.object(edits,"accept_path",side_effect=race):
-            with self.assertRaisesRegex(ValueError,"stale"):
-                algorithms.accept_candidates(self.workspace,"race")
-        for key,value in before.items():
-            np.testing.assert_array_equal(self.workspace.load_arrays()[key],value)
+        with patch.object(edits, "set_poses", side_effect=race):
+            with self.assertRaisesRegex(ValueError, "mask changed"):
+                fixes.keep(self.workspace, preview.id)
+        for key, value in before.items():
+            np.testing.assert_array_equal(self.workspace.load_arrays()[key], value)
 
     def test_changed_cached_base_mask_is_rejected(self):
         from worm_pose_gen.workspace import Workspace
         initial = np.zeros((HEIGHT, WIDTH), np.uint8)
         self.workspace.set_masks([5], [initial])
-        candidate = algorithms.CandidateSet(algorithm="mirror", params={}, first=5, last=5,
-            anchor_before=None, anchor_after=None, rows=[5], candidates={}, path=[], metrics={})
-        candidate.mask_revisions = {"5": self.workspace.mask_revision(5)}
+        revisions = {"5": self.workspace.mask_revision(5)}
         Workspace.open(self.workspace.path).set_masks([5], [np.ones_like(initial)])
         with self.assertRaisesRegex(ValueError, "stale"):
-            algorithms.validate_candidate_masks(self.workspace, candidate)
+            algorithms.validate_mask_revisions(self.workspace, revisions, [5], [], "test")
 
     def test_propagation_never_restores_invalid_or_explicitly_accepted_baseline(self):
         from worm_pose_gen import pipeline
@@ -134,19 +130,19 @@ class MaskEditTests(EditFixture):
         self.assertTrue(np.isnan(changed["latent_independent"][5]).all())
         self.assertTrue(np.isnan(changed["body_length_px"][5]))
         self.assertEqual(pipeline.restore_independent_rows(changed,np.full(6,"chain_forward")), [0,1,2,3,4])
-        # An explicitly accepted chain has the same algorithm id as a pipeline
-        # chain, but its candidate job provenance makes it a fixed manual choice.
+        # A kept chain refit has the same algorithm id as a pipeline chain,
+        # but its fix job provenance makes it a fixed manual choice.
         state = self.workspace.load_state()
         state["centerline_xy"][0] += 10
         curve = state["centerline_xy"][0].copy()
         provenance = np.full(6,"chain_forward")
         jobs = np.full(6,"stage", dtype="<U64")
-        jobs[0] = "candidates:trusted"
+        jobs[0] = "fix:p000001"
         self.assertNotIn(0,pipeline.restore_independent_rows(state,provenance,jobs))
         np.testing.assert_array_equal(state["centerline_xy"][0],curve)
         self.assertTrue(pipeline.placed_rows(state,provenance,jobs)[0])
 
-    def test_actual_tiny_region_refit_accept_preserves_outside_poses(self):
+    def test_actual_tiny_region_refit_kept_preserves_outside_poses(self):
         from dataclasses import asdict
         import torch
         from worm_pose_gen import pipeline
@@ -162,10 +158,10 @@ class MaskEditTests(EditFixture):
         edits.set_mask(self.workspace,5,labels)
         before = self.workspace.load_state()
         before_provenance = self.workspace.load_provenance()
-        candidate = algorithms.run_region(self.workspace,"slow_refit",5,5,{"preset":"fast"},device="cpu",job="tiny")
+        candidate = algorithms.run_algorithm(self.workspace,"slow_refit",5,5,{"preset":"fast"},device="cpu")
         self.assertEqual(len(candidate.path),1)
         self.assertFalse(self.workspace.load_state()["fitted"][5])
-        result = algorithms.accept_candidates(self.workspace,candidate.id)
+        result = keep(self.workspace,candidate)
         after = self.workspace.load_state()
         self.assertTrue(after["fitted"][5])
         self.assertFalse(after["mask_stale"][5])

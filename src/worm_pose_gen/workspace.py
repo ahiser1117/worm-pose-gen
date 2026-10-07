@@ -1,19 +1,20 @@
 """On-disk workspace for one recording range.
 
-A workspace replaces the write-once run directory of ``scripts/fit_recording.py``
-with a place the pipeline stages and the user's interventions read from and
-write back to (``docs/APP_PLAN.md`` section 4)::
+A workspace is the place the pipeline stages and the user's fixes read from
+and write back to (``docs/APP_PLAN.md`` section 4); the app keeps one per
+recording, always the whole recording (``docs/APP_SIMPLIFICATION.md``)::
 
     <workspaces>/<name>/
-      workspace.json         recording path, frame range, settings, imported runs
+      workspace.json         recording path, frame range, settings (setup, models)
       state.npz              current per-frame arrays (the poses.npz layout)
       hypotheses.npz         candidates per frame (hypotheses_*, path_*, prediction_*)
       provenance.npz         per frame: algorithm id, job or edit id, unix time
+      summary.json           the stages' run summary (fit configuration, prior, propagation)
       masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk
       overrides/masks/       sparse: frames whose mask the user edited
       edits.jsonl            append-only log of every intervention
-      snapshots/<time>_<label>/   copies of state, hypotheses and provenance
-      imported_summary.json  the summary.json of an imported run
+      fixes/                 Refit and Relabel previews waiting for Keep or Discard
+      exports/               the per-recording tables the Export button wrote
 
 Rows are positions in ``frame_index = range(first, last + 1, step)``; every
 per-frame array has one entry per row.  Every file write goes through a
@@ -32,8 +33,6 @@ import json
 import hashlib
 import os
 from pathlib import Path
-import re
-import shutil
 import threading
 import time as time_module
 from typing import Any, Sequence
@@ -47,8 +46,6 @@ DEFAULT_WORKSPACES_ROOT = Path("/temp_data4/alex/external_artifacts/workspaces")
 RECORDING_DATASET = "/img_nir"
 MASK_CHUNK_ROWS = 1024
 HYPOTHESIS_PREFIXES = ("hypotheses_", "path_", "prediction_")
-# The fitter's ``source`` codes and the algorithm ids they stand for.
-SOURCE_ALGORITHMS = {0: "independent_fit", 1: "chain_forward", 2: "chain_backward"}
 ALGORITHM_DTYPE = "<U32"
 JOB_DTYPE = "<U64"
 _CHUNK_CACHE_SIZE = 2
@@ -58,28 +55,6 @@ BoolArray = NDArray[np.bool_]
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _timestamp_slug(stamp: datetime | None = None) -> str:
-    stamp = stamp or datetime.now(timezone.utc)
-    return stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-
-
-def _slug(text: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", text.strip()).strip("-")
-    return cleaned or "snapshot"
-
-
-def _iso_to_unix(iso: str | None) -> float | None:
-    if not iso:
-        return None
-    try:
-        stamp = datetime.fromisoformat(iso)
-    except ValueError:
-        return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    return stamp.timestamp()
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
@@ -157,7 +132,6 @@ class WorkspaceInfo:
     step: int
     created_at: str
     settings: dict[str, Any] = field(default_factory=dict)
-    imported_runs: list[str] = field(default_factory=list)
     frame_count: int = 0
     image_shape: list[int] | None = None
 
@@ -230,10 +204,6 @@ class Workspace:
         return self.path / "edits.jsonl"
 
     @property
-    def snapshots_dir(self) -> Path:
-        return self.path / "snapshots"
-
-    @property
     def recording(self) -> Path:
         return Path(self.info.recording)
 
@@ -273,7 +243,6 @@ class Workspace:
             step=int(step),
             created_at=utc_now(),
             settings=dict(settings or {}),
-            imported_runs=[],
             frame_count=int(len(frame_index)),
             image_shape=None if shape is None else [shape[0], shape[1]],
         )
@@ -292,51 +261,6 @@ class Workspace:
         info.path = str(path)
         info.name = path.name
         return cls(path, info)
-
-    @classmethod
-    def import_run(cls, root: Path, run_dir: Path, name: str | None = None) -> "Workspace":
-        """A workspace holding a fitter run's arrays as its state; the run is left untouched.
-
-        Older runs lack the hypotheses arrays and some newer statistics; whatever
-        the run has is stored.  Provenance comes from the run's ``source`` array
-        on fitted rows and is attributed to the job ``import:<run name>`` at the
-        run's start time.
-        """
-
-        run_dir = Path(run_dir)
-        summary = json.loads((run_dir / "summary.json").read_text())
-        arrays = _load_npz(run_dir / "poses.npz")
-        if "frame_index" not in arrays:
-            raise ValueError(f"{run_dir}: poses.npz has no frame_index")
-        frame_index = np.asarray(arrays["frame_index"], dtype=np.int64)
-        first, last = int(frame_index[0]), int(frame_index[-1])
-        step = int(summary.get("step") or (int(frame_index[1] - frame_index[0]) if len(frame_index) > 1 else 1))
-        if not np.array_equal(_frame_range(first, last, step), frame_index):
-            raise ValueError(f"{run_dir}: frame_index is not a regular range with step {step}")
-        workspace = cls.create(root, name or run_dir.name, Path(summary["recording"]), first, last, step, settings={})
-        workspace.info.imported_runs = [run_dir.name]
-        workspace.info.settings = {"imported_run_path": str(run_dir)}
-        for key in ("threshold", "mask_cleanup", "preset", "fit_config"):
-            if key in summary:
-                workspace.info.settings[key] = summary[key]
-        workspace.save_info()
-        shutil.copyfile(run_dir / "summary.json", workspace.path / "imported_summary.json")
-        if (run_dir / "recording_prior.json").exists():
-            shutil.copyfile(run_dir / "recording_prior.json", workspace.path / "recording_prior.json")
-        state, hypotheses = split_arrays(arrays)
-        workspace.save_state(state)
-        if hypotheses:
-            workspace.save_hypotheses(hypotheses)
-        workspace._import_provenance(arrays, run_dir.name, _iso_to_unix(summary.get("started_at")))
-        return workspace
-
-    def _import_provenance(self, arrays: dict[str, np.ndarray], run_name: str, when: float | None) -> None:
-        fitted = np.asarray(arrays.get("fitted", np.ones(self.n, dtype=bool)), dtype=bool)
-        source = np.asarray(arrays.get("source", np.zeros(self.n, dtype=np.int8)))
-        for code, algorithm in SOURCE_ALGORITHMS.items():
-            rows = np.nonzero(fitted & (source == code))[0]
-            if len(rows):
-                self.set_provenance(rows, algorithm, f"import:{run_name}", when)
 
     # ------------------------------------------------------------------ rows
 
@@ -621,31 +545,6 @@ class Workspace:
             return []
         return [json.loads(line) for line in self.edits_path.read_text().splitlines() if line.strip()]
 
-    # -------------------------------------------------------------- snapshots
-
-    def snapshot(self, label: str) -> Path:
-        """Copy state, hypotheses and provenance into ``snapshots/<time>_<label>/``."""
-
-        with self._lock:
-            base = self.snapshots_dir / f"{_timestamp_slug()}_{_slug(label)}"
-            target, suffix = base, 1
-            while target.exists():
-                suffix += 1
-                target = base.with_name(f"{base.name}-{suffix}")
-            target.mkdir(parents=True)
-            copied = []
-            for source in (self.state_path, self.hypotheses_path, self.provenance_path):
-                if source.exists():
-                    shutil.copyfile(source, target / source.name)
-                    copied.append(source.name)
-            _write_json_atomic(target / "snapshot.json", {"label": label, "time": utc_now(), "files": copied, "edits": len(self.edits())})
-        return target
-
-    def snapshots(self) -> list[str]:
-        if not self.snapshots_dir.exists():
-            return []
-        return sorted(p.name for p in self.snapshots_dir.iterdir() if p.is_dir())
-
     # ---------------------------------------------------------------- summary
 
     def summary(self) -> dict[str, Any]:
@@ -660,8 +559,6 @@ class Workspace:
             "has_hypotheses": self.hypotheses_path.exists(),
             "provenance": self.provenance_counts(),
             "edits": len(self.edits()),
-            "imported_runs": list(self.info.imported_runs),
-            "snapshots": self.snapshots(),
             "has_prior": (self.path / "recording_prior.json").exists(),
         }
         if "iou" in state and fitted.any():

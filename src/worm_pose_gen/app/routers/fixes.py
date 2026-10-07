@@ -60,7 +60,7 @@ def review(name: str, payload: ReviewRequest, app: AppState = Depends(get_state)
 def flip(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
     view = app.view(name)
     app.check_writable(name)
-    return fix_ops.flip(view, payload, app.viewer.segmenters, app.device)
+    return fix_ops.flip(view, payload, app.segmenters, app.device)
 
 
 @router.post("/{name}/fixes/refit")
@@ -94,7 +94,7 @@ def get_preview(name: str, preview_id: str, app: AppState = Depends(get_state)) 
 def keep(name: str, preview_id: str, payload: dict[str, Any] = Body(default={}), app: AppState = Depends(get_state)) -> dict[str, Any]:
     view = app.view(name)
     app.check_writable(name)
-    return fix_ops.keep(view, preview_id, payload or {}, app.viewer.segmenters, app.device)
+    return fix_ops.keep(view, preview_id, payload or {}, app.segmenters, app.device)
 
 
 @router.delete("/{name}/fixes/previews/{preview_id}")
@@ -111,4 +111,4 @@ def list_fixes(name: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
 def undo(name: str, edit_id: str, payload: dict[str, Any] = Body(default={}), app: AppState = Depends(get_state)) -> dict[str, Any]:
     view = app.view(name)
     app.check_writable(name)
-    return fix_ops.undo(view, edit_id, payload or {}, app.viewer.segmenters, app.device)
+    return fix_ops.undo(view, edit_id, payload or {}, app.segmenters, app.device)

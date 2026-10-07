@@ -399,8 +399,8 @@ def main() -> int:
     predictions_of = None if predictor is None else (lambda rows: predictor.predict([indices[row] for row in rows]))
 
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
-    # independent pose itself is kept so a viewer can show what propagation
-    # replaced (worm_pose_gen.pose_viewer).
+    # independent pose itself is kept so the developer layers can show what
+    # propagation replaced.
     arrays.update(compute_ambiguity(arrays, prior=prior_dict, image_shape=image_shape))
     arrays["score_independent"] = arrays["ambiguity_score"].copy()
     independent_copies(arrays)

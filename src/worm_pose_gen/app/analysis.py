@@ -39,7 +39,7 @@ import numpy as np
 
 from .. import library, pipeline
 from ..jobs import FINISHED_STATES, JobRecord, JobSpec
-from ..label_app import data_url
+from .images import data_url
 from ..library.setups import ROLE_OUTPUTS
 from ..recordings import RecordingInfo, list_recordings
 from ..workspace import Workspace, _write_json_atomic, list_workspaces, utc_now
@@ -289,10 +289,7 @@ def library_recordings(app: AppState, setup: library.Setup) -> list[RecordingInf
     """The setup's recordings (under its roots or registered to it, not registered to another setup)."""
 
     libraries = app.libraries
-    infos = list_recordings(
-        library.recording_sources(libraries, setup.ref), poses_root=None, workspaces_root=None, prior_cache=None,
-        cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]),
-    )
+    infos = list_recordings(library.recording_sources(libraries, setup.ref), cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]))
     registered = library.setups.registered_recordings(libraries)
     return [info for info in infos if registered.get(info.path, {}).get("setup") in (None, setup.ref)]
 

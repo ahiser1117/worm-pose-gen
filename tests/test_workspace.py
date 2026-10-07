@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -37,10 +35,9 @@ def _write_recording(path: Path, frames: int = FRAMES, height: int = HEIGHT, wid
         handle.create_dataset("/img_nir", data=stack)
 
 
-def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAMES, independent: bool = True, prior: bool = True) -> None:
-    """A run directory with the arrays the fitter stores, frames ``first`` onward (after tests/test_pose_viewer.py)."""
+def _fit_arrays(*, first: int = 0, count: int = FRAMES, independent: bool = True) -> dict[str, np.ndarray]:
+    """The per-frame arrays the fitter stores (``poses.npz`` layout), frames ``first`` onward (after tests/test_frame_view.py)."""
 
-    path.mkdir(parents=True)
     n_points = 100
     frame_index = np.arange(first, first + count)
     latent = np.concatenate((np.zeros(16), [0.0, 100.0], [WIDTH / 2, HEIGHT / 2]))
@@ -82,25 +79,7 @@ def _write_run(path: Path, recording: Path, *, first: int = 0, count: int = FRAM
         arrays["hypotheses_source"][-1, :2] = ["independent", "forward"]
         arrays["hypotheses_count"][-1] = 2
         arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
-    np.savez_compressed(path / "poses.npz", **arrays)
-    summary = {
-        "started_at": "2026-09-06T10:00:00+00:00",
-        "recording": str(recording),
-        "frames": [int(frame_index[0]), int(frame_index[-1])],
-        "step": 1,
-        "frame_count": count,
-        "threshold": 0.5,
-        "mask_cleanup": {"fill_holes": True, "fill_holes_radius_px": 8, "largest_component": True, "min_worm_pixels": 500},
-        "preset": "fast",
-        "prior": {"length_px": 100.0, "width_px": 10.0},
-    }
-    (path / "summary.json").write_text(json.dumps(summary))
-    if prior:
-        (path / "recording_prior.json").write_text(json.dumps({"length_px": 100.0, "width_px": 10.0}))
-
-
-def _tree_digest(path: Path) -> dict[str, str]:
-    return {str(p.relative_to(path)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(path.rglob("*")) if p.is_file()}
+    return arrays
 
 
 def _blob(height: int, width: int, seed: int) -> np.ndarray:
@@ -153,62 +132,22 @@ class WorkspaceTests(unittest.TestCase):
         blind = Workspace.create(self.workspaces, "blind", self.root / "nope.h5", 0, 3)
         self.assertIsNone(blind.image_shape)
 
-    def test_import_run_splits_arrays_and_sets_provenance(self) -> None:
-        run = self.root / "runs" / "2026-09-06T10-00-00Z_demo"
-        _write_run(run, self.recording)
-        before = _tree_digest(run)
-        ws = Workspace.import_run(self.workspaces, run)
-        self.assertEqual(_tree_digest(run), before)
-        self.assertEqual(ws.info.name, run.name)
-        self.assertEqual(ws.info.recording, str(self.recording))
-        self.assertEqual(ws.info.frames, [0, FRAMES - 1])
-        self.assertEqual(ws.info.imported_runs, [run.name])
-        self.assertEqual(ws.info.settings["preset"], "fast")
-        self.assertTrue((ws.path / "imported_summary.json").exists())
-        self.assertTrue((ws.path / "recording_prior.json").exists())
-
-        state, hypotheses = ws.load_state(), ws.load_hypotheses()
+    def test_split_arrays_separates_hypotheses_from_the_state(self) -> None:
+        arrays = _fit_arrays()
+        state, hypotheses = split_arrays(arrays)
         self.assertNotIn("hypotheses_energy", state)
         self.assertNotIn("path_index", state)
         self.assertIn("centerline_xy_independent", state)
         self.assertIn("width_template", state)
         self.assertEqual(set(hypotheses), {"hypotheses_centerline_xy", "hypotheses_energy", "hypotheses_source", "hypotheses_count", "path_index", "path_override", "prediction_xy"})
-        self.assertEqual(hypotheses["hypotheses_source"][-1].tolist(), ["independent", "forward", ""])
-        with np.load(run / "poses.npz") as archive:
-            original = {k: archive[k] for k in archive.files}
+        ws = Workspace.create(self.workspaces, "demo", self.recording, 0, FRAMES - 1)
+        ws.save_state(state)
+        ws.save_hypotheses(hypotheses)
         merged = ws.load_arrays()
-        self.assertEqual(set(merged), set(original))
-        for key, value in original.items():
+        self.assertEqual(set(merged), set(arrays))
+        for key, value in arrays.items():
             np.testing.assert_array_equal(merged[key], value)
-        restate, rehyp = split_arrays(merged)
-        self.assertEqual(set(restate), set(state))
-        self.assertEqual(set(rehyp), set(hypotheses))
-
-        provenance = ws.load_provenance()
-        self.assertEqual(provenance["algorithm"].tolist(), ["", "independent_fit", "independent_fit", "independent_fit", "chain_backward", "chain_forward"])
-        self.assertEqual(provenance["job"][1], f"import:{run.name}")
-        self.assertEqual(provenance["job"][0], "")
-        self.assertTrue(np.isnan(provenance["time"][0]))
-        self.assertEqual(provenance["time"][1], datetime(2026, 9, 6, 10, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(ws.provenance_counts(), {"chain_backward": 1, "chain_forward": 1, "independent_fit": 3})
-
-        named = Workspace.import_run(self.workspaces, run, name="baseline")
-        self.assertEqual(named.info.name, "baseline")
-        self.assertEqual(named.path, self.workspaces / "baseline")
-
-    def test_import_older_run_without_hypotheses(self) -> None:
-        run = self.root / "runs" / "2026-09-06T11-00-00Z_old"
-        _write_run(run, self.recording, first=2, count=3, independent=False, prior=False)
-        ws = Workspace.import_run(self.workspaces, run)
-        self.assertEqual(ws.frame_index.tolist(), [2, 3, 4])
-        self.assertFalse((ws.path / "hypotheses.npz").exists())
-        self.assertFalse((ws.path / "recording_prior.json").exists())
-        self.assertEqual(ws.load_hypotheses(), {})
-        self.assertIn("centerline_xy", ws.load_state())
-        summary = ws.summary()
-        self.assertFalse(summary["has_hypotheses"])
-        self.assertFalse(summary["has_prior"])
-        self.assertEqual(summary["provenance"], {"chain_backward": 1, "chain_forward": 1})
+        self.assertEqual(split_arrays(_fit_arrays(independent=False))[1], {})
 
     def test_state_and_provenance_round_trip(self) -> None:
         ws = Workspace.create(self.workspaces, "demo", self.recording, 0, 5)
@@ -340,25 +279,6 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(edits[0]["time"].endswith("+00:00"))
         self.assertEqual(len((ws.path / "edits.jsonl").read_text().splitlines()), 3)
         self.assertEqual(ws.summary()["edits"], 3)
-
-    def test_snapshot_copies_state_hypotheses_and_provenance(self) -> None:
-        ws = Workspace.create(self.workspaces, "demo", self.recording, 0, 5)
-        ws.save_state({"fitted": np.ones(6, dtype=bool)})
-        ws.set_provenance([0], "independent_fit", "j1")
-        path = ws.snapshot("before fix / v1")
-        self.assertEqual(path.parent, ws.path / "snapshots")
-        self.assertTrue(path.name.endswith("_before-fix-v1"))
-        self.assertEqual(sorted(p.name for p in path.iterdir()), ["provenance.npz", "snapshot.json", "state.npz"])
-        self.assertEqual(json.loads((path / "snapshot.json").read_text())["label"], "before fix / v1")
-        with np.load(path / "state.npz") as archive:
-            self.assertEqual(archive["fitted"].tolist(), [True] * 6)
-        again = ws.snapshot("before fix / v1")
-        self.assertNotEqual(again, path)
-        self.assertEqual(ws.summary()["snapshots"], sorted([path.name, again.name]))
-        # The snapshot is a copy: later state changes do not touch it.
-        ws.save_state({"fitted": np.zeros(6, dtype=bool)})
-        with np.load(path / "state.npz") as archive:
-            self.assertEqual(archive["fitted"].tolist(), [True] * 6)
 
     def test_list_workspaces_newest_first(self) -> None:
         self.assertEqual(list_workspaces(self.workspaces), [])

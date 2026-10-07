@@ -76,8 +76,7 @@ def main():
     libraries = make_library(root)
     personal_items(libraries, root)
     app = create_app(AppConfig(
-        workspaces_root=root / "workspaces", recording_roots=(), poses_root=root / "poses", dataset_root=root / "cache",
-        checkpoint=None, body_net=None, prior_cache=None, notes=root / "notes.json", gpus=(), device="cpu", job_interval=0.2,
+        workspaces_root=root / "workspaces", dataset_root=root / "cache", gpus=(), device="cpu", job_interval=0.2,
         max_concurrent=4, lab_library=libraries.lab, library=libraries.personal,
     ))
     state = app.state.app_state
