@@ -28,11 +28,15 @@ Stages and what they read and write:
 - ``track``: the track-length pass over clipped and deviating frames
   (``track_length_refit``).
 - ``export``: workspace -> ``exports/<recording>_<time>/``, the per-frame table
-  and ``export.json`` (``worm_pose_gen.export_table``).
+  and ``export.json`` (``worm_pose_gen.export_table``).  Not a default stage:
+  an analysis (``DEFAULT_STAGES``) stops at ``track``, and the app exports
+  only when the user asks.
 
 Each stage's parameters are a dataclass whose defaults match the script's
 flags; ``from_dict`` ignores unknown keys, so one parameter dict can drive
-every stage.  Besides the stages, the command line runs one region algorithm
+every stage.  The command line runs one stage (``--stage``) or several in
+pipeline order in one process (``--stages``, the app's Analyse job, whose
+progress spans them all).  Besides the stages, it runs one region algorithm
 of ``worm_pose_gen.algorithms`` (``--region-run``, argv from
 ``region_command``), which writes a candidate set rather than the state.  With ``checkpoint=None`` the segmenter is replaced by a
 threshold on dark pixels (below 128), which keeps the stages testable on a
@@ -96,7 +100,7 @@ from .workspace import MASK_CHUNK_ROWS, pack_mask
 
 
 STAGES = ("segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_body", "export")
-DEFAULT_STAGES = tuple(stage for stage in STAGES if stage != "fixed_body")
+DEFAULT_STAGES = tuple(stage for stage in STAGES if stage not in ("fixed_body", "export"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "segmenter" / "best.ckpt"
 EXTERNAL_ROOT = Path(os.environ.get("WORM_POSE_EXTERNAL_ROOT", "/temp_data4/alex/external_artifacts"))
@@ -2033,6 +2037,18 @@ def stage_command(workspace_path: Path | str, stage: str, params: dict[str, Any]
 REGION_SPEC_KEYS = ("algorithm", "first", "last", "params", "anchor_before", "anchor_after", "id")
 
 
+def stages_command(workspace_path: Path | str, stages: Sequence[str], params: dict[str, Any] | None) -> list[str]:
+    """The argv that runs ``stages`` in pipeline order as one job, every stage reading ``params`` (``run_all``'s ``'*'``)."""
+
+    unknown = [stage for stage in stages if stage not in STAGES]
+    if unknown or not stages:
+        raise ValueError(f"unknown stages {unknown or 'none given'}; expected some of {STAGES}")
+    return [
+        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        "--workspace", str(workspace_path), "--stages", ",".join(stages), "--params", json.dumps(params or {}),
+    ]
+
+
 def region_command(workspace_path: Path | str, spec: Any) -> list[str]:
     """The argv that runs one region algorithm as a job (``worm_pose_gen.algorithms.run_region`` through this module).
 
@@ -2113,6 +2129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stage", choices=STAGES)
+    group.add_argument("--stages", default=None, help="comma-separated stages, run in pipeline order in this process with the same --params")
     group.add_argument("--region-run", default=None, help="JSON region spec: algorithm, first, last (rows), params, anchor_before, anchor_after, id")
     parser.add_argument("--params", default="{}", help="JSON object of stage parameters")
     parser.add_argument("--device", default=None)
@@ -2129,6 +2146,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(_json_safe(result), indent=1))
         return 0
     params = json.loads(args.params)
+    if args.stages is not None:
+        stages = [stage for stage in args.stages.split(",") if stage]
+        unknown = [stage for stage in stages if stage not in STAGES]
+        if unknown or not stages:
+            parser.error(f"--stages: unknown stages {unknown or 'none given'}; expected some of {STAGES}")
+        _report_progress(0.0, f"{stages[0]}: starting")
+        results = run_all(workspace, {"*": params}, stages, device=args.device, progress=_report_progress)
+        _report_progress(1.0, "analysis: done", _json_safe({"stages": list(results)}))
+        print(json.dumps(_json_safe(results), indent=1))
+        return 0
     _report_progress(0.0, f"{args.stage}: starting")
     result = run_stage(workspace, args.stage, params, device=args.device, progress=_report_progress)
     _report_progress(1.0, f"{args.stage}: done", _json_safe(result))
