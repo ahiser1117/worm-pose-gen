@@ -2,8 +2,9 @@
 
 ``mask_fit.fit_mask`` optimizes the starts of one frame as a batch.  Whole
 recordings need the batch to span frames as well, so this module lays several
-frames' crops on a common raster, renders every (frame, start) row in one
-call, and compiles the renderer, which is memory-bound in eager mode.
+frames' crops on a common raster and renders every (frame, start) row in one
+call.  The renderer's tensor form is memory-bound, so on CUDA it runs as
+fused kernels (``tube_kernels``) and on the CPU through torch.compile.
 
 Each frame keeps its own window on the shared raster.  Window pixels outside
 the camera carry zero weight in the energy (censored, exactly as ``fit_mask``
@@ -115,17 +116,23 @@ _CAPTURE: dict[torch.device, tuple[torch.cuda.Stream, Any, torch.cuda.CUDAGraph]
 
 
 def get_renderer(compile_renderer: bool) -> Renderer:
-    """The soft-tube renderer, compiled once per process when requested."""
+    """The soft-tube renderer: eager, or fused when requested (``tube_kernels`` on CUDA, torch.compile on the CPU)."""
 
-    if not compile_renderer:
-        return render_tube_segments
+    return _fused_renderer if compile_renderer else render_tube_segments
+
+
+def _fused_renderer(centerline_xy: Tensor, diameter: Tensor, image_height: int, image_width: int, **kwargs: Any) -> Tensor:
+    if centerline_xy.is_cuda:
+        from .tube_kernels import render_tube_segments_cuda
+
+        return render_tube_segments_cuda(centerline_xy, diameter, image_height, image_width, **kwargs)
     if "fn" not in _COMPILED:
         try:
             _COMPILED["fn"] = torch.compile(render_tube_segments, dynamic=True)
         except Exception as error:  # pragma: no cover - depends on the toolchain
             warnings.warn(f"torch.compile unavailable ({error}); rendering eagerly", stacklevel=2)
             _COMPILED["fn"] = render_tube_segments
-    return _COMPILED["fn"]
+    return _COMPILED["fn"](centerline_xy, diameter, image_height, image_width, **kwargs)
 
 
 def _record_step(step: Callable[[], Tensor], device: torch.device) -> tuple[torch.cuda.CUDAGraph, Tensor]:
@@ -265,7 +272,7 @@ def _window_targets(
 @torch.no_grad()
 def _render_hard_winners(
     centerline: Tensor, diameter: Tensor, height: int, width: int, *,
-    edge_softness: float, threshold: float, chunk_rows: int,
+    edge_softness: float, threshold: float, chunk_rows: int, render: Renderer = render_tube_segments,
 ) -> Tensor:
     """Render only pixels that can reach the hard threshold in each chunk.
 
@@ -296,7 +303,7 @@ def _render_hard_winners(
             y1 = max(0, min(height, int(np.ceil(block[:, 3].max() + radius)) + 1))
         if x0 >= x1 or y0 >= y1:
             continue
-        rendered = render_tube_segments(
+        rendered = render(
             centerline[start:stop], diameter[start:stop], y1 - y0, x1 - x0,
             edge_softness=edge_softness, pixel_origin_xy=(x0, y0),
         )
@@ -732,6 +739,8 @@ def _fit_group(
             centerline[winner_rows] - offsets[winner_rows, None, :], diameter[winner_rows],
             height, width, edge_softness=config.edge_softness,
             threshold=config.hard_threshold, chunk_rows=config.final_render_rows,
+            # The fused CUDA renderer; on the CPU a compiled render would recompile for every chunk's shape.
+            render=renderer if device.type == "cuda" else render_tube_segments,
         )
         hard_np = hard.cpu().numpy()
         centerline_np = centerline.cpu().numpy().astype(np.float64)

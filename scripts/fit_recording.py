@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
         "--starts", default=None, choices=tuple(START_SETS),
         help="starting states per frame (default skeleton+straight; the reference preset uses all). The skeleton start wins on nearly every frame",
     )
-    parser.add_argument("--no-compile", action="store_true", help="render eagerly instead of through torch.compile")
+    parser.add_argument("--no-compile", action="store_true", help="render eagerly instead of through the fused CUDA kernels (torch.compile on the CPU)")
     parser.add_argument("--compile-energy", action="store_true", help="opt in to compiling the complete energy for independent fitting (adds compilation startup; benchmark before enabling)")
     parser.add_argument(
         "--width-coefficients", type=int, default=None,

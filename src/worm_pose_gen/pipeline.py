@@ -221,7 +221,7 @@ class FitParams(_Params):
     fine_stride: int | None = _help("centerline point stride of the finest stage (1 or 2)", default=None)
     padding: int | None = _help("crop padding around the mask in pixels (preset default)", default=None)
     starts: str | None = _help("starting states per frame: skeleton, skeleton+straight, skeleton+reversed, all", default=None)
-    compile: bool = _help("render through torch.compile", default=True)
+    compile: bool = _help("render through the fused CUDA kernels (torch.compile on the CPU)", default=True)
     width_coefficients: int | None = _help("B-spline coefficients of the width correction (0 = symmetric)", default=None)
     width_prior: float | None = _help("prior weight pulling the width correction toward zero", default=None)
     orient: bool = _help("place the thinner (tail) end last when fitting without a prior", default=True)

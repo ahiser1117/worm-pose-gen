@@ -57,6 +57,34 @@ class RendererRuntimeTests(unittest.TestCase):
             self.assertTrue(torch.isfinite(actual_grad).all().item())
             torch.testing.assert_close(actual_grad, expected_grad, rtol=2e-3, atol=5e-3)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_fused_cuda_renderer_matches_tensor_form(self):
+        from worm_pose_gen.tube_kernels import render_tube_segments_cuda
+
+        # Smooth random walks with varying widths, some leaving the raster,
+        # rendered on an offset origin and a raster that is no multiple of the tile.
+        generator = torch.Generator().manual_seed(7)
+        steps = torch.randn((6, 40, 2), generator=generator) * 1.5 + torch.tensor([1.2, 0.4])
+        points = (steps.cumsum(1) + torch.tensor([10.0, 30.0])).cuda()
+        points[2, :, 0] -= 40.0
+        widths = (torch.rand((6, 40), generator=generator) * 6 + 3).cuda()
+        expected_points, expected_widths = points.clone().requires_grad_(), widths.clone().requires_grad_()
+        actual_points, actual_widths = points.clone().requires_grad_(), widths.clone().requires_grad_()
+        expected = render_tube_segments(expected_points, expected_widths, 61, 75, edge_softness=0.8, pixel_origin_xy=(3, 5))
+        actual = render_tube_segments_cuda(actual_points, actual_widths, 61, 75, edge_softness=0.8, pixel_origin_xy=(3, 5))
+        torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-5)
+        weights = torch.linspace(.1, 1, actual.numel(), device="cuda").reshape_as(actual)
+        expected_grads = torch.autograd.grad((expected * weights).sum(), (expected_points, expected_widths))
+        actual_grads = torch.autograd.grad((actual * weights).sum(), (actual_points, actual_widths))
+        for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+            torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-3, atol=1e-4)
+        # Deterministic: no atomics in the per-segment sums.
+        repeat_points, repeat_widths = points.clone().requires_grad_(), widths.clone().requires_grad_()
+        repeated = render_tube_segments_cuda(repeat_points, repeat_widths, 61, 75, edge_softness=0.8, pixel_origin_xy=(3, 5))
+        repeated_grads = torch.autograd.grad((repeated * weights).sum(), (repeat_points, repeat_widths))
+        for repeated_grad, actual_grad in zip(repeated_grads, actual_grads, strict=True):
+            self.assertTrue(torch.equal(repeated_grad, actual_grad))
+
     def test_outputs_and_gradients_match_vector_reference(self):
         # Varying widths, self-contact, off-camera points and a zero-length
         # segment exercise the geometric cases that affect fitting gradients.
