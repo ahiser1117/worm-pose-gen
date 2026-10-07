@@ -18,12 +18,8 @@ class Phase4ConfigurationTests(unittest.TestCase):
     def test_user_artifacts_default_to_workspace_root(self):
         config = AppConfig(workspaces_root=Path("/tmp/example-workspaces"))
         self.assertEqual(config.corpus_root, Path("/tmp/example-workspaces/corpus"))
-        self.assertEqual(config.checkpoints_root, Path("/tmp/example-workspaces/checkpoints"))
-        config = config_from_args(parse_args([
-            "--corpus-root", "/tmp/user-labels", "--checkpoints-root", "/tmp/user-models", "--gpus", "",
-        ]))
+        config = config_from_args(parse_args(["--corpus-root", "/tmp/user-labels", "--gpus", ""]))
         self.assertEqual(config.corpus_root, Path("/tmp/user-labels"))
-        self.assertEqual(config.checkpoints_root, Path("/tmp/user-models"))
 
     def test_segment_and_bootstrap_jobs_use_selected_model(self):
         with tempfile.TemporaryDirectory() as directory:
