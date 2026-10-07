@@ -45,13 +45,15 @@ def label_inputs(shift=0):
 
 
 def store_targets(libraries, record, centerline, *, fit_iou=0.97):
+    """Targets as the setup's mask default ``lab:seg`` (set at the end of :func:`make_library`) would build them."""
+
     label = record.load()
     targets = render_body_targets(label.mask == 1, centerline, np.full(len(centerline), 8.0))
     meta = {"has_body": True, "fit_iou": fit_iou, "label": record.identity, "fit_method": "independent",
             "self_contact": self_contact(centerline, np.full(len(centerline), 8.0))}
     arrays = {"centerline_xy": centerline, "width_profile": np.full(len(centerline), 8.0), "ap": targets.ap.astype(np.float16),
               "overlap": targets.overlap, "head_xy": targets.head_xy, "tail_xy": targets.tail_xy, "diameter_px": np.float64(8.0)}
-    write_targets(libraries, record.sha256, meta, arrays)
+    write_targets(libraries, record.sha256, "lab:seg", meta, arrays)  # built by the setup's mask default
 
 
 def save_weights(module, path):

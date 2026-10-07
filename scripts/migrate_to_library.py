@@ -277,18 +277,20 @@ def migrate_model(out: Path, model_id: str, run_dir: Path, *, kind: str, outputs
 # --------------------------------------------------------------------------- main
 
 
-def seed_targets(seed: Libraries, record: LabelRecord, arrays: dict[str, np.ndarray], meta: dict[str, Any], label_fields: dict[str, Any], source: Path) -> None:
-    """The old record's targets as the cache entry of the migrated revision (they were built from the same mask)."""
+def seed_targets(seed: Libraries, record: LabelRecord, arrays: dict[str, np.ndarray], meta: dict[str, Any], label_fields: dict[str, Any],
+                 source: Path, builder: str) -> None:
+    """The old record's targets as the cache entry of the migrated revision: they were built from the same mask, with
+    the segmenter that becomes the setup's mask default, so they are filed under that builder."""
 
     entry = {key: meta[key] for key in TARGET_META if key in meta}
     entry.setdefault("fit_method", "independent")
     if label_fields.get("orientation") == "manual" and "trace_xy" not in label_fields:
         entry["orientation"] = "manual"
-    entry.update(label=record.identity, built_at=utc_now(), fit_preset=meta.get("fit_preset"), max_lag=meta.get("max_lag"), seeded_from=str(source))
+    entry.update(label=record.identity, builder=builder, built_at=utc_now(), fit_preset=meta.get("fit_preset"), max_lag=meta.get("max_lag"), seeded_from=str(source))
     targets = {name: arrays[name] for name in TARGET_ARRAYS if name in arrays} if meta.get("has_body") else {}
     if meta.get("has_body"):
         describe_body(entry, arrays["centerline_xy"], arrays["width_profile"], (record.height, record.width))
-    write_targets(seed, record.sha256, entry, targets)
+    write_targets(seed, record.sha256, builder, entry, targets)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -372,7 +374,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         migrated[sample["sample_id"]], sources[sample["sample_id"]] = record, sample
         if args.seed_cache is not None and found is not None and current:
-            seed_targets(libraries, record, found[0], found[1], fields, sample["store"] / "body_fields" / f"{sample['sample_id']}.npz")
+            seed_targets(libraries, record, found[0], found[1], fields, sample["store"] / "body_fields" / f"{sample['sample_id']}.npz",
+                         f"lab:{args.segmenter_name}")
         if number % 25 == 0 or number == len(order):
             print(f"{number}/{len(order)} labels", flush=True)
 

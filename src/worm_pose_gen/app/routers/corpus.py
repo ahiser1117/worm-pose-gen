@@ -45,8 +45,6 @@ def corpus(source: str = "", split: str = "", recording: str = "", q: str = "", 
 
 @router.post("/corpus/labels")
 def save_label(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    if payload.get("target") is not None:
-        return app.labeling.save(payload)
     name, frame = str(payload.get("workspace") or ""), _integer(payload, "frame")
     view = app.view(name)
     app.check_writable(name)

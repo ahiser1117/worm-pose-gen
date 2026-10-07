@@ -69,7 +69,7 @@ class LibraryApiTests(unittest.TestCase):
 
     def test_label_listing_filters_and_sorts_by_fit_iou(self):
         records = library.labels(self.libraries, ["lab:base"])
-        write_targets(self.libraries, records[1].sha256, {"has_body": False, "fit_iou": 0.7, "self_contact": True}, {})
+        write_targets(self.libraries, records[1].sha256, None, {"has_body": False, "fit_iou": 0.7, "self_contact": True}, {})
         rows = self.get("/api/library/datasets/lab:base/labels", sort="fit_iou")["labels"]
         self.assertEqual([(r["frame"], r["fit_iou"], r["targets"]) for r in rows], [(20, 0.7, "built"), (10, None, "missing")])
         self.assertEqual([r["frame"] for r in self.get("/api/library/datasets/lab:base/labels", status="complete")["labels"]], [20])

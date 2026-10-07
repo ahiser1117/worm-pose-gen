@@ -155,8 +155,10 @@ def dataset(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
         return _dataset(app, ref).summary()
 
 
-def _row(app: AppState, record: library.LabelRecord) -> dict[str, Any]:
-    meta = library.cached_meta(_libraries(app), record)
+def label_row(app: AppState, record: library.LabelRecord, builder: str | None = library.SETUP_DEFAULT) -> dict[str, Any]:
+    """A label as listings show it, with the state of its body targets (built by ``builder``, by default the setup's)."""
+
+    meta = library.cached_meta(_libraries(app), record, builder)
     return {**record.to_dict(), "targets": "built" if meta is not None else "missing",
             "fit_iou": None if meta is None else meta.get("fit_iou"),
             "self_contact": None if meta is None else meta.get("self_contact")}
@@ -175,7 +177,8 @@ def dataset_labels(ref: str, recording: str = "", split: str = "", status: str =
         raise ValueError(f"unknown sort {sort!r}; expected one of {SORTS}")
     with _found():
         records = library.labels(_libraries(app), [ref], split or None, recording=recording or None, status=status or None)
-    rows = [_row(app, record) for record in records]
+        builder = library.target_builder(_libraries(app), _dataset(app, ref).setup)
+    rows = [label_row(app, record, builder) for record in records]
     if contact:
         rows = [row for row in rows if row["self_contact"] is (contact == "yes")]
     if sort == "fit_iou":
@@ -187,7 +190,9 @@ def _point(xy: np.ndarray) -> list[float] | None:
     return xy.tolist() if np.all(np.isfinite(xy)) else None
 
 
-def _targets_layers(app: AppState, record: library.LabelRecord) -> dict[str, Any] | None:
+def targets_layers(app: AppState, record: library.LabelRecord) -> dict[str, Any] | None:
+    """A label's built targets as drawable layers (``None`` until they are built with the setup's builder)."""
+
     built = library.load_targets(_libraries(app), record)
     if built is None:
         return None
@@ -217,7 +222,7 @@ def label(ref: str, recording: str, frame: int, revision: int | None = None, app
     loaded = record.load()
     owner = _dataset(app, record.dataset)
     return {
-        "label": _row(app, record), "revisions": [r.to_dict() for r in owner.revisions(recording, frame)],
+        "label": label_row(app, record), "revisions": [r.to_dict() for r in owner.revisions(recording, frame)],
         "width": record.width, "height": record.height, "meta": loaded.meta,
         "image": data_url(loaded.image), "image_raw": data_url(loaded.image_raw), "mask": data_url(mask_to_png_values(loaded.mask)),
         "orientation": record.orientation, "mask_only": record.mask_only,
@@ -225,7 +230,7 @@ def label(ref: str, recording: str, frame: int, revision: int | None = None, app
         "trace_xy": None if loaded.trace_xy is None else loaded.trace_xy.tolist(),
         "max_lag": loaded.max_lag, "context_valid": loaded.context_valid.tolist(),
         "nose_xy": [xy.tolist() if ok else None for xy, ok in zip(loaded.nose_xy, loaded.nose_valid)],
-        "targets": _targets_layers(app, record),
+        "targets": targets_layers(app, record),
     }
 
 
@@ -287,7 +292,7 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
             trace_xy=payload.get("trace_xy"), mask_only=bool(payload.get("mask_only")),
             expected_revision=None if expected is None else int(expected), **inputs,
         )
-    return {"label": _row(app, record)}
+    return {"label": label_row(app, record)}
 
 
 # --------------------------------------------------------------------------- benchmarks and models

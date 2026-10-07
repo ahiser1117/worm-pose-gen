@@ -70,10 +70,11 @@ class AppState:
         self._recordings_lock = threading.Lock()
         self.registry = RecordingRegistry(config.workspaces_root / "recordings_registry.json")
         self.libraries = Libraries(config.lab_library, config.library)
-        from .labeling import LabelingService
-        self.labeling = LabelingService(self)
-        # A label group the launcher opened (``worm-pose-labeler --queue``); the UI starts in Paint on it.
-        self.startup_group: str | None = None
+        # The Labeling page: its frame services and the queues it walks (``<workspaces_root>/queues``).
+        from .labeling import Labeling
+        from .queues import QueueStore
+        self.labeling = Labeling(self)
+        self.queues = QueueStore(config.workspaces_root / "queues", self.runner)
         self._body_net = None
         self._body_net_lock = threading.Lock()
         from .network_fields import NetworkFields
@@ -361,7 +362,6 @@ class AppState:
             "gpus": list(self.config.gpus),
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),
-            "startup_group": self.startup_group,
             # The body-field network the Run panel's checkbox fits with (the fit stage's ``body_net``).
             "body_net": {"path": None if self.config.body_net is None else str(self.config.body_net.resolve()),
                          "exists": self.config.body_net is not None and self.config.body_net.is_file()},

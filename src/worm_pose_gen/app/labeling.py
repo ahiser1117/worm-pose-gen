@@ -1,411 +1,422 @@
-"""Mask labeling for the corpus and for workspace frames: frames, proposals, refinement, saves, and label groups.
+"""The Labeling page's backend: open a frame, propose and refine its mask, propose or fit its body, save the label.
 
-A *target* is a workspace frame (``workspace`` + ``frame``: the workspace's
-mask correction, which feeds fitting), a saved corpus label (``sample_id``),
-or a recording frame (``recording`` + ``dataset`` + ``frame``).  Paint, the
-corpus labeling section of the app, walks a *label group*: an ordered list of
-targets with optional split pledges.  A group is one of
+One frame's label is labeled on one page (``docs/APP_SIMPLIFICATION.md``,
+section 3): the mask first, then the body, then Save.  A frame is named by
+an *entry* ``{"recording", "frame", "path"?}`` within the current setup;
+``path`` is the recording file, needed only while the frame has no label
+yet.
 
-``manifest``  a labeling manifest file (``recordings`` aliases with split
-              pledges, ``frames``); the repository's ``docs/labeling_*/manifest.json``
-              are offered for loading;
-``section``   a stretch of one recording chosen for relabeling (``first``..``last``
-              by ``step``), usually sent from a workspace's Inspect selection;
-              sections persist in ``<workspaces_root>/label_sections.json``;
-``samples``   saved corpus labels (an opened label, the Labels filter, Body fields).
+**Saving to.** Saves go to the user's personal dataset for the setup: the
+one the page asks for (``dataset``), else ``mine:<setup-id>-labels`` when it
+exists, else the first personal dataset of the setup.  When there is none,
+the first save creates ``mine:<setup-id>-labels``, extending the setup's lab
+dataset (the first, when there are several) or standalone when the lab has
+none.  Until then the lab dataset is where existing labels are read from.
 
-Group progress counts the entries that have a corpus label.
+**Where a frame comes from.** A frame the dataset (or the one it extends)
+has labeled opens from the label, which holds the image, the context frames
+and the nose landmarks, so the recording is not needed.  Any other frame is
+captured from its recording (:func:`library.capture.read_label_inputs`);
+the captures of the last few frames stay in memory for the proposals and
+the save.  The mask the frame opens with is the label's; for a frame of a
+Relabel queue the workspace's mask; otherwise the default mask model's
+proposal at a threshold of 0.5 (empty without a model).
+
+**Models.** The setup's default ``mask`` model gives the Network proposal
+and the ``body`` model (a body-field net) the body proposal: a trace through
+its predicted A-P field (:func:`body_proposal.propose_trace`) fit like a hand
+trace (:func:`body_fields.trace_fit`).  Library models are loaded once on
+the app's device (:mod:`library.inference`); fits run one at a time.
+
+**Saving** writes a new label revision (:meth:`library.Dataset.save`) with
+the body as decided: a trace (traced by hand or the proposal's), a head end
+(``head_xy``: the orientation was flipped or confirmed without a trace),
+neither (the automatic orientation), and ``mask_only``.  The origin is the
+queue's (``fix`` for Relabel, ``spread`` for a frame search); an edit outside
+a queue keeps ``fix`` for a label made by a fix and is ``spread`` otherwise.
+Then a job rebuilds the label's body targets (:mod:`library.targets`).
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict
-import hashlib
+from collections import Counter, OrderedDict
 import binascii
-import json
-from pathlib import Path
 import threading
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from ..corpus import CorpusStore, recording_identity
+from .. import library
+from ..jobs import JobSpec
 from ..label_app import Proposer, data_url, decode_mask_data_url, mask_to_png_values, probability_to_png
-from ..jobs import REPO_ROOT
-from ..pipeline import workspace_dataset
-from ..workspace import _write_json_atomic, utc_now
+from ..library.datasets import assign_split
+from ..library.targets import recording_length, targets_command
+from .routers.jobs import place
+from .routers.library import label_row, targets_layers
 from .state import NotFound, _integer
 
+# Recording captures kept in memory: each holds the 33 context frames of one frame.
+CAPTURES = 4
+REFINE_METHODS = {"fill_holes": "fill_holes", "largest": "largest_component", "grow": "dilate", "shrink": "erode"}
+TARGETS_JOB_KIND = "body_targets"
 
-def encoded(mask):
+
+def encode_mask(mask: np.ndarray) -> str:
     return data_url(mask_to_png_values(mask))
 
 
-def decoded(value, shape):
+def decode_mask(value: Any, shape: tuple[int, int]) -> np.ndarray:
     try:
-        return decode_mask_data_url(str(value or ''), shape)
+        return decode_mask_data_url(str(value or ""), shape)
     except (OSError, binascii.Error) as error:
-        raise ValueError('mask must contain a readable base64 PNG image') from error
+        raise ValueError("mask must contain a readable base64 PNG image") from error
 
 
-def key(target):
-    return f"{recording_identity(target['recording'], target['dataset'])}:{target['frame']}"
+def encode_ap(ap: np.ndarray) -> str:
+    """The A-P field as 0 (undefined) or ``1 + round(254 * ap)``, as the library API sends it."""
+
+    ap = np.asarray(ap, dtype=np.float32)
+    return data_url(np.where(np.isfinite(ap), 1 + np.round(254 * np.clip(np.nan_to_num(ap), 0, 1)), 0).astype(np.uint8))
 
 
-MANIFEST_GLOB = "docs/labeling_*/manifest.json"
-GROUP_KINDS = ('manifest', 'section', 'samples')
+def _point(xy: Any) -> list[float] | None:
+    xy = np.asarray(xy, dtype=np.float64)
+    return xy.tolist() if xy.shape == (2,) and np.all(np.isfinite(xy)) else None
 
 
-class LabelingService:
-    def __init__(self, app):
+def _points(value: Any, name: str) -> np.ndarray | None:
+    if value is None:
+        return None
+    points = np.asarray(value, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2 or not np.all(np.isfinite(points)):
+        raise ValueError(f"'{name}' needs at least two [x, y] points")
+    return points
+
+
+def body_layers(mask: np.ndarray, centerline: np.ndarray, width_profile: np.ndarray, fit_iou: float) -> dict[str, Any]:
+    """A head-first body as the page draws it: midline, widths, A-P field, ends and how well it fits the mask."""
+
+    from ..body_targets import render_body_targets
+
+    targets = render_body_targets(mask, centerline, width_profile)
+    return {
+        "centerline_xy": np.asarray(centerline).tolist(), "width_profile": np.asarray(width_profile).tolist(),
+        "ap": encode_ap(targets.ap), "head_xy": _point(targets.head_xy), "tail_xy": _point(targets.tail_xy),
+        "fit_iou": float(fit_iou),
+    }
+
+
+class Labeling:
+    """The services of the Labeling page; one per app (``AppState.labeling``)."""
+
+    def __init__(self, app: Any) -> None:
         self.app = app
-        self.groups: dict[str, dict] = {}
-        self.sections_path = app.config.workspaces_root / 'label_sections.json'
+        self._captures: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
         self._lock = threading.Lock()
-        self._fit_lock = threading.Lock()
+        # Proposals, fits and target builds share the app's device: one at a time.
+        self.fit_lock = threading.Lock()
 
     @property
-    def store(self):
-        return CorpusStore(self.app.config.corpus_root)
+    def libraries(self) -> library.Libraries:
+        return self.app.libraries
 
-    def target(self, value):
-        if not isinstance(value, dict):
-            raise ValueError("target must identify a workspace, corpus sample, or recording frame")
-        if value.get('workspace'):
-            view = self.app.view(str(value['workspace']))
-            frame = _integer(value, 'frame')
-            view.workspace.row_of(frame)
-            return {'workspace': str(value['workspace']), 'recording': str(view.workspace.recording.resolve()),
-                    'dataset': workspace_dataset(view.workspace), 'frame': frame}
-        if value.get('sample_id'):
-            sample = self.store.get(str(value['sample_id']))
-            if sample is None:
-                raise NotFound('saved corpus label no longer exists')
-            return {'sample_id': sample.sample_id, 'recording': str(Path(sample.source_path).resolve()),
-                    'dataset': sample.dataset_path, 'frame': sample.frame_index}
-        path = self.app.recording_path(str(value.get('recording') or ''))
-        dataset = '/' + str(value.get('dataset') or self.app.recording_dataset(path)).strip('/')
-        target = {'recording': str(path.resolve()), 'dataset': dataset, 'frame': _integer(value, 'frame')}
-        source = self.source(target)
-        if not 0 <= target['frame'] < source.frame_count:
-            raise ValueError('frame is outside recording bounds')
-        return target
+    # ------------------------------------------------------------------ datasets
 
-    def source(self, target):
-        source, error = self.app.viewer._source(target['recording'], target['dataset'])
-        if source is None and Path(target['recording']).is_file():
-            # A user may restore/register an initially missing source without restarting.
-            cache_key = target['recording'] if target['dataset'] == '/img_nir' else f"{target['recording']}#{target['dataset']}"
-            with self.app.viewer._lock:
-                if self.app.viewer._sources.get(cache_key, (None,))[0] is None:
-                    self.app.viewer._sources.pop(cache_key, None)
-            source, error = self.app.viewer._source(target['recording'], target['dataset'])
-        if source is None:
-            raise ValueError(f"recording unavailable: {error}; locate and register the source HDF5 recording")
-        return source
+    def saving(self, setup_ref: str, requested: str | None = None) -> dict[str, Any]:
+        """Where saves for a setup go: ``{"setup", "dataset", "create", "extends", "choices", "reading"}``.
 
-    def images(self, target):
-        if target.get('sample_id'):
-            with self.store.locked():
-                image, mask, record = self.store.load(target['sample_id'])
-                return self.store.load_raw(record.sample_id), image
-        return self.source(target).corrected(target['frame'])
+        ``dataset`` is the existing personal dataset saves go to, or ``None``
+        when the first save will create ``create`` (extending ``extends``);
+        ``reading`` is the dataset existing labels are read from meanwhile.
+        """
 
-    def checkpoint(self, target):
-        if target.get('workspace'):
-            view = self.app.view(target['workspace'])
-            return view.workspace.info.settings.get('checkpoint') or view.run.summary.get('selected_checkpoint') or (view.run.summary.get('checkpoint') or {}).get('path')
-        return None if self.app.config.checkpoint is None else str(self.app.config.checkpoint)
+        libraries = self.libraries
+        setup = library.get_setup(libraries, setup_ref)
+        _, setup_id = library.parse_ref(setup.ref)
+        datasets = library.list_datasets(libraries, setup.ref)
+        mine = [d.ref for d in datasets if d.scope == "mine"]
+        lab = [d.ref for d in datasets if d.scope == "lab"]
+        default_id = f"{setup_id}-labels"
+        if requested:
+            if requested not in mine:
+                raise ValueError(f"{requested} is not a personal dataset of {setup.ref}")
+            chosen = requested
+        else:
+            chosen = f"mine:{default_id}" if f"mine:{default_id}" in mine else (mine[0] if mine else None)
+        extends = lab[0] if lab else None
+        return {
+            "setup": setup.ref, "dataset": chosen, "create": None if chosen else f"mine:{default_id}",
+            "extends": extends, "choices": mine, "reading": chosen or extends,
+        }
 
-    def matching(self, target):
-        return self.store.find_frame(target['recording'], target['dataset'], target['frame'])
+    def dataset_for_save(self, setup_ref: str, requested: str | None) -> tuple[library.Dataset, bool]:
+        """The dataset to save into, created on the first save; and whether it was just created."""
 
-    def frame(self, value, group_id=None):
-        target = self.target(value)
-        raw, image = self.images(target)
-        sample = self.matching(target)
-        base = None
-        revision = sample.revision if sample else 0
-        mask = encoded(np.zeros(image.shape, dtype=np.uint8))
-        override = False
-        stale = False
-        if target.get('workspace'):
-            payload = self.app.view(target['workspace']).mask_payload(target['frame'], self.app.viewer.segmenters, self.app.device)
-            mask, base, revision = payload['mask'], payload['base_mask'], payload['revision']
-            override, stale = payload['has_override'], payload['stale']
-        elif sample:
-            _, label, _ = self.store.load(sample.sample_id)
-            mask = encoded(label)
-        pledge = self.store.frame_pledge(target['recording'], target['dataset'], target['frame'])
-        entry = None
-        if group_id:
-            entry = self.entry(group_id, target)
-            pledge = pledge or (None if entry['split'] == 'auto' else entry['split'])
-        return {'target': target, 'key': key(target), 'frame': target['frame'], 'width': image.shape[1], 'height': image.shape[0],
-                'image': data_url(image), 'image_raw': data_url(raw), 'mask': mask, 'base_mask': base,
-                'has_override': override, 'stale': stale, 'revision': revision,
-                'workspace_revision': revision if target.get('workspace') else None,
-                'corpus_revision': sample.revision if sample else 0, 'sample': asdict(sample) if sample else None,
-                'checkpoint': self.app.viewer.segmenters.signature(self.checkpoint(target)),
-                'pledged_split': pledge, 'entry': entry, 'capabilities': {'network': self.app.viewer.segmenters.resolve(self.checkpoint(target)) is not None,
-                    'classical': True, 'raw_threshold': True, 'saved_workspace': override, 'saved_corpus': sample is not None},
-                'encoding': {'background': 0, 'worm': 255, 'ignore': 128}}
+        target = self.saving(setup_ref, requested)
+        if target["dataset"]:
+            return library.Dataset(self.libraries, target["dataset"]), False
+        _, dataset_id = library.parse_ref(target["create"])
+        setup = library.get_setup(self.libraries, setup_ref)
+        dataset = library.create_dataset(
+            self.libraries, dataset_id, setup=setup_ref, extends=target["extends"], name=f"{setup.name}: my labels",
+            description="Labels saved from the Labeling page.",
+        )
+        return dataset, True
 
-    def proposals(self, payload):
-        target = self.target(payload.get('target'))
-        source = payload.get('source')
-        result = {'target': target, 'key': key(target), 'source': source, 'request_id': payload.get('request_id'),
-                  'draft_generation': payload.get('draft_generation'), 'draft_revision': payload.get('draft_revision')}
-        if source == 'saved_workspace':
-            if not target.get('workspace'):
-                raise ValueError('no workspace override is available for this target')
-            workspace = self.app.workspace(target['workspace'])
-            mask = workspace.get_override_mask(workspace.row_of(target['frame']))
+    def existing(self, reading: str | None, recording: str, frame: int) -> library.LabelRecord | None:
+        if reading is None:
+            return None
+        try:
+            return library.Dataset(self.libraries, reading).get(recording, frame)
+        except LookupError:
+            return None
+
+    # ------------------------------------------------------------------ frames
+
+    def _entry(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        setup = str(payload.get("setup") or "")
+        library.parse_ref(setup)
+        entry = payload.get("entry")
+        if not isinstance(entry, dict) or not entry.get("recording"):
+            raise ValueError("'entry' must name a recording and a frame")
+        return setup, {"recording": str(entry["recording"]), "frame": _integer(entry, "frame"), "path": entry.get("path")}
+
+    def capture(self, setup_ref: str, path: str, frame: int) -> dict[str, Any]:
+        """What a new label stores from its recording, read once and kept for the next requests about the frame."""
+
+        from ..library.capture import read_label_inputs
+
+        setup = library.get_setup(self.libraries, setup_ref)
+        resolved = str(Path(path).expanduser().resolve())
+        key = (resolved, int(frame), setup.video.get("dataset_path"), setup.video.get("flat_field"))
+        with self._lock:
+            if key in self._captures:
+                self._captures.move_to_end(key)
+                return self._captures[key]
+        owner = library.setup_for_recording(self.libraries, resolved)
+        if owner != setup_ref:
+            raise ValueError(f"{resolved} belongs to {owner or 'no setup'}, not to {setup_ref}")
+        try:
+            inputs = read_label_inputs(resolved, frame, video=setup.video, flat_field_cache=self.app.config.dataset_root / "flat_fields")
+        except OSError as error:
+            raise ValueError(f"{Path(resolved).name} cannot be read: {error}") from error
+        with self._lock:
+            self._captures[key] = inputs
+            while len(self._captures) > CAPTURES:
+                self._captures.popitem(last=False)
+        return inputs
+
+    def inputs(self, setup_ref: str, entry: dict[str, Any], record: library.LabelRecord | None) -> dict[str, Any]:
+        """The frame, context and nose of an entry: from its label when it has one, else from its recording."""
+
+        if record is not None:
+            label = record.load()
+            return {"image": label.image, "image_raw": label.image_raw, "context": label.context, "context_valid": label.context_valid,
+                    "nose_xy": label.nose_xy, "nose_valid": label.nose_valid, "source_path": record.source_path,
+                    "dataset_path": record.dataset_path}
+        if not entry.get("path"):
+            raise NotFound(f"{entry['recording']} frame {entry['frame']} has no label; its recording path is needed")
+        return self.capture(setup_ref, str(entry["path"]), entry["frame"])
+
+    def _resolve(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any], library.LabelRecord | None, dict[str, Any]]:
+        setup, entry = self._entry(payload)
+        target = self.saving(setup, payload.get("dataset") or None)
+        record = self.existing(target["reading"], entry["recording"], entry["frame"])
+        return setup, entry, target, record, self.inputs(setup, entry, record)
+
+    def model(self, setup_ref: str, ref: str) -> Any:
+        """A library model on the app's device at the setup's frame rate (:func:`library.inference.load_model` caches it)."""
+
+        from ..library.inference import load_model
+
+        return load_model(self.libraries, ref, device=self.app.device, fps=library.get_setup(self.libraries, setup_ref).fps)
+
+    def defaults(self, setup_ref: str) -> dict[str, str | None]:
+        defaults = library.get_setup(self.libraries, setup_ref).defaults
+        body = defaults.get("body")
+        if body is not None and library.get_card(self.libraries, body).kind != "body_net":
+            body = None
+        return {"mask": defaults.get("mask"), "body": body}
+
+    def probability(self, setup_ref: str, inputs: dict[str, Any]) -> np.ndarray | None:
+        ref = self.defaults(setup_ref)["mask"]
+        if ref is None:
+            return None
+        with self.fit_lock:
+            return self.model(setup_ref, ref).predict(inputs["context"], inputs["context_valid"]).mask
+
+    def open(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Everything the page shows for an entry; see the module docstring for where the mask comes from."""
+
+        setup, entry, target, record, inputs = self._resolve(payload)
+        image = inputs["image"]
+        shape = image.shape
+        probability = None
+        body: dict[str, Any] = {"trace_xy": None, "head_xy": None, "mask_only": False}
+        targets = None
+        if record is not None:
+            label = record.load()
+            mask, source = label.mask, "label"
+            body = {"trace_xy": None if label.trace_xy is None else label.trace_xy.tolist(),
+                    "head_xy": None if label.head_xy is None else label.head_xy.tolist(), "mask_only": record.mask_only}
+            targets = targets_layers(self.app, record)
+        else:
+            mask, source = self._workspace_mask(payload.get("queue"), entry, shape)
             if mask is None:
-                raise ValueError('no saved workspace override for this frame')
-        elif source == 'saved_corpus':
-            sample = self.matching(target)
-            if sample is None:
-                raise NotFound('no saved corpus label for this frame')
-            _, mask, _ = self.store.load(sample.sample_id)
-        elif source in ('network', 'classical', 'raw_threshold'):
-            _, image = self.images(target)
-            if source == 'network':
-                probability, checkpoint = self.app.viewer.segmenters.probability(self.checkpoint(target), image)
-                if probability is None:
-                    raise ValueError('Network proposal requires an available checkpoint')
-                threshold = float(payload.get('threshold', 0.5))
-                if not 0 <= threshold <= 1:
-                    raise ValueError('network threshold must be between 0 and 1')
-                mask = (probability >= threshold).astype(np.uint8)
-                result.update(probability=data_url(probability_to_png(probability)), checkpoint=checkpoint)
-            else:
-                classical, threshold = Proposer.classical(image)
-                mask = (classical if source == 'classical' else threshold).astype(np.uint8)
+                probability = self.probability(setup, inputs)
+                mask, source = ((probability >= 0.5).astype(np.uint8), "network") if probability is not None else (np.zeros(shape, np.uint8), "empty")
+        own_revision = 0
+        split = None
+        if target["dataset"]:
+            dataset = library.Dataset(self.libraries, target["dataset"])
+            own = dataset.revisions(entry["recording"], entry["frame"])
+            own_revision = own[-1].revision if own else 0
+            split = dataset.splits().get(entry["recording"])
+        elif target["extends"]:
+            split = library.Dataset(self.libraries, target["extends"]).splits().get(entry["recording"])
+        if split is None and target["reading"]:
+            counts = Counter(r.split for r in library.Dataset(self.libraries, target["reading"]).labels())
+            split_note = f"{assign_split(counts)} (new recording: set by its first label)"
         else:
-            raise ValueError('unknown mask proposal source')
-        return {**result, 'mask': encoded(mask)}
+            split_note = None
+        centre = len(inputs["context"]) // 2
+        return {
+            "setup": setup, "saving": target, "entry": entry, "width": int(shape[1]), "height": int(shape[0]),
+            "image": data_url(image), "image_raw": data_url(inputs["image_raw"]),
+            "mask": encode_mask(mask), "mask_source": source,
+            "probability": None if probability is None else data_url(probability_to_png(probability)),
+            "label": None if record is None else label_row(self.app, record), "expected_revision": own_revision,
+            "split": split, "split_note": split_note, "body": body, "targets": targets,
+            "nose_xy": _point(inputs["nose_xy"][centre]) if bool(inputs["nose_valid"][centre]) else None,
+            "max_lag": centre, "context_valid": np.asarray(inputs["context_valid"]).tolist(), "models": self.defaults(setup),
+        }
 
-    def refine(self, payload):
-        target = self.target(payload.get('target'))
-        _, image = self.images(target)
-        mask = decoded(payload.get('mask'), image.shape)
-        method = str(payload.get('method') or '')
-        # The tube fitter shares a device and is intentionally independent of pose jobs.
-        with self._fit_lock:
-            refined, info = Proposer.refine(mask, method, self.app.device)
-        return {'target': target, 'key': key(target), 'mask': encoded(refined), 'info': info,
-                'request_id': payload.get('request_id'), 'draft_generation': payload.get('draft_generation'),
-                'draft_revision': payload.get('draft_revision')}
+    def _workspace_mask(self, queue_id: Any, entry: dict[str, Any], shape: tuple[int, ...]) -> tuple[np.ndarray | None, str]:
+        """A Relabel frame's mask in its workspace (the override when the user edited it)."""
 
-    def save(self, payload):
-        target = self.target(payload.get('target'))
-        if 'revision' not in payload:
-            raise ValueError('corpus revision is required (0 for a new label)')
-        revision = _integer(payload, 'revision')
-        if revision < 0:
-            raise ValueError('corpus revision must be nonnegative')
-        raw, image = self.images(target)
-        mask = decoded(payload.get('mask'), image.shape)
-        split = payload.get('split')
-        if payload.get('group_id'):
-            entry = self.entry(payload['group_id'], target)
-            split = entry['split'] if entry['split'] != 'auto' else split
-        if target.get('sample_id'):
-            sample = self.store.update_label(target['sample_id'], mask, revision)
+        if not queue_id:
+            return None, ""
+        queue = self.app.queues.get(str(queue_id))
+        if queue.get("kind") != "relabel":
+            return None, ""
+        workspace = self.app.workspace(queue["workspace"])
+        row = workspace.row_of(entry["frame"])
+        labels = workspace.get_override_mask(row)
+        if labels is None:
+            stored = workspace.get_mask(row)
+            labels = None if stored is None else stored.astype(np.uint8)
+        if labels is None or labels.shape != tuple(shape):
+            return None, ""
+        return labels, "workspace"
+
+    def context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        *_, inputs = self._resolve(payload)
+        return {"max_lag": len(inputs["context"]) // 2, "valid": np.asarray(inputs["context_valid"]).tolist(),
+                "frames": [data_url(frame) for frame in inputs["context"]]}
+
+    def network(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The default mask model's worm probability (PNG, 0..255); the page thresholds it itself."""
+
+        setup, *_, inputs = self._resolve(payload)
+        probability = self.probability(setup, inputs)
+        if probability is None:
+            raise ValueError(f"{setup} has no default mask model yet; use Threshold, or choose a model on the Training page")
+        return {"probability": data_url(probability_to_png(probability)), "model": self.defaults(setup)["mask"]}
+
+    def refine(self, payload: dict[str, Any]) -> dict[str, Any]:
+        method = str(payload.get("method") or "")
+        if method not in REFINE_METHODS:
+            raise ValueError(f"unknown refinement {method!r}; expected one of {tuple(REFINE_METHODS)}")
+        width, height = _integer(payload, "width"), _integer(payload, "height")
+        mask = decode_mask(payload.get("mask"), (height, width))
+        with self.fit_lock:
+            refined, info = Proposer.refine(mask, REFINE_METHODS[method], self.app.device)
+        return {"mask": encode_mask(refined), "info": info}
+
+    # ------------------------------------------------------------------ bodies
+
+    def _fit(self, mask: np.ndarray, trace: np.ndarray, length_px: float | None) -> dict[str, Any]:
+        import torch
+
+        from ..body_fields import fit_config, trace_fit
+        from ..mask_fit import default_width_template
+
+        config = fit_config()
+        centerline, profile, iou = trace_fit(
+            mask, trace, length_px=length_px, config=config, template=default_width_template(config.n_points),
+            device=torch.device(self.app.device),
+        )
+        return body_layers(mask, centerline, profile, iou)
+
+    def _length(self, target: dict[str, Any], recording: str) -> float | None:
+        if target["reading"] is None:
+            return None
+        builder = library.target_builder(self.libraries, target["setup"])
+        return recording_length(self.libraries, target["reading"], recording, builder)
+
+    def proposal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The body model's proposal for the frame's current mask: ``{"status": "ready", "trace_xy", ...body layers}``,
+        ``{"status": "no_trace"}`` when the fields give no trace, or ``{"status": "unavailable", "reason"}``."""
+
+        from ..body_proposal import propose_trace
+
+        setup, entry, target, _, inputs = self._resolve(payload)
+        ref = self.defaults(setup)["body"]
+        if ref is None:
+            return {"status": "unavailable", "reason": "this setup has no body-field model"}
+        mask = decode_mask(payload.get("mask"), inputs["image"].shape) == 1
+        if not mask.any():
+            return {"status": "no_trace", "model": ref}
+        with self.fit_lock:
+            prediction = self.model(setup, ref).predict(inputs["context"], inputs["context_valid"]).field_prediction()
+            trace = propose_trace(prediction, mask)
+            if trace is None:
+                return {"status": "no_trace", "model": ref}
+            body = self._fit(mask, trace, self._length(target, entry["recording"]))
+        return {"status": "ready", "model": ref, "trace_xy": trace.tolist(), **body}
+
+    def fit(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The body fit along a traced midline (head first) on the frame's current mask."""
+
+        setup, entry, target, _, inputs = self._resolve(payload)
+        trace = _points(payload.get("trace_xy"), "trace_xy")
+        mask = decode_mask(payload.get("mask"), inputs["image"].shape) == 1
+        if not mask.any():
+            raise ValueError("paint the worm before tracing its midline")
+        with self.fit_lock:
+            return {"trace_xy": trace.tolist(), **self._fit(mask, trace, self._length(target, entry["recording"]))}
+
+    # ------------------------------------------------------------------ saving
+
+    def save(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Write a new label revision, start the job that rebuilds its body targets, and mark the queue entry saved."""
+
+        setup, entry = self._entry(payload)
+        queue = self.app.queues.get(str(payload["queue"])) if payload.get("queue") else None
+        dataset, created = self.dataset_for_save(setup, payload.get("dataset") or None)
+        record = self.existing(dataset.ref, entry["recording"], entry["frame"])
+        inputs = self.inputs(setup, entry, record)
+        if queue is not None:
+            origin = queue["origin"]
         else:
-            sample = self.store.save_frame(target['recording'], target['dataset'], target['frame'], image, mask,
-                image_raw=raw, revision=revision, split=split,
-                label_source='manual:workspace' if target.get('workspace') else 'manual:corpus')
-        return {'target': target, 'key': key(target), 'sample': asdict(sample), 'revision': sample.revision,
-                'counts': self.store.counts(), 'root': str(self.store.root)}
-
-    # ----------------------------------------------------------------- groups
-
-    def entry(self, group_id, target):
-        entry = next((e for e in self._group(group_id)['entries'] if key(e['target']) == key(target)), None)
-        if entry is None:
-            raise ValueError('target is not in the selected label group')
-        return entry
-
-    def _group(self, group_id):
-        self._load_sections()
-        with self._lock:
-            group = self.groups.get(str(group_id))
-        if group is None:
-            raise NotFound('unknown label group; open it again')
-        return group
-
-    def _labeled(self):
-        return {f"{recording_identity(r.source_path, r.dataset_path)}:{r.frame_index}" for r in self.store.records()}
-
-    def _summary(self, group, labeled):
-        done = sum(key(e['target']) in labeled for e in group['entries'])
-        return {k: v for k, v in group.items() if k != 'entries'} | {
-            'progress': {'total': len(group['entries']), 'labeled': done, 'remaining': len(group['entries']) - done}}
-
-    def group(self, group_id):
-        """A group with every entry marked ``labeled`` and the position of its first unlabeled entry (or None)."""
-
-        group, labeled = self._group(group_id), self._labeled()
-        entries = [{**e, 'labeled': key(e['target']) in labeled} for e in group['entries']]
-        return {**self._summary(group, labeled), 'entries': entries,
-                'first_unlabeled': next((i for i, e in enumerate(entries) if not e['labeled']), None)}
-
-    def list_groups(self):
-        """Opened groups with progress, and the repository's manifests not yet opened."""
-
-        self._load_sections()
-        labeled = self._labeled()
-        with self._lock:
-            groups = list(self.groups.values())
-        opened = {g.get('path') for g in groups if g['kind'] == 'manifest'}
-        discovered = []
-        for path in sorted(REPO_ROOT.glob(MANIFEST_GLOB)):
-            if str(path.resolve()) in opened:
-                continue
-            try:
-                data = json.loads(path.read_text())
-                discovered.append({'path': str(path.resolve()), 'name': str(data.get('name', path.parent.name)),
-                                   'description': str(data.get('description', '')), 'frames': len(data.get('frames', []))})
-            except (OSError, ValueError) as error:
-                discovered.append({'path': str(path.resolve()), 'name': path.parent.name, 'error': str(error)})
-        return {'groups': [self._summary(g, labeled) for g in groups], 'discovered': discovered}
-
-    def open_group(self, payload):
-        kind = payload.get('kind')
-        if kind == 'manifest':
-            return self.load_manifest(str(payload.get('path') or ''))
-        if kind == 'section':
-            return self.create_section(payload)
-        if kind == 'samples':
-            return self.sample_group(payload.get('sample_ids'), str(payload.get('name') or ''))
-        raise ValueError(f'unknown label group kind {kind!r}; expected one of {GROUP_KINDS}')
-
-    def _register(self, group):
-        with self._lock:
-            self.groups[group['id']] = group
-        return self.group(group['id'])
-
-    def close_group(self, group_id):
-        """Forget a group; a section is also removed from the saved sections."""
-
-        group = self._group(group_id)
-        if group['kind'] == 'section':
-            with self._lock:
-                sections = self._read_sections()
-                sections.pop(group['id'], None)
-                _write_json_atomic(self.sections_path, sections)
-        with self._lock:
-            self.groups.pop(group['id'], None)
-        return {'closed': group['id']}
-
-    def sample_group(self, sample_ids, name=''):
-        if not isinstance(sample_ids, list) or not sample_ids:
-            raise ValueError('a samples group needs a non-empty sample_ids list')
-        entries = []
-        for index, sample_id in enumerate(dict.fromkeys(map(str, sample_ids))):
-            target = self.target({'sample_id': sample_id})
-            entries.append({'target': target, 'split': 'auto', 'position': index + 1, 'reasons': [], 'error': None})
-        group_id = 'smp_' + hashlib.sha256(json.dumps([e['target']['sample_id'] for e in entries]).encode()).hexdigest()[:20]
-        label = name or (entries[0]['target']['sample_id'] if len(entries) == 1 else f'{len(entries)} saved labels')
-        return self._register({'id': group_id, 'kind': 'samples', 'name': label, 'entries': entries, 'errors': []})
-
-    def _read_sections(self):
-        return json.loads(self.sections_path.read_text()) if self.sections_path.exists() else {}
-
-    def _section_group(self, section_id, section):
-        target = {'recording': section['recording'], 'dataset': section['dataset']}
-        entries = [{'target': {**target, 'frame': frame}, 'split': 'auto', 'position': index + 1, 'reasons': [], 'error': None}
-                   for index, frame in enumerate(range(section['first'], section['last'] + 1, section['step']))]
-        return {'id': section_id, 'kind': 'section', 'entries': entries, 'errors': [], **section}
-
-    def _load_sections(self):
-        with self._lock:
-            for section_id, section in self._read_sections().items():
-                if section_id not in self.groups:
-                    self.groups[section_id] = self._section_group(section_id, section)
-
-    def create_section(self, payload):
-        """Persist a recording stretch to relabel; the same recording, range and step give the same section."""
-
-        first, last = _integer(payload, 'first'), _integer(payload, 'last')
-        if payload.get('workspace'):
-            # A range selected in a workspace: its recording, dataset and frame stride; the workspace is not kept.
-            workspace = self.app.workspace(str(payload['workspace']))
-            frames = workspace.frame_index
-            stride = int(frames[1] - frames[0]) if len(frames) > 1 else 1
-            payload = {**payload, 'recording': str(workspace.recording), 'dataset': workspace_dataset(workspace),
-                       'step': payload.get('step') or stride, 'origin': payload.get('origin') or {'workspace': str(payload['workspace'])},
-                       'name': payload.get('name') or f"{payload['workspace']} frames {first}-{last}"}
-        step = _integer(payload, 'step', 1)
-        target = self.target({'recording': payload.get('recording'), 'dataset': payload.get('dataset'), 'frame': first})
-        frames = self.source(target).frame_count
-        if step < 1 or last < first or last >= frames:
-            raise ValueError(f'a section needs 0 <= first <= last < {frames} and a positive step')
-        identity = json.dumps([target['recording'], target['dataset'], first, last, step])
-        section_id = 'sec_' + hashlib.sha256(identity.encode()).hexdigest()[:20]
-        name = str(payload.get('name') or f"{Path(target['recording']).stem} frames {first}-{last}")
-        section = {'name': name, 'recording': target['recording'], 'dataset': target['dataset'], 'first': first,
-                   'last': last, 'step': step, 'origin': payload.get('origin'), 'created_at': utc_now()}
-        with self._lock:
-            sections = self._read_sections()
-            section = sections.setdefault(section_id, section)
-            _write_json_atomic(self.sections_path, sections)
-            self.groups[section_id] = self._section_group(section_id, section)
-        return self.group(section_id)
-
-    def load_manifest(self, path):
-        path = Path(path).expanduser().resolve()
-        if not path.is_file():
-            raise NotFound('manifest file does not exist')
-        data = json.loads(path.read_text())
-        if not isinstance(data, dict) or not isinstance(data.get('recordings'), dict) or not isinstance(data.get('frames'), list):
-            raise ValueError('manifest needs a recordings object and a frames list')
-        recordings, entries, errors = [], [], []
-        aliases, pledges = {}, {}
-        for alias, record in data['recordings'].items():
-            if not isinstance(record, dict) or not isinstance(record.get('path'), str):
-                raise ValueError('each manifest recording needs a path')
-            source_path = Path(record['path']).expanduser()
-            if not source_path.is_absolute():
-                source_path = path.parent / source_path
-            source_path = source_path.resolve()
-            dataset = '/' + str(record.get('dataset') or record.get('dataset_path') or '/img_nir').strip('/')
-            split = record.get('split', 'auto')
-            if split not in ('auto', 'train', 'val', 'test'):
-                raise ValueError(f'unknown manifest split {split!r}')
-            identity = recording_identity(source_path, dataset)
-            if identity in pledges and pledges[identity] != split:
-                raise ValueError('manifest aliases pledge the same recording to different splits')
-            pledges[identity] = split
-            record = {'recording': str(source_path), 'dataset': dataset, 'split': split, 'alias': alias}
-            try:
-                source = self.source(record)
-                record['frame_count'] = source.frame_count
-                # Registry access is sufficient; do not create or modify a workspace.
-                self.app.registry.add(source_path, dataset)
-            except (OSError, ValueError) as error:
-                record['error'] = str(error)
-                errors.append({'recording': alias, 'error': str(error)})
-            aliases[alias] = record
-            recordings.append(record)
-        seen = set()
-        for index, entry in enumerate(data['frames']):
-            if not isinstance(entry, dict) or 'recording' not in entry or 'frame_index' not in entry:
-                raise ValueError('each manifest frame needs recording and frame_index')
-            if entry['recording'] not in aliases:
-                raise ValueError('manifest frame refers to an unknown recording')
-            record = aliases[entry['recording']]
-            target = {k: record[k] for k in ('recording', 'dataset')}
-            target['frame'] = int(entry['frame_index'])
-            if target['frame'] < 0 or ('frame_count' in record and target['frame'] >= record['frame_count']):
-                raise ValueError('manifest frame is outside recording bounds')
-            if key(target) in seen:
-                raise ValueError('manifest contains duplicate canonical frames')
-            seen.add(key(target))
-            entries.append({'target': target, 'split': record['split'], 'position': index + 1,
-                            'reasons': entry.get('reasons', []), 'error': record.get('error')})
-        manifest_id = hashlib.sha256((str(path) + json.dumps(data, sort_keys=True)).encode()).hexdigest()[:24]
-        return self._register({'id': manifest_id, 'kind': 'manifest', 'path': str(path), 'name': str(data.get('name', path.stem)),
-                               'description': str(data.get('description', '')), 'recordings': recordings,
-                               'entries': entries, 'errors': errors})
+            origin = "fix" if record is not None and record.origin == "fix" else "spread"
+        mask = decode_mask(payload.get("mask"), inputs["image"].shape)
+        trace = _points(payload.get("trace_xy"), "trace_xy")
+        head = payload.get("head_xy")
+        expected = payload.get("expected_revision")
+        saved = dataset.save(
+            recording=entry["recording"], frame=entry["frame"], mask=mask, origin=origin,
+            orientation="manual" if trace is not None or head is not None else "auto", head_xy=head, trace_xy=trace,
+            mask_only=bool(payload.get("mask_only")), expected_revision=None if expected is None else int(expected), **inputs,
+        )
+        job = None
+        if (mask == 1).any():
+            spec = JobSpec(kind=TARGETS_JOB_KIND, params={"labels": [saved.identity]}, gpus=1 if self.app.config.gpus else 0,
+                           label=f"Body targets of {saved.recording} frame {saved.frame}")
+            job = self.app.runner.submit(place(self.app, spec, {}), targets_command(self.libraries, [saved.identity])).to_dict()
+        summary = None
+        if queue is not None:
+            summary = self.app.queues.mark_saved(queue["id"], entry, saved.identity)
+        return {"label": label_row(self.app, saved), "dataset": dataset.ref, "created": created, "job": job, "queue": summary}
 
