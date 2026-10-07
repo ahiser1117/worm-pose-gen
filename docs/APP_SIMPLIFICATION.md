@@ -590,9 +590,13 @@ Behind this, one job record has two executors:
 
 1. **The mask-only segmenter is removed.** There is one architecture, the
    body-field net, and the Outputs choice is gone from the Train form.
-   **Gate:** on the current test split (39 labels, the same metric function),
-   the segmenter r4-hand284 reaches mask IoU 0.983, and the body-field net
-   runs reach 0.85–0.87. The segmenter, its trainer and its evaluator are
+   **Gate:** on the old per-frame test split (39 labels, the same metric
+   function), the segmenter r4-hand284 reached mask IoU 0.983, and the
+   body-field net runs reached 0.85–0.87. Rescored on the first benchmark
+   `nir-v1` (13 labels from 3 held-out recordings) by the new evaluator, the
+   gap is much smaller: segmenter 0.988 mean / 0.979 worst label, body-field
+   net 0.980 / 0.970 (head/tail 13 of 13, A-P error 0.094). `nir-v1` is too
+   small to call the gate met. The segmenter, its trainer and its evaluator are
    deleted once a body-field net matches its mask IoU on the first benchmark.
    Until then, the pipeline's mask still comes from r4. Body-target building
    also uses the segmenter today (it segments context frames for chain fits),
