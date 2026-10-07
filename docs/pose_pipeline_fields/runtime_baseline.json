@@ -1,0 +1,359 @@
+{
+ "generated_at": "2026-10-07T09:13:13+00:00",
+ "git": {
+  "commit": "b44b9f4e7df78f05413dd91be7f485719f404f84",
+  "dirty": true,
+  "diff_sha256": "0d1ed47e26cf1d2650413e03d9b014e896ee1e0db34e65e4e5275aa713bd40e7"
+ },
+ "host": "flv-c3.mit.edu",
+ "cuda_visible_devices": "2",
+ "gpu": [
+  "NVIDIA RTX A5500"
+ ],
+ "repeat": 2,
+ "body_net": "checkpoints/body_net/best.ckpt",
+ "clips": [
+  {
+   "name": "spiral_0131",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
+   "start": 3650,
+   "frames": 300,
+   "prior_file": "/temp_data4/alex/external_artifacts/recording_priors/2024-01-31-02_k6.json",
+   "prior_sha256": "ce234d532ffad1c843b498dc106fcfffa20d2a1ac07e46ff361b5af3da3c4311"
+  },
+  {
+   "name": "edge_0528",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5",
+   "start": 6850,
+   "frames": 300,
+   "prior_file": "/temp_data4/alex/external_artifacts/recording_priors/2024-05-28-02_k6.json",
+   "prior_sha256": "267469ece0a794894ad582da1228717ab63384d46347e12fa669ac7fa9c8c94e"
+  },
+  {
+   "name": "ordinary_0131",
+   "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5",
+   "start": 4350,
+   "frames": 300,
+   "prior_file": "/temp_data4/alex/external_artifacts/recording_priors/2024-01-31-02_k6.json",
+   "prior_sha256": "ce234d532ffad1c843b498dc106fcfffa20d2a1ac07e46ff361b5af3da3c4311"
+  }
+ ],
+ "runs_dir": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z",
+ "runs": [
+  {
+   "clip": "spiral_0131",
+   "repeat": 0,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-13-16Z_spiral_0131_r0",
+   "load_1min_at_start": 0.75830078125,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 289.63531002774835,
+   "staged_seconds": 282.6764485137537,
+   "seconds": {
+    "read": 0.0644299779087305,
+    "flat_field": 0.42924771271646023,
+    "network": 2.8566901115700603,
+    "cleanup": 2.14988806983456,
+    "fields": 5.079942075535655,
+    "init": 33.08899899106473,
+    "fit": 85.8787117600441,
+    "video": 0.0,
+    "propagate": 153.12395655410364,
+    "track": 0.004583260975778103
+   },
+   "total_ms_per_frame": 942.254828379179,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 0,
+    "iou_median": 0.963965521136199,
+    "pose_jumps": 0,
+    "length_jumps": 8,
+    "in_view_changes": 0
+   }
+  },
+  {
+   "clip": "edge_0528",
+   "repeat": 0,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-18-07Z_edge_0528_r0",
+   "load_1min_at_start": 1.2421875,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 293.300013710279,
+   "staged_seconds": 285.65621426701546,
+   "seconds": {
+    "read": 0.0724419979378581,
+    "flat_field": 0.4438199936412275,
+    "network": 2.854517998173833,
+    "cleanup": 2.1186838541179895,
+    "fields": 5.147191736847162,
+    "init": 35.34802256571129,
+    "fit": 89.98072164691985,
+    "video": 0.0,
+    "propagate": 141.343079067301,
+    "track": 8.347735406365246
+   },
+   "total_ms_per_frame": 952.1873808900515,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 2,
+    "iou_median": 0.9626392537173198,
+    "pose_jumps": 0,
+    "length_jumps": 4,
+    "in_view_changes": 19
+   }
+  },
+  {
+   "clip": "ordinary_0131",
+   "repeat": 0,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-23-00Z_ordinary_0131_r0",
+   "load_1min_at_start": 1.08740234375,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 169.69895692681894,
+   "staged_seconds": 162.1592069491744,
+   "seconds": {
+    "read": 0.2798347477801144,
+    "flat_field": 0.430014462210238,
+    "network": 2.9089393923059106,
+    "cleanup": 2.4105344228446484,
+    "fields": 5.182211014907807,
+    "init": 31.033717511221766,
+    "fit": 119.7523631406948,
+    "video": 0.0,
+    "propagate": 0.15698957815766335,
+    "track": 0.004602679051458836
+   },
+   "total_ms_per_frame": 540.5306898305813,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 0,
+    "iou_median": 0.9602912111473036,
+    "pose_jumps": 0,
+    "length_jumps": 6,
+    "in_view_changes": 0
+   }
+  },
+  {
+   "clip": "spiral_0131",
+   "repeat": 1,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-25-50Z_spiral_0131_r1",
+   "load_1min_at_start": 1.1298828125,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 287.88840647414327,
+   "staged_seconds": 280.1628811946139,
+   "seconds": {
+    "read": 0.06492205569520593,
+    "flat_field": 0.4346378995105624,
+    "network": 2.850964488927275,
+    "cleanup": 2.1531872884370387,
+    "fields": 5.184266960714012,
+    "init": 33.19990490656346,
+    "fit": 86.04276787443087,
+    "video": 0.0,
+    "propagate": 150.22749806474894,
+    "track": 0.004731655586510897
+   },
+   "total_ms_per_frame": 933.8762706487129,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 0,
+    "iou_median": 0.963965521136199,
+    "pose_jumps": 0,
+    "length_jumps": 8,
+    "in_view_changes": 0
+   }
+  },
+  {
+   "clip": "edge_0528",
+   "repeat": 1,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-30-38Z_edge_0528_r1",
+   "load_1min_at_start": 1.0498046875,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 294.45338211907074,
+   "staged_seconds": 286.6854253653437,
+   "seconds": {
+    "read": 0.06203441647812724,
+    "flat_field": 0.4310427554883063,
+    "network": 2.803607081528753,
+    "cleanup": 2.116301271133125,
+    "fields": 5.040572885423899,
+    "init": 35.329974497668445,
+    "fit": 91.29061711672693,
+    "video": 0.0,
+    "propagate": 141.21539374999702,
+    "track": 8.39588159089908
+   },
+   "total_ms_per_frame": 955.6180845511457,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 2,
+    "iou_median": 0.9626392537173198,
+    "pose_jumps": 0,
+    "length_jumps": 4,
+    "in_view_changes": 19
+   }
+  },
+  {
+   "clip": "ordinary_0131",
+   "repeat": 1,
+   "run": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-13-13Z/2026-10-07T09-35-32Z_ordinary_0131_r1",
+   "load_1min_at_start": 1.05615234375,
+   "gpu_processes_at_start": 0,
+   "wall_seconds": 167.25971004506573,
+   "staged_seconds": 159.73161801928654,
+   "seconds": {
+    "read": 0.06617328291758895,
+    "flat_field": 0.4303051009774208,
+    "network": 2.8264831425622106,
+    "cleanup": 2.4125680262222886,
+    "fields": 5.094529099296778,
+    "init": 31.227299149613827,
+    "fit": 117.51361248502508,
+    "video": 0.0,
+    "propagate": 0.15611732797697186,
+    "track": 0.004530404694378376
+   },
+   "total_ms_per_frame": 532.4387267309552,
+   "quality": {
+    "frames_fitted": 300,
+    "frames_iou_below_0.9": 0,
+    "iou_median": 0.9602912111473036,
+    "pose_jumps": 0,
+    "length_jumps": 6,
+    "in_view_changes": 0
+   }
+  }
+ ],
+ "heldout": {
+  "traced": {
+   "n": 32,
+   "within_half_width": 32,
+   "ap_error_mean": 0.024960527178336633,
+   "head_correct": 1.0,
+   "iou_median": 0.945985337795855
+  },
+  "accepted": {
+   "n": 34,
+   "within_half_width": 34,
+   "ap_error_mean": 0.01437926642692593,
+   "head_correct": 1.0,
+   "iou_median": 0.9615508415032333
+  }
+ },
+ "timing": {
+  "frames": 900,
+  "ms_per_frame": {
+   "read": 0.21458861676769125,
+   "flat_field": 1.4399841733069882,
+   "network": 9.42339412557582,
+   "cleanup": 7.421229274219109,
+   "fields": 17.02152105048299,
+   "init": 110.52304340888642,
+   "fit": 327.60777497353655,
+   "video": 0.0,
+   "propagate": 323.99889904746993,
+   "track": 9.285468162658313
+  },
+  "total_ms_per_frame": 807.3110273102712,
+  "total_ms_per_frame_by_repeat": [
+   811.6576330332706,
+   807.3110273102712
+  ],
+  "repeat_spread": 0.005384053451469628,
+  "wall_seconds": 749.6014986382797,
+  "overhead_seconds": 22.142410934902728,
+  "clips": {
+   "spiral_0131": {
+    "ms_per_frame": {
+     "read": 0.2147665930291017,
+     "flat_field": 1.4308257090548675,
+     "network": 9.503214963090917,
+     "cleanup": 7.1662935661152005,
+     "fields": 16.933140251785517,
+     "init": 110.2966633035491,
+     "fit": 286.26237253348035,
+     "video": 0.0,
+     "propagate": 500.7583268824965,
+     "track": 0.01527753658592701
+    },
+    "total_ms_per_frame": 933.8762706487129,
+    "wall_seconds": 287.88840647414327
+   },
+   "edge_0528": {
+    "ms_per_frame": {
+     "read": 0.20678138826042414,
+     "flat_field": 1.436809184961021,
+     "network": 9.345356938429177,
+     "cleanup": 7.054337570443749,
+     "fields": 16.801909618079662,
+     "init": 117.76658165889482,
+     "fit": 299.9357388230662,
+     "video": 0.0,
+     "propagate": 470.71797916665673,
+     "track": 27.825784687884152
+    },
+    "total_ms_per_frame": 952.1873808900515,
+    "wall_seconds": 293.300013710279
+   },
+   "ordinary_0131": {
+    "ms_per_frame": {
+     "read": 0.2205776097252965,
+     "flat_field": 1.4333815407007933,
+     "network": 9.421610475207368,
+     "cleanup": 8.035114742815495,
+     "fields": 16.981763664322596,
+     "init": 103.4457250374059,
+     "fit": 391.71204161675024,
+     "video": 0.0,
+     "propagate": 0.5203910932565728,
+     "track": 0.015101348981261253
+    },
+    "total_ms_per_frame": 532.4387267309552,
+    "wall_seconds": 167.25971004506573
+   }
+  }
+ },
+ "quality": {
+  "spiral_0131": {
+   "frames_iou_below_0.9": 0,
+   "iou_median": 0.963965521136199,
+   "pose_jumps": 0,
+   "length_jumps": 8,
+   "in_view_changes": 0
+  },
+  "edge_0528": {
+   "frames_iou_below_0.9": 2,
+   "iou_median": 0.9626392537173198,
+   "pose_jumps": 0,
+   "length_jumps": 4,
+   "in_view_changes": 19
+  },
+  "ordinary_0131": {
+   "frames_iou_below_0.9": 0,
+   "iou_median": 0.9602912111473036,
+   "pose_jumps": 0,
+   "length_jumps": 6,
+   "in_view_changes": 0
+  }
+ },
+ "finished_at": "2026-10-07T09:40:34+00:00",
+ "noise": {
+  "second_invocation": "/temp_data4/alex/external_artifacts/runtime_benchmark/2026-10-07T09-40-57Z/benchmark.json",
+  "second_total_ms_per_frame": 809.0231417031545,
+  "between_invocations": 0.0021207618067444175,
+  "single_repeat_totals_ms_per_frame": [
+   811.6576330332706,
+   807.3110273102712,
+   809.0231417031545,
+   816.1546621782085
+  ],
+  "single_repeat_totals_range": 0.010954433382883027,
+  "single_clip_repeat_range_max": 0.020811645080640925,
+  "large_stage_minima_between_invocations_max": 0.0029190502546938557,
+  "overhead_seconds_by_repeat": [
+   22.142410934902728,
+   23.02157405903563,
+   22.411430018488318,
+   23.14575252402574
+  ],
+  "quality_identical": true,
+  "heldout_identical": true
+ }
+}

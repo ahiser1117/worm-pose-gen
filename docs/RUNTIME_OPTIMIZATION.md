@@ -101,27 +101,18 @@ test suite was not run.
 
 ## Reproduce and enable
 
-The benchmark script saves per-stage timings, fit counts, output arrays,
-configuration, source hash, device, and peak GPU allocations. Baseline source
-was copied before optimization, including existing workspace edits. JSON
-reports and numerical comparisons are in [runtime_optimization](runtime_optimization/).
+These measurements came from the staged-workspace version of
+`scripts/benchmark_pose_runtime.py` (commit `72aadbc`), which saved per-stage
+timings, fit counts, output arrays, configuration, source hash, device, and
+peak GPU allocations. Baseline source was copied before optimization,
+including existing workspace edits. JSON reports and numerical comparisons are
+in [runtime_optimization](runtime_optimization/). The script has since been
+replaced by the fixed clip benchmark with the body-field network (its
+docstring gives the protocol and the KEEP rule; the baseline is
+`docs/pose_pipeline_fields/runtime_baseline.json`).
 
-```bash
-scripts/project_env.sh env CUDA_VISIBLE_DEVICES=3 .venv/bin/python \
-  scripts/benchmark_pose_runtime.py \
-  --output /tmp/pose-runtime-new --repeats 3 --frames 6 \
-  --recording /store1/shared/all_data_raw/prj_aversion/2024-05-22/2024-05-22-15.h5 \
-  --checkpoint checkpoints/segmenter/best.ckpt \
-  --prior-file /temp_data4/alex/external_artifacts/workspaces/2024-05-22-15_f0-1199/recording_prior.json \
-  --dataset-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1 \
-  --compile --device cuda --propagate
-```
-
-Use a new output directory for each invocation. To compare another source
-snapshot, add `--source-root /path/to/snapshot/src`. For the optional mode, add
-`--fit-overrides '{"compile_energy":true}'`. In `scripts/fit_recording.py`, use
-`--compile-energy`; workspace pipeline callers can set
-`FitParams.overrides={"compile_energy": True}`.
+In `scripts/fit_recording.py`, the optional mode is `--compile-energy`;
+workspace pipeline callers can set `FitParams.overrides={"compile_energy": True}`.
 
 Whole-energy compilation stays disabled by default because it adds compiler
 startup and its benefit depends on group shapes and reuse. The first
