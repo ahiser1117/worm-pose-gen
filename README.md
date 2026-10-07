@@ -119,21 +119,20 @@ Bootstrap labels, train, evaluate, and label interactively:
 ```bash
 scripts/project_env.sh uv run --no-sync --frozen python \
   scripts/bootstrap_segmentation_labels.py --frames-per-recording 40
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
-scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
-scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train.py \
+  --setup lab:nir-flv --dataset lab:nir-labels --start-from lab:nir-hand284
+scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_model.py --model lab:nir-hand284
 scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.app \
   --corpus-root /temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1
 ```
 
 Labels are stored under
 `/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
-on flv-c4 with an 80/10/10 train/val/test assignment; checkpoints go to the
-git-ignored `checkpoints/segmenter/` directory. The bootstrap step only
-matters for a fresh store: the bootstrapped labels of this one were retired
-on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
-hand-refined, and the promoted model is `r2-hand165` (see
-`docs/segmenter_model_names.json` for the model names the plots use). New
+on flv-c4 and were migrated into the library's lab dataset `nir-labels`;
+trained models are library model cards (`mine:<name>` in your personal
+library). The bootstrap step only matters for a fresh store: the
+bootstrapped labels of this one were retired on 2026-09-05
+(`scripts/retire_bootstrap_labels.py`) and every label is hand-refined. New
 labeling work uses the pose app at `http://127.0.0.1:8768`: label frames in
 Paint, browse them in Labels, and fine-tune in Training (see
 [Paint: labeling the corpus](#paint-labeling-the-corpus)).
@@ -634,21 +633,13 @@ input masks, including anchors, and cannot be accepted after those masks
 change. A segmentation-stage rerun preserves overrides.
 
 In **Labels**, filter by source, split and recording, delete saved labels, or
-open one (or the filtered list) in Paint to repaint. Fine-tuning in **Training** needs
-at least one train and one validation label. **Start fine-tune job** snapshots
-the exact label revisions and configured worm checkpoint before queueing;
-later corpus edits cannot change the training inputs. Progress, logs and
-cancellation use the right-panel Jobs tab. Outputs live under
-`--checkpoints-root` (default `<workspaces-root>/checkpoints`) in separate run
-directories with the input snapshot, run record, metrics and best/last weights.
-The app does not replace the base checkpoint or automatically promote a run.
-
-After a job finishes, select its checkpoint and click **Use in workspace**.
-This changes future segmentation and on-demand probabilities while retaining
-the checkpoint provenance of stored masks. Run segment when ready to replace
-the automatic masks; manually saved overrides still take precedence. The
-research script `scripts/train_segmenter.py` retains its earlier promotion
-behavior; the app uses `worm_pose_gen.training`.
+open one (or the filtered list) in Paint to repaint. Models are trained and
+evaluated on the library's datasets from the **Training** page, or with
+`scripts/train.py` and `scripts/evaluate_model.py`, which run the same code
+(`worm_pose_gen.model_training`, `worm_pose_gen.model_eval`): a training job
+prepares body targets, trains, evaluates on every benchmark of the setup and
+writes the model card; **Use as default** in the model picker replaces
+promotion (docs/APP_SIMPLIFICATION.md, section 4).
 
 The same operations are available through the API:
 
@@ -660,8 +651,7 @@ The same operations are available through the API:
 | Read/edit/delete label | `GET/PUT/DELETE /api/corpus/labels/{sample_id}` |
 | Label draft/proposals/refinement/save | `POST /api/labeling/frame`, `/proposals`, `/refine`, `/save` (under `/api/labeling`; `group_id` applies a group's pledge) |
 | Label groups | `GET /api/labeling/groups`; `POST /api/labeling/groups` with `kind` `manifest` (`path`), `section` (`recording`, `dataset`, `first`, `last`, `step`, or `workspace` + range) or `samples` (`sample_ids`); `GET/DELETE /api/labeling/groups/{id}` |
-| Training schema/job | `GET /api/training`, `POST /api/jobs` with `kind: fine_tune` and `params` |
-| List/select checkpoint | `GET /api/checkpoints`, `POST /api/workspaces/{name}/checkpoint` with `checkpoint` ID or path |
+| Models, training runs, evaluations | `GET /api/training/models?setup=&benchmark=`, `/models/{ref}`, `/runs`, `/schema`; `POST /api/training/plan`, `/evaluations`; `POST /api/jobs` with `kind: train` or `kind: evaluate` |
 | Body-field targets | `GET /api/body-fields`, `GET /api/body-fields/{id}` and `/{id}/context`; `POST /api/body-fields/{id}/flip`, `/review`, `/rebuild` ([`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md)) |
 | Body-field network on a workspace frame | `GET /api/workspaces/{name}/network-fields?frame=F` (A-P and crossings as PNG, head/tail or null, peaks) |
 
