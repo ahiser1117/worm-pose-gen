@@ -89,8 +89,9 @@ def refit_job(view: WorkspaceView, payload: dict[str, Any]) -> tuple[JobSpec, li
     """The job of a Refit of frames ``first..last``: the plan (``fixes.plan_refit``), validated now so a bad request is a 400.
 
     ``algorithm`` and ``params`` are the developer's overrides of the
-    recommended algorithm and its defaults.  Returns the job, its argv and
-    ``{preview, plan}`` for the answer.
+    recommended algorithm and its defaults; ``keep`` makes the job keep its
+    own preview (the refit after a mask edit).  Returns the job, its argv
+    and ``{preview, plan}`` for the answer.
     """
 
     view.refresh()
@@ -106,6 +107,7 @@ def refit_job(view: WorkspaceView, payload: dict[str, Any]) -> tuple[JobSpec, li
     spec = {
         "preview": preview, "kind": "refit", "algorithm": plan.algorithm, "first": plan.first, "last": plan.last,
         "anchor_before": plan.anchor_before, "anchor_after": plan.anchor_after, "codes": plan.codes, "params": params,
+        "keep": bool(payload.get("keep")),
     }
     frames = frames_of(view, plan.first, plan.last)
     job = JobSpec(kind=fixes.FIX_JOB_KIND, params=spec, workspace=view.name, frames=frames, label=f"Refit frames {frames[0]}-{frames[1]} ({plan.algorithm})")

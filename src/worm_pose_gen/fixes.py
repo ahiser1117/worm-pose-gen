@@ -73,7 +73,9 @@ current poses for the before/after view, and the inputs they saw.  Keep
 installs the preview as one ``edits.set_poses`` edit (provenance: the
 algorithm, job ``fix:<id>``), so Undo works and the propagate stage treats
 the rows as placed; Keep refuses a preview whose masks or poses changed
-since it ran.  Discard deletes it.  Flip goes through
+since it ran.  Discard deletes it.  A refit spec with ``keep`` (the refit
+that follows a mask edit) is kept by the job itself as soon as it is ready,
+so it lands even when no browser is waiting.  Flip goes through
 ``edits.flip_orientation``.  ``fixes_list`` reads the edit log back in
 plain words, each fix with its Undo.
 """
@@ -627,7 +629,7 @@ def load_keyframes(workspace: Any, preview_id: str) -> list[Keyframe]:
 
 
 def fix_command(workspace_path: Path | str, spec: dict[str, Any]) -> list[str]:
-    """The argv of a fix job: ``spec`` is ``{preview, kind: refit, algorithm, first, last, anchor_before, anchor_after, codes, params}`` (rows) or ``{preview, kind: stitch, params}``."""
+    """The argv of a fix job: ``spec`` is ``{preview, kind: refit, algorithm, first, last, anchor_before, anchor_after, codes, params, keep?}`` (rows) or ``{preview, kind: stitch, params}``."""
 
     return [".venv/bin/python", "-m", "worm_pose_gen.fixes", "--workspace", str(workspace_path), "--run", json.dumps(algorithms._json_safe(spec))]
 
@@ -660,7 +662,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_progress(0.0, f"{spec.get('kind', 'fix')}: starting")
     preview = run_spec(workspace, spec, device=args.device, progress=report_progress)
     result = {"preview": preview.id, "kind": preview.kind, "algorithm": preview.algorithm, "rows": len(preview.rows), "metrics": algorithms._json_safe(preview.metrics)}
-    report_progress(1.0, f"{preview.kind}: preview {preview.id} ready", result)
+    if spec.get("keep"):
+        # The refit after a mask edit: installed as soon as it is ready, with no one waiting to press Keep.
+        result["kept"] = keep(workspace, preview.id).edit_id
+        report_progress(1.0, f"{preview.kind}: kept as {result['kept']}", result)
+    else:
+        report_progress(1.0, f"{preview.kind}: preview {preview.id} ready", result)
     print(json.dumps(result, indent=1))
     return 0
 
