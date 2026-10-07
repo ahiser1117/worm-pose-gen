@@ -737,7 +737,9 @@ class _MaskFitState(nn.Module):
 
         return (self.log_width[:, None] + self.log_width_correction()).exp() * template[None, :]
 
-    def optimizer(self) -> torch.optim.Optimizer:
+    def optimizer(self, capturable: bool = False) -> torch.optim.Optimizer:
+        """Adam over the parameter groups; ``capturable`` (CUDA) is the fused form a CUDA graph can record."""
+
         c = self.config
         groups = [
             {"params": [self.centroid], "lr": c.translation_lr},
@@ -748,7 +750,7 @@ class _MaskFitState(nn.Module):
         ]
         if self.width_shape.shape[1]:
             groups.append({"params": [self.width_shape], "lr": c.width_shape_lr})
-        return torch.optim.Adam(groups)
+        return torch.optim.Adam(groups, fused=capturable or None, capturable=capturable)
 
     def width_prior(self) -> Tensor:
         """Gaussian pull of the width correction toward its prior mean."""

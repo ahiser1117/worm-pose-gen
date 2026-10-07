@@ -55,9 +55,23 @@ class BatchFitRuntimeTests(unittest.TestCase):
 
     def test_empty_schedule_has_correct_history_shape(self):
         config = replace(self.config, stage_steps=(0, 0, 0))
-        result = fit_masks([self.mask], [self.starts], config=config, device='cpu')[0]
-        self.assertEqual(result.energy_history.shape, (0, 2))
-        self.assertTrue(np.isfinite(result.centerline_xy).all())
+        devices = ('cpu', 'cuda') if torch.cuda.is_available() else ('cpu',)
+        for device in devices:
+            result = fit_masks([self.mask], [self.starts], config=config, device=device)[0]
+            self.assertEqual(result.energy_history.shape, (0, 2))
+            self.assertTrue(np.isfinite(result.centerline_xy).all())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_recorded_cuda_steps_follow_the_eager_fit(self):
+        # On CUDA every step after a stage's first, Adam included, replays a
+        # recording; the fused Adam rounds differently from the CPU one.
+        expected = fit_masks([self.mask, self.mask], [self.starts, self.starts[::-1]], config=self.config, device='cpu')
+        actual = fit_masks([self.mask, self.mask], [self.starts, self.starts[::-1]], config=self.config, device='cuda')
+        for eager, recorded in zip(expected, actual, strict=True):
+            self.assertEqual(recorded.best_index, eager.best_index)
+            np.testing.assert_allclose(recorded.energy_history, eager.energy_history, atol=1e-4)
+            np.testing.assert_allclose(recorded.centerline_xy, eager.centerline_xy, atol=1e-3)
+            np.testing.assert_allclose(recorded.latent, eager.latent, atol=1e-3)
 
     def test_whole_energy_capture_reuses_graphs_across_groups(self):
         # The eager backend verifies capture, gradients and guard reuse without

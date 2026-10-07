@@ -138,8 +138,8 @@ def _fused_renderer(centerline_xy: Tensor, diameter: Tensor, image_height: int, 
     return _COMPILED["fn"](centerline_xy, diameter, image_height, image_width, **kwargs)
 
 
-def _record_step(step: Callable[[], Tensor], device: torch.device) -> tuple[torch.cuda.CUDAGraph, Tensor]:
-    """Record one optimization step's CUDA work as a graph; returns it and the step's output, which every replay rewrites.
+def _record_step(step: Callable[[], None], device: torch.device) -> torch.cuda.CUDAGraph:
+    """Record one optimization step's CUDA work as a graph.
 
     An eager step launches hundreds of small kernels from Python; for all but
     the largest groups the launches, not the GPU, set the fit's speed.  A
@@ -161,10 +161,10 @@ def _record_step(step: Callable[[], Tensor], device: torch.device) -> tuple[torc
         # Other threads (the app's request handlers) may use the GPU meanwhile.
         graph.capture_begin(pool=pool, capture_error_mode="thread_local")
         try:
-            output = step()
+            step()
         finally:
             graph.capture_end()
-    return graph, output
+    return graph
 
 
 @dataclass(frozen=True)
@@ -591,8 +591,29 @@ def _fit_group(
                 state.centroid.add_(head_priors.project(head) - head)
 
     constrain_head()
-    optimizer = state.optimizer()
+    # On CUDA every step after a stage's first replays a recording of the
+    # whole step, Adam included (fused, reading its learning rates on the
+    # device); the first runs eagerly, so the renderer is compiled for the
+    # stage's raster outside the recording.  The crossing exemption of the
+    # separation penalty reads its reach on the host, so fits that use it
+    # stay eager.
+    record = device.type == "cuda" and not (use_temporal and config.separation_weight > 0)
+    optimizer = state.optimizer(capturable=record)
     base_rates = [group["lr"] for group in optimizer.param_groups]
+    # Each step's learning rate per parameter group: the stage's scale times the within-stage decay.
+    schedule = [
+        [base * scale * (1.0 + (config.within_stage_decay - 1.0) * (step / max(steps - 1, 1))) for base in base_rates]
+        for steps, scale in zip(config.stage_steps, config.stage_lr_scale, strict=True)
+        for step in range(steps)
+    ]
+    # The step counter lives on the device, so a recorded step reads its
+    # learning rates and writes its history row at the right step.
+    step_index = torch.zeros(1, dtype=torch.long, device=device)
+    if record:
+        rates = torch.tensor(schedule, dtype=torch.float32, device=device).reshape(-1, len(base_rates))
+        rate = torch.tensor(base_rates, dtype=torch.float32, device=device)
+        for k, group in enumerate(optimizer.param_groups):
+            group["lr"] = rate[k]
     finest = min(config.stage_downsample)
     eps = torch.finfo(torch.float32).eps
     stage_cache: dict[int, tuple[Tensor, Tensor, Tensor]] = {}
@@ -691,11 +712,12 @@ def _fit_group(
     # Keep the small history on the fitting device and transfer it once. A
     # host copy inside every iteration forces CUDA to finish every queued op.
     history = torch.empty((sum(config.stage_steps), len(starts_flat)), device=device)
-    history_step = 0
 
-    def step_gradients(factor: int, stride: int) -> Tensor:
-        """The energy, the best state at the finest stage, and the gradients of one step; returns the soft Dice."""
+    def iterate(factor: int, stride: int) -> None:
+        """One step: the energy, the best state at the finest stage, the gradients, Adam, the head projection and the history row."""
 
+        if record:
+            rate.copy_(rates.index_select(0, step_index)[0])
         dice, loss = energy(factor, stride)
         total = loss.sum()
         finite.logical_and_(torch.isfinite(total))
@@ -707,37 +729,28 @@ def _fit_group(
                     torch.where(selected, now, kept, out=kept)
                 torch.where(improved, loss.detach(), best_loss, out=best_loss)
         total.backward()
-        return dice.detach()
+        optimizer.step()
+        constrain_head()
+        history.index_copy_(0, step_index, dice.detach()[None])
+        step_index.add_(1)
 
-    # On CUDA every step after a stage's first replays a recording of it; the
-    # first runs eagerly, so the renderer is compiled for the stage's raster
-    # outside the recording.  The optimizer steps eagerly, since its learning
-    # rate and bias correction change every step.  The crossing exemption of
-    # the separation penalty reads its reach on the host, so fits that use it
-    # stay eager.
-    record = device.type == "cuda" and not (use_temporal and config.separation_weight > 0)
-    for factor, steps, scale, stride in zip(
-        config.stage_downsample, config.stage_steps, config.stage_lr_scale, config.stage_point_stride, strict=True
-    ):
+    taken = 0
+    for factor, steps, stride in zip(config.stage_downsample, config.stage_steps, config.stage_point_stride, strict=True):
         graph = None
         for step in range(steps):
-            progress = step / max(steps - 1, 1)
-            decay = 1.0 + (config.within_stage_decay - 1.0) * progress
-            for group, base in zip(optimizer.param_groups, base_rates, strict=True):
-                group["lr"] = base * scale * decay
-            if graph is None:
-                optimizer.zero_grad(set_to_none=True)
-                dice = step_gradients(factor, stride)
-            else:
+            if graph is not None:
                 graph.replay()
-            optimizer.step()
-            constrain_head()
-            history[history_step].copy_(dice)
-            history_step += 1
-            if record and graph is None and step + 1 < steps:
-                # The recording's backward writes fresh gradient tensors, which every replay overwrites.
+            else:
+                if not record:
+                    for group, lr in zip(optimizer.param_groups, schedule[taken], strict=True):
+                        group["lr"] = lr
                 optimizer.zero_grad(set_to_none=True)
-                graph, dice = _record_step(lambda: step_gradients(factor, stride), device)
+                iterate(factor, stride)
+                if record and step + 1 < steps:
+                    # The recording's backward writes fresh gradient tensors, which every replay overwrites.
+                    optimizer.zero_grad(set_to_none=True)
+                    graph = _record_step(lambda: iterate(factor, stride), device)
+            taken += 1
     if not bool(finite):
         raise RuntimeError("non-finite batch mask-fit energy")
     if bool(torch.isfinite(best_loss).any()):
