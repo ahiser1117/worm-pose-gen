@@ -371,7 +371,10 @@ these datasets export velocity in the image frame, and `export.json` says so.
    controls in Labeling.
 2. Read-only runs are removed; the CLI pipeline writes workspaces.
 3. One workspace per recording, always the whole recording.
-4. The curvature kymograph is the main timeline view for now.
+4. The curvature kymograph is the main timeline view for now. Its color
+   scale clips curvature × body length at ±15 (median about 4 and 90th
+   percentile about 10 on a real recording), confirmed by Alex 2026-10-07.
+   Issues closer than 8 sampled frames stay merged into one, also confirmed.
 5. Export adds velocity and the full-body width profile; more derived
    features will come later.
 6. Hypotheses (6c), Outcomes, the candidate-set UI and Starts are deleted.
