@@ -1,0 +1,95 @@
+{
+ "args": {
+  "dataset_root": "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1",
+  "checkpoint": "/home/alex/git/worm-pose-gen/checkpoints/body_net/best.ckpt",
+  "preset": "fast",
+  "ap_weight": "0.001",
+  "end_weight": "0.01",
+  "splits": "['val', 'test']",
+  "variants": "['baseline', 'trace', 'fields', 'both']",
+  "out": ".claude/tmp/commit/heldout_all",
+  "device": "None"
+ },
+ "summary": {
+  "traced/baseline": {
+   "n": 32,
+   "distance_median": 0.5089002042250226,
+   "within_half_width": 15,
+   "ap_error_median": 0.2763366848230362,
+   "ap_error_mean": 0.2606667470536195,
+   "head_correct": 0.71875,
+   "iou_median": 0.6130787507523405,
+   "trace_won": 0
+  },
+  "traced/trace": {
+   "n": 32,
+   "distance_median": 0.03986895730357749,
+   "within_half_width": 32,
+   "ap_error_median": 0.027661744505167007,
+   "ap_error_mean": 0.16637117849313654,
+   "head_correct": 0.65625,
+   "iou_median": 0.9539315846236103,
+   "trace_won": 29
+  },
+  "traced/fields": {
+   "n": 32,
+   "distance_median": 0.840494450158797,
+   "within_half_width": 5,
+   "ap_error_median": 0.19023983925580978,
+   "ap_error_mean": 0.20888115122215822,
+   "head_correct": 1.0,
+   "iou_median": 0.38877385363971895,
+   "trace_won": 0
+  },
+  "traced/both": {
+   "n": 32,
+   "distance_median": 0.03779889638694933,
+   "within_half_width": 32,
+   "ap_error_median": 0.015490423422306776,
+   "ap_error_mean": 0.024960527178336633,
+   "head_correct": 1.0,
+   "iou_median": 0.945985337795855,
+   "trace_won": 31
+  },
+  "accepted/baseline": {
+   "n": 34,
+   "distance_median": 0.00726105781635171,
+   "within_half_width": 34,
+   "ap_error_median": 0.003403501119464636,
+   "ap_error_mean": 0.13183861227041824,
+   "head_correct": 0.7058823529411765,
+   "iou_median": 0.963998705481517,
+   "trace_won": 0
+  },
+  "accepted/trace": {
+   "n": 34,
+   "distance_median": 0.007307109432210983,
+   "within_half_width": 34,
+   "ap_error_median": 0.0036522644804790616,
+   "ap_error_mean": 0.12988218250307804,
+   "head_correct": 0.7058823529411765,
+   "iou_median": 0.9639410134112738,
+   "trace_won": 8
+  },
+  "accepted/fields": {
+   "n": 34,
+   "distance_median": 0.007837237232128286,
+   "within_half_width": 34,
+   "ap_error_median": 0.005609957734122872,
+   "ap_error_mean": 0.008113575205617748,
+   "head_correct": 1.0,
+   "iou_median": 0.9611007914706451,
+   "trace_won": 0
+  },
+  "accepted/both": {
+   "n": 34,
+   "distance_median": 0.00783736962022282,
+   "within_half_width": 34,
+   "ap_error_median": 0.005730986362323165,
+   "ap_error_mean": 0.01437926642692593,
+   "head_correct": 1.0,
+   "iou_median": 0.9615508415032333,
+   "trace_won": 6
+  }
+ }
+}

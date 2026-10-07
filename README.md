@@ -52,8 +52,9 @@ and their adjacent generated assets retain the evidence for each stage:
    pretrained ResNet-18 U-Net with Lightning, and refine labels in the
    browser app with the network proposing.
 9. [`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md) — the body-field network's
-   targets (A-P field, head/tail, overlap) built from the hand labels, and
-   their review and correction in the app's Body fields tab.
+   targets (A-P field, head/tail, overlap) built from the hand labels,
+   their review and correction in the app's Body fields tab, and the
+   network's evidence and trace starts in the pose fitter (`--body-net`).
 
 ## Setup
 
@@ -175,6 +176,13 @@ images (mask the tube misses in blue, tube outside the mask in red) for its
 `scripts/render_pose_run.py` produces the video and residual images for a
 stored run without refitting, and `scripts/compare_pose_runs.py` puts
 several runs side by side on the same frames.
+
+`--body-net checkpoints/body_net/best.ckpt` adds the body-field network:
+its A-P field and head/tail score every fit (independent, propagation and
+track pass), its proposed trace is an extra start, and the evidence rather
+than the taper decides the orientation. On the sequence set it cuts the
+independent fits' frames below IoU 0.9 from 599 to 107, at about 230 ms
+more per frame ([Body-field evidence in the pose fitter](docs/BODY_FIELDS.md#body-field-evidence-in-the-pose-fitter)).
 
 Runtime improvements and reproducible GPU 3 benchmarks are documented in
 [Runtime optimization](docs/RUNTIME_OPTIMIZATION.md). The default optimizations
