@@ -31,14 +31,13 @@ import torch
 from torch import Tensor
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
+from .library.datasets import SPLITS, assign_split
 from .segmenter import IGNORE_LABEL, normalize_frame
 
 
 DEFAULT_DATASET_ROOT = Path(
     "/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1"
 )
-SPLITS = ("train", "val", "test")
-SPLIT_FRACTIONS = (0.8, 0.1, 0.1)
 LABEL_FILTERS = ("all", "bootstrap", "manual")
 
 
@@ -58,17 +57,6 @@ def matches_label_filter(label_source: str, label_filter: str) -> bool:
 
 def make_sample_id(recording: str, frame_index: int) -> str:
     return f"{recording}_f{int(frame_index):06d}"
-
-
-def assign_split(counts: dict[str, int]) -> str:
-    """Pick the split furthest below its target share after one more sample."""
-
-    total = sum(int(counts.get(name, 0)) for name in SPLITS) + 1
-    deficits = [
-        fraction * total - int(counts.get(name, 0))
-        for name, fraction in zip(SPLITS, SPLIT_FRACTIONS, strict=True)
-    ]
-    return SPLITS[int(np.argmax(deficits))]
 
 
 @dataclass(frozen=True)

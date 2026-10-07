@@ -322,8 +322,13 @@ def list_recordings(
     prior_cache: Path | None = DEFAULT_PRIOR_CACHE,
     cache: Path | None = None,
     registry: RecordingRegistry | None = None,
+    dataset: str = DATASET_PATH,
 ) -> list[RecordingInfo]:
-    """Catalog the recordings under ``roots`` plus the registered ones, reusing ``cache`` for unchanged files."""
+    """Catalog the recordings under ``roots`` plus the registered ones, reusing ``cache`` for unchanged files.
+
+    ``dataset`` is the HDF5 dataset holding the frames of files found under
+    the roots (a setup's video dataset); registered files keep their own.
+    """
 
     index = RecordingIndex(cache)
     runs = _references(poses_root, "summary.json")
@@ -338,9 +343,9 @@ def list_recordings(
                 found.append(path)
     found.sort(key=lambda p: (p.stem, str(p)))
     for path in found:
-        dataset = registered.get(path, DATASET_PATH)
+        frames_dataset = registered.get(path, dataset)
         try:
-            entry = index.facts(path, dataset)
+            entry = index.facts(path, frames_dataset)
             stamp = _file_stamp(path)
         except OSError as error:
             # Vanished or unstat-able between listing and probing: report it rather than drop it.
@@ -360,7 +365,7 @@ def list_recordings(
                 prior_cached=prior_is_cached(path, prior_cache),
                 runs=_lookup(runs, path),
                 workspaces=_lookup(workspaces, path),
-                dataset=dataset,
+                dataset=frames_dataset,
                 registered=path in registered,
             )
         )

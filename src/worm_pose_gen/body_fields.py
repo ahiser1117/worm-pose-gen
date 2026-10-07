@@ -725,6 +725,83 @@ def accept_proposal(store: SegmentationStore, sample_id: str) -> dict[str, Any]:
     return meta
 
 
+def fit_targets(
+    mask: NDArray[np.bool_],
+    context: NDArray[np.uint8],
+    valid: NDArray[np.bool_],
+    tracking: HeadTracking,
+    *,
+    config: BatchFitConfig,
+    template: NDArray[np.generic],
+    device: torch.device,
+    length_px: Callable[[], float | None],
+    independent: MaskFitResult | None = None,
+    trace: tuple[NDArray[np.generic], bool] | None = None,
+    head_xy: NDArray[np.generic] | None = None,
+    segmenter: SegmentationModule | None = None,
+) -> tuple[dict[str, Any], dict[str, np.ndarray], Any]:
+    """The body-field targets of one labeled frame from its hand mask, context frames and nose landmarks.
+
+    The body is, in order: the refit along a traced midline (``trace``: the
+    points, head first, and whether to keep them as drawn); else the
+    independent fit (``independent``, fitted here when not given) or, for a
+    tangled frame when a ``segmenter`` is given, the chain fit when it is
+    better.  An untraced body's head is the end nearest ``head_xy`` (a
+    person's choice: orientation ``manual``), else the acquisition nose
+    (``nose``, ``nose_nearby``), else the thinner end is the tail
+    (``taper``).  ``length_px`` gives the recording's typical body length,
+    asked for only when a trace or a camera exit needs it.
+
+    Returns the meta (build fields only, no store keys), the target arrays
+    (no context), and the rendered targets, or ``None`` for a label without
+    a worm (``has_body`` false).
+    """
+
+    meta: dict[str, Any] = {"has_body": False}
+    arrays: dict[str, np.ndarray] = {}
+    if not mask.any():
+        return meta, arrays, None
+    max_lag = len(context) // 2
+    nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
+    if nose is not None:
+        arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
+        meta["nose_offset"] = offset
+    if trace is not None:
+        targets = _traced_body(
+            meta, arrays, mask, trace[0], as_drawn=trace[1], length_px=length_px(),
+            config=config, template=template, device=device,
+        )
+        meta["has_body"] = True
+        return meta, arrays, targets
+    result = independent if independent is not None else fit_masks(
+        [mask], [initializations_for(mask, config)], width_template=template, config=config, device=device,
+    )[0]
+    meta["fit_method"] = "independent"
+    independent_iou = float(result.records[result.best_index]["final_iou"])
+    tangled = independent_iou < CHAIN_IOU or self_contact(result.centerline_xy, result.width_profile)
+    if segmenter is not None and tangled:
+        chained = chain_fit(mask, context, valid, tracking, segmenter, config=config, template=template, device=device)
+        if chained is not None and chained[0].records[chained[0].best_index]["final_iou"] > independent_iou:
+            result = chained[0]
+            meta.update(fit_method="chain", chain_anchor_offset=chained[1], independent_fit_iou=independent_iou)
+    if head_xy is not None:
+        result = _nose_first(result, np.asarray(head_xy, dtype=np.float64), config)
+        meta["orientation"] = "manual"
+    elif nose is not None:
+        result = _nose_first(result, nose, config)
+        meta["orientation"] = "nose" if offset == 0 else "nose_nearby"
+    else:
+        result, _ = orient_tail_last(result, config=config)
+        meta["orientation"] = "taper"
+    targets = _set_body(
+        meta, arrays, mask, result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"]),
+    )
+    if mark_exits(meta, arrays, mask, length_px()):
+        targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
+    meta["has_body"] = True
+    return meta, arrays, targets
+
+
 def build(
     store: SegmentationStore,
     records: Sequence[SampleRecord],
@@ -738,9 +815,11 @@ def build(
     """Build the records of ``records`` (all of them; skipping current ones is the caller's choice).
 
     Frames are read and fitted per source recording, so each recording opens
-    once.  Without ``segmenter`` no chain fits are tried.  ``on_built``
-    receives each written meta.  Returns how many samples
-    took each orientation (``no_body`` for empty labels).
+    once and its independent fits run as one batch (:func:`fit_targets` does
+    the rest of each record).  Without ``segmenter`` no chain fits are tried.
+    ``on_built`` receives each written meta.  Returns how many samples took
+    each orientation (``traced`` for refits along a stored trace, ``no_body``
+    for empty labels).
     """
 
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -788,62 +867,28 @@ def build(
         fitted = {p[0].sample_id: r for p, r in zip(bodies, results, strict=True)}
 
         for record, image, mask, context, valid, tracking in pending:
+            trace = traces.get(record.sample_id)
+            built, arrays, targets = fit_targets(
+                mask, context, valid, tracking, config=config, template=template, device=device,
+                length_px=lambda record=record: recording_length(store, record),
+                independent=fitted.get(record.sample_id), trace=trace, segmenter=segmenter,
+            )
             meta: dict[str, Any] = {
                 "sample_id": record.sample_id, "mask_revision": record.revision, "max_lag": max_lag,
-                "fit_preset": FIT_PRESET, "has_body": record.sample_id in fitted,
+                "fit_preset": FIT_PRESET, **built,
             }
-            arrays: dict[str, np.ndarray] = {"context": context, "context_valid": valid}
-            result = fitted.get(record.sample_id)
-            if record.sample_id in traces and mask.any():
-                trace, as_drawn = traces[record.sample_id]
-                nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
-                if nose is not None:
-                    arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
-                    meta["nose_offset"] = offset
-                targets = _traced_body(
-                    meta, arrays, mask, trace, as_drawn=as_drawn, length_px=recording_length(store, record),
-                    config=config, template=template, device=device,
-                )
-                meta.update(has_body=True, review="accepted", reviewed_at=utc_now())
-                summary["traced"] += 1
-                if review:
-                    review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
-                        review_dir / f"{record.sample_id}.png"
-                    )
-            elif result is not None:
-                meta["fit_method"] = "independent"
-                independent_iou = float(result.records[result.best_index]["final_iou"])
-                tangled = independent_iou < CHAIN_IOU or self_contact(result.centerline_xy, result.width_profile)
-                if segmenter is not None and tangled:
-                    chained = chain_fit(mask, context, valid, tracking, segmenter, config=config, template=template, device=device)
-                    if chained is not None and chained[0].records[chained[0].best_index]["final_iou"] > independent_iou:
-                        result = chained[0]
-                        meta.update(fit_method="chain", chain_anchor_offset=chained[1], independent_fit_iou=independent_iou)
-                nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
-                if nose is not None:
-                    d_head = float(np.linalg.norm(result.centerline_xy[0] - nose))
-                    d_tail = float(np.linalg.norm(result.centerline_xy[-1] - nose))
-                    if d_tail < d_head:
-                        result = reverse_result(result, config=config)
-                    meta["orientation"] = "nose" if offset == 0 else "nose_nearby"
-                    meta["nose_offset"] = offset
-                    arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
-                else:
-                    result, _ = orient_tail_last(result, config=config)
-                    meta["orientation"] = "taper"
-                targets = _set_body(
-                    meta, arrays, mask, result.centerline_xy, result.width_profile,
-                    float(result.records[result.best_index]["final_iou"]),
-                )
-                if mark_exits(meta, arrays, mask, recording_length(store, record)):
-                    targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
-                summary[meta["orientation"]] += 1
-                if review:
-                    review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
-                        review_dir / f"{record.sample_id}.png"
-                    )
-            else:
+            arrays = {"context": context, "context_valid": valid, **arrays}
+            if targets is None:
                 summary["no_body"] += 1
+            elif trace is not None:
+                meta.update(review="accepted", reviewed_at=utc_now())
+                summary["traced"] += 1
+            else:
+                summary[meta["orientation"]] += 1
+            if review and targets is not None:
+                review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
+                    review_dir / f"{record.sample_id}.png"
+                )
             with locked(store.root):
                 save(field_path(store.root, record.sample_id), meta, arrays)
             if on_built is not None:
