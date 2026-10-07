@@ -22,14 +22,15 @@ holds everything the app creates.  Items are named ``lab:<id>`` or
         training/                          hyperparameters, metrics, the exact label revisions used
         evaluations/<scope>.<benchmark>.json
       evaluations/lab.<model>/             (personal) evaluations of lab models
-      cache/body_targets/<sha256>.{npz,json}   (personal) body targets built from each label revision
+      cache/body_targets/<builder>/<sha256>.{npz,json}   (personal) body targets of each label revision, per builder model
 
 Modules: :mod:`.roots` (where the libraries are, references, file
 helpers), :mod:`.setups` (setups, default models, recording -> setup),
 :mod:`.datasets` (datasets, per-recording splits, inheritance, saving
 labels), :mod:`.labels` (the label revision file), :mod:`.targets` (the body
 target cache), :mod:`.benchmarks`, :mod:`.models` (cards, weights,
-evaluations).
+evaluations), :mod:`.runtime` (loading a model and asking it for masks or
+body fields).
 
 Reading labels for training and evaluation
 ------------------------------------------
@@ -53,8 +54,10 @@ overrides the inherited one.  Each :class:`LabelRecord` carries its split
 exact revision and :func:`trained_on` summarizes a run's records for its
 model card.  ``benchmark_labels(libs, "lab:nir-v1")`` gives a benchmark's
 frozen revisions.  Body targets are built with :func:`build_targets`
-(fitter on the GPU, optional segmenter for chain fits) and read with
-:func:`load_targets`; ``meta["fit_iou"]``, ``meta["self_contact"]`` and the
+(fitter on the GPU; the setup's default mask model, the *builder*, segments
+context frames for chain fits) and read with :func:`load_targets`; both
+key the cache by the label revision and the builder, so a new default model
+means new targets; ``meta["fit_iou"]``, ``meta["self_contact"]`` and the
 arrays ``ap``, ``overlap``, ``head_xy``, ``tail_xy``, ``diameter_px`` are
 what :class:`body_net.BodyFieldDataset` reads from the old records today.
 """
@@ -71,14 +74,15 @@ from .setups import (
     Setup, create_setup, defaults_log, get_setup, list_setups, recording_id, recording_sources, register_recording,
     set_default, setup_for_recording, write_setup,
 )
-from .targets import build_targets, cached_meta, load_targets
+from .runtime import LoadedModel, load_model
+from .targets import SETUP_DEFAULT, build_targets, cached_meta, load_targets, target_builder
 
 __all__ = [
-    "BENCHMARK_ORIGINS", "Benchmark", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "ModelCard",
-    "ORIGINS", "PERSONAL_LIBRARY_BY_HOST", "SPLITS", "STATUSES", "Setup", "assign_split", "benchmark_labels",
+    "BENCHMARK_ORIGINS", "Benchmark", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "LoadedModel",
+    "ModelCard", "ORIGINS", "PERSONAL_LIBRARY_BY_HOST", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "assign_split", "benchmark_labels",
     "build_targets", "cached_meta", "create_dataset", "create_model", "create_setup", "defaults_log", "evaluation_path",
     "evaluations", "fingerprint", "freeze_benchmark", "get_benchmark", "get_card", "get_setup", "labels",
-    "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_targets", "make_inputs", "make_ref",
+    "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_model", "load_targets", "make_inputs", "make_ref",
     "parse_ref", "recording_id", "recording_sources", "register_recording", "resolve", "save_evaluation", "set_default",
-    "setup_for_recording", "trained_on", "training_dir", "weights_path", "write_benchmark", "write_model", "write_setup",
+    "setup_for_recording", "target_builder", "trained_on", "training_dir", "weights_path", "write_benchmark", "write_model", "write_setup",
 ]
