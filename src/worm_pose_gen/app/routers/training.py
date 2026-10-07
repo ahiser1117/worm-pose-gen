@@ -31,7 +31,6 @@ live loss curve each job reports.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import json
 from pathlib import Path
 from typing import Any, Iterator
 

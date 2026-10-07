@@ -1,6 +1,4 @@
 """HTTP contracts for independent corpus edits."""
-import hashlib
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,7 +9,6 @@ import h5py
 import numpy as np
 
 from worm_pose_gen.app import AppConfig, create_app
-from worm_pose_gen.corpus import CorpusStore
 from worm_pose_gen.label_app import data_url, mask_to_png_values, decode_mask_data_url
 from worm_pose_gen.workspace import Workspace
 
