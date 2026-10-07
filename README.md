@@ -392,9 +392,10 @@ Training can open Jobs and restores the workspace's side-panel view on return.
   inputs block stale candidates, and another attempt preserves the range.
 - Deleting a computed option requires confirmation naming its option and range.
 - **Export** uses a central checklist with links to Inspect, Masks and Jobs. It shows saved workspace scope, destination and outstanding review
-  status, then writes named Parquet from a matching workspace snapshot. Names
-  cannot overwrite prior exports. The download points to the captured result,
-  so later corrections cannot change it. Export is separate from Run pipeline.
+  status, then writes one export (`exports/<recording>_<UTC time>/`: a
+  documented per-frame Parquet table and `export.json`, see
+  `worm_pose_gen/export_table.py`) read under the workspace lock. Export is
+  separate from Run pipeline.
 
 Labels browses saved segmentation samples and opens frames for labeling;
 Training presents label counts and prerequisites before common settings, with
@@ -423,8 +424,9 @@ line.
 A workspace holds a recording range's masks, poses, hypotheses and
 provenance (which algorithm and job or edit produced each frame's pose, and
 when), its edit log with a before-snapshot per edit, its candidate sets,
-snapshots and Parquet exports (one row per frame with pose, statistics,
-flags, provenance and kinematics); the layout is in section 4 of the plan.
+snapshots and exports (one row per frame: midline, curvature, width, head,
+tail, centroid, velocity and review status, with units in `export.json`);
+the layout is in section 4 of the plan.
 Existing runs appear read-only in the viewer's source list and "Import run as
 workspace" copies one into a workspace so its stages can be rerun and its
 frames edited. The frame panel shows each frame's provenance (algorithm, job

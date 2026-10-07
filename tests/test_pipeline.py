@@ -42,7 +42,6 @@ from worm_pose_gen.pipeline import (
     TrackParams,
     build_fit_config,
     config_from_dict,
-    export_table,
     independent_copies,
     new_arrays,
     read_summary,
@@ -392,28 +391,22 @@ class StageTests(unittest.TestCase):
         self.assertTrue(np.isfinite(state["track_length_px"]).all())
 
     def _export(self) -> None:
+        # The stage over a fitted workspace (tests/test_export.py covers the table itself).
         import pyarrow.parquet as pq
 
-        result = run_stage(self.workspace, "export", {"name": "test"}, device="cpu")
+        result = run_stage(self.workspace, "export", {"pixel_size_um": 1.5}, device="cpu")
         path = Path(result["path"])
-        self.assertEqual(path, self.workspace.path / "exports" / "test.parquet")
-        table = pq.read_table(path)
-        self.assertEqual(table.num_rows, FRAMES)
-        expected = {
-            "frame_index", "fitted", "iou", "tube_coverage", "body_length_px", "width_px", "points_in_fov", "source", "ambiguity_score",
-            "provenance_algorithm", "provenance_job", "provenance_time", "centerline_x", "centerline_y", "width_profile",
-            "centroid_x", "centroid_y", "speed_px_per_frame", "mean_abs_curvature",
-        } | {f"flag_{name}" for name in FLAG_NAMES}
-        self.assertEqual(set(table.column_names), expected)
-        rows = table.to_pylist()
-        self.assertEqual(rows[0]["frame_index"], 0)
-        self.assertEqual(len(rows[0]["centerline_x"]), 100)
-        self.assertEqual(len(rows[0]["width_profile"]), 100)
-        self.assertEqual(rows[0]["provenance_algorithm"], "independent_fit")
-        self.assertIsNone(rows[0]["speed_px_per_frame"])  # no earlier frame
-        self.assertTrue(all(np.isfinite(r["speed_px_per_frame"]) for r in rows[1:]))
-        self.assertTrue(all(r["mean_abs_curvature"] > 0 for r in rows))
-        self.assertAlmostEqual(rows[0]["centroid_x"], float(np.mean(rows[0]["centerline_x"])))
+        self.assertEqual(path.parent.parent, self.workspace.path / "exports")
+        self.assertTrue((path.parent / "export.json").is_file())
+        rows = pq.read_table(path).to_pylist()
+        self.assertEqual(len(rows), FRAMES)
+        self.assertEqual(rows[0]["frame"], 0)
+        self.assertEqual(len(rows[0]["midline_x"]), 100)
+        self.assertTrue(all(r["status"] in ("auto", "unresolved") for r in rows))
+        fitted = [r for r in rows if r["head_x"] is not None]
+        self.assertTrue(fitted)
+        self.assertTrue(all(np.isfinite(r["curvature"]).all() and min(r["width"]) > 0 for r in fitted))
+        self.assertEqual(result["length_unit"], "um")
 
     def _cli(self) -> None:
         # The job command re-runs the ambiguity stage through the module's entry point and reports progress.
@@ -473,7 +466,7 @@ class StageTests(unittest.TestCase):
             self.assertIn(key, merged)
         self.assertEqual(workspace_setup(imported).start_set, "skeleton+reversed")
         self.assertEqual(workspace_setup(imported).config.stage_steps, (60, 60))
-        run_stage(imported, "export", {"name": "imported"}, device="cpu")
+        run_stage(imported, "export", {}, device="cpu")
         self.assertEqual(read_summary(imported)["starts"], "skeleton+reversed")
         shutil.rmtree(imported.path)
 
@@ -482,7 +475,7 @@ class StageTests(unittest.TestCase):
         handle = open(self.workspace.path / ".lock", "w")
         fcntl.flock(handle, fcntl.LOCK_EX)
         finished: list[float] = []
-        thread = threading.Thread(target=lambda: (run_stage(self.workspace, "export", {"name": "locked"}, device="cpu"), finished.append(time.monotonic())))
+        thread = threading.Thread(target=lambda: (run_stage(self.workspace, "export", {}, device="cpu"), finished.append(time.monotonic())))
         thread.start()
         time.sleep(0.4)
         self.assertEqual(finished, [])
@@ -492,7 +485,7 @@ class StageTests(unittest.TestCase):
         thread.join(timeout=30)
         self.assertEqual(len(finished), 1)
         self.assertGreaterEqual(finished[0], released)
-        self.assertTrue((self.workspace.path / "exports" / "locked.parquet").exists())
+        self.assertEqual(len(list((self.workspace.path / "exports").glob("*/export.json"))), 2)
 
 
 class BodyFieldStageTests(unittest.TestCase):
@@ -619,29 +612,6 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertEqual(fresh["hypotheses_source"][1].tolist(), ["forward"] * 3)
         self.assertEqual(int(fresh["path_index"][1]), 4)
         self.assertEqual(int(fresh["hypotheses_count"][2]), 0)
-
-
-class ExportTableTests(unittest.TestCase):
-    def test_kinematics_from_synthetic_arrays(self) -> None:
-        config = BatchFitConfig()
-        arrays = new_arrays(np.array([10, 11, 13]), config)
-        template = default_width_template()
-        for row, shift in enumerate((0.0, 3.0, 9.0)):
-            latent = np.concatenate((np.zeros(16), [0.0, 100.0], [50.0 + shift, 40.0]))
-            arrays["centerline_xy"][row] = decode_centerline(latent)
-            arrays["width_profile"][row] = 10.0 * template
-            arrays["fitted"][row] = True
-            arrays["iou"][row] = 0.9
-        arrays["fitted"][1] = False
-        table = export_table(arrays, {"algorithm": np.array(["a", "", "b"]), "job": np.array(["j", "", "j"]), "time": np.array([1.0, np.nan, 2.0])})
-        rows = table.to_pylist()
-        self.assertIsNone(rows[1]["centerline_x"])
-        self.assertIsNone(rows[1]["centroid_x"])
-        # Row 2 follows row 0 (row 1 is not fitted): 9 px over 3 frames.
-        self.assertAlmostEqual(rows[2]["speed_px_per_frame"], 3.0, places=6)
-        self.assertAlmostEqual(rows[2]["mean_abs_curvature"], 0.0, places=6)  # a straight body
-        self.assertEqual(rows[2]["provenance_algorithm"], "b")
-        self.assertEqual(rows[0]["frame_index"], 10)
 
 
 if __name__ == "__main__":

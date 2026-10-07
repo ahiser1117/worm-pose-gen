@@ -350,9 +350,17 @@ function of the midline, the width and time, so the exporter keeps a list of
 feature functions, and adding a feature means adding one function.
 
 Velocity in µm/s needs the pixel size (from the setup) and the stage position
-of each frame, if the stage tracks the worm. The pipeline does not read stage
-positions today; their source in the recording files still has to be
-identified.
+of each frame, if the stage tracks the worm. The flv-c recordings
+(ConfocalTrackerControl.jl) carry both: `/pos_stage` holds one stage reading
+per saved frame in units of 0.1 µm (NaN on a failed serial read, 3–20% of
+frames, in gaps of mostly 1–4 frames), and `/img_metadata/img_timestamp`
+holds the camera clock in nanoseconds for every camera frame (40 Hz; the
+saved 20 fps frames are those with `q_iter_save` and `q_recording` set).
+The real rate is about 19.5 fps because of dropped frames, so time comes from
+the timestamps. The world position is the image position minus the stage
+position, with stage x/y along image x/y (checked on fitted centroids), and
+the stage is read about half a frame after the exposure. Recordings without
+these datasets export velocity in the image frame, and `export.json` says so.
 
 ### Decisions (2026-10-07)
 

@@ -27,7 +27,8 @@ Stages and what they read and write:
   ``chain_backward``, ``independent_refit``).
 - ``track``: the track-length pass over clipped and deviating frames
   (``track_length_refit``).
-- ``export``: one Parquet row per frame under ``exports/``.
+- ``export``: workspace -> ``exports/<recording>_<time>/``, the per-frame table
+  and ``export.json`` (``worm_pose_gen.export_table``).
 
 Each stage's parameters are a dataclass whose defaults match the script's
 flags; ``from_dict`` ignores unknown keys, so one parameter dict can drive
@@ -45,6 +46,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields, replace
+from datetime import datetime
 import fcntl
 import json
 import math
@@ -88,7 +90,7 @@ from .propagation import (
     warm_schedule,
 )
 from .recording_prior import RecordingPrior, bootstrap_prior_from_masks
-from .run_records import checkpoint_fingerprint, timestamp_slug, utc_now
+from .run_records import checkpoint_fingerprint, git_revision, utc_now
 from .segmentation_dataset import DEFAULT_DATASET_ROOT
 from .workspace import MASK_CHUNK_ROWS, pack_mask
 
@@ -288,7 +290,9 @@ class FixedBodyParams(_Params):
 
 @dataclass
 class ExportParams(_Params):
-    name: str | None = _help("file stem under exports/ (default: the UTC time)", default=None)
+    pixel_size_um: float | None = _help("µm per image pixel (the setup's); lengths stay in pixels without it", default=None)
+    fps: float | None = _help("frame rate, for time when the recording has no camera timestamps (the setup's)", default=None)
+    setup: str | None = _help("the setup the recording belongs to, recorded in export.json", default=None)
 
 
 STAGE_PARAMS: dict[str, type[_Params]] = {
@@ -1891,89 +1895,67 @@ def run_track(
     return info
 
 
-def _curvature(curve: np.ndarray) -> float:
-    """Mean absolute turning angle per unit length along a centerline (1/px)."""
+def human_status(workspace: Any, provenance: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Per row: whether a person fixed the pose, and whether a person's review of it still holds.
 
-    step = np.diff(curve, axis=0)
-    segment = np.linalg.norm(step, axis=1)
-    if len(segment) < 2 or not np.isfinite(segment).all():
-        return float("nan")
-    angle = np.arctan2(step[:, 1], step[:, 0])
-    turn = np.abs(np.angle(np.exp(1j * np.diff(angle))))
-    return float(np.mean(turn / np.maximum(0.5 * (segment[1:] + segment[:-1]), 1e-6)))
+    A pose is fixed when its provenance is not one of the stages' own
+    algorithms (a pick, a flip, an accepted region run, a mask edit) or its
+    mask is the user's override.  Reviews are the rows of
+    ``human_review.json`` (``app/inspection.py``); every row there was
+    current when the file was written (``reviewed_at``), so a review holds
+    while neither the row's provenance nor a logged edit naming the row
+    (an undo included) is from a later second.
+    """
 
-
-def export_table(arrays: dict[str, np.ndarray], provenance: dict[str, np.ndarray] | None = None) -> "pyarrow.Table":
-    """One row per frame: pose, statistics, flags, provenance and kinematics, as a pyarrow table."""
-
-    import pyarrow as pa
-
-    n = len(arrays["frame_index"])
-    fitted = np.asarray(arrays["fitted"], dtype=bool)
-    curves = np.asarray(arrays["centerline_xy"], dtype=np.float64)
-    nan = np.full(n, np.nan)
-
-    def column(name: str, default: np.ndarray) -> np.ndarray:
-        return np.asarray(arrays[name]) if name in arrays else default
-
-    def floats(values: np.ndarray) -> "pa.Array":
-        # NaN means "no value" in the arrays; Parquet readers expect null for that.
-        values = np.asarray(values, dtype=np.float64)
-        return pa.array(values, mask=np.isnan(values))
-
-    centroid = np.nanmean(curves, axis=1) if n else np.zeros((0, 2))
-    centroid[~fitted] = np.nan
-    speed = nan.copy()
-    previous: int | None = None
-    for row in range(n):
-        if not fitted[row]:
-            continue
-        if previous is not None:
-            gap = max(int(arrays["frame_index"][row]) - int(arrays["frame_index"][previous]), 1)
-            speed[row] = float(np.linalg.norm(centroid[row] - centroid[previous])) / gap
-        previous = row
-    curvature = np.asarray([_curvature(curves[row]) if fitted[row] else float("nan") for row in range(n)])
-    columns: dict[str, Any] = {
-        "frame_index": pa.array(np.asarray(arrays["frame_index"], dtype=np.int64)),
-        "fitted": pa.array(fitted),
-        "iou": floats(arrays["iou"]),
-        "tube_coverage": floats(column("tube_coverage", nan)),
-        "body_length_px": floats(arrays["body_length_px"]),
-        "width_px": floats(arrays["width_px"]),
-        "points_in_fov": pa.array(np.asarray(arrays["points_in_fov"], dtype=np.int64)),
-        "source": pa.array(column("source", np.zeros(n, dtype=np.int8)).astype(np.int8)),
-        "ambiguity_score": pa.array(column("ambiguity_score", np.zeros(n, dtype=np.int64)).astype(np.int64)),
-    }
-    for name in FLAG_NAMES:
-        columns[f"flag_{name}"] = pa.array(column(f"flag_{name}", np.zeros(n, dtype=bool)).astype(bool))
-    provenance = provenance or {}
-    columns["provenance_algorithm"] = pa.array([str(v) for v in provenance.get("algorithm", np.full(n, ""))], pa.string())
-    columns["provenance_job"] = pa.array([str(v) for v in provenance.get("job", np.full(n, ""))], pa.string())
-    columns["provenance_time"] = floats(provenance.get("time", nan))
-    columns["centerline_x"] = pa.array([row[:, 0].tolist() if fitted[i] else None for i, row in enumerate(curves)], pa.list_(pa.float64()))
-    columns["centerline_y"] = pa.array([row[:, 1].tolist() if fitted[i] else None for i, row in enumerate(curves)], pa.list_(pa.float64()))
-    profile = np.asarray(arrays["width_profile"], dtype=np.float64)
-    columns["width_profile"] = pa.array([profile[i].tolist() if fitted[i] else None for i in range(n)], pa.list_(pa.float64()))
-    columns["centroid_x"] = floats(centroid[:, 0] if n else np.zeros(0))
-    columns["centroid_y"] = floats(centroid[:, 1] if n else np.zeros(0))
-    columns["speed_px_per_frame"] = floats(speed)
-    columns["mean_abs_curvature"] = floats(curvature)
-    return pa.table(columns)
+    n = workspace.n
+    fixed = ~np.isin(np.asarray(provenance["algorithm"]).astype(str), sorted(PIPELINE_ALGORITHMS))
+    fixed[[row for row in workspace.override_rows() if 0 <= row < n]] = True
+    reviewed = np.zeros(n, dtype=bool)
+    path = Path(workspace.path) / "human_review.json"
+    record = json.loads(path.read_text()) if path.exists() else {}
+    if record.get("reviewed_at"):
+        later = datetime.fromisoformat(record["reviewed_at"]).timestamp() + 1.0
+        reviewed[[row for row in record.get("rows", []) if isinstance(row, int) and 0 <= row < n]] = True
+        changed = np.asarray(provenance["time"], dtype=np.float64) >= later
+        for edit in workspace.edits():
+            if datetime.fromisoformat(edit["time"]).timestamp() >= later:
+                changed[[row for row in (edit.get("payload") or {}).get("rows", []) if isinstance(row, int) and 0 <= row < n]] = True
+        reviewed &= ~changed
+    return fixed, reviewed
 
 
 def run_export(workspace: Any, params: ExportParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
-    import pyarrow.parquet as pq
+    """Write one export of the workspace (``worm_pose_gen.export_table``); returns its ``export.json`` and the table's ``path``.
 
-    setup = workspace_setup(workspace)
-    arrays = workspace_arrays(workspace, setup.config)
-    table = export_table(arrays, workspace.load_provenance())
-    exports = Path(workspace.path) / "exports"
-    exports.mkdir(parents=True, exist_ok=True)
-    path = exports / f"{params.name or timestamp_slug()}.parquet"
-    pq.write_table(table, path)
-    result = {"path": str(path), "rows": table.num_rows, "columns": table.column_names}
-    update_summary(workspace, {"export": result})
-    return result
+    The export only reads the workspace and writes under ``exports/``: the
+    run summary and the review records are left as they are, so exporting
+    never invalidates a review.  Under the workspace lock (``run_stage``, or
+    ``app/exporting.py``) the state, provenance, reviews and edit log it reads
+    are one consistent capture.
+    """
+
+    from . import export_table
+
+    arrays = workspace_arrays(workspace, workspace_setup(workspace).config)
+    fixed, reviewed = human_status(workspace, workspace.load_provenance())
+    flags = [np.asarray(arrays[f"flag_{name}"], dtype=bool) for name in FLAG_NAMES if f"flag_{name}" in arrays]
+    flagged = np.any(flags, axis=0) if flags else np.zeros(workspace.n, dtype=bool)
+    summary = read_summary(workspace)
+    about = {
+        "created_at": utc_now(),
+        "app_revision": git_revision(PROJECT_ROOT),
+        "workspace": workspace.info.name,
+        "setup": params.setup,
+        # What the workspace records about the models that produced it.
+        "models": {"mask": summary.get("checkpoint"), "body": (summary.get("fit_params") or {}).get("body_net")},
+    }
+    return export_table.export(
+        Path(workspace.path) / "exports",
+        recording=Path(workspace.info.recording), dataset=workspace_dataset(workspace), frames=workspace.frame_index,
+        centerline_xy=arrays["centerline_xy"], width_profile_px=arrays["width_profile"], fitted=arrays["fitted"],
+        status=export_table.frame_status(arrays["fitted"], flagged, arrays["mask_stale"], fixed, reviewed),
+        pixel_size_um=params.pixel_size_um, fps=params.fps, about=about,
+    )
 
 
 def run_stage(
