@@ -116,6 +116,15 @@ class ReasonTests(unittest.TestCase):
         self.assertFalse(fixes.orientation_flips(state).any())
 
 
+class PlacedTests(unittest.TestCase):
+    def test_kept_fixes_count_as_placed_whatever_their_algorithm(self) -> None:
+        state = straight_state(4)
+        algorithm = np.array(["chain_forward", "chain_forward", "independent_fit", "beam_path"])
+        job = np.array(["j1", "fix:p000001", "candidates:c000001", "fix:p000002"], dtype="<U64")
+        self.assertEqual(pipeline.placed_job(job).tolist(), [False, True, True, True])
+        self.assertEqual(pipeline.placed_rows(state, algorithm, job).tolist(), [False, True, True, True])
+
+
 class IssueTests(unittest.TestCase):
     def test_runs_closer_than_eight_frames_merge_and_short_ones_stay(self) -> None:
         rows = np.zeros(60, dtype=bool)
