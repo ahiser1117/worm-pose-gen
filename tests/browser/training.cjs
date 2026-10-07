@@ -58,7 +58,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const failed = page.locator('.tr-run.failed');
     assert.match(await failed.innerText(), /CUDA out of memory/);
     // lab:seg was never evaluated: its evaluation is queued on its own and its numbers arrive.
-    await page.waitForFunction(() => /\d\.\d{3}/.test(document.querySelector('.mp-table tr[data-ref="lab:seg"]').innerText), null, {timeout: 120000});
+    await page.waitForFunction(() => /\d\.\d{3}/.test(document.querySelector('.mp-table tr[data-ref="lab:seg"]')?.innerText || ""), null, {timeout: 120000});
     assert.equal(await page.locator('.mp-table tr[data-ref="lab:seg"] td.mp-pending').count(), 0);
     await page.waitForFunction(() => document.querySelectorAll('.tr-run:not(.failed) polyline.tr-val').length && /epoch 6/.test(document.querySelector('.tr-run:not(.failed)').innerText));
     await shot(page, 'models');
@@ -88,7 +88,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await dialog.locator('input[value="mask"]').isChecked(), true);  // not yet the mask default
     await dialog.locator('input[value="body"]').check();
     await dialog.getByRole('button', {name: 'Use as default'}).click();
-    await page.waitForFunction(() => /★ body/.test(document.querySelector('.mp-table tr[data-ref="mine:copper-ft"]').innerText));
+    await page.waitForFunction(() => /★ body/.test(document.querySelector('.mp-table tr[data-ref="mine:copper-ft"]')?.innerText || ""));
     assert.doesNotMatch(await row('lab:body').innerText(), /★ body/);
     const setup = await (await fetch(base + '/api/library/setups/lab:rig')).json();
     assert.equal(setup.defaults.body, 'mine:copper-ft');
