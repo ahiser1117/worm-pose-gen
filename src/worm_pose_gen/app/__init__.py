@@ -45,6 +45,7 @@ from ..pipeline import WorkspaceBusy
 from .routers import algorithms, body_fields, corpus, edits, jobs, masks, recordings, static, viewer, workspaces
 from .routers import labeling as labeling_routes
 from .routers import inspection as inspection_routes
+from .routers import fixes as fixes_routes
 
 __all__ = ["AppConfig", "AppState", "NotFound", "create_app", "main", "parse_args"]
 
@@ -111,6 +112,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(body_fields.router)
     app.include_router(labeling_routes.router)
     app.include_router(inspection_routes.router)
+    app.include_router(fixes_routes.router)
     app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(static.router)

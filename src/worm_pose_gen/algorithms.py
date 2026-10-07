@@ -42,6 +42,12 @@ chains and the path connect the region to the anchors the user chose.
 Every region run is one line in ``<workspaces root>/algorithm_outcomes.jsonl``
 with the region's metrics before and after (``region_metrics``), so the
 question of which defaults make manual work rare can be answered from the log.
+
+``run_algorithm`` is the run without the storage: the Refit fix
+(``worm_pose_gen.fixes``) previews its path and installs it through the
+edit log.  ``stitch`` serves the Relabel fix: it pins the poses of labeled
+keyframes and refits every gap between consecutive keyframes as a
+propagate stretch anchored on them.
 """
 
 from __future__ import annotations
@@ -327,7 +333,7 @@ class CandidatePose:
         )
 
     def to_pose(self) -> dict[str, Any]:
-        """The ``edits.set_pose`` / ``pose_from_hypothesis`` field dictionary."""
+        """The ``edits.set_poses`` / ``pose_from_hypothesis`` field dictionary."""
 
         return {
             "latent": self.latent, "width_px": self.width_px, "width_shape": self.width_shape, "width_profile": self.width_profile,
@@ -989,12 +995,19 @@ def _propagate_region(
         row = local.rows[local_row]
         ordered = sorted(options, key=lambda c: (SOURCE_CODES.get(c.source, 3), c.beam))
         candidates[row] = [CandidatePose.from_result(c.result, ctx.config, c.source, c.start_name, c.total_energy) for c in ordered]
-    missing = [r for r in ctx.fit_rows() if not candidates.get(r)]
-    for row in missing:
+    _fit_missing(ctx, candidates, ctx.fit_rows())
+    return candidates, info
+
+
+def _fit_missing(ctx: RegionContext, candidates: dict[int, list[CandidatePose]], rows: Sequence[int]) -> None:
+    """Fit the ``rows`` no chain reached from their mask's standard starts, so every row with a mask gets a candidate."""
+
+    for row in rows:
+        if candidates.get(row):
+            continue
         starts = standard_initializations(ctx.masks[row], config=ctx.config)
         result = fit_masks([ctx.masks[row]], [starts], width_template=ctx.width_template, config=ctx.config, device=ctx.device)[0]
         candidates[row] = [CandidatePose.from_result(result, ctx.config, "independent", "mask_refit")]
-    return candidates, info
 
 
 class _Chain(_RegionAlgorithm):
@@ -1246,6 +1259,24 @@ def _overlap(points: np.ndarray, profile: np.ndarray, mask: MaskArray | None, co
     return np.asarray((crop.x0, crop.x1, crop.y0, crop.y1), dtype=np.int64), dice, iou
 
 
+def _placed_pose(
+    ctx: RegionContext, row: int, points: np.ndarray, profile: np.ndarray, width_px: float, width_shape: np.ndarray, source: str, start: str
+) -> CandidatePose:
+    """A pose that was placed rather than fit (smoothed, or a label's), scored against the row's mask like a fit."""
+
+    assert ctx.image_shape is not None
+    crop, dice, iou = _overlap(points, profile, ctx.masks.get(row), ctx.config, ctx.device, ctx.image_shape)
+    body_length = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+    energy = dice + prior_penalty(ctx.config, body_length, width_px, width_shape) if math.isfinite(dice) else float("nan")
+    height, width = ctx.image_shape
+    in_fov = int(np.sum((points[:, 0] >= 0) & (points[:, 0] < width) & (points[:, 1] >= 0) & (points[:, 1] < height)))
+    return CandidatePose(
+        centerline_xy=points, latent=encode_centerline(points, ctx.config.coefficients), width_px=width_px, width_shape=width_shape,
+        width_profile=np.asarray(profile, dtype=np.float64), body_length_px=body_length, points_in_fov=in_fov, crop=crop,
+        energy=float(energy), soft_dice=dice, iou=iou, source=source, start=start,
+    )
+
+
 class FixedBodySmoother(_RegionAlgorithm):
     id = "fixed_body_smoother"
     label = "Fixed-body temporal smoother"
@@ -1322,16 +1353,7 @@ class FixedBodySmoother(_RegionAlgorithm):
         for k, node in enumerate(nodes):
             if fixed[k]:
                 continue
-            points = chains[k]
-            crop, dice, iou = _overlap(points, profile, ctx.masks.get(node), config, ctx.device, shape)
-            body_length = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
-            energy = dice + prior_penalty(config, body_length, width_px, width_shape) if math.isfinite(dice) else float("nan")
-            in_fov = int(np.sum((points[:, 0] >= 0) & (points[:, 0] < shape[1]) & (points[:, 1] >= 0) & (points[:, 1] < shape[0])))
-            candidates[node] = [CandidatePose(
-                centerline_xy=points, latent=encode_centerline(points, config.coefficients), width_px=width_px, width_shape=width_shape,
-                width_profile=np.asarray(profile, dtype=np.float64), body_length_px=body_length, points_in_fov=in_fov, crop=crop,
-                energy=float(energy), soft_dice=dice, iou=iou, source="smoothed", start="fixed_body",
-            )]
+            candidates[node] = [_placed_pose(ctx, node, chains[k], profile, width_px, width_shape, "smoothed", "fixed_body")]
             _report(progress, 0.6 + 0.35 * (k + 1) / count, f"{self.id}: overlap of frame {frames[node]} ({k + 1}/{count})")
         head_steps = np.linalg.norm(np.diff(chains[:, 0], axis=0), axis=1) / np.maximum(np.diff(frames[nodes]), 1) if count > 1 else np.zeros(0)
         # The chain fixes the orientation; a later orientation search must not reverse it.
@@ -1702,36 +1724,184 @@ def run_region(
     ``c<6 digits>`` of the workspace's counter.  The state is not changed.
     """
 
+    candidate_set = run_algorithm(workspace, algorithm_id, first, last, params, anchor_before=anchor_before, anchor_after=anchor_after, device=device, progress=progress)
+    candidate_set.job = str(job or "")
+    candidate_set.id = str(job) if job else next_candidate_id(workspace)
+    save_candidate_set(workspace, candidate_set)
+    append_outcome(
+        outcomes_root(workspace),
+        {
+            "time": utc_now(), "workspace": candidate_set.workspace, "recording": candidate_set.recording,
+            "first": candidate_set.first, "last": candidate_set.last, "frames": list(candidate_set.frames),
+            "anchors": {"before": candidate_set.anchor_before, "after": candidate_set.anchor_after}, "algorithm": candidate_set.algorithm,
+            "params": candidate_set.params, "metrics_before": candidate_set.metrics_before, "metrics_after": candidate_set.metrics,
+            "candidate_set": candidate_set.id, "job": candidate_set.job,
+            "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path), "accepted": False,
+        },
+    )
+    _report(progress, 1.0, f"{candidate_set.algorithm}: {len(candidate_set.path)} frames on the path, median IoU {candidate_set.metrics.get('median_iou')}")
+    return candidate_set
+
+
+def run_algorithm(
+    workspace: Any,
+    algorithm_id: str,
+    first: int,
+    last: int,
+    params: dict[str, Any] | None = None,
+    *,
+    anchor_before: int | None = None,
+    anchor_after: int | None = None,
+    device: torch.device | str | None = None,
+    progress: Progress | None = None,
+) -> CandidateSet:
+    """Run ``algorithm_id`` on rows ``first..last`` with these anchors and return its candidates, path and metrics; nothing is saved.
+
+    ``metrics_before`` describes the state the algorithm saw and
+    ``mask_revisions`` the masks it fit, so whoever installs the result can
+    tell whether the workspace changed underneath it.
+    """
+
     algorithm = get_algorithm(algorithm_id)
     resolved = algorithm.resolve(params)  # type: ignore[attr-defined]
     algorithm.check_anchors(anchor_before, anchor_after)  # type: ignore[attr-defined]
     preparation = "resegmenting unedited masks without hole filling" if resolved.get("fill_holes") == "off" else "loading region masks"
     _report(progress, 0.0, f"{algorithm.id}: {preparation}")
     ctx = build_context(workspace, first, last, anchor_before, anchor_after, device, fill_holes=resolved.get("fill_holes", "workspace"))
-    mask_revisions = dict(ctx.mask_revisions)
     before = region_metrics(ctx.state, ctx.rows, ctx.image_shape)
     started = time.perf_counter()
     candidate_set = algorithm.run(ctx, resolved, progress)
     candidate_set.metrics["seconds"] = time.perf_counter() - started
     candidate_set.metrics_before = before
-    candidate_set.mask_revisions = mask_revisions
-    candidate_set.job = str(job or "")
-    candidate_set.id = str(job) if job else next_candidate_id(workspace)
+    candidate_set.mask_revisions = dict(ctx.mask_revisions)
     candidate_set.workspace = str(workspace.info.name)
     candidate_set.recording = str(workspace.info.recording)
-    save_candidate_set(workspace, candidate_set)
+    return candidate_set
+
+
+# ---------------------------------------------------------------------------
+# Stitching keyframes
+
+
+STITCH = "stitch"
+
+
+@dataclass
+class Keyframe:
+    """A pose a person fixed at one row: a head-first centerline in image ``(x, y)`` and the body's diameter at each of its points.
+
+    This is the body fit of a label (``body_fields``: ``centerline_xy`` and
+    ``width_profile``); how labels are stored does not matter here.  Any
+    number of points is accepted and resampled to the fit's.
+    """
+
+    row: int
+    centerline_xy: np.ndarray
+    width_profile: np.ndarray
+
+
+def _resample_body(centerline_xy: Any, width_profile: Any, n_points: int) -> tuple[np.ndarray, np.ndarray]:
+    """The centerline and its diameters at ``n_points`` points evenly spaced in arc length (unchanged when there are ``n_points`` already)."""
+
+    points = np.asarray(centerline_xy, dtype=np.float64)
+    profile = np.asarray(width_profile, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
+        raise ValueError("a keyframe's centerline_xy must have shape [N>=2, 2]")
+    if profile.shape != (len(points),):
+        raise ValueError("a keyframe's width_profile needs one diameter per centerline point")
+    if not (np.isfinite(points).all() and np.isfinite(profile).all() and (profile > 0).all()):
+        raise ValueError("a keyframe's centerline and widths must be finite and its widths positive")
+    if len(points) == n_points:
+        return points.copy(), profile.copy()
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))))
+    if arc[-1] <= 0:
+        raise ValueError("a keyframe's centerline has zero length")
+    target = np.linspace(0.0, arc[-1], n_points)
+    resampled = np.column_stack((np.interp(target, arc, points[:, 0]), np.interp(target, arc, points[:, 1])))
+    return resampled, np.interp(target, arc, profile)
+
+
+def keyframe_pose(ctx: RegionContext, keyframe: Keyframe) -> CandidatePose:
+    """The keyframe as a stored pose: resampled to the fit's points, widths as the fit's scale and shape, scored against the row's mask."""
+
+    points, profile = _resample_body(keyframe.centerline_xy, keyframe.width_profile, ctx.config.n_points)
+    width_px, width_shape = _width_parameters(profile, ctx.width_template, ctx.config)
+    return _placed_pose(ctx, int(keyframe.row), points, profile, width_px, width_shape, "keyframe", "label")
+
+
+def stitch(
+    workspace: Any,
+    keyframes: Sequence[Keyframe],
+    params: dict[str, Any] | None = None,
+    *,
+    device: torch.device | str | None = None,
+    progress: Progress | None = None,
+) -> CandidateSet:
+    """Pin the keyframes' poses and refit every gap between consecutive keyframes with those two as fixed anchors; nothing is saved.
+
+    The gaps are refit the way ``beam_path`` refits a region (its parameters
+    apply): the gaps are the propagate stage's stretches, every keyframe
+    anchors the forward chain of the gap after it and the backward chain of
+    the gap before it, all chains run in one lockstep batch, and the path
+    through each gap is tied to its two keyframes, which fixes its
+    orientation head first.  Only the rows from the first keyframe to the
+    last are seen, so frames outside the stretch, which was relabeled
+    because it went wrong, give the chains neither velocity nor starts.
+    The set covers those rows; a keyframe row has its pinned pose as its only
+    candidate, so the path places the keyframes as well.
+    """
+
+    params = REGISTRY["beam_path"].resolve(params)  # type: ignore[attr-defined]
+    rows = sorted(int(k.row) for k in keyframes)
+    if not rows:
+        raise ValueError("stitching needs at least one keyframe")
+    if len(set(rows)) != len(rows):
+        raise ValueError("two keyframes are on the same frame")
+    first, last = rows[0], rows[-1]
+    _report(progress, 0.0, "stitch: loading masks")
+    ctx = build_context(workspace, first, last, None, None, device, fill_holes=params["fill_holes"])
+    if ctx.image_shape is None:
+        raise ValueError("stitching requires the recording's image dimensions")
+    before = region_metrics(ctx.state, ctx.rows, ctx.image_shape)
+    started = time.perf_counter()
+    pinned = {int(k.row): keyframe_pose(ctx, k) for k in keyframes}
+    index = np.arange(first, last + 1)
+    local = {k: v[index].copy() for k, v in ctx.state.items() if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == ctx.n}
+    for row, pose in pinned.items():
+        edits._write_pose(local, row - first, pose.to_pose())
+    gaps = [(a + 1 - first, b - 1 - first) for a, b in zip(rows, rows[1:]) if b - a > 1]
+    candidates: dict[int, list[CandidatePose]] = {row: [pose] for row, pose in pinned.items()}
+    path = [(row, 0, False) for row in rows]
+    if gaps:
+        propagation = _path_config(params)
+        warm = None if params["preset"] == "fast" else _preset_schedule(ctx.config, params["preset"], propagation.chain_length_sigma)
+        _report(progress, 0.05, f"stitch: refitting {len(gaps)} gaps between {len(rows)} keyframes")
+        raw, _ = propagate(
+            local, gaps, {r - first: m for r, m in ctx.masks.items() if first <= r <= last}, config=ctx.config, device=ctx.device,
+            width_template=ctx.width_template, propagation=propagation, warm_config=warm,
+            progress=None if progress is None else (lambda p, m: _report(progress, 0.05 + 0.85 * p, f"stitch: {m}")),
+        )
+        for local_row, options in raw.items():
+            ordered = sorted(options, key=lambda c: (SOURCE_CODES.get(c.source, 3), c.beam))
+            candidates[local_row + first] = [CandidatePose.from_result(c.result, ctx.config, c.source, c.start_name, c.total_energy) for c in ordered]
+        gap_rows = [r for a, b in gaps for r in range(a + first, b + first + 1)]
+        _fit_missing(ctx, candidates, [r for r in gap_rows if r in ctx.masks])
+        _report(progress, 0.92, "stitch: selecting the path through every gap")
+        offered = {r - first: [_as_candidate(p, j) for j, p in enumerate(candidates[r])] for r in gap_rows if candidates.get(r)}
+        chosen = select_path(offered, local, gaps, ctx.config, propagation, ctx.image_shape)
+        for local_row, choice in chosen.items():
+            index_of = next(j for j, c in enumerate(offered[local_row]) if c is choice.candidate)
+            path.append((local_row + first, index_of, bool(choice.mirrored)))
     frames = np.asarray(ctx.state["frame_index"], dtype=np.int64)
-    append_outcome(
-        outcomes_root(workspace),
-        {
-            "time": utc_now(), "workspace": str(workspace.info.name), "recording": str(workspace.info.recording),
-            "first": ctx.first, "last": ctx.last, "frames": [int(frames[ctx.first]), int(frames[ctx.last])],
-            "anchors": {"before": ctx.anchor_before, "after": ctx.anchor_after}, "algorithm": algorithm.id, "params": resolved,
-            "metrics_before": before, "metrics_after": candidate_set.metrics, "candidate_set": candidate_set.id, "job": candidate_set.job,
-            "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path), "accepted": False,
-        },
+    candidate_set = CandidateSet(
+        algorithm=STITCH, params=_json_safe(params), first=first, last=last, anchor_before=None, anchor_after=None, rows=ctx.rows,
+        candidates={r: candidates.get(r, []) for r in ctx.rows}, path=sorted(path), metrics={}, metrics_before=before,
+        frames=[int(frames[first]), int(frames[last])], workspace=str(workspace.info.name), recording=str(workspace.info.recording),
+        mask_revisions=dict(ctx.mask_revisions),
     )
-    _report(progress, 1.0, f"{algorithm.id}: {len(candidate_set.path)} frames on the path, median IoU {candidate_set.metrics.get('median_iou')}")
+    candidate_set.metrics = metrics_with_path(ctx.state, candidate_set, ctx.rows, ctx.image_shape)
+    candidate_set.metrics["seconds"] = time.perf_counter() - started
+    _report(progress, 1.0, f"stitch: {len(candidate_set.path)} frames placed between {len(rows)} keyframes")
     return candidate_set
 
 

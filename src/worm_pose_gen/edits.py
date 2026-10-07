@@ -58,7 +58,7 @@ EDIT_KINDS = ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", 
 PICK_ALGORITHM = "manual:pick"
 FLIP_ALGORITHM = "manual:flip"
 EDITS_DIR = "edits"
-# The pose fields ``pose_from_hypothesis`` returns and ``set_pose`` accepts.
+# The pose fields ``pose_from_hypothesis`` returns and ``set_poses`` accepts.
 POSE_FIELDS = (
     "latent", "width_px", "width_shape", "width_profile", "centerline_xy", "body_length_px", "points_in_fov", "crop",
     "iou", "energy", "total_energy", "source", "best_start",
@@ -671,22 +671,39 @@ def accept_path(
     )
 
 
-def set_pose(workspace: Any, row: int, pose: dict[str, Any], *, algorithm: str, job: str, note: str = "") -> EditResult:
-    """Write an explicit pose (the ``pose_from_hypothesis`` fields) into ``row``; it is not one of the stored hypotheses."""
+def set_poses(
+    workspace: Any,
+    poses: dict[int, dict[str, Any]],
+    *,
+    algorithm: str,
+    job: str,
+    note: str = "",
+    extra: dict[str, Any] | None = None,
+    check: Callable[[dict[str, np.ndarray]], None] | None = None,
+) -> EditResult:
+    """Write explicit poses (row -> the ``pose_from_hypothesis`` fields) as one edit; they are not stored hypotheses.
+
+    ``check`` sees the state under the workspace lock before anything is
+    written and raises to refuse the edit (a refit result whose inputs
+    changed since it ran); ``extra`` adds fields to the log entry.
+    """
 
     with workspace_lock(workspace, timeout=LOCK_TIMEOUT):
         loaded = _load(workspace)
-        rows = _check_rows([row], loaded.n)
+        rows = _check_rows(list(poses), loaded.n)
+        if check is not None:
+            check(loaded.state)
         window = _window(rows, loaded.n)
         before = _capture(loaded, window)
-        summary_before = {rows[0]: _row_summary(loaded, rows[0])}
-        _write_pose(loaded.state, rows[0], pose)
-        if loaded.hypotheses:
-            loaded.hypotheses["path_index"][rows[0]] = -1
-            loaded.hypotheses["path_mirrored"][rows[0]] = False
+        summary_before = {row: _row_summary(loaded, row) for row in rows}
+        for row in rows:
+            _write_pose(loaded.state, row, poses[row])
+            if loaded.hypotheses:
+                loaded.hypotheses["path_index"][row] = -1
+                loaded.hypotheses["path_mirrored"][row] = False
         _refresh_ambiguity(loaded, rows)
         _apply_provenance(workspace, loaded, rows, str(algorithm), str(job))
-        payload = {"algorithm": str(algorithm), "job": str(job), "note": str(note or "")}
+        payload = {"algorithm": str(algorithm), "job": str(job), "note": str(note or ""), **(extra or {})}
         return _commit(workspace, loaded, before, window, rows, "set_pose", payload, summary_before)
 
 
