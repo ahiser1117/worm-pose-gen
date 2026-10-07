@@ -362,6 +362,17 @@ Training can open Jobs and restores the workspace's side-panel view on return.
   Jobs. Completion offers **Inspect results**. Current-frame and selected-range
   runs retain their anchors, parameters and explicit scope. Scope comes before
   configuration, and segmentation checks that the selected checkpoint is available.
+  The **Body-field network** checkbox in the same section fits with the app's
+  `--body-net` network (default `checkpoints/body_net/best.ckpt`; on when that
+  file exists, otherwise disabled with the missing path shown): it sets the fit
+  stage's `body_net`, which propagate and track then read from the fit's
+  summary. It is the same value as the detailed fit-stage `body_net` field, so a
+  path typed there shows as "custom checkpoint", and unchecking stores "no
+  network" rather than falling back to the default. The header, the workspace
+  list and the Run summary say whether the current poses were **fit with
+  network**, **fit without network** or are **not fitted** (from the fit's
+  `fit_params.body_net`, or for an imported run its `fit_config` body-field
+  weights).
 - **Inspect** lists unprocessed and flagged segments with reasons and human-review
   state. **Minimum segment length** defaults to **8 sampled frames** and is
   adjustable and remembered across reloads. The queue and next-segment actions
@@ -655,7 +666,7 @@ The same operations are available through the API:
 Browser regressions include `mask_editor.cjs`, `masks_task.cjs`, `paint_section.cjs`,
 `task_labels_review.cjs`, `task_shortcuts.cjs`, `workflow_run.cjs`,
 `workflow_compare_export.cjs`, `inspection_filter.cjs`, `usability_library.cjs`,
-`usability_shell.cjs`, `body_fields.cjs`, `body_fields_proposal.cjs` and `network_fields.cjs` under `tests/browser`; the shell test uses a separately
+`usability_shell.cjs`, `body_fields.cjs`, `body_fields_proposal.cjs`, `network_fields.cjs` and `body_net_run.cjs` under `tests/browser`; the shell test uses a separately
 started `phase4_fixture.py` at `UI_BASE_URL` (default `http://127.0.0.1:18770`). The complete workflow
 is `tests/browser/phase4_workflow.cjs`, which starts its own synthetic CPU app,
 trains for one epoch, accepts a regional refit, checks undo, records human

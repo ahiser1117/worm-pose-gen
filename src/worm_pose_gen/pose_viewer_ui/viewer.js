@@ -14,7 +14,8 @@ function sourceOptionText(kind, entry) {
     const summary = entry.summary || {};
     const iou = summary.iou && summary.iou.median !== undefined && summary.iou.median !== null ? ` · IoU ${fmt(summary.iou.median)}` : "";
     const fitted = summary.fitted !== undefined ? ` · ${summary.fitted}/${entry.frame_count} fit` : "";
-    return `${entry.name}${iou}${fitted}`;
+    const network = entry.fit_network ? ` · ${fitNetworkText(entry)}` : "";
+    return `${entry.name}${iou}${fitted}${network}`;
   }
   const iou = entry.iou_median === null || entry.iou_median === undefined ? "" : ` · IoU ${entry.iou_median.toFixed(3)}`;
   return `${entry.name}${iou}`;
@@ -23,7 +24,7 @@ function sourceOptionText(kind, entry) {
 function sourceOptionTitle(kind, entry) {
   if (entry.error) return `${entry.path || entry.name}\n${entry.error}`;
   const frames = entry.frames || [null, null];
-  if (kind === "workspace") return `${entry.recording} frames ${frames[0]}–${frames[1]} step ${entry.step} · created ${fmtTime(entry.created_at)}${entry.imported_runs && entry.imported_runs.length ? ` · imported ${entry.imported_runs.join(", ")}` : ""}`;
+  if (kind === "workspace") return `${entry.recording} frames ${frames[0]}–${frames[1]} step ${entry.step} · created ${fmtTime(entry.created_at)}${entry.imported_runs && entry.imported_runs.length ? ` · imported ${entry.imported_runs.join(", ")}` : ""}${entry.fit_network ? ` · ${fitNetworkText(entry)}` : ""}`;
   return `${entry.recording} frames ${frames[0]}–${frames[1]} · ${entry.mask_cleanup} · checkpoint ${entry.checkpoint_sha}`;
 }
 
@@ -59,6 +60,7 @@ function describeSource(run) {
   if (run.kind === "workspace") {
     const summary = run.workspace_summary || {};
     const prov = summary.provenance || {};
+    lines.push(`${fitNetworkText(entry) || "fit unknown"}${entry.fit_network_checkpoint ? ` (${entry.fit_network_checkpoint.split("/").pop()})` : ""}`);
     lines.push(`workspace · ${fmt(summary.fitted)} fitted · masks ${summary.has_masks ? fmt(summary.mask_rows) + " rows" : "none"} · hypotheses ${summary.has_hypotheses ? "yes" : "no"} · prior ${summary.has_prior ? "yes" : "no"}`);
     // Live counts from the provenance block when the payload has one, else the summary's.
     let counts = "";

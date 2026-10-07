@@ -290,6 +290,8 @@ table.outcomes .ok { color: var(--accent); }
 #app-header h1 { font-size: 16px; margin: 0; white-space: nowrap; margin-left: auto; }
 #app-header nav { margin-left: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 #active-recording { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
+#workspace-fit-network { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; background: #2a343c; color: var(--muted); white-space: nowrap; }
+#workspace-fit-network[data-state=with] { background: #3c2457; color: #d3a6ff; }
 #workspace-menu { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sidebar { grid-area: 2 / 1 / 3 / 2; padding: 0; scroll-padding-top: var(--task-sticky-height, 52px); }
 #tabs { position: sticky; top: 0; z-index: 5; margin: 0; padding: 8px; gap: 4px; background: var(--panel); }

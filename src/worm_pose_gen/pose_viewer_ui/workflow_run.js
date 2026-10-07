@@ -33,6 +33,34 @@ const workflowRun = (() => {
     }
     render();
   }
+  // The fit stage's body_net, shown as the "Body-field network" checkbox. It is
+  // the same stage value the detailed fit form edits: the app's --body-net path
+  // (checked), another path (checked, "custom checkpoint"), or null (unchecked).
+  // With no value yet it defaults to the app's network when that file exists.
+  const appNetwork = () => state.info?.body_net || {path: null, exists: false};
+  const fitValues = () => state.stageValues.fit || (state.stageValues.fit = {});
+  const basename = path => String(path).split(/[\\/]/).pop();
+  function setBodyNet(value) {
+    fitValues().body_net = value;
+    writeStorage('poseViewer.stageParams', state.stageValues);
+    const field = [...document.querySelectorAll('#stages .stage[data-stage="fit"] label.param')].find(label => label.querySelector('.param-name')?.textContent === 'body_net');
+    if (field) { field.querySelector('input').value = value ?? ''; field.classList.add('edited'); }
+    if (typeof renderStageMeta === 'function') renderStageMeta('fit');
+  }
+  function renderBodyNet() {
+    const network = appNetwork(), box = $('#workflow-body-net-toggle'), note = $('#workflow-body-net-status');
+    if (!state.stages || !state.stageValues) return;
+    if (!('body_net' in fitValues()) && network.exists) setBodyNet(network.path);
+    const value = fitValues().body_net || null;
+    box.checked = !!value;
+    box.disabled = !value && !network.exists;
+    note.textContent = value && value !== network.path ? `custom checkpoint: ${basename(value)}` : value ? `Network: ${basename(value)}` : network.exists ? 'Off: fits use the mask alone.' : `no body-field network at ${network.path || '(none configured; pass --body-net)'}`;
+    note.title = value || network.path || '';
+  }
+  function toggleBodyNet() {
+    setBodyNet($('#workflow-body-net-toggle').checked ? appNetwork().path : null);
+    render();
+  }
   async function chooseCheckpoint() {
     if (!maskEditor.beforeMutation()) return;
     const checkpoint = $('#workflow-model-select').value, source = currentSourceKey();
@@ -99,8 +127,9 @@ const workflowRun = (() => {
     const range = frames.length ? `Workspace frames ${frames[0].toLocaleString()}–${frames[frames.length - 1].toLocaleString()} · ${frames.length.toLocaleString()} frames${entry.step > 1 ? ` · step ${entry.step}` : ""}` : "Workspace frame range unavailable";
     const checkpoint = selectedCheckpoint();
     checkCheckpoint();
+    renderBodyNet();
     const edits = Object.entries(state.stageValues || {}).filter(([stage]) => stage !== "export").reduce((n, [, params]) => n + Object.keys(params || {}).length, 0);
-    $("#workflow-run-summary").textContent = `${range}\nCheckpoint: ${checkpoint || "unavailable — configure a segment checkpoint below"}\nConfiguration: ${edits ? `${edits} saved parameter overrides` : "standard stage defaults"}`;
+    $("#workflow-run-summary").textContent = `${range}\nCheckpoint: ${checkpoint || "unavailable — configure a segment checkpoint below"}\nConfiguration: ${edits ? `${edits} saved parameter overrides` : "standard stage defaults"}\nCurrent poses: ${fitNetworkText(entry) || "fit unknown"}`;
     $("#workflow-inspect-results").hidden = active || !(record && record.done);
     const segmentationIncluded = !!$('#stages [data-stage="segment"] .stage-include:checked');
     const needsCheckpoint = segmentationIncluded && validation?.available !== true;
@@ -135,10 +164,11 @@ const workflowRun = (() => {
     $("#ws-create").textContent = "Create workspace & configure pipeline";
     const overview = document.createElement("section");
     overview.id = "workflow-run-overview"; overview.className = "group"; overview.hidden = true;
-    overview.innerHTML = '<h3 id="workflow-run-status"></h3><p id="workflow-run-summary" class="note"></p><p id="workflow-run-reason" class="note" role="status"></p><div id="workflow-run-models"><label>Available model<select id="workflow-model-select"></select></label><div class="row wrap"><button id="workflow-model-use" type="button">Use selected model</button><button id="workflow-model-refresh" type="button">Check again</button></div></div><ol id="workflow-stage-progress" aria-label="Pipeline stages"></ol><button id="workflow-inspect-results" class="primary" hidden>Inspect results</button>';
+    overview.innerHTML = '<h3 id="workflow-run-status"></h3><p id="workflow-run-summary" class="note"></p><p id="workflow-run-reason" class="note" role="status"></p><div id="workflow-run-models"><label>Available model<select id="workflow-model-select"></select></label><div class="row wrap"><button id="workflow-model-use" type="button">Use selected model</button><button id="workflow-model-refresh" type="button">Check again</button></div></div><div id="workflow-body-net" class="workflow-body-net"><label><input id="workflow-body-net-toggle" type="checkbox"> Body-field network</label><p class="note">Scores fits with the network\'s A-P field and head/tail and starts them from its traced midline; propagation and the track pass use it too.</p><p id="workflow-body-net-status" class="note" role="status"></p></div><ol id="workflow-stage-progress" aria-label="Pipeline stages"></ol><button id="workflow-inspect-results" class="primary" hidden>Inspect results</button>';
     $('#rerun-scope-info').after(overview);
     $('#workflow-model-use').onclick = chooseCheckpoint;
     $('#workflow-model-refresh').onclick = () => checkCheckpoint(true);
+    $('#workflow-body-net-toggle').onchange = toggleBodyNet;
     $("#workflow-inspect-results").onclick = () => showTab("inspect");
     $("#run-all").textContent = "Run pipeline";
     $("#run-all").title = "Run the included pipeline stages in order";

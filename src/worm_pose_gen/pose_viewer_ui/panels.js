@@ -561,6 +561,11 @@ function paramInputType(param) {
   return "str";
 }
 
+// Parameters whose cleared value is a choice, kept even though it equals the
+// default: fit.body_net null means "fit without the network", where no value
+// lets the Run panel's checkbox default to the app's network.
+const EXPLICIT_PARAMS = new Set(["fit.body_net"]);
+
 // The edited value of a parameter, or undefined when it is at its default.
 function paramValue(stage, param) {
   const values = state.stageValues[stage] || {};
@@ -594,7 +599,7 @@ function renderParamField(stage, param) {
     const parsed = parseParamInput(kind, input);
     if (parsed.error) { setStatus(`${stage}.${param.name}: ${parsed.error}`, "error"); return; }
     const values = state.stageValues[stage] || (state.stageValues[stage] = {});
-    if (JSON.stringify(parsed.value) === JSON.stringify(param.default)) delete values[param.name]; else values[param.name] = parsed.value;
+    if (JSON.stringify(parsed.value) === JSON.stringify(param.default) && !EXPLICIT_PARAMS.has(`${stage}.${param.name}`)) delete values[param.name]; else values[param.name] = parsed.value;
     writeStorage("poseViewer.stageParams", state.stageValues);
     field.classList.toggle("edited", param.name in values);
     renderStageMeta(stage);

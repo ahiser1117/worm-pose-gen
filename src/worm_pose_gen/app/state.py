@@ -357,6 +357,9 @@ class AppState:
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),
             "startup_group": self.startup_group,
+            # The body-field network the Run panel's checkbox fits with (the fit stage's ``body_net``).
+            "body_net": {"path": None if self.config.body_net is None else str(self.config.body_net.resolve()),
+                         "exists": self.config.body_net is not None and self.config.body_net.is_file()},
         }
 
     # --------------------------------------------------------------------- notes

@@ -94,6 +94,11 @@ function syncTaskSelection() {
   }
   $("#selection-info").textContent = !series ? "Open a recording or workspace" : region ? `Selected ${series[region.first]}–${series[region.last]} · ${region.last - region.first + 1} sampled frames` : "No range selected";
   $("#workspace-menu").textContent = state.runName ? state.runName : "No workspace open";
+  const network = isWorkspace() && state.run ? state.run.entry.fit_network : null, badge = $("#workspace-fit-network");
+  badge.hidden = !network;
+  badge.textContent = network ? fitNetworkText(state.run.entry) : "";
+  badge.dataset.state = network || "";
+  badge.title = network === "with" ? `Current poses were fit with the body-field network${state.run.entry.fit_network_checkpoint ? ` (${state.run.entry.fit_network_checkpoint})` : ""}.` : network === "without" ? "Current poses were fit without the body-field network." : "";
   $("#toggle-raw").classList.toggle("active", state.showRaw);
   $("#toggle-raw").setAttribute("aria-pressed", String(state.showRaw));
   $("#active-recording").textContent = state.run && state.run.entry.recording || "";

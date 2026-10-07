@@ -311,6 +311,10 @@ function currentSourceKey() { return state.runName ? sourceKey(state.sourceKind,
 
 function isWorkspace() { return state.sourceKind === "workspace"; }
 
+// Whether a workspace's current poses were fit with the body-field network (its ``fit_network``).
+const FIT_NETWORK_TEXT = { with: "fit with network", without: "fit without network", not_fitted: "not fitted" };
+function fitNetworkText(entry) { return FIT_NETWORK_TEXT[entry?.fit_network] || ""; }
+
 function workspaceEntry(name) { return state.workspaces.find((w) => w.name === name) || null; }
 
 function runEntry(name) { return state.runs.find((r) => r.name === name) || null; }

@@ -101,12 +101,37 @@ def workspace_run(workspace: Workspace, source: RecordingSource | None, source_e
     return LoadedRun(workspace.path, source, source_error, arrays=arrays, summary=summary, masks=workspace.effective_mask)
 
 
+FIT_NETWORK_STATES = ("with", "without", "not_fitted")
+
+
+def fit_network(summary: dict[str, Any], fitted: int) -> tuple[str, str | None]:
+    """Whether the current poses were fit with the body-field network: ``with``, ``without`` or ``not_fitted``, and its checkpoint when known.
+
+    ``summary`` is the workspace's run summary (``pipeline.read_summary``: its
+    own ``summary.json``, else the ``imported_summary.json`` copied from the
+    imported run's directory).  A fit stage (and ``scripts/fit_recording.py``)
+    records ``fit_params.body_net``; older runs only their ``fit_config``,
+    whose body-field weights are nonzero exactly when the network scored the
+    fits.
+    """
+
+    config = summary.get("fit_config")
+    if not fitted or not config:
+        return "not_fitted", None
+    params = summary.get("fit_params") or {}
+    if "body_net" in params:
+        return ("with" if params["body_net"] else "without"), params["body_net"] or None
+    weights = (config.get("field_ap_weight") or 0, config.get("field_end_weight") or 0)
+    return ("with" if max(weights) > 0 else "without"), None
+
+
 def workspace_entry(workspace: Workspace, summary: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     """A catalog row for a workspace, shaped like ``pose_viewer.run_entry`` so the browser can list both."""
 
     cleanup = cleanup_options(summary)
     iou = stats.get("iou") or {}
     checkpoint = summary.get("checkpoint") or {}
+    network, network_checkpoint = fit_network(summary, int(stats.get("fitted") or 0))
     return {
         "name": workspace.info.name,
         "path": str(workspace.path),
@@ -127,6 +152,8 @@ def workspace_entry(workspace: Workspace, summary: dict[str, Any], stats: dict[s
         "checkpoint_path": checkpoint.get("path"),
         "git_commit": (summary.get("git") or {}).get("commit", "")[:8],
         "imported_runs": list(workspace.info.imported_runs),
+        "fit_network": network,
+        "fit_network_checkpoint": network_checkpoint,
     }
 
 
@@ -180,7 +207,10 @@ class WorkspaceView:
         """``WorkspaceInfo`` plus the workspace summary: the row of the workspace list."""
 
         self.refresh()
-        return {**self.workspace.info.to_dict(), "kind": "workspace", "summary": self.summary()}
+        summary = self.summary()
+        network, checkpoint = fit_network(read_summary(self.workspace), int(summary.get("fitted") or 0))
+        return {**self.workspace.info.to_dict(), "kind": "workspace", "summary": summary,
+                "fit_network": network, "fit_network_checkpoint": checkpoint}
 
     def payload(self, others: Iterable[dict[str, Any]]) -> dict[str, Any]:
         """The viewer's run payload for this workspace, with its info, summary and provenance counts."""

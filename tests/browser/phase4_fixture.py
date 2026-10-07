@@ -44,7 +44,7 @@ def main():
     app = create_app(AppConfig(
         workspaces_root=root / "workspaces", recording_roots=(root,), poses_root=root / "runs",
         checkpoint=base, dataset_root=root / "cache", prior_cache=None,
-        notes=root / "notes.json", gpus=(), device="cpu", job_interval=.1,
+        notes=root / "notes.json", gpus=(), device="cpu", job_interval=.1, body_net=None,
     ))
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 

@@ -207,11 +207,16 @@ stage predicts it (`GET /api/workspaces/{name}/network-fields`,
 `app/network_fields.py`: `pipeline.workspace_frames` with the app's flat-field
 cache, neighbours outside the recording as zero lag channels), and the ends
 are judged by `body_proposal.field_evidence` against the row's current mask,
-so an end the layer leaves out is one the fit does not use.
+so an end the layer leaves out is one the fit does not use. The header and
+the workspace list mark whether a workspace's current poses were fit with the
+network (`fit_network` in `GET /api/workspaces`: `with`, `without` or
+`not_fitted`).
 
 The network's predictions also steer the tube fit of a recording. With
 `--body-net <checkpoint>` (`scripts/fit_recording.py`) or the fit stage's
-`body_net` parameter (`pipeline.FitParams`), every fitted frame is predicted
+`body_net` parameter (`pipeline.FitParams`; in the pose app, the **Body-field
+network** checkbox of the Run panel, which sets it to the app's `--body-net`
+and is on by default when that file exists), every fitted frame is predicted
 from its flat-fielded neighbours at the checkpoint's lags
 (`body_proposal.RecordingFieldPredictor`, slab by slab), and the prediction
 enters the fit three ways:

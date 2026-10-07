@@ -15,5 +15,5 @@ make_workspace(args.root)
 uvicorn.run(create_app(AppConfig(
     workspaces_root=args.root / "workspaces", recording_roots=(args.root,),
     poses_root=args.root / "runs", dataset_root=args.root / "cache", checkpoint=None,
-    notes=args.root / "notes.json", prior_cache=None, gpus=(), device="cpu", job_interval=.1,
+    notes=args.root / "notes.json", prior_cache=None, gpus=(), device="cpu", job_interval=.1, body_net=None,
 )), host="127.0.0.1", port=args.port, log_level="warning")
