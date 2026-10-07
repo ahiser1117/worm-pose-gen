@@ -1,15 +1,16 @@
 # Fixed body overlay
 
-After processing a recording and repairing its poses, open **Run → Whole
-workspace → Detailed stage configuration → Fixed body (optional)** and click
-that stage's **Run** button. It is excluded from the default pipeline. To
-process an entire recording, use a workspace containing the entire recording;
-the pass visits every sampled frame in that workspace.
+After analysing a recording and repairing its poses, run the `fixed_body`
+stage on its workspace: tick **fixed_body** in the Analyse dialog's stage
+list (the app started with `--dev`), or submit a stage job
+(`POST /api/jobs` with `{"kind": "stage", "stage": "fixed_body",
+"workspace": ...}`). It is excluded from the default stages. The pass visits
+every sampled frame of the workspace, which is the whole recording.
 
-The result appears in **Layers → Fixed body (dashed = extrapolated)**. The
-cyan overlay shows its centerline, outline, equal-length segment markers and
-width ticks. Its visibility and opacity can be adjusted independently of the
-reviewed pose. It is available during playback as well as on paused frames.
+Each frame payload of the Workspace page carries the result as `fixed_body`
+(centerline, outline, equal-length segment markers and width ticks, with the
+extrapolated parts marked), during playback as well as on paused frames. The
+page does not draw it yet; the old viewer drew it as a cyan overlay.
 
 The model uses a single length and head-to-tail diameter profile for the
 workspace. By default it calibrates from at least three fully visible poses
@@ -57,16 +58,18 @@ workspace job lock. It does not replace reviewed poses, masks, hypotheses,
 provenance, or their existing exports.
 
 Changing input poses or masks marks the saved model outdated and withholds its
-overlay. Rerun **Fixed body** to recalibrate and rebuild it from the corrected
-workspace. Reloading the app preserves the saved result and its stale status.
+overlay. Rerun the `fixed_body` stage to recalibrate and rebuild it from the
+corrected workspace. Reloading the app preserves the saved result and its
+stale status.
 
 ## Temporal smoother
 
-The regional algorithm **Fixed-body temporal smoother** (`fixed_body_smoother`
-in the Run panel's algorithm dropdown) is the fixed body with a motion prior.
-It runs on a region like the other algorithms, produces a candidate set, and
-changes nothing until the set is accepted. Unlike the overlay stage it writes
-poses: each frame's candidate is the smoothed body encoded as a pose latent,
+The regional algorithm **Fixed-body temporal smoother** (`fixed_body_smoother`)
+is the fixed body with a motion prior. It runs on a region like the other
+algorithms: a Refit with it (the Workspace page's Refit override, with
+`--dev`) produces a before/after preview and changes nothing until it is
+kept. Unlike the overlay stage it writes poses: each frame's candidate is
+the smoothed body encoded as a pose latent,
 with the calibrated width profile and its overlap against the frame's mask.
 
 The body is the pipeline's own pose space with the length frozen: 99 equal
@@ -106,7 +109,7 @@ the chain is an error. The unsupported remainder of a clipped body follows
 the prior, so it continues the shape of neighbouring frames rather than a
 straight line; it is a completion, not a measurement.
 
-The candidate set's metrics carry the calibration (`fixed_body`: length,
+The result's metrics carry the calibration (`fixed_body`: length,
 segment length, calibration frames, measured motion scales), the solver's
 iterations and convergence, the number of orientation flips applied, the
 frames that had no usable targets, and the largest head step per source

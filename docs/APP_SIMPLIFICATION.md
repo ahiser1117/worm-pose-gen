@@ -1,8 +1,10 @@
 # App simplification
 
-Status: draft, 2026-10-07. This document collects the decisions of the app
-simplification pass. When accepted it replaces `UI_TASK_TABS_PLAN.md` and the
-UI sections of `APP_PLAN.md`. Section 1 (storage) comes first because the
+Status: implemented on branch `app-simplification` (waves 1–3, 2026-10-07).
+This document collects the decisions of the app simplification pass. It
+replaces `UI_TASK_TABS_PLAN.md` (deleted) and the UI sections of
+`APP_PLAN.md`. Section 5 ends with what was built differently from the text
+above it. Section 1 (storage) comes first because the
 model picker, Labeling and Training pages are built on it; the page-by-page
 reviews follow as sections 2–4.
 
@@ -771,6 +773,64 @@ agent edits only its own section and files.
     `best.ckpt` promotion, `last.ckpt`, the old evaluation folders, and
     `segmenter_model_names.json`
 - Update the README and the browser tests, then run the full suite.
+
+Done. Wave 3 deleted the `pose_viewer_ui` package and the stdlib viewer
+(`pose_viewer.py`; its frame layers, statistics and series moved to
+`app/frame_view.py`), the standalone labeler (`label_app.py` and
+`label_app_ui`; `RecordingSource` moved to `recordings.py`, the PNG helpers
+to `app/images.py`, the mask refinements to `app/labeling.py`), the corpus
+(`corpus.py` and `/api/corpus`), the old browser tests, and the endpoints
+`/api/state`, `/api/run`, `/api/frame`, `/api/pose`, `/api/starts`,
+`/api/notes`, `/api/note*`, `/api/outcomes`, `/api/stages`,
+`/api/recordings` (list, datasets, register, unregister, preparation,
+prepare), `POST /api/workspaces` and `/import`, `GET /api/workspaces`,
+`/api/workspaces/{name}/pose`, `/starts`, `/snapshot`, `/edits`,
+`/segment`, `/inspection`, `/region`, `/candidates`, and
+`DELETE .../mask`. Candidate sets lost their storage, accept flow and
+outcome log (`run_algorithm` and the fixes' previews remain), the edits
+lost `pick_hypothesis`, `accept_path` and the segment flips, the pipeline
+lost `--region-run` and the stage schemas, workspaces lost run import and
+snapshots, the app lost `--poses-root`, `--run`, `--recording-root`,
+`--corpus-root`, `--checkpoint`, `--body-net` and `--notes` and the
+recording registry, and the scripts for the bootstrap labels, the legacy
+store, the speck cleanup and the old Body fields proposals went with them.
+The `worm-pose-labeler` and `worm-pose-viewer` commands are gone;
+`worm-pose-app --queue <manifest>` opens a labeling manifest as a Labeling
+queue.
+
+### What was built differently
+
+- **The segmenter stays** until a body-field net matches its mask IoU
+  (section 4, decision 1): a setup has a `mask` and a `body` default, and
+  the Train form fine-tunes a segmenter from a segmenter.
+- **Analyse is one job** of kind `analyse`, `pipeline --stages` over the
+  default stages in one process, so its progress spans the analysis. The
+  dev stage list includes the opt-in `fixed_body` stage.
+- **Run on** appears only when there is a choice (local GPUs and SLURM);
+  with one place to run, the dialogs say nothing.
+- **The Refit override** (dev) is an algorithm menu and a JSON field of
+  parameter values, not a generated form; `GET /api/algorithms` documents
+  the parameters.
+- **New queue** picks, in each window of a recording, the candidate frame
+  with the highest mask entropy per worm pixel (`frame_search.py`).
+- **The body-target builder** is the setup's default mask model, part of
+  the cache key with the label revision; changing the default makes the
+  targets missing until rebuilt.
+- **Body proposals on the CPU.** Labeling computes the body proposal when a
+  frame opens only when the server's models run on a GPU (`gpu` in
+  `/api/config`); without one (15–20 s a frame) it shows **Propose**.
+- **The probability layer** (the segmenter run on a rested frame) is
+  computed only with `--dev`; analysts see the stored mask.
+- **Not built:** the dev "Compare run (same recording)" control, and a
+  drawing of the `fixed_body` overlay on the Workspace page (the frame
+  payload still carries it).
+- **Old data kept readable:** `PLACED_JOB_PREFIXES` still counts the
+  `candidates:` provenance of sets accepted before the fixes, and the fixes
+  list still names old `pick_hypothesis` and `accept_path` edits. Workspaces
+  imported from runs need their `imported_summary.json` renamed to
+  `summary.json`. Recordings registered by hand in the old
+  `recordings_registry.json` must be added again with **Add recording**.
+  `docs/pose_review/notes.json` is kept as data.
 
 ### Wave 2 contracts between the pages
 

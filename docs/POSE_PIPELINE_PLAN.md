@@ -11,8 +11,9 @@ the field of view or crosses itself. Each step ends with a measurement; the
 
 What exists on 2026-09-03:
 
-- **Segmenter.** ResNet-18 U-Net, promoted checkpoint
-  `checkpoints/segmenter/best.ckpt`, median IoU 0.972 val / 0.974 test,
+- **Segmenter.** ResNet-18 U-Net, then the promoted checkpoint
+  `checkpoints/segmenter/best.ckpt` (models are library model cards since
+  the app simplification), median IoU 0.972 val / 0.974 test,
   calibrated (background p ~ 0.004). `scripts/segment_video.py` runs it over
   a recording, fills narrow holes, keeps the largest component, and writes a
   video.
@@ -620,12 +621,13 @@ videos:
   or running clips of one recording together.
 - **Review loop.** Frames marked by eye from the videos become named
   examples in the manifest, rendered as before/after strips by
-  `scripts/compare_pose_runs.py` on every run. Since 2026-09-07 the
-  browser viewer (`python -m worm_pose_gen.pose_viewer`, see the README)
-  does the marking: it scrubs a stored run with every pipeline layer
-  composited on the frame, the per-frame statistics and flags, the width
-  and curvature profiles, synced time series, and appends review notes to
-  `docs/pose_review/notes.json`. Runs fit from that date on also store the
+  `scripts/compare_pose_runs.py` on every run. From 2026-09-07 the
+  browser viewer (`worm_pose_gen.pose_viewer`, since replaced by the pose
+  app's Workspace page; its layers, statistics and series are the page's
+  `--dev` tools) did the marking: it scrubbed a stored run with every
+  pipeline layer composited on the frame, the per-frame statistics and
+  flags, the width and curvature profiles, synced time series, and appended
+  review notes to `docs/pose_review/notes.json`. Runs fit from that date on also store the
   independent pose (`centerline_xy_independent`, `width_profile_independent`,
   `body_length_independent` in `poses.npz`) so the viewer can show what
   propagation replaced.
@@ -744,8 +746,9 @@ manifest.json` queues 393 frames over 13 recordings from the clip-candidate
 scans (coils and holes first, then border and ordinary frames), with five
 new training recordings, two validation-only animals (`2023-09-07-13`,
 `2024-02-01-07`) and three test-only animals (`2024-05-28-02`,
-`2023-10-26-01`, `2024-06-18-12`); `worm_pose_gen.label_app --queue` walks
-it and pledges each recording's split. Three recordings of the archive need
+`2023-10-26-01`, `2024-06-18-12`); the standalone labeler of the time
+walked it and pledged each recording's split (today `worm-pose-app --queue`
+opens it as a Labeling queue). Three recordings of the archive need
 an HDF5 filter plugin that is not installed (`2023-06-30-01`,
 `2023-08-15-01`, `2023-12-11-06`) and were left out; the scan and the
 flat-field estimate now skip unreadable frames.
@@ -1354,7 +1357,7 @@ rather than continuity).
 | 5 | done (2026-09-04) | lockstep forward/backward propagation across ambiguous stretches, warm-started from good neighbours, lowest total energy wins; clip frames below IoU 0.9 fall 611 -> 62; minute frames 450--451 fixed at 10 ms/frame; videos now rendered from the final arrays |
 | 5b | done (2026-09-04) | anchor-centred 2% chain length prior and off-camera redirect: clip frames below IoU 0.9 fall 62 -> 11; `edge_inside` flag stored; edge frames whose tube stops inside are left to step 6's smoothness; labeling round 2 queued (393 frames, 13 recordings, held-out animals) |
 | 5c | done (2026-09-05) | labeling round 2 (65 frames), bootstrap labels retired, `r2-hand165` promoted (val 0.978 / test 0.981); `--raw-mask` option; edge fragments gone with the new model, coil gaps are real background; raw masks off by default until step 6 |
-| viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes) |
+| viewer | done (2026-09-07) | `worm_pose_gen.pose_viewer`: browser diagnostic for stored runs (layers, statistics, flags, classification, width/curvature profiles, time series, compare run, review notes); replaced by the pose app's Workspace page and its `--dev` tools (APP_SIMPLIFICATION.md) |
 | 6a | done (2026-09-08) | first-order autoregressive starts and a temporal prior (weight 0.01, sigma half a width) inside propagation chains; chain candidates and predictions stored and drawn by the viewer; raw spiral 14 -> 0 frames below 0.9, held-out minutes unchanged; single-state chains shown fragile, motivating 6b/6c |
 | 6c | done (2026-09-08) | beam of three chain states per direction, independent refit under the chain schedule, one path per stretch by dynamic programming over candidates and mirrors; edge minute pose jumps 23 -> 1, flips 96 -> 68, in-stretch length jumps 0 on every run; sequence set 8 -> 7 below 0.9, edge clip jumps 4 -> 0; the balanced refit schedule was worse and is not the default |
 | 6b | done (2026-09-08) | bend limit (radius half a width; tightest bends 14--17 -> 3--5), tube coverage beside IoU with segmentation tags, track length pass after propagation on clipped frames outside stretches (edge length jumps halved), jump-seeded stretches, anchor diversity for the chains (two bistable coil clips 29 and 34 failures -> 0 and 6); sequence set 7 -> 5 below 0.9, spiral_0528 median -0.013 under the bend limit, propagation about twice 6c |
