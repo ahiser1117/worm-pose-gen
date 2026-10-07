@@ -15,6 +15,9 @@ from .classical import _skeleton_longest_path, _thin, resample_centerline, tange
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
+# Steps of every width walk taken at once (32 px at the default step; a body is 40-50 px wide).
+WIDTH_WALK_BLOCK = 128
+
 
 @dataclass(frozen=True)
 class AnchorConfig:
@@ -300,7 +303,13 @@ def extend_centerline_to_mask_boundary(
 def estimate_width_along_normals(
     mask: NDArray[np.generic], centerline_xy: NDArray[np.generic], *, step: float = 0.25
 ) -> FloatArray:
-    """Estimate full body width by walking both normals until foreground exit."""
+    """Estimate full body width by walking both normals until foreground exit.
+
+    Every walk takes the same steps, accumulated one at a time as a walker
+    adds them, and ends at the first step past the image diagonal or whose
+    rounded pixel is background.  All walks advance together,
+    ``WIDTH_WALK_BLOCK`` steps at a time.
+    """
 
     binary = np.asarray(mask, dtype=bool)
     points = np.asarray(centerline_xy, dtype=np.float64)
@@ -308,25 +317,37 @@ def estimate_width_along_normals(
         raise ValueError("mask must be 2-D and centerline_xy must be [N>=2,2]")
     if not np.isfinite(step) or step <= 0:
         raise ValueError("step must be finite and positive")
+    if not np.isfinite(points).all():
+        raise ValueError("centerline points must be finite")
     derivative = np.gradient(points, axis=0)
     magnitude = np.linalg.norm(derivative, axis=1)
     if np.any(magnitude <= 1e-9):
         raise ValueError("centerline tangent is degenerate")
     normal = np.column_stack((-derivative[:, 1], derivative[:, 0])) / magnitude[:, None]
     max_distance = float(math.hypot(*binary.shape))
-    widths = np.zeros(len(points), dtype=np.float64)
-    for index, (point, direction) in enumerate(zip(points, normal, strict=True)):
-        sides: list[float] = []
-        for sign in (-1.0, 1.0):
-            distance = 0.0
-            while distance <= max_distance and _inside(
-                binary, *(point + sign * direction * distance)
-            ):
-                distance += step
-            sides.append(max(0.0, distance - step))
-        # One pixel accounts for the center pixel shared by both walks.
-        widths[index] = sides[0] + sides[1] + 1.0
-    return widths
+    walk = np.cumsum(np.concatenate(([0.0], np.full(int(max_distance / step) + 2, step))))
+    steps = int(np.searchsorted(walk, max_distance, side="right"))
+    # Walks toward -normal for every point, then toward +normal.
+    origins = np.concatenate((points, points))
+    directions = np.concatenate((-1.0 * normal, 1.0 * normal))
+    ends = np.full(len(origins), steps)
+    active = np.arange(len(origins))
+    height, width = binary.shape
+    for begin in range(0, steps, WIDTH_WALK_BLOCK):
+        distance = walk[begin : min(begin + WIDTH_WALK_BLOCK, steps)]
+        xy = origins[active, None, :] + directions[active, None, :] * distance[None, :, None]
+        # np.rint rounds half to even, as round() does.
+        xi, yi = np.rint(xy[..., 0]).astype(np.int64), np.rint(xy[..., 1]).astype(np.int64)
+        inside = (xi >= 0) & (xi < width) & (yi >= 0) & (yi < height)
+        inside[inside] = binary[yi[inside], xi[inside]]
+        stopped = ~inside.all(1)
+        ends[active[stopped]] = begin + np.argmin(inside[stopped], axis=1)
+        active = active[~stopped]
+        if not len(active):
+            break
+    sides = np.maximum(0.0, walk[ends] - step)
+    # One pixel accounts for the center pixel shared by both walks.
+    return sides[: len(points)] + sides[len(points) :] + 1.0
 
 
 def render_centerline_mask(
