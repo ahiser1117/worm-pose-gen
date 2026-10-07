@@ -634,8 +634,9 @@ def unified_main(argv: list[str] | None = None) -> None:
     """Compatibility launcher: ordinary labeling now opens the pose app.
 
     The old ``--dataset-root`` holds both labels and flat-field caches, so
-    map it to both app roots. Queue manifests use the unified labeling
-    service with canonical recording identities and retained split pledges.
+    map it to both app roots. A queue manifest (``--queue``) becomes a
+    Labeling queue, and the printed address opens it; its recordings must
+    belong to a setup, and splits come from the dataset, not the manifest.
     ``main`` and the module entry point remain available for legacy callers.
     """
     args = parse_args(argv, description="Open the unified pose app for mask painting, corpus editing and fine-tuning. Legacy labeling flags and queue manifests remain supported.")
@@ -651,11 +652,12 @@ def unified_main(argv: list[str] | None = None) -> None:
     try:
         for path in args.recordings or []:
             state.register_recording({"path": str(path), "dataset": DATASET_PATH})
+        page = ""
         if args.queue is not None:
-            state.startup_group = state.labeling.load_manifest(args.queue)['id']
-        print(f"worm-pose-labeler now opens the unified pose app at http://{config.host}:{config.port}/", flush=True)
-        print(f"Corpus: {config.corpus_root}. Paint labels manifests, recording sections and saved labels; "
-              "a workspace's Masks task corrects its own masks.", flush=True)
+            from .app.queues import manifest_queue
+
+            page = f"#labeling/queue/{manifest_queue(state, args.queue)['id']}"
+        print(f"worm-pose-labeler now opens the unified pose app at http://{config.host}:{config.port}/{page}", flush=True)
         uvicorn.run(app, host=config.host, port=config.port, log_level="info")
     finally:
         state.close()

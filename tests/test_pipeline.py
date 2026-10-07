@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -186,7 +187,7 @@ class ParamTests(unittest.TestCase):
     def test_stage_command_round_trips_the_parameters(self) -> None:
         params = {"preset": "fast", "overrides": {"stage_steps": [1, 2]}, "threshold": 0.4}
         command = stage_command(Path("/tmp/ws"), "fit", params)
-        self.assertEqual(command[:3], [".venv/bin/python", "-m", "worm_pose_gen.pipeline"])
+        self.assertEqual(command[:3], [sys.executable, "-m", "worm_pose_gen.pipeline"])
         self.assertEqual(command[command.index("--workspace") + 1], "/tmp/ws")
         self.assertEqual(command[command.index("--stage") + 1], "fit")
         self.assertEqual(json.loads(command[command.index("--params") + 1]), params)

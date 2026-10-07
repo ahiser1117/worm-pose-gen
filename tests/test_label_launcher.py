@@ -30,17 +30,18 @@ class LabelLauncherTests(unittest.TestCase):
         run.assert_called_once_with(app, host="127.0.0.2", port=9001, log_level="info")
         state.close.assert_called_once()
 
-    def test_queue_loads_unified_manifest_without_legacy_fallback(self):
+    def test_queue_manifest_becomes_a_labeling_queue_without_legacy_fallback(self):
         argv = ["--queue", "/tmp/queue.json", "--dataset-root", "/tmp/labels", "--port", "9002"]
         state = mock.Mock()
-        state.labeling.load_manifest.return_value = {"id": "queue-id"}
         app = SimpleNamespace(state=SimpleNamespace(app_state=state))
-        with mock.patch("worm_pose_gen.label_app.main") as legacy, mock.patch("worm_pose_gen.app.create_app", return_value=app), mock.patch("uvicorn.run") as run:
-            with contextlib.redirect_stdout(io.StringIO()):
+        output = io.StringIO()
+        with mock.patch("worm_pose_gen.label_app.main") as legacy, mock.patch("worm_pose_gen.app.create_app", return_value=app), \
+                mock.patch("worm_pose_gen.app.queues.manifest_queue", return_value={"id": "q1"}) as make, mock.patch("uvicorn.run") as run:
+            with contextlib.redirect_stdout(output):
                 unified_main(argv)
         legacy.assert_not_called()
-        state.labeling.load_manifest.assert_called_once_with(Path('/tmp/queue.json'))
-        self.assertEqual(state.startup_group, "queue-id", "the UI opens Paint on the launcher's queue")
+        make.assert_called_once_with(state, Path('/tmp/queue.json'))
+        self.assertIn("http://127.0.0.1:9002/#labeling/queue/q1", output.getvalue())
         run.assert_called_once()
         state.close.assert_called_once()
 

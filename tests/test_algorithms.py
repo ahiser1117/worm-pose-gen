@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -96,7 +97,7 @@ class RegistryTests(unittest.TestCase):
     def test_region_command_round_trips_the_spec(self) -> None:
         spec = {"algorithm": "beam_path", "first": 3, "last": 9, "params": {"beam": 2}, "anchor_before": 2, "anchor_after": None, "id": "j0000000a"}
         command = region_command(Path("/tmp/ws"), spec)
-        self.assertEqual(command[:3], [".venv/bin/python", "-m", "worm_pose_gen.pipeline"])
+        self.assertEqual(command[:3], [sys.executable, "-m", "worm_pose_gen.pipeline"])
         self.assertEqual(command[command.index("--workspace") + 1], "/tmp/ws")
         decoded = json.loads(command[command.index("--region-run") + 1])
         self.assertEqual(decoded, {"algorithm": "beam_path", "first": 3, "last": 9, "params": {"beam": 2}, "anchor_before": 2, "id": "j0000000a"})

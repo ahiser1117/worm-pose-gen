@@ -85,6 +85,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 import json
+import sys
 import math
 import os
 from pathlib import Path
@@ -631,7 +632,7 @@ def load_keyframes(workspace: Any, preview_id: str) -> list[Keyframe]:
 def fix_command(workspace_path: Path | str, spec: dict[str, Any]) -> list[str]:
     """The argv of a fix job: ``spec`` is ``{preview, kind: refit, algorithm, first, last, anchor_before, anchor_after, codes, params, keep?}`` (rows) or ``{preview, kind: stitch, params}``."""
 
-    return [".venv/bin/python", "-m", "worm_pose_gen.fixes", "--workspace", str(workspace_path), "--run", json.dumps(algorithms._json_safe(spec))]
+    return [sys.executable, "-m", "worm_pose_gen.fixes", "--workspace", str(workspace_path), "--run", json.dumps(algorithms._json_safe(spec))]
 
 
 def run_spec(workspace: Any, spec: dict[str, Any], *, device: torch.device | str | None = None, progress: Progress | None = None) -> Preview:

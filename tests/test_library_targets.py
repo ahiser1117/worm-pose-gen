@@ -1,6 +1,7 @@
-"""The body-target cache of the library: built from a label alone, keyed by its revision, oriented by the person's choice."""
+"""The body-target cache of the library: built from a label alone, keyed by its revision and builder, oriented by the person's choice."""
 
 from dataclasses import replace
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ import numpy as np
 
 from worm_pose_gen import body_fields, library
 from worm_pose_gen.batch_fit import PRESETS
-from worm_pose_gen.library import Libraries
+from worm_pose_gen.library import Libraries, targets
 
 
 SHAPE = (96, 400)
@@ -59,9 +60,9 @@ class TargetCacheTests(unittest.TestCase):
             self.assertEqual(stored, meta)
             self.assertGreater(arrays["head_xy"][0], 300)  # head at the nose end
             self.assertLess(float(np.nanmean(arrays["ap"][:, 300:])), float(np.nanmean(arrays["ap"][:, :100])))
-            built = (libraries.personal / "cache" / "body_targets" / f"{auto.sha256}.json").stat().st_mtime_ns
+            built = (libraries.personal / "cache" / "body_targets" / "none" / f"{auto.sha256}.json").stat().st_mtime_ns
             self.assertEqual(library.build_targets(libraries, auto, device="cpu"), meta)  # cached: not refit
-            self.assertEqual((libraries.personal / "cache" / "body_targets" / f"{auto.sha256}.json").stat().st_mtime_ns, built)
+            self.assertEqual((libraries.personal / "cache" / "body_targets" / "none" / f"{auto.sha256}.json").stat().st_mtime_ns, built)
             # A person puts the head at the left end: a new revision, new targets, the old ones untouched.
             flipped = dataset.save(recording="rec", frame=7, origin="fix", orientation="manual", head_xy=[52.0, 48.0], **worm_label())
             meta = library.build_targets(libraries, flipped, device="cpu")
@@ -69,8 +70,43 @@ class TargetCacheTests(unittest.TestCase):
             _, arrays = library.load_targets(libraries, flipped)
             self.assertLess(arrays["head_xy"][0], 100)
             self.assertEqual(library.cached_meta(libraries, auto)["orientation"], "nose")
-            rows = sorted(p.suffix for p in (libraries.personal / "cache" / "body_targets").iterdir())
+            rows = sorted(p.suffix for p in (libraries.personal / "cache" / "body_targets" / "none").iterdir())
             self.assertEqual(rows, [".json", ".json", ".npz", ".npz"])
+
+    @mock.patch.object(body_fields, "fit_config", fast_fit_config)
+    def test_a_new_default_mask_model_means_new_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            libraries = Libraries(lab=None, personal=root / "mine")
+            library.write_setup(libraries.personal, "rig", name="Rig")
+            weights = root / "w.ckpt"
+            weights.write_bytes(b"w")
+            library.create_model(libraries, "seg", {"name": "seg", "kind": "segmenter", "setup": "mine:rig", "outputs": ["mask"],
+                                                    "inputs": library.make_inputs([], fps=20.0, pixel_size_um=1.0)}, weights)
+            record = library.create_dataset(libraries, "d", setup="mine:rig").save(recording="rec", frame=7, origin="spread", **worm_label())
+            self.assertIsNone(library.target_builder(libraries, "mine:rig"))
+            library.build_targets(libraries, record, device="cpu")
+            self.assertEqual(library.cached_meta(libraries, record)["builder"], None)
+            library.set_default(libraries, "mine:rig", "mask", "mine:seg", reason="first model")
+            self.assertEqual(library.target_builder(libraries, "mine:rig"), "mine:seg")
+            self.assertIsNone(library.cached_meta(libraries, record))  # built by another model: missing until rebuilt
+            self.assertIsNone(library.load_targets(libraries, record))
+            self.assertIsNotNone(library.cached_meta(libraries, record, None))
+            # The builder's mask model segments the context frames for a chain fit; here every frame is the label's.
+            segmenter = mock.Mock()
+            segmenter.predict_probability_batch.side_effect = lambda frames, batch_size=8: np.stack([worm_label()["mask"]] * len(frames)).astype(np.float32)
+            meta = library.build_targets(libraries, record, segmenter=segmenter, device="cpu")
+            self.assertEqual(meta["builder"], "mine:seg")
+            self.assertEqual(library.cached_meta(libraries, record), meta)
+            self.assertTrue((libraries.personal / "cache" / "body_targets" / "mine.seg" / f"{record.sha256}.npz").is_file())
+
+    def test_job_command_names_the_label_revisions(self):
+        libraries = Libraries(lab=Path("/lab"), personal=Path("/mine"))
+        identity = {"dataset": "mine:d", "recording": "rec", "frame": 7, "revision": 2, "sha256": "x"}
+        command = targets.targets_command(libraries, [identity])
+        self.assertEqual(command[1:5], ["-m", "worm_pose_gen.library.targets", "--personal", "/mine"])
+        self.assertEqual(json.loads(command[command.index("--labels") + 1]), [{"dataset": "mine:d", "recording": "rec", "frame": 7, "revision": 2}])
+        self.assertEqual(command[-2:], ["--lab", "/lab"])
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ from dataclasses import asdict, dataclass, field, fields as dataclass_fields, re
 from datetime import datetime
 import fcntl
 import json
+import sys
 import math
 import os
 from pathlib import Path
@@ -2026,10 +2027,10 @@ def run_all(
 
 
 def stage_command(workspace_path: Path | str, stage: str, params: dict[str, Any] | None) -> list[str]:
-    """The argv that runs one stage as a job (relative to the repo root, where the venv lives)."""
+    """The argv that runs one stage as a job, with this interpreter (the job runs from the repo root)."""
 
     return [
-        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        sys.executable, "-m", "worm_pose_gen.pipeline",
         "--workspace", str(workspace_path), "--stage", stage, "--params", json.dumps(params or {}),
     ]
 
@@ -2044,7 +2045,7 @@ def stages_command(workspace_path: Path | str, stages: Sequence[str], params: di
     if unknown or not stages:
         raise ValueError(f"unknown stages {unknown or 'none given'}; expected some of {STAGES}")
     return [
-        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        sys.executable, "-m", "worm_pose_gen.pipeline",
         "--workspace", str(workspace_path), "--stages", ",".join(stages), "--params", json.dumps(params or {}),
     ]
 
@@ -2069,7 +2070,7 @@ def region_command(workspace_path: Path | str, spec: Any) -> list[str]:
     payload = {k: values.get(k) for k in REGION_SPEC_KEYS if values.get(k) is not None}
     payload.setdefault("params", {})
     return [
-        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        sys.executable, "-m", "worm_pose_gen.pipeline",
         "--workspace", str(workspace_path), "--region-run", json.dumps(_json_safe(payload)),
     ]
 
