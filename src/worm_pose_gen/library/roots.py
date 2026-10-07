@@ -25,6 +25,8 @@ import socket
 import tempfile
 from typing import Any, Iterator
 
+import numpy as np
+
 
 LAB_ROOT_FLV = Path("/store1/shared/worm-pose-models")
 LAB_LIBRARY_BY_HOST: dict[str, Path] = {
@@ -140,8 +142,16 @@ def write_json(path: Path, value: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=path.name + ".", suffix=".partial", delete=False) as handle:
-        json.dump(value, handle, indent=1, sort_keys=True)
+        json.dump(value, handle, indent=1, sort_keys=True, default=_plain)
     os.replace(handle.name, path)
+
+
+def _plain(value: Any) -> Any:
+    """NumPy scalars (a fit's flags and scores often are) as Python values."""
+
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def append_jsonl(path: Path, entry: dict[str, Any]) -> None:

@@ -10,7 +10,7 @@ import numpy as np
 from worm_pose_gen import library
 from worm_pose_gen.library import Libraries
 from worm_pose_gen.library.datasets import Dataset, assign_split
-from worm_pose_gen.library.roots import default_lab_root, default_personal_root, parse_ref, ref_filename
+from worm_pose_gen.library.roots import default_lab_root, default_personal_root, parse_ref, ref_filename, write_json
 
 
 SHAPE = (24, 32)
@@ -50,6 +50,12 @@ class RootTests(unittest.TestCase):
         self.assertIsNone(default_lab_root("laptop"))
         self.assertEqual(default_personal_root("flv-c2", "kim"), Path("/temp_data4/kim/worm-pose-library"))
         self.assertEqual(default_personal_root("laptop", "kim"), Path("~/worm-pose-library").expanduser())
+
+    def test_json_files_take_numpy_scalars(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "a" / "meta.json"
+            write_json(path, {"cut": np.bool_(True), "iou": np.float32(0.5)})
+            self.assertEqual(json.loads(path.read_text()), {"cut": True, "iou": 0.5})
 
     def test_missing_lab_library_lists_personal_items_only(self):
         with tempfile.TemporaryDirectory() as directory:
