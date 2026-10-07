@@ -117,22 +117,6 @@ class AppTests(unittest.TestCase):
 
     # ----- tests
 
-    def test_selected_checkpoint_availability(self) -> None:
-        endpoint = "/api/checkpoints/availability"
-        for value in ("", "base", str(self.root / "missing.ckpt"), str(self.root)):
-            result = self.client.get(endpoint, params={"checkpoint": value})
-            self.assertEqual(result.status_code, 200, result.text)
-            self.assertFalse(result.json()["available"])
-            self.assertIn("Choose", result.json()["reason"])
-        custom = self.root / "availability-check.ckpt"
-        custom.write_bytes(b"checkpoint presence test")
-        result = self.client.get(endpoint, params={"checkpoint": str(custom)}).json()
-        self.assertEqual(result, {"available": True, "path": str(custom.resolve())})
-        with mock.patch.object(self.app.state.app_state.config, "checkpoint", custom):
-            self.assertEqual(self.client.get(endpoint, params={"checkpoint": "base"}).json(), result)
-        custom.unlink()
-        self.assertFalse(self.client.get(endpoint, params={"checkpoint": str(custom)}).json()["available"])
-
     def test_static_files_and_state(self) -> None:
         page = self.client.get("/")
         self.assertEqual(page.status_code, 200)

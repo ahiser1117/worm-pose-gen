@@ -9,8 +9,9 @@ interventions (hypothesis pick, orientation flip, undo) through the edit
 log with provenance per frame; and Phase 3: the algorithm registry run on a
 region between anchors as a job, the candidate sets it produces (compared,
 accepted or discarded) and the outcome log. Phase 4 adds reversible mask
-painting, a versioned user corpus, fine-tuning jobs on frozen labels and
-explicit checkpoint selection. The Body fields screen reviews, flips and
+painting and a versioned user corpus; models are trained and evaluated on
+the library's datasets by ``train`` and ``evaluate`` jobs (the Training
+page, ``routers/training.py``). The Body fields screen reviews, flips and
 rebuilds the body-field targets built from the corpus labels. Everything the
 UI does goes through these endpoints, so a script can drive the same work
 headless.
@@ -44,6 +45,7 @@ from .config import DEFAULT_BODY_NET, AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
 from .routers import algorithms, analysis as analysis_routes, body_fields, config as config_routes, corpus, edits, jobs, library, masks, recordings, static, viewer, workspaces
+from .routers import training as training_routes
 from .routers import labeling as labeling_routes
 from .routers import inspection as inspection_routes
 from .routers import fixes as fixes_routes
@@ -118,6 +120,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(library.router)
+    app.include_router(training_routes.router)
     app.include_router(config_routes.router)
     app.include_router(static.router)
     return app
@@ -139,7 +142,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run", action="append", type=Path, dest="runs", help="extra run directory to serve (repeatable)")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
     parser.add_argument("--corpus-root", type=Path, default=None, help="user segmentation labels (default: <workspaces-root>/corpus; may point to an existing segmentation store)")
-    parser.add_argument("--checkpoints-root", type=Path, default=None, help="fine-tuning runs and checkpoints (default: <workspaces-root>/checkpoints)")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="segmenter for on-demand probability maps")
     parser.add_argument("--body-net", type=Path, default=DEFAULT_BODY_NET, help="body-field network for proposed traces in Body fields")
     parser.add_argument("--gpus", default=None, help="comma-separated GPU ids for jobs (default: all visible)")
@@ -158,7 +160,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
         host=args.host, port=args.port, workspaces_root=args.workspaces_root,
         recording_roots=tuple(args.recording_roots) if args.recording_roots else tuple(DEFAULT_RECORDING_ROOTS),
         poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, body_net=args.body_net, notes=args.notes,
-        corpus_root=args.corpus_root, checkpoints_root=args.checkpoints_root,
+        corpus_root=args.corpus_root,
         lab_library=args.lab_library, library=args.library, dev=args.dev,
         gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent, extra_runs=tuple(args.runs or ()),
     )

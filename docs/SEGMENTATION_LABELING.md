@@ -84,87 +84,28 @@ skipped, in about `0.3 s` per frame.
 
 ## 4. Train and evaluate
 
+Training and evaluation now read the library's datasets and benchmarks
+(docs/APP_SIMPLIFICATION.md, sections 1 and 4); this store was migrated into
+the lab dataset `nir-labels`:
+
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
-scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
-scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train.py \
+  --setup lab:nir-flv --dataset lab:nir-labels --start-from lab:nir-hand284
+scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_model.py --model lab:nir-hand284
 ```
 
-Each training run gets its own directory under `checkpoints/segmenter/runs/`,
-named by start time and `--name`, holding `best.ckpt` (lowest validation
-loss), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
-`run.json`: arguments, git revision, the fingerprint of the checkpoint it
-started from, the exact train, validation, and test membership (sample id,
-label source, revision, save time), the checkpoint fingerprints, epochs run,
-and the final metrics. The directory is git-ignored. Mixed precision and a
-test pass with the best checkpoint are on by default.
-
-A run ends when the validation loss (masked BCE plus soft Dice) has not
-improved for `--patience 5` epochs, and the learning rate halves whenever
-the loss stalls for `--plateau-patience 2` epochs, so the stop means the
-model has converged rather than that a schedule tied to an epoch cap ran
-out (`--epochs 300` is only a cap). Checkpoint selection uses the same
+The stopping rule below is unchanged: a run ends when the validation loss
+(masked BCE plus soft Dice) has not improved for `--patience` epochs (5 for
+the segmenter), the learning rate halves whenever the loss stalls for
+`--plateau-patience` epochs, and the model is the checkpoint with the lowest
 validation loss, not the thresholded IoU: IoU saturates within ten epochs
 while the loss keeps falling, and runs selected on IoU produced models whose
-background probability sat near `0.3`. The masks at threshold `0.5` were
-fine, but nearly every pixel fell in the app's uncertain band. Selecting on
-loss picks a calibrated model with the same or better masks.
-
-`--train-labels manual|bootstrap|all` picks the training labels, hand-refined
-by default; validation and test always use every label they hold. Without
-`--init` the model starts from ImageNet weights with no worm exposure; with
-`--init <checkpoint>` it warm-starts from that model (the optimizer and
-schedule restart either way).
-
-After training, the run's best checkpoint is scored against the currently
-promoted `checkpoints/segmenter/best.ckpt` on the validation split, and
-replaces it when its mean validation loss over the hand-refined validation
-labels is lower. That is the quantity training selects and stops on, so a
-better-calibrated model wins even when the thresholded masks tie; the mean
-IoU of both is recorded alongside. The labeling app loads the promoted
-file, so it always proposes from the best validated model.
-`--promote` forces the copy, `--no-promote` skips the comparison, and every
-decision, with both scores and checkpoint fingerprints, is appended to
-`checkpoints/segmenter/promotions.jsonl` and stored in the run record.
-
-Evaluation runs **every** `best.ckpt` and `last.ckpt` under `runs/`
-(`--checkpoint` picks files instead). One invocation is a session, kept
-under `checkpoints/segmenter/evaluations/<session time>/<run>__<best|last>/`.
-Each `evaluation.json` holds the time, git revision, checkpoint fingerprint
-(path, size, modification time, SHA-256), the run record it came from, a
-fingerprint of the labels used, the split membership at that moment, the
-summary, and per-sample IoU, Dice, precision, and recall against both the
-network and the classical threshold, with label and predicted pixel counts.
-The worst-sample overlay sheets sit beside it, and one summary line per
-checkpoint is appended to `evaluations/history.jsonl`. `--note` stores a
-free-text reason with every record of the session. Bootstrapped labels are
-not truth, so the number that matters is the hand-refined subset; since
-every validation and test label has been hand-refined, that is now the
-whole held-out set.
-
-A frame labeled as all background scores 1 when the prediction is also
-empty and 0 when the network paints anything, and the summary reports the
-false-positive pixels on empty-label frames separately.
-
-### Plots
-
-`scripts/plot_segmenter_history.py` writes seven figures to
-`checkpoints/segmenter/plots/`. Models are named by
-`docs/segmenter_model_names.json`: a short display name per run directory
-(`r1-hand100`, `r2-hand165`, ...: labeling round, training-label source,
-number of training labels) and a `headline` list of the models drawn in
-colour and with a fixed marker in every figure; other runs are grey. The
-last headline model is the newest and the one before it its reference.
-
-| Figure | Content |
-|---|---|
-| `training_curves.png` | training and validation loss (log scale) and validation IoU per epoch, selected epoch starred |
-| `checkpoint_comparison.png` | per best checkpoint of the newest session: median (dot), interquartile range (bar), and a line down to the lowest non-empty frame; the promoted model is marked |
-| `evaluation_history.png` | median IoU of every model across evaluation sessions (the labels grow between sessions) |
-| `latest_evaluation.png` | per-frame IoU of the headline models, frames grouped by recording and sorted by the newest model |
-| `model_delta.png` | per-frame IoU of the newest model minus its reference, so a regression on one frame is visible next to the gains |
-| `iou_ecdf.png` | cumulative distribution of per-frame IoU per headline model, validation and test pooled |
-| `dataset_growth.png` | labels over time, and labels per recording by split |
+background probability sat near `0.3`. Promotion, `best.ckpt`,
+`promotions.jsonl`, the `--train-labels` filter and the
+`evaluations/history.jsonl` sessions are gone: a model becomes a setup's
+default with **Use as default** (with a reason), and each evaluation is
+stored with its model per benchmark. The comparisons below were made with
+the old scripts.
 
 ### Three-way comparison (September 3, 2026)
 

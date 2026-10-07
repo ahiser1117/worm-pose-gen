@@ -6,7 +6,9 @@ anchors, Phase 3) from ``pipeline.region_command``, so the process that runs
 it is the same ``python -m worm_pose_gen.pipeline`` a script would start; the
 runner adds ``WORM_POSE_PROGRESS_FILE`` and ``WORM_POSE_JOB_ID`` to its
 environment, which is how progress and provenance find their way back (a
-region job names its candidate set after the job id).
+region job names its candidate set after the job id).  ``train`` and
+``evaluate`` jobs (the Training page, :mod:`.training`) run
+``model_training`` and ``model_eval`` the same way.
 
 Every job is placed by the request: ``run_on`` (``local`` or ``slurm``;
 omitted, this machine when it has GPUs for jobs, else SLURM), ``slurm``
@@ -26,8 +28,8 @@ from fastapi import APIRouter, Body, Depends
 from . import get_state
 from ... import pipeline
 from ...jobs import STATES, JobRecord, JobSpec
-from ...training import fine_tune_job
 from .. import regions
+from .training import evaluation_job, training_job
 from ..state import AppState, NotFound
 
 router = APIRouter(prefix="/api")
@@ -144,12 +146,14 @@ def submit(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
         spec, command = stage_job(app, payload, "export")
     elif kind == regions.REGION_JOB_KIND:
         spec, command = regions.region_job(app.view(str(payload.get("workspace") or "")), payload)
-    elif kind == "fine_tune":
-        spec, command = fine_tune_job(app, payload)
+    elif kind == "train":
+        spec, command = training_job(app, payload)
+    elif kind == "evaluate":
+        spec, command = evaluation_job(app, payload)
     elif kind == "command":
         spec, command = command_job(payload)
     else:
-        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region, fine_tune or command")
+        raise ValueError(f"unknown job kind {kind!r}; expected stage, export, region, train, evaluate or command")
     return app.runner.submit(place(app, spec, payload), command).to_dict()
 
 
