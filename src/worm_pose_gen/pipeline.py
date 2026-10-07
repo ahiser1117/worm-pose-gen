@@ -121,6 +121,9 @@ PROPAGATION_ALGORITHMS = tuple(CANDIDATE_ALGORITHMS.values())
 # algorithm is anything else (a manual pick or flip, an accepted region run)
 # was put there on purpose: a propagate pass keeps it and works around it.
 PIPELINE_ALGORITHMS = frozenset((*SOURCE_ALGORITHMS.values(), *PROPAGATION_ALGORITHMS, TRACK_ALGORITHM, ""))
+# Jobs whose poses the user installed whatever their algorithm: an accepted
+# candidate set, and a kept fix (``worm_pose_gen.fixes``).
+PLACED_JOB_PREFIXES = ("candidates:", "fix:")
 SUMMARY_FILE = "summary.json"
 WORKSPACE_LOCK_FILE = ".lock"
 # The per-frame arrays ``store_result`` writes, and the name each is kept
@@ -821,7 +824,7 @@ def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarra
 
     replaced = np.isin(np.asarray(algorithm).astype(str), PROPAGATION_ALGORITHMS) & np.asarray(arrays["fitted"], dtype=bool)
     if job is not None:
-        replaced &= ~np.char.startswith(np.asarray(job).astype(str), "candidates:")
+        replaced &= ~placed_job(job)
     if "mask_stale" in arrays:
         replaced &= ~np.asarray(arrays["mask_stale"], dtype=bool)
     if "latent_independent" in arrays:
@@ -1777,8 +1780,15 @@ def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray, job: np.nd
     """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): manual picks and flips, accepted region runs."""
 
     names = np.asarray(algorithm).astype(str)
-    accepted = np.zeros(len(names), dtype=bool) if job is None else np.char.startswith(np.asarray(job).astype(str), "candidates:")
+    accepted = np.zeros(len(names), dtype=bool) if job is None else placed_job(job)
     return np.asarray(arrays["fitted"], dtype=bool) & (accepted | ~np.isin(names, tuple(PIPELINE_ALGORITHMS)))
+
+
+def placed_job(job: np.ndarray) -> NDArray[np.bool_]:
+    """Per row, whether its provenance job is one whose poses the user installed (``PLACED_JOB_PREFIXES``)."""
+
+    jobs = np.asarray(job).astype(str)
+    return np.logical_or.reduce([np.char.startswith(jobs, prefix) for prefix in PLACED_JOB_PREFIXES])
 
 
 def keep_hypotheses(fresh: dict[str, np.ndarray], old: dict[str, np.ndarray], rows: Sequence[int]) -> None:

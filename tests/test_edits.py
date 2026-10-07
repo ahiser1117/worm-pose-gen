@@ -36,7 +36,7 @@ from worm_pose_gen.edits import (
     pose_from_hypothesis,
     segment_info,
     segment_of,
-    set_pose,
+    set_poses,
     undo,
 )
 from worm_pose_gen.latent import decode_centerline, encode_centerline
@@ -411,10 +411,17 @@ class AcceptPathAndSetPoseTests(EditFixture):
         with self.assertRaises(ValueError):
             accept_path(self.workspace, [], algorithm="x", job="y")
 
-    def test_set_pose_writes_an_explicit_pose(self) -> None:
+    def test_set_poses_writes_explicit_poses_as_one_edit(self) -> None:
         curve = self.original["centerline_xy"][3] + (0.0, 5.0)
-        result = set_pose(self.workspace, 3, {"centerline_xy": curve, "iou": 0.91, "best_start": "region:slow"}, algorithm="slow_refit", job="j7")
-        self.assertEqual((result.kind, result.rows), ("set_pose", [3]))
+        other = self.original["centerline_xy"][4] + (0.0, -5.0)
+        result = set_poses(
+            self.workspace, {3: {"centerline_xy": curve, "iou": 0.91, "best_start": "region:slow"}, 4: {"centerline_xy": other}},
+            algorithm="slow_refit", job="j7", extra={"fix": {"kind": "refit"}},
+        )
+        self.assertEqual((result.kind, result.rows), ("set_pose", [3, 4]))
+        self.assertEqual(self.workspace.edits()[-1]["payload"]["fix"], {"kind": "refit"})
+        np.testing.assert_array_equal(self.state()["centerline_xy"][4], other)
+        self.assertEqual(self.provenance_of(4)[:2], ("slow_refit", "j7"))
         state, hyps = self.state(), self.hypotheses()
         np.testing.assert_array_equal(state["centerline_xy"][3], curve)
         np.testing.assert_allclose(decode_centerline(state["latent"][3]), curve, atol=1e-6)
@@ -426,9 +433,15 @@ class AcceptPathAndSetPoseTests(EditFixture):
         self.assertEqual(int(hyps["path_index"][3]), -1)
         self.assertEqual(self.provenance_of(3)[:2], ("slow_refit", "j7"))
         with self.assertRaises(ValueError):
-            set_pose(self.workspace, 3, {"iou": 0.5}, algorithm="a", job="b")
+            set_poses(self.workspace, {3: {"iou": 0.5}}, algorithm="a", job="b")
         with self.assertRaises(ValueError):
-            set_pose(self.workspace, 3, {"centerline_xy": curve[:10]}, algorithm="a", job="b")
+            set_poses(self.workspace, {3: {"centerline_xy": curve[:10]}}, algorithm="a", job="b")
+        # A check that refuses leaves the workspace and the log untouched.
+        def refuse(state):
+            raise ValueError("changed")
+        with self.assertRaisesRegex(ValueError, "changed"):
+            set_poses(self.workspace, {3: {"centerline_xy": curve}}, algorithm="a", job="b", check=refuse)
+        self.assertEqual(len(self.workspace.edits()), 1)
 
 
 class UndoTests(EditFixture):
