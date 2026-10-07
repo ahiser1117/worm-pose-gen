@@ -72,17 +72,21 @@
 /* ------------------------------------------------------------- Workspace */
 
 .ws-main { display: grid; grid-template-columns: 292px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100%; }
+/* The left panel shares its height: the fix panel keeps its natural height, the
+   Fixes list shrinks to a few rows, and the Issues list takes what is left and
+   scrolls inside it, so a long issue list never pushes the fixes out of view.
+   The panel itself scrolls only when even those minimums do not fit. */
 .ws-left { grid-row: 1; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--border); }
 .ws-left > div { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .ws-left > div:empty { display: none; }
-.ws-issues { flex: 1 1 0; min-height: 200px; display: flex; flex-direction: column; }
+.ws-issues { flex: 1 1 0; min-height: 156px; display: flex; flex-direction: column; }
 .ws-fix { flex: none; }
 .ws-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .ws-panel-head h3 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 .ws-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ws-done-bar { height: 4px; border-radius: 2px; background: var(--panel-2); margin-bottom: 8px; overflow: hidden; }
 .ws-done-bar span { display: block; height: 100%; background: var(--accent); }
-.ws-issue-list { flex: 1 1 auto; min-height: 60px; overflow-y: auto; margin: 0 -6px; padding: 0 2px; }
+.ws-issue-list { flex: 1 1 auto; min-height: 44px; overflow-y: auto; margin: 0 -6px; padding: 0 2px; }
 .ws-issue { padding: 5px 8px; }
 .ws-issue-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--warn); }
 .ws-issue.reviewed .ws-issue-dot { background: var(--accent); }
@@ -114,7 +118,7 @@
 .ws-dev-refit { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .ws-dev-refit select { width: auto; }
 
-.ws-fixes { flex: none; max-height: 26vh; display: flex; flex-direction: column; }
+.ws-fixes { flex: 0 1 auto; min-height: 96px; max-height: 26vh; display: flex; flex-direction: column; }
 .ws-fix-list { overflow-y: auto; min-height: 0; margin: 0 -6px; }
 .ws-fix-item { padding: 4px 8px; }
 .ws-fix-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
