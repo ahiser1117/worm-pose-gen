@@ -31,6 +31,7 @@ import numpy as np
 from numpy.typing import NDArray
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 
 from .head_fit import HeadConstraint, HeadPriors
 from .mask_fit import (
@@ -120,6 +121,20 @@ def get_renderer(compile_renderer: bool) -> Renderer:
             warnings.warn(f"torch.compile unavailable ({error}); rendering eagerly", stacklevel=2)
             _COMPILED["fn"] = render_tube_segments
     return _COMPILED["fn"]
+
+
+@dataclass(frozen=True)
+class BodyFieldEvidence:
+    """Body-field network predictions for one frame that a fit is scored against.
+
+    ``ap`` is the full-image A-P field (0 head, 1 tail), NaN where it says
+    nothing: off the body and on predicted crossings.  ``head_xy`` and
+    ``tail_xy`` are the predicted ends, ``None`` when that end is not in view.
+    """
+
+    ap: NDArray[np.float32]
+    head_xy: NDArray[np.float64] | None
+    tail_xy: NDArray[np.float64] | None
 
 
 def _place(start: int, size: int, target: int, limit: int) -> int:
@@ -255,6 +270,92 @@ def _render_hard_winners(
     return hard
 
 
+def _field_tensors(
+    fields: Sequence[BodyFieldEvidence | None], windows: Sequence[CropWindow], height: int, width: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Per frame: A-P crop and its validity on the batch window raster, ends and their presence."""
+
+    n = len(fields)
+    ap = np.zeros((n, height, width), dtype=np.float32)
+    valid = np.zeros_like(ap)
+    ends = np.zeros((n, 2, 2), dtype=np.float32)
+    has_end = np.zeros((n, 2), dtype=np.float32)
+    for f, (evidence, w) in enumerate(zip(fields, windows, strict=True)):
+        if evidence is None:
+            continue
+        ix0, ix1 = max(w.x0, 0), min(w.x1, w.image_width)
+        iy0, iy1 = max(w.y0, 0), min(w.y1, w.image_height)
+        local = np.asarray(evidence.ap, dtype=np.float32)[iy0:iy1, ix0:ix1]
+        rows, cols = slice(iy0 - w.y0, iy1 - w.y0), slice(ix0 - w.x0, ix1 - w.x0)
+        known = np.isfinite(local)
+        ap[f, rows, cols] = np.where(known, local, 0.0)
+        valid[f, rows, cols] = known
+        for k, point in enumerate((evidence.head_xy, evidence.tail_xy)):
+            if point is not None and np.all(np.isfinite(point)):
+                ends[f, k], has_end[f, k] = point, 1.0
+    return tuple(torch.from_numpy(a).to(device) for a in (ap, valid, ends, has_end))
+
+
+def _field_penalty(
+    centerline: Tensor, origin: Tensor, ap: Tensor, valid: Tensor, ends: Tensor, has_end: Tensor, config: MaskFitConfig
+) -> Tensor:
+    """Per row: A-P agreement of the midline points and distance of the ends to the predicted ones.
+
+    ``ap`` and ``valid`` are per-row rasters whose pixel (0, 0) is image pixel
+    ``origin`` (x, y); ``ends`` holds the predicted head and tail of each row
+    and ``has_end`` whether each is in view.
+    """
+
+    total = torch.zeros(centerline.shape[0], dtype=centerline.dtype, device=centerline.device)
+    if config.field_ap_weight > 0:
+        height, width = ap.shape[-2:]
+        local = centerline - origin[:, None, :]
+        # grid_sample's normalized coordinates with align_corners=False.
+        grid = torch.stack((2 * (local[..., 0] + 0.5) / width - 1, 2 * (local[..., 1] + 0.5) / height - 1), -1)[:, None]
+        sampled = F.grid_sample(ap[:, None], grid, align_corners=False)[:, 0, 0]
+        known = (F.grid_sample(valid[:, None], grid, align_corners=False)[:, 0, 0] > 0.999).to(centerline.dtype)
+        position = torch.linspace(0.0, 1.0, centerline.shape[1], device=centerline.device)
+        squared = ((sampled - position[None, :]) / config.field_ap_sigma).square()
+        total = total + config.field_ap_weight * (squared * known).sum(1) / known.sum(1).clamp_min(1.0)
+    if config.field_end_weight > 0:
+        squared = (torch.stack((centerline[:, 0], centerline[:, -1]), 1) - ends).square().sum(-1) / config.field_end_sigma_px**2
+        total = total + config.field_end_weight * (squared * has_end).sum(1)
+    return total
+
+
+def field_energies(
+    centerlines: Sequence[NDArray[np.generic]], fields: Sequence[BodyFieldEvidence | None], config: MaskFitConfig
+) -> FloatArray:
+    """The evidence energy ``fit_masks`` adds for each centerline against its frame's evidence (0 without either).
+
+    This scores poses the fitter did not produce, such as the mirror of a
+    fit.  Each frame's A-P field is read on the centerline's bounding box
+    plus a pixel, which holds every pixel the bilinear sampling of a point
+    in the image reads; the evidence is NaN off the body, so the fitter's
+    window, which holds the whole mask, reads the same values.
+    """
+
+    if len(centerlines) != len(fields):
+        raise ValueError("fields must align with centerlines")
+    out = np.zeros(len(centerlines))
+    if config.field_ap_weight <= 0 and config.field_end_weight <= 0:
+        return out
+    cpu = torch.device("cpu")
+    for k, (curve, evidence) in enumerate(zip(centerlines, fields, strict=True)):
+        if evidence is None:
+            continue
+        points = np.ascontiguousarray(curve, dtype=np.float64)
+        x0, y0 = (int(v) - 1 for v in np.floor(points.min(0)))
+        x1, y1 = (int(v) + 2 for v in np.ceil(points.max(0)))
+        window = CropWindow(x0, x1, y0, y1, *evidence.ap.shape)
+        ap, valid, ends, has_end = _field_tensors([evidence], [window], window.height, window.width, cpu)
+        origin = torch.tensor([[x0, y0]], dtype=torch.float32)
+        centerline = torch.as_tensor(points[None], dtype=torch.float32)
+        out[k] = float(_field_penalty(centerline, origin, ap, valid, ends, has_end, config)[0])
+    return out
+
+
 def fit_masks(
     masks: Sequence[NDArray[np.generic]],
     initializations: Sequence[Sequence[Initialization]],
@@ -264,12 +365,16 @@ def fit_masks(
     device: torch.device | str | None = None,
     references: Sequence[NDArray[np.generic] | None] | None = None,
     head_constraints: Sequence[HeadConstraint | None] | None = None,
+    fields: Sequence[BodyFieldEvidence | None] | None = None,
 ) -> list[MaskFitResult]:
     """Fit every mask from its own starts; results follow the input order.
 
     ``references`` gives, per mask, a centerline ``[n_points, 2]`` the fit is
     pulled toward by the temporal prior (``config.temporal_prior_weight``),
     or ``None`` for no pull on that frame.
+    ``fields`` gives, per mask, body-field network evidence the fit is
+    scored against (``config.field_ap_weight`` / ``field_end_weight``), or
+    ``None`` for none on that frame.
     ``head_constraints`` adds tracking/previous-head penalties and projects
     every optimizer iterate into the permitted head movement and image bounds.
     """
@@ -280,6 +385,8 @@ def fit_masks(
         raise ValueError("references must align with masks")
     if head_constraints is not None and len(head_constraints) != len(masks):
         raise ValueError("head_constraints must align with masks")
+    if fields is not None and len(fields) != len(masks):
+        raise ValueError("fields must align with masks")
     if not masks:
         return []
     if not (
@@ -323,6 +430,7 @@ def fit_masks(
             resolved_device,
             references=None if references is None else [references[i] for i in group],
             head_constraints=None if head_constraints is None else [head_constraints[i] for i in group],
+            fields=None if fields is None else [fields[i] for i in group],
         )
         for index, result in zip(group, fitted, strict=True):
             results[index] = result
@@ -338,11 +446,15 @@ def _fit_group(
     device: torch.device,
     references: Sequence[NDArray[np.generic] | None] | None = None,
     head_constraints: Sequence[HeadConstraint | None] | None = None,
+    fields: Sequence[BodyFieldEvidence | None] | None = None,
 ) -> list[MaskFitResult]:
     # Whole-energy compilation is measured only for independent fits. The
     # changing references/head constraints in sequential fitting can generate
     # unstable specialized GPU kernels, so those calls retain normal rendering.
-    compile_energy = config.compile_energy and references is None and head_constraints is None
+    use_fields = fields is not None and any(f is not None for f in fields) and (
+        config.field_ap_weight > 0 or config.field_end_weight > 0
+    )
+    compile_energy = config.compile_energy and references is None and head_constraints is None and not use_fields
     renderer = get_renderer(config.compile_renderer and not compile_energy)
     windows, height, width = batch_windows(crops)
     target, distance, valid = _window_targets(masks, windows, height, width, device)
@@ -392,6 +504,15 @@ def _fit_group(
         has_reference = reference_mask_t.sum(1, keepdim=True)[..., None] > 0
         crossing_reference_t = torch.where(has_reference, reference_t, torch.full_like(reference_t, float("nan")))
 
+    if use_fields:
+        field_ap, field_valid, field_ends, field_has_end = _field_tensors(fields, windows, height, width, device)
+
+    def field_energy(centerline: Tensor) -> Tensor:
+        return _field_penalty(
+            centerline, offsets, field_ap[frame_of_row], field_valid[frame_of_row], field_ends[frame_of_row],
+            field_has_end[frame_of_row], config,
+        )
+
     state = _MaskFitState(starts_flat, config, device)
     head_priors = None if head_constraints is None else HeadPriors(
         [head_constraints[f] for f, starts in enumerate(initializations) for _ in starts], camera_size,
@@ -438,6 +559,8 @@ def _fit_group(
             total = total + temporal_scale * squared
         if head_priors is not None:
             total = total + head_priors.energy(centerline[:, 0])
+        if use_fields:
+            total = total + field_energy(centerline)
         return total
 
     def render_rows(centerline: Tensor, diameter: Tensor, factor: int, stride: int, fn: Renderer) -> Tensor:
@@ -532,6 +655,7 @@ def _fit_group(
     with torch.no_grad():
         final_dice, final_loss = energy(finest, finest_stride)
         centerline = state.centerline()
+        final_field = field_energy(centerline) if use_fields else torch.zeros_like(final_dice)
         width_scale = state.log_width.exp()
         diameter = state.diameter(template)
         # Winner per frame by total energy (overlap plus priors), then one
@@ -557,6 +681,7 @@ def _fit_group(
         shape_np = state.width_shape.detach().cpu().numpy().astype(np.float64)
         initial_np = initial_dice.cpu().numpy()
         final_np = final_dice.cpu().numpy()
+        field_np = final_field.cpu().numpy()
     history_np = history.cpu().numpy().astype(np.float64)
 
     results: list[MaskFitResult] = []
@@ -579,6 +704,8 @@ def _fit_group(
                     "name": start.name,
                     "initial_soft_dice_energy": float(initial_np[row]),
                     "final_soft_dice_energy": float(final_np[row]),
+                    # The body-field evidence part of ``final_energy`` (0 without evidence).
+                    "final_field_energy": float(field_np[row]),
                     "final_energy": float(loss_np[row]),
                     "final_iou": iou if row == best_row else float("nan"),
                     "final_coverage": coverage if row == best_row else float("nan"),

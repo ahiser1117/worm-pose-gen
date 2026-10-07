@@ -7,9 +7,11 @@ import torch
 
 from worm_pose_gen import body_fields
 from worm_pose_gen.body_net import OUTPUTS
-from worm_pose_gen.body_proposal import FieldPrediction, propose_trace
+from worm_pose_gen.body_proposal import OVERLAP_THRESHOLD, FieldPrediction, field_evidence, propose_trace, trace_start
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.corpus import CorpusStore
+from worm_pose_gen.latent import decode_centerline
+from worm_pose_gen.mask_fit import MaskFitConfig
 
 SHAPE = (300, 420)
 CORNERS = np.array([[80, 150], [340, 150], [340, 250], [240, 250], [240, 60]], float)
@@ -61,9 +63,68 @@ class ProposeTraceTests(unittest.TestCase):
         self.assertGreater(np.linalg.norm(trace[-1] - CORNERS[-1]), 5.0)
         self.assertLess(np.linalg.norm(trace[0] - CORNERS[0]), 2.0)
 
+    def test_an_end_off_the_mask_is_left_out(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        # The tail heatmap peaks on a fragment the cleanup removed, 40 px past the mask's tail end.
+        fragment = CORNERS[-1] - [0, 54]
+        prediction = FieldPrediction(prediction.mask, prediction.ap, prediction.head, point_heatmap(SHAPE, fragment, 6.0), prediction.overlap)
+        trace = propose_trace(prediction, mask)
+        self.assertTrue(all(mask[int(y), int(x)] for x, y in trace))
+        self.assertGreater(float(np.linalg.norm(trace[-1] - fragment)), 30.0)
+        evidence = field_evidence(prediction, mask)
+        self.assertIsNone(evidence.tail_xy)
+        np.testing.assert_allclose(evidence.head_xy, CORNERS[0], atol=1)
+
     def test_no_body_gives_no_trace(self):
         centerline, mask = looped_body()
         self.assertIsNone(propose_trace(prediction_from(centerline, mask), np.zeros(SHAPE, bool)))
+
+    def test_a_body_cut_by_the_image_edge_is_traced_to_the_edge(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        # Without the top 100 rows the last run, going up from (240, 250), leaves the image and the tail with it.
+        clipped = FieldPrediction(**{name: getattr(prediction, name)[100:] for name in OUTPUTS})
+        trace = propose_trace(clipped, mask[100:])
+        np.testing.assert_allclose(trace[0], CORNERS[0] - [0, 100], atol=2)
+        self.assertLess(abs(trace[-1, 0] - 240), 10.0)
+        self.assertLess(trace[-1, 1], 40.0)
+        self.assertTrue(all(mask[100:][int(y), int(x)] for x, y in trace))
+
+
+class TraceStartTests(unittest.TestCase):
+    def test_a_trace_stopping_short_of_the_image_edge_is_continued_off_camera(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        # Without the top 109 rows the last run leaves the image, and its last band point lies about 20 px below the edge.
+        cut = 109
+        clipped = FieldPrediction(**{name: getattr(prediction, name)[cut:] for name in OUTPUTS})
+        self.assertGreater(propose_trace(clipped, mask[cut:])[-1, 1], 15.0)
+        config = MaskFitConfig()
+        curve = decode_centerline(trace_start(clipped, mask[cut:], config=config, length_px=650.0).latent, config.coefficients)
+        self.assertAlmostEqual(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()), 650.0, delta=10.0)
+        self.assertLess(curve[-1, 1], -50.0)  # the tail, off the top edge
+        np.testing.assert_allclose(curve[0], CORNERS[0] - [0, cut], atol=3)
+
+
+class FieldEvidenceTests(unittest.TestCase):
+    def test_evidence_is_the_field_on_the_body_off_crossings(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        evidence = field_evidence(prediction, mask)
+        np.testing.assert_array_equal(evidence.ap, np.where(mask & (prediction.overlap < OVERLAP_THRESHOLD), prediction.ap, np.nan))
+        np.testing.assert_allclose(evidence.head_xy, CORNERS[0], atol=1)
+        np.testing.assert_allclose(evidence.tail_xy, CORNERS[-1], atol=1)
+        self.assertTrue(np.isnan(field_evidence(prediction, np.zeros(SHAPE, bool)).ap).all())
+
+    def test_an_end_at_the_image_edge_does_not_score_fits(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        # Without the top 50 rows the tail sits 10 px below the edge, where a body leaving the camera fires the tail heatmap too.
+        clipped = FieldPrediction(**{name: getattr(prediction, name)[50:] for name in OUTPUTS})
+        evidence = field_evidence(clipped, mask[50:])
+        self.assertIsNone(evidence.tail_xy)
+        np.testing.assert_allclose(evidence.head_xy, CORNERS[0] - [0, 50], atol=1)
 
 
 class StubModule(torch.nn.Module):

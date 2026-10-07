@@ -121,6 +121,17 @@ class MaskFitConfig:
     separation_weight: float = 0.0
     separation_fraction: float = 0.9
     separation_arc_widths: float = 2.0
+    # Body-field evidence (``batch_fit.fit_masks(fields=...)``): every midline
+    # point should sit where the body-field network's A-P field equals the
+    # point's own position along the body (in units of ``field_ap_sigma``),
+    # and the ends at the network's head and tail (in units of
+    # ``field_end_sigma_px``).  At a contact the A-P field changes across the
+    # contact line, so a pose routed onto the wrong limb pays for it even
+    # where the overlap with the mask is the same.  Zero weights disable it.
+    field_ap_weight: float = 0.0
+    field_ap_sigma: float = 0.05
+    field_end_weight: float = 0.0
+    field_end_sigma_px: float = 10.0
     default_length_px: float = 600.0
     default_width_px: float = 45.0
     # Constant-curvature arcs (rad/px) used by the moment-based starts.

@@ -8,21 +8,25 @@ labeled mask (the centre of the band's patch of body, skipping pixels
 predicted as a crossing), then the predicted tail.  Because the A-P field
 changes across a contact line, a band picks out one limb even where two
 touch, which is what a skeleton of the mask cannot do.  The trace is then fit
-like a hand trace (:func:`body_fields.trace_fit`).
+like a hand trace (:func:`body_fields.trace_fit`), or the fields score an
+ordinary fit (:func:`field_evidence`, :class:`batch_fit.BodyFieldEvidence`)
+and the trace starts it (:func:`trace_start`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy import ndimage
 import torch
 
+from .batch_fit import BodyFieldEvidence
 from .body_net import OUTPUTS, BodyFieldModule
+from .mask_fit import Initialization, MaskFitConfig, extend_start_to_length, init_from_centerline
 from .segmenter import INPUT_MEAN, INPUT_STD
-from .temporal_context import difference_channels
 
 
 FloatArray = NDArray[np.float64]
@@ -30,6 +34,17 @@ FloatArray = NDArray[np.float64]
 TRACE_LEVELS = 20
 # A heatmap peak below this means the end is not in view.
 END_THRESHOLD = 0.3
+# An end predicted this close to the image edge does not score fits: where
+# the body leaves the camera the tail heatmap fires (edge_0528: peaks of
+# 0.3-0.47 on 31 frames, switching on and off), and an end term pinning the
+# fit's tail there pulls the whole body into view.
+END_BORDER_PX = 20.0
+# A peak farther than this from the cleaned mask is on a part the cleanup
+# removed (tail_reentry_0623: a re-entering tail tip cut off as its own
+# component, 20-180 px away), and an end pulled there drags the fit off the
+# body; such an end is not used.  Real tails lie up to 16 px off reviewed
+# masks, which miss the thin tip.
+END_MASK_PX = 20.0
 # Pixels predicted as a crossing above this are left out of the bands.
 OVERLAP_THRESHOLD = 0.5
 MIN_BAND_PIXELS = 20
@@ -52,27 +67,107 @@ class FieldPrediction:
     overlap: NDArray[np.float32]
 
 
+# Body-field evidence weights for ordinary fits (``MaskFitConfig.field_*``).
+# On the 66 reviewed held-out frames (scripts/evaluate_field_fitting.py) the
+# trace start plus these terms put all 32 hand-traced contacts and coils
+# within half a body width of the hand trace (15 without) with every head at
+# the right end; an A-P weight of 0.01 or more pulled fits off the mask edges.
+FIELD_AP_WEIGHT = 0.001
+FIELD_END_WEIGHT = 0.01
+
+
+def network_inputs(
+    centre: NDArray[np.uint8], pairs: Sequence[tuple[NDArray[np.uint8] | None, NDArray[np.uint8] | None]],
+) -> NDArray[np.float32]:
+    """The network's input stack: the normalized frame, then one difference per lag.
+
+    ``pairs`` holds ``(frame[t + lag], frame[t - lag])`` per lag, ``None`` for
+    a frame that does not exist; such a lag gets a zero channel, as in
+    training (:func:`temporal_context.difference_channels`).
+    """
+
+    channels = [(centre.astype(np.float32) / 255.0 - INPUT_MEAN) / INPUT_STD]
+    for later, earlier in pairs:
+        if later is None or earlier is None:
+            channels.append(np.zeros(centre.shape, dtype=np.float32))
+        else:
+            channels.append((later.astype(np.float32) - earlier.astype(np.float32)) / (255.0 * INPUT_STD))
+    return np.stack(channels)
+
+
 @torch.inference_mode()
+def _run(module: BodyFieldModule, inputs: NDArray[np.float32]) -> list[FieldPrediction]:
+    tensor = torch.as_tensor(inputs).to(module.device)
+    with torch.autocast(device_type=module.device.type, enabled=module.device.type == "cuda"):
+        logits = module(tensor).float()
+    maps = torch.sigmoid(logits).cpu().numpy()
+    return [FieldPrediction(**{name: m[k] for k, name in enumerate(OUTPUTS)}) for m in maps]
+
+
 def predict_fields(module: BodyFieldModule, context: NDArray[np.uint8], valid: NDArray[np.bool_]) -> FieldPrediction:
     """Run the network on the centre of a context stack (as stored in a body-field record)."""
 
     centre = context.shape[0] // 2
     if module.lags and max(module.lags) > centre:
         raise ValueError(f"the model needs lags up to {max(module.lags)}; the context reaches {centre}")
-    frame = (context[centre].astype(np.float32) / 255.0 - INPUT_MEAN) / INPUT_STD
-    inputs = np.concatenate((frame[None], difference_channels(context.astype(np.float32), valid, module.lags)))
-    tensor = torch.as_tensor(inputs)[None].to(module.device)
-    with torch.autocast(device_type=module.device.type, enabled=module.device.type == "cuda"):
-        logits = module(tensor)[0].float()
-    maps = torch.sigmoid(logits).cpu().numpy()
-    return FieldPrediction(**{name: maps[k] for k, name in enumerate(OUTPUTS)})
+    pairs = [
+        (context[centre + lag] if valid[centre + lag] else None, context[centre - lag] if valid[centre - lag] else None)
+        for lag in module.lags
+    ]
+    return _run(module, network_inputs(context[centre], pairs)[None])[0]
 
 
-def _end(heatmap: NDArray[np.float32]) -> FloatArray | None:
-    if float(heatmap.max()) < END_THRESHOLD:
+class RecordingFieldPredictor:
+    """Body-field predictions for frames of one recording, from their flat-fielded neighbours."""
+
+    def __init__(self, module: BodyFieldModule, frames: Any, *, batch_size: int = 8) -> None:
+        self.module = module
+        self.frames = frames
+        self.batch_size = batch_size
+
+    def predict(self, frame_indices: Sequence[int]) -> list[FieldPrediction]:
+        """One prediction per source frame index; neighbours outside the recording give zero channels."""
+
+        lags = self.module.lags
+        targets = [int(f) for f in frame_indices]
+        needed = sorted({f + o for f in targets for o in (0, *lags, *(-lag for lag in lags)) if 0 <= f + o < self.frames.total})
+        corrected, _, _ = self.frames.corrected(needed)
+        frame = dict(zip(needed, corrected))
+        results: list[FieldPrediction] = []
+        for start in range(0, len(targets), self.batch_size):
+            batch = targets[start : start + self.batch_size]
+            inputs = np.stack([network_inputs(frame[f], [(frame.get(f + lag), frame.get(f - lag)) for lag in lags]) for f in batch])
+            results.extend(_run(self.module, inputs))
+        return results
+
+
+def _end(heatmap: NDArray[np.float32], body: NDArray[np.bool_]) -> FloatArray | None:
+    """The heatmap's peak (x, y); ``None`` below ``END_THRESHOLD`` or more than ``END_MASK_PX`` off ``body``."""
+
+    peak = int(np.argmax(heatmap))
+    if float(heatmap.flat[peak]) < END_THRESHOLD:
         return None
-    y, x = np.unravel_index(int(np.argmax(heatmap)), heatmap.shape)
+    y, x = (int(v) for v in np.unravel_index(peak, heatmap.shape))
+    reach = int(np.ceil(END_MASK_PX))
+    top, left = max(y - reach, 0), max(x - reach, 0)
+    ys, xs = np.nonzero(body[top : y + reach + 1, left : x + reach + 1])
+    if not len(ys) or float(np.hypot(ys + top - y, xs + left - x).min()) > END_MASK_PX:
+        return None
     return np.array([x, y], dtype=np.float64)
+
+
+def _box(mask: NDArray[np.bool_]) -> tuple[slice, slice] | None:
+    """Rows and columns of the mask's bounding box plus one pixel; ``None`` for an empty mask.
+
+    The extra pixel is background (or the box meets the image edge), so the
+    distance transform of the crop finds the same nearest background pixels
+    as that of the whole image.
+    """
+
+    rows, cols = np.flatnonzero(mask.any(1)), np.flatnonzero(mask.any(0))
+    if not len(rows):
+        return None
+    return slice(max(int(rows[0]) - 1, 0), int(rows[-1]) + 2), slice(max(int(cols[0]) - 1, 0), int(cols[-1]) + 2)
 
 
 def propose_trace(prediction: FieldPrediction, mask: NDArray[np.bool_], *, levels: int = TRACE_LEVELS) -> FloatArray | None:
@@ -88,38 +183,58 @@ def propose_trace(prediction: FieldPrediction, mask: NDArray[np.bool_], *, level
     Points closer than a third of a body width to the previous one are
     dropped (except the tail, which replaces its neighbour).  An end whose heatmap stays below ``END_THRESHOLD`` is left
     out, so a trace whose body leaves the camera stops at the last band
-    (which :func:`body_fields.extend_trace` continues off camera).
+    (which :func:`trace_start` continues off camera); so is an end whose
+    peak lies more than ``END_MASK_PX`` off the mask.
     """
 
     body = np.asarray(mask, dtype=bool)
-    domain = body & (prediction.overlap < OVERLAP_THRESHOLD)
-    if not domain.any():
+    box = _box(body)
+    if box is None:
+        return None
+    head, tail = _end(prediction.head, body), _end(prediction.tail, body)
+    # Everything below works on the mask's box; ``origin`` is its corner in the image.
+    origin = np.array([box[1].start, box[0].start])
+    body = body[box]
+    ys, xs = np.nonzero(body & (prediction.overlap[box] < OVERLAP_THRESHOLD))
+    if not len(ys):
         return None
     depth = ndimage.distance_transform_edt(body)
     diameter = 2.0 * float(depth.max())
-    head, tail = _end(prediction.head), _end(prediction.tail)
     points: list[FloatArray] = [] if head is None else [head]
+    # Band k holds edges[k] <= A-P < edges[k + 1], the last one closed at 1.
     edges = np.linspace(0.0, 1.0, levels + 1)
+    ap = prediction.ap[box][ys, xs]
+    level = np.searchsorted(edges, ap, side="right") - 1
+    level[ap == edges[-1]] = levels - 1
+    order = np.argsort(level, kind="stable")  # pixels grouped by band, in raster order within one
+    bounds = np.searchsorted(level[order], np.arange(levels + 1))
     for k in range(levels):
-        upper = prediction.ap <= edges[k + 1] if k == levels - 1 else prediction.ap < edges[k + 1]
-        band = domain & (prediction.ap >= edges[k]) & upper
-        components, count = ndimage.label(band, structure=np.ones((3, 3)))
-        if not count:
+        members = order[bounds[k] : bounds[k + 1]]
+        if len(members) < MIN_BAND_PIXELS:  # no patch can be large enough
             continue
-        sizes = np.bincount(components.ravel())[1:]
+        # The band's patches, labeled on the band's own box.
+        by, bx = ys[members], xs[members]
+        top, left = int(by.min()), int(bx.min())
+        patch = np.zeros((int(by.max()) - top + 1, int(bx.max()) - left + 1), dtype=bool)
+        patch[by - top, bx - left] = True
+        components, count = ndimage.label(patch, structure=np.ones((3, 3)))
+        labels = components[by - top, bx - left]
+        sizes = np.bincount(labels)[1:]
         largest = int(sizes.max())
         if largest < MIN_BAND_PIXELS:
             continue
         candidates = [i + 1 for i in range(count) if sizes[i] >= MIN_PATCH_FRACTION * largest]
-        centroids = {c: np.array(ndimage.center_of_mass(band, components, c)[::-1]) for c in candidates}
+        # Image coordinates are summed before dividing, as a centre of mass over the whole image is.
+        centroids = np.stack((np.bincount(labels, bx + origin[0]), np.bincount(labels, by + origin[1])), 1)[1:] / sizes[:, None]
         if points:
-            chosen = min(candidates, key=lambda c: float(np.linalg.norm(centroids[c] - points[-1])))
+            chosen = min(candidates, key=lambda c: float(np.linalg.norm(centroids[c - 1] - points[-1])))
         else:
             chosen = max(candidates, key=lambda c: sizes[c - 1])
-        ys, xs = np.nonzero(components == chosen)
-        central = depth[ys, xs] >= CENTRAL_FRACTION * depth[ys, xs].max()
-        pixels = np.stack((xs[central], ys[central]), 1).astype(np.float64)
-        points.append(pixels[np.argmin(np.linalg.norm(pixels - centroids[chosen], axis=1))])
+        inside = labels == chosen
+        py, px = by[inside], bx[inside]
+        central = depth[py, px] >= CENTRAL_FRACTION * depth[py, px].max()
+        pixels = (np.stack((px[central], py[central]), 1) + origin).astype(np.float64)
+        points.append(pixels[np.argmin(np.linalg.norm(pixels - centroids[chosen - 1], axis=1))])
     if tail is not None:
         points.append(tail)
     kept: list[FloatArray] = []
@@ -129,3 +244,40 @@ def propose_trace(prediction: FieldPrediction, mask: NDArray[np.bool_], *, level
     if tail is not None and kept[-1] is not points[-1]:
         kept[-1] = tail  # the tail is the end; it replaces a band point too close to it
     return np.stack(kept) if len(kept) >= 3 else None
+
+
+def field_evidence(prediction: FieldPrediction, mask: NDArray[np.bool_]) -> BodyFieldEvidence:
+    """What a fit of ``mask`` is scored against: the A-P field on the body (not on crossings) and the ends in view on it, away from the image edge."""
+
+    body = np.asarray(mask, dtype=bool)
+    ap = np.full(body.shape, np.nan, dtype=np.float32)
+    box = _box(body)
+    if box is not None:
+        ap[box] = np.where(body[box] & (prediction.overlap[box] < OVERLAP_THRESHOLD), prediction.ap[box], np.nan)
+    height, width = body.shape
+
+    def scored(point: FloatArray | None) -> FloatArray | None:
+        return None if point is None or min(point[0], point[1], width - 1 - point[0], height - 1 - point[1]) <= END_BORDER_PX else point
+
+    return BodyFieldEvidence(ap=ap, head_xy=scored(_end(prediction.head, body)), tail_xy=scored(_end(prediction.tail, body)))
+
+
+def trace_start(
+    prediction: FieldPrediction, mask: NDArray[np.bool_], *, config: MaskFitConfig, length_px: float | None = None,
+) -> Initialization | None:
+    """A head-first starting pose along the proposed trace (``None`` without one).
+
+    A trace that stops where the body leaves the camera is lengthened off
+    camera to ``length_px`` as the standard starts are
+    (:func:`mask_fit.extend_start_to_length`: an end within 80 px of mask
+    pixels on the border).  The last band point of a clipped body lies a
+    median 23 px from the edge (90th percentile 60 px, on edge_0528), so a
+    test of that point alone left most such traces short, and their fits
+    squeezed the whole body into view.
+    """
+
+    trace = propose_trace(prediction, mask)
+    if trace is None:
+        return None
+    start = init_from_centerline(trace, mask, name="network_trace", config=config)
+    return start if length_px is None else extend_start_to_length(start, mask, length_px, config=config)

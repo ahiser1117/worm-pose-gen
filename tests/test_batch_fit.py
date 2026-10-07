@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 import torch
 
-from worm_pose_gen.batch_fit import BatchFitConfig, batch_windows, fit_masks, plan_groups
+from worm_pose_gen.batch_fit import BatchFitConfig, BodyFieldEvidence, batch_windows, field_energies, fit_masks, plan_groups
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import (
     CropWindow,
@@ -16,6 +16,7 @@ from worm_pose_gen.mask_fit import (
     default_width_template,
     fit_mask,
     hard_iou,
+    orientation_pair,
     render_tube_segments,
     standard_initializations,
 )
@@ -65,6 +66,17 @@ def _latent(seed: int, centroid: tuple[float, float], length: float = 150.0) -> 
     rng = np.random.default_rng(seed)
     shape = np.convolve(rng.normal(0.0, 0.5, 16), [0.25, 0.5, 0.25], "same")
     return np.concatenate((shape, [0.4, length], centroid))
+
+
+def body_evidence(curve: np.ndarray, mask: np.ndarray) -> BodyFieldEvidence:
+    """What a perfect body-field network says about a head-first ``curve``: each mask pixel's arc position, and the ends."""
+
+    ys, xs = np.nonzero(mask)
+    pixels = np.stack((xs, ys), 1).astype(np.float64)
+    nearest = np.argmin(np.linalg.norm(pixels[:, None, :] - curve[None], axis=-1), axis=1)
+    ap = np.full(mask.shape, np.nan, dtype=np.float32)
+    ap[ys, xs] = nearest / (len(curve) - 1)
+    return BodyFieldEvidence(ap, np.asarray(curve[0], dtype=np.float64), np.asarray(curve[-1], dtype=np.float64))
 
 
 class BatchFitTests(unittest.TestCase):
@@ -188,6 +200,32 @@ class BatchFitTests(unittest.TestCase):
         self.assertLessEqual(free.records[0]["final_coverage"], 1.0)
         with self.assertRaisesRegex(ValueError, "references"):
             fit_masks([mask], [start], config=SMALL, device="cpu", references=[])
+
+    def test_body_field_evidence_is_recorded_and_scores_any_pose_as_the_fit_does(self) -> None:
+        height, width = 160, 220
+        latent = _latent(6, (width / 2, height / 2))
+        mask = _render(latent, height, width)
+        curve = decode_centerline(latent)
+        evidence = body_evidence(curve, mask)
+        config = replace(SMALL, field_ap_weight=0.01, field_end_weight=0.01)
+        starts = list(orientation_pair(Initialization("s", latent, 12.0), config=config))
+        result = fit_masks([mask], [starts], config=config, device="cpu", fields=[evidence])[0]
+        best = result.records[result.best_index]
+        # The evidence picks the head-first orientation and its energy is part of the total.
+        self.assertLess(float(np.linalg.norm(result.centerline_xy[0] - curve[0])), 5.0)
+        self.assertGreater(best["final_field_energy"], 0.0)
+        self.assertGreaterEqual(best["final_energy"], best["final_soft_dice_energy"] + best["final_field_energy"])
+        # Evaluated outside the fit, the same pose costs the same; its mirror costs far more.
+        scored, mirrored = field_energies([result.centerline_xy, result.centerline_xy[::-1]], [evidence, evidence], config)
+        self.assertAlmostEqual(scored, best["final_field_energy"], delta=1e-4 + 1e-3 * best["final_field_energy"])
+        self.assertGreater(mirrored, best["final_field_energy"] + 1.0)
+        self.assertEqual(field_energies([result.centerline_xy], [None], config).tolist(), [0.0])
+        self.assertEqual(field_energies([result.centerline_xy], [evidence], SMALL).tolist(), [0.0])
+        # Without evidence (or without weights) the record says 0.
+        for record in fit_masks([mask], [starts], config=config, device="cpu", fields=[None])[0].records:
+            self.assertEqual(record["final_field_energy"], 0.0)
+        for record in fit_masks([mask], [starts], config=SMALL, device="cpu", fields=[evidence])[0].records:
+            self.assertEqual(record["final_field_energy"], 0.0)
 
     def test_rejects_misaligned_inputs(self) -> None:
         mask = np.zeros((32, 32), dtype=bool)
