@@ -1,7 +1,8 @@
 """Body-field network predictions on workspace frames, for the viewer's network layers.
 
-The network is the app's ``--body-net`` (``AppState.body_net``, shared with
-Body fields).  A frame is predicted from its flat-fielded recording frame and
+The network is the body model the workspace was analysed with
+(:func:`analysis.workspace_body_net`), else the app's ``--body-net``
+(``AppState.body_net``, shared with Body fields).  A frame is predicted from its flat-fielded recording frame and
 lag neighbours exactly as the fit stage reads them (:func:`pipeline.workspace_frames`
 with the app's flat-field cache, :class:`body_proposal.RecordingFieldPredictor`);
 a neighbour outside the recording gives a zero lag channel.  The response
@@ -98,7 +99,9 @@ class NetworkFields:
         view.refresh()
         workspace = view.workspace
         row = workspace.row_of(frame)
-        module = self.app.body_net()
+        from .analysis import workspace_body_net
+
+        module = self.app.body_net(workspace_body_net(workspace))
         model = str(getattr(module, "checkpoint_path", ""))
         key = (name, str(workspace.recording), row, workspace.mask_revision(row), model)
         hit = self._cached(key)

@@ -275,9 +275,10 @@ class AppTests(unittest.TestCase):
         self.assertIn("exists", self.post("/api/workspaces", {"name": "fresh", "recording": str(self.recording), "first": 0, "last": 2}, 400)["error"])
         self.assertIn("does not exist", self.post("/api/workspaces", {"name": "x", "recording": str(self.root / "recordings" / "nope.h5"), "first": 0, "last": 2}, 400)["error"])
         self.assertIn("recording roots", self.post("/api/workspaces", {"name": "x", "recording": "/nope.h5", "first": 0, "last": 2}, 404)["error"])
-        self.assertIn("name", self.post("/api/workspaces", {"recording": str(self.recording), "first": 0, "last": 2}, 400)["error"])
+        # Without a name a workspace is named after its recording (and its range when it is not the whole recording).
+        self.assertEqual(self.post("/api/workspaces", {"recording": str(self.recording), "first": 0, "last": 2})["name"], "rec-a_f0-2")
         self.assertIn("'first' must be an integer", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "first": "abc", "last": 2}, 400)["error"])
-        self.assertIn("'last' is required", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "first": 0}, 400)["error"])
+        self.assertIn("'step' must be an integer", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "step": "two"}, 400)["error"])
         # An empty workspace still opens in the viewer: every row unfitted.
         empty = self.get("/api/workspaces/fresh")
         self.assertEqual(empty["series"]["fitted"], [0] * FRAMES)

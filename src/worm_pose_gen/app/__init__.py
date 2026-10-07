@@ -43,7 +43,7 @@ from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import DEFAULT_BODY_NET, AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
-from .routers import algorithms, body_fields, config as config_routes, corpus, edits, jobs, library, masks, recordings, static, viewer, workspaces
+from .routers import algorithms, analysis as analysis_routes, body_fields, config as config_routes, corpus, edits, jobs, library, masks, recordings, static, viewer, workspaces
 from .routers import labeling as labeling_routes
 from .routers import inspection as inspection_routes
 from .routers import fixes as fixes_routes
@@ -114,6 +114,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(labeling_routes.router)
     app.include_router(inspection_routes.router)
     app.include_router(fixes_routes.router)
+    app.include_router(analysis_routes.router)
     app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(library.router)
