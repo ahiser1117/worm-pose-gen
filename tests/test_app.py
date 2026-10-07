@@ -317,7 +317,7 @@ class AppTests(unittest.TestCase):
         starts = self.get("/api/workspaces/fresh/starts?frame=2")
         self.assertTrue(starts["starts"])
         self.assertEqual(len(starts["starts"][0]["centerline_xy"]), 100)
-        self.assertGreater(self.get("/api/state")["workspaces"][0]["summary"]["mask_rows"], 0)
+        self.assertGreater(next(w for w in self.get("/api/state")["workspaces"] if w["name"] == "fresh")["summary"]["mask_rows"], 0)
 
     def test_file_explorer_registers_a_recording_with_its_own_dataset(self) -> None:
         listing = self.get(f"/api/files?path={self.root}")

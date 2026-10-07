@@ -482,9 +482,8 @@ export class WorkspaceView {
 
   // The target of the fixes: an issue, a dragged range, or null (the current frame).
   select(target, {seek = true} = {}) {
-    if (this.mode === "relabel" || this.mode === "preview" || this.mode === "job" || this.mode === "mask") {
-      if (target?.kind === "range" && this.mode === "relabel") return;
-    }
+    // Relabel's keyframes and a mask draft belong to the target they started on.
+    if (this.mode === "relabel" || this.mode === "mask") return;
     this.target = target;
     this.selectedIssue = target?.kind === "issue" ? target.issue : null;
     this.timeline.set("selection", target?.kind === "range" ? [target.first, target.last] : null);

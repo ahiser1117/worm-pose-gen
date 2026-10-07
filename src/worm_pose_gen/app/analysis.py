@@ -52,7 +52,7 @@ ANALYSE_JOB_KIND = "analyse"
 # segmenter until a body-field net matches it (section 4, decision 1).
 ROLE_KINDS = {"mask": "segmenter", "body": "body_net"}
 LAST_OPENED_FILE = "last_opened.json"
-KYMOGRAPH_RANGE = 10.0
+KYMOGRAPH_RANGE = 15.0
 
 
 # ---------------------------------------------------------------------------

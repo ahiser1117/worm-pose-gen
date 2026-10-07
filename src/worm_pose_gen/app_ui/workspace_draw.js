@@ -49,7 +49,7 @@ function divergingLut() {
   const lut = new Uint8ClampedArray(256 * 4);
   for (let v = 1; v < 256; v++) {
     const t = (v - 128) / 127;
-    const color = t < 0 ? mix(zero, negative, Math.min(1, -t * 1.6)) : mix(zero, positive, Math.min(1, t * 1.6));
+    const color = t < 0 ? mix(zero, negative, Math.sqrt(-t)) : mix(zero, positive, Math.sqrt(t));
     lut.set([...color, 255], v * 4);
   }
   return lut; // value 0 (no pose) stays transparent
