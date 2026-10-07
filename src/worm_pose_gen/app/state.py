@@ -359,7 +359,6 @@ class AppState:
             "recording_roots": [str(p) for p in self.config.recording_roots],
             "poses_root": str(self.config.poses_root),
             "corpus_root": str(self.config.corpus_root),
-            "checkpoints_root": str(self.config.checkpoints_root),
             "gpus": list(self.config.gpus),
             "jobs_running": len(self.runner.list("running")),
             "jobs_queued": len(self.runner.list("queued")),

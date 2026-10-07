@@ -148,10 +148,11 @@ def find_frames(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """The job: ``--spec`` is ``{"recordings": [{"path", "id", "frames", "exclude"}], "frames": N, "model": ref | null,
-    "libraries": {"lab", "personal"}, "video": {"dataset_path", "flat_field"}, "dataset_root": path}``."""
+    "libraries": {"lab", "personal"}, "video": {"dataset_path", "flat_field"}, "fps": setup fps, "dataset_root": path}``."""
 
     from .jobs import report_progress
-    from .library import Libraries, load_model
+    from .library import Libraries
+    from .library.inference import load_model
     from .pipeline import Frames
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -164,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_progress(0.0, f"loading {spec['model']}")
         roots = spec["libraries"]
         libraries = Libraries(lab=None if roots.get("lab") is None else Path(roots["lab"]), personal=Path(roots["personal"]))
-        model = load_model(libraries, spec["model"], args.device)
+        model = load_model(libraries, spec["model"], device=args.device, fps=spec.get("fps"))
     video = spec.get("video") or {}
 
     def open_predict(recording: dict[str, Any]) -> tuple[Predict | None, Callable[[], None]]:
@@ -172,8 +173,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return None, lambda: None
         frames = Frames(Path(recording["path"]), dataset_root=spec.get("dataset_root"), flat_field=bool(video.get("flat_field", True)),
                         dataset=str(video.get("dataset_path") or "/img_nir"))
-        handle = lambda: frames._handle.close() if frames._handle is not None else None  # noqa: E731
-        return (lambda indices: model.recording_probabilities(frames, indices)), handle
+
+        def predict(indices: Sequence[int]) -> list[NDArray[np.float32]]:
+            # Each frame with the neighbours its lags need, read as one slab.
+            lag = model.max_lag
+            out = []
+            for index in indices:
+                first, last = max(0, index - lag), min(frames.total - 1, index + lag)
+                stack, _, _ = frames.corrected(list(range(first, last + 1)))
+                out.append(model.predict_sequence(stack, None, [index - first])[0].mask)
+            return out
+
+        return predict, frames.close
 
     entries = find_frames(spec["recordings"], int(spec["frames"]), open_predict,
                           progress=lambda fraction, message: report_progress(0.02 + 0.97 * fraction, message))

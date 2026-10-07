@@ -26,7 +26,7 @@ proposal at a threshold of 0.5 (empty without a model).
 and the ``body`` model (a body-field net) the body proposal: a trace through
 its predicted A-P field (:func:`body_proposal.propose_trace`) fit like a hand
 trace (:func:`body_fields.trace_fit`).  Library models are loaded once on
-the app's device; fits run one at a time.
+the app's device (:mod:`library.inference`); fits run one at a time.
 
 **Saving** writes a new label revision (:meth:`library.Dataset.save`) with
 the body as decided: a trace (traced by hand or the proposal's), a head end
@@ -113,7 +113,6 @@ class Labeling:
     def __init__(self, app: Any) -> None:
         self.app = app
         self._captures: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
-        self._models: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         # Proposals, fits and target builds share the app's device: one at a time.
         self.fit_lock = threading.Lock()
@@ -226,18 +225,12 @@ class Labeling:
         record = self.existing(target["reading"], entry["recording"], entry["frame"])
         return setup, entry, target, record, self.inputs(setup, entry, record)
 
-    def model(self, ref: str) -> library.LoadedModel:
-        """A library model on the app's device, loaded at first use (and again when its weights change)."""
+    def model(self, setup_ref: str, ref: str) -> Any:
+        """A library model on the app's device at the setup's frame rate (:func:`library.inference.load_model` caches it)."""
 
-        stamp = library.weights_path(self.libraries, ref).stat().st_mtime
-        with self._lock:
-            cached = self._models.get(ref)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-        loaded = library.load_model(self.libraries, ref, self.app.device)
-        with self._lock:
-            self._models[ref] = (stamp, loaded)
-        return loaded
+        from ..library.inference import load_model
+
+        return load_model(self.libraries, ref, device=self.app.device, fps=library.get_setup(self.libraries, setup_ref).fps)
 
     def defaults(self, setup_ref: str) -> dict[str, str | None]:
         defaults = library.get_setup(self.libraries, setup_ref).defaults
@@ -251,7 +244,7 @@ class Labeling:
         if ref is None:
             return None
         with self.fit_lock:
-            return self.model(ref).mask_probability(inputs["context"], inputs["context_valid"])
+            return self.model(setup_ref, ref).predict(inputs["context"], inputs["context_valid"]).mask
 
     def open(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Everything the page shows for an entry; see the module docstring for where the mask comes from."""
@@ -376,7 +369,7 @@ class Labeling:
         if not mask.any():
             return {"status": "no_trace", "model": ref}
         with self.fit_lock:
-            prediction = self.model(ref).fields(inputs["context"], inputs["context_valid"])
+            prediction = self.model(setup, ref).predict(inputs["context"], inputs["context_valid"]).field_prediction()
             trace = propose_trace(prediction, mask)
             if trace is None:
                 return {"status": "no_trace", "model": ref}

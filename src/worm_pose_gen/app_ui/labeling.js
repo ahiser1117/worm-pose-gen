@@ -5,7 +5,8 @@
 //   #labeling                    the queues of the setup, New queue, Browse labels
 //   #labeling/new                New queue: recordings and a number of frames → Find frames (a job)
 //   #labeling/queue/<id>[/<n>]   a queue's frames (Relabel keyframes from the Workspace, found frames, a manifest)
-//   #labeling/browse             existing labels, filtered, lowest body fit IoU first
+//   #labeling/browse[/<dataset>/<recording>]   existing labels, filtered, lowest body fit IoU first
+//                                (the Training page's Datasets tab links a dataset's recording here)
 //
 // The left panel walks the frames; the editor (labeling_editor.js) labels the
 // open one. A finished Relabel queue offers Back to workspace, which hands the
@@ -50,12 +51,12 @@ export async function mount(section, context) {
 
 export async function show(params = "") {
   page.visible = true;
-  const [mode, id, index] = params.split("/");
+  const [mode, id, index] = params.split("/").map(decodeURIComponent);
   if (mode === "queue" && id) {
     if (page.mode === "queue" && page.queue?.id === id && index === undefined) { renderHeader(); return; }
     await openQueue(id, index === undefined ? null : Number(index));
   } else if (mode === "browse") {
-    await openBrowse();
+    await openBrowse(id || null, index || "");
   } else if (mode === "new") {
     if (!leaveFrame()) return;
     page.mode = "new";
@@ -324,8 +325,10 @@ async function go(index, {force = false} = {}) {
   if (!force && index === page.index) return true;
   if (!leaveFrame()) return false;
   page.index = index;
-  const hash = page.mode === "queue" ? `#labeling/queue/${page.queue.id}/${index}` : "#labeling/browse";
-  if (location.hash !== hash) history.replaceState(null, "", hash);
+  if (page.mode === "queue") {
+    const hash = `#labeling/queue/${page.queue.id}/${index}`;
+    if (location.hash !== hash) history.replaceState(null, "", hash);
+  }
   renderLeftMarks();
   const request = {setup: page.setup, dataset: page.saving?.dataset || null, entry: list[index]};
   if (page.mode === "queue") request.queue = page.queue.id;
@@ -376,14 +379,27 @@ async function onSaved(answer, {next}) {
 
 // ------------------------------------------------------------------ browse labels
 
-async function openBrowse() {
+// Browse the labels of `datasetRef` (by default the dataset saves read from), optionally of one recording.
+async function openBrowse(datasetRef = null, recording = "") {
   if (!leaveFrame()) return;
+  const f = page.browse.filters;
+  if (datasetRef) {
+    try {
+      const summary = await api(`/api/library/datasets/${encodeURIComponent(datasetRef)}`);
+      if (summary.setup !== page.setup) { page.setup = summary.setup; remember(STORE_SETUP, summary.setup); }
+      if (summary.writable) remember(storeDataset(summary.setup), summary.ref);  // a dataset of mine: saves go there too
+    } catch (error) {
+      ctx.toast(`Could not open ${datasetRef}: ${error.message}`, "error");
+      datasetRef = null;
+    }
+    Object.assign(f, {recording, split: "", status: "", contact: false});
+  }
   await refreshSaving();
   page.mode = "browse";
   page.index = -1;
+  page.browse.dataset = datasetRef || page.saving?.reading || null;
   editor.clear();
-  const f = page.browse.filters;
-  const dataset = page.saving?.reading;
+  const dataset = page.browse.dataset;
   const select = (name, options, label) => el("select", {"aria-label": label, onchange: (e) => { f[name] = e.target.value; loadBrowse(); }},
     options.map(([value, text]) => el("option", {value, selected: f[name] === value}, text)));
   let recordings = [];
@@ -396,7 +412,7 @@ async function openBrowse() {
   left.replaceChildren(
     button("← Queues", () => ctx.navigate("labeling"), {class: "link"}),
     el("section", {class: "section"}, el("h3", {}, "Browse labels"),
-      dataset ? null : el("p", {class: "note"}, "There are no labels for this setup yet."),
+      dataset ? el("p", {class: "note lb-dataset"}, `Labels of ${dataset}`) : el("p", {class: "note"}, "There are no labels for this setup yet."),
       select("recording", [["", "All recordings"], ...recordings.map((r) => [r, r])], "Recording"),
       el("div", {class: "row lb-tight"},
         select("split", [["", "All splits"], ["train", "Train"], ["val", "Validation"], ["test", "Test"]], "Split"),
@@ -410,7 +426,7 @@ async function openBrowse() {
 }
 
 async function loadBrowse() {
-  const dataset = page.saving?.reading, f = page.browse.filters, token = ++page.browse.token;
+  const dataset = page.browse.dataset, f = page.browse.filters, token = ++page.browse.token;
   if (!dataset) { page.browse.rows = []; renderBrowseList(); return; }
   let rows = [];
   try {

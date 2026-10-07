@@ -146,8 +146,8 @@ def build_targets(
     """Fit and store a label's targets unless they are already built (with this builder); returns their meta.
 
     ``segmenter`` is the builder's mask model when the caller has it loaded
-    (anything with ``predict_probability_batch``,
-    :meth:`.runtime.LoadedModel.mask_model`); otherwise it is loaded here.
+    (anything with ``predict_probability_batch``, as
+    :class:`.inference.LoadedModel`); otherwise it is loaded here.
     """
 
     builder = _builder(libraries, record, builder)
@@ -164,9 +164,7 @@ def build_targets(
     label = record.load()
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
     if segmenter is None and builder is not None:
-        from .runtime import load_model
-
-        segmenter = load_model(libraries, builder, device).mask_model()
+        segmenter = _load_builder(libraries, record, builder, device)
     config = body_fields.fit_config()
     count = len(label.context)
     tracking = HeadTracking(
@@ -190,6 +188,16 @@ def build_targets(
         describe_body(meta, arrays["centerline_xy"], arrays["width_profile"], mask.shape)
     write_targets(libraries, record.sha256, builder, meta, arrays)
     return meta
+
+
+def _load_builder(libraries: Libraries, record: LabelRecord, builder: str, device: Any) -> Any:
+    """The builder model, run at the label's setup's frame rate (:func:`.inference.load_model`)."""
+
+    from .inference import load_model
+    from .setups import get_setup
+
+    fps = get_setup(libraries, Dataset(libraries, record.dataset).setup).fps
+    return load_model(libraries, builder, device=device, fps=fps)
 
 
 # --------------------------------------------------------------------------- job
@@ -231,9 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         builder = _builder(libraries, record, SETUP_DEFAULT)
         report_progress(k / len(wanted), f"building body targets of {record.key}")
         if builder is not None and builder not in models and (args.force or cached_meta(libraries, record, builder) is None):
-            from .runtime import load_model
-
-            models[builder] = load_model(libraries, builder, args.device).mask_model()
+            models[builder] = _load_builder(libraries, record, builder, args.device)
         meta = build_targets(libraries, record, builder=builder, segmenter=models.get(builder), device=args.device, force=args.force)
         built.append({**record.identity, "builder": builder, "fit_iou": meta.get("fit_iou"), "has_body": meta.get("has_body")})
     report_progress(1.0, f"built the body targets of {len(built)} label(s)", result={"targets": built})

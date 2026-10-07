@@ -1,4 +1,4 @@
-"""User corpus browsing/editing and explicit checkpoint selection."""
+"""User corpus browsing and editing (the old label store; models train from the library, :mod:`.training`)."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -12,7 +12,6 @@ from ..state import AppState, NotFound, _integer
 from ...corpus import CorpusStore, recording_identity
 from ...label_app import data_url, decode_mask_data_url, mask_to_png_values
 from ...pipeline import workspace_dataset, workspace_lock
-from ...training import training_schema, list_checkpoints, resolve_checkpoint
 
 router = APIRouter(prefix="/api")
 
@@ -41,12 +40,7 @@ def corpus(source: str = "", split: str = "", recording: str = "", q: str = "", 
                 "filtered_counts": {s: sum(r.split == s for r in filtered) for s in ("train", "val", "test")},
                 "facets": {"sources": sorted({r.label_source for r in records}),
                            "splits": ["train", "val", "test"], "recordings": list(recordings.values())},
-                "samples": [asdict(r) for r in filtered], "training": training_schema()}
-
-
-@router.get("/training")
-def training(app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return {**training_schema(), "checkpoint": str(app.config.checkpoint), "root": str(app.config.checkpoints_root)}
+                "samples": [asdict(r) for r in filtered]}
 
 
 @router.post("/corpus/labels")
@@ -99,37 +93,3 @@ def delete_label(sample_id: str, app: AppState = Depends(get_state)) -> dict[str
     if not store.delete(sample_id):
         raise NotFound(f"unknown corpus label {sample_id!r}")
     return {"deleted": sample_id, "counts": store.counts()}
-
-
-@router.get("/checkpoints")
-def checkpoints(app: AppState = Depends(get_state)) -> dict[str, Any]:
-    return {"root": str(app.config.checkpoints_root), "checkpoints": list_checkpoints(app.config)}
-
-
-@router.get("/checkpoints/availability")
-def checkpoint_availability(checkpoint: str = "", app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """Check a selected catalog ID or custom path without loading the model."""
-    if not checkpoint.strip():
-        return {"available": False, "reason": "Choose an available segmentation checkpoint."}
-    try:
-        path = resolve_checkpoint(app.config, checkpoint)
-        with path.open("rb") as handle:
-            handle.read(1)
-    except (OSError, ValueError) as error:
-        return {"available": False, "reason": f"Model unavailable: {error}. Choose another checkpoint."}
-    return {"available": True, "path": str(path)}
-
-
-@router.post("/workspaces/{name}/checkpoint")
-def select_checkpoint(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    if not payload.get("checkpoint"):
-        raise ValueError("'checkpoint' is required")
-    checkpoint = resolve_checkpoint(app.config, str(payload["checkpoint"]))
-    view = app.view(name)
-    app.check_writable(name)
-    with workspace_lock(view.workspace, timeout=2):
-        view.refresh()
-        view.workspace.info.settings["checkpoint"] = str(checkpoint)
-        view.workspace.save_info()
-    view.refresh()
-    return {"workspace": name, "checkpoint": str(checkpoint)}

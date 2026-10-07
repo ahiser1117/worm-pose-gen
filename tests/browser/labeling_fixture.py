@@ -36,6 +36,7 @@ from worm_pose_gen.app.queues import relabel_queue
 from worm_pose_gen.batch_fit import PRESETS
 from worm_pose_gen.body_targets import render_body_targets
 from worm_pose_gen.library.capture import read_label_inputs
+from worm_pose_gen.library.inference import Outputs
 from worm_pose_gen.library.targets import write_targets
 from worm_pose_gen.workspace import Workspace
 
@@ -67,13 +68,12 @@ class StandIn:
     def _true(self, context):
         return self.truth[hashlib.sha1(context[len(context) // 2].tobytes()).hexdigest()]
 
-    def mask_probability(self, context, valid):
-        _, mask = self._true(context)
-        return np.clip(ndimage.gaussian_filter(mask.astype(np.float32), 1.5) * 1.1, 0, 1)
-
-    def fields(self, context, valid):
+    def predict(self, context, valid):
         centerline, mask = self._true(context)
-        return prediction_from(centerline, mask)
+        if self.card.kind == "segmenter":
+            return Outputs(mask=np.clip(ndimage.gaussian_filter(mask.astype(np.float32), 1.5) * 1.1, 0, 1))
+        fields = prediction_from(centerline, mask)
+        return Outputs(**{name: getattr(fields, name) for name in ("mask", "ap", "head", "tail", "overlap")})
 
 
 def main():
@@ -130,7 +130,7 @@ def main():
         lab_library=lab, library=personal, dev=args.dev,
     ))
     state = app.state.app_state
-    state.labeling.model = lambda ref: StandIn(library.get_card(libraries, ref), truth)
+    state.labeling.model = lambda setup, ref: StandIn(library.get_card(libraries, ref), truth)
     queue = relabel_queue(state, "ws", [10, 20, 30])
     (root / "fixture.json").write_text(json.dumps({"relabel": queue["id"]}))
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

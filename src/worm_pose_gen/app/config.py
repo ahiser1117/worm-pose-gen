@@ -33,7 +33,6 @@ class AppConfig:
     poses_root: Path = DEFAULT_RUNS_ROOT
     dataset_root: Path = DEFAULT_DATASET_ROOT
     corpus_root: Path | None = None
-    checkpoints_root: Path | None = None
     checkpoint: Path | None = DEFAULT_CHECKPOINT
     body_net: Path | None = DEFAULT_BODY_NET
     prior_cache: Path | None = DEFAULT_PRIOR_CACHE
@@ -57,7 +56,6 @@ class AppConfig:
         self.poses_root = Path(self.poses_root)
         self.dataset_root = Path(self.dataset_root)
         self.corpus_root = self.workspaces_root / "corpus" if self.corpus_root is None else Path(self.corpus_root)
-        self.checkpoints_root = self.workspaces_root / "checkpoints" if self.checkpoints_root is None else Path(self.checkpoints_root)
         self.checkpoint = None if self.checkpoint is None else Path(self.checkpoint)
         self.body_net = None if self.body_net is None else Path(self.body_net)
         self.prior_cache = None if self.prior_cache is None else Path(self.prior_cache)

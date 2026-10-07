@@ -191,6 +191,12 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await page.keyboard.press('Shift+ArrowRight');
     await page.waitForFunction(() => /frame 25/.test(document.querySelector('.lb-status')?.textContent || ''));
 
+    // The Training page's Datasets tab links one dataset's recording.
+    await page.goto(base + '/#labeling/browse/lab:nir-labels/2024-05-05-01');
+    await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 4);
+    assert.match(await page.locator('.lb-dataset').textContent(), /Labels of lab:nir-labels/);
+    assert.equal(await page.locator('[aria-label="Recording"]').inputValue(), '2024-05-05-01');
+
     // The help lists the shortcuts.
     await page.keyboard.press('?');
     await page.waitForSelector('dialog.lb-help[open]');

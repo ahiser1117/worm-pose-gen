@@ -15,10 +15,9 @@ Output channels (:data:`OUTPUTS`):
 ``overlap``  logit that a mask pixel is covered twice (a crossing), BCE on
              mask pixels
 
-Targets come from ``<store>/body_fields/<sample_id>.npz``
-(``scripts/build_body_fields.py``) and their review in the app.  A sample
-with no body, a review of ``rejected``, or a poor tube fit (``fit_iou`` below
-``min_fit_iou``) unless reviewed ``accepted`` trains the mask only.
+Targets are a label's mask and its built body targets
+(:mod:`library.targets`); :mod:`model_training` reads them from the library
+and decides which labels train the body (:func:`model_eval.body_used`).
 """
 
 from __future__ import annotations
@@ -31,14 +30,10 @@ import numpy as np
 from numpy.typing import NDArray
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 
-from . import body_fields
 from .body_targets import point_heatmap
-from .segmentation_dataset import SegmentationStore
-from .segmenter import IGNORE_LABEL, INPUT_MEAN, INPUT_STD, ResNet18UNet, masked_binary_metrics
-from .temporal_context import difference_channels
+from .segmenter import IGNORE_LABEL, ResNet18UNet, masked_binary_metrics
 
 
 OUTPUTS = ("mask", "ap", "head", "tail", "overlap")
@@ -90,150 +85,37 @@ def _augment(
     return np.ascontiguousarray(frames, dtype=np.float32), np.ascontiguousarray(targets, dtype=np.float32)
 
 
-# Rows of the target stack built by BodyFieldDataset.
+# Rows of the target stack a body-field item carries (:func:`body_target_rows`).
 _MASK, _VALID, _AP, _AP_VALID, _HEAD, _TAIL, _OVERLAP, _OVERLAP_VALID = range(8)
+TARGET_ROWS = 8
 
 
-class BodyFieldDataset(Dataset[dict[str, Tensor | str]]):
-    def __init__(
-        self,
-        store: SegmentationStore,
-        split: str,
-        lags: Sequence[int],
-        *,
-        augment: bool = False,
-        crop_size: int | None = None,
-        seed: int = 0,
-        min_fit_iou: float = 0.9,
-    ) -> None:
-        self.store = store
-        self.records = store.records(split)
-        missing = [r.sample_id for r in self.records if not body_fields.field_path(store.root, r.sample_id).exists()]
-        if missing:
-            raise FileNotFoundError(f"{len(missing)} samples lack body fields (run scripts/build_body_fields.py): {missing[:3]}")
-        self.lags = tuple(int(lag) for lag in lags)
-        self.augment = augment
-        self.crop_size = crop_size
-        self.seed = seed
-        self.min_fit_iou = min_fit_iou
+def body_target_rows(mask: NDArray[np.uint8], targets: dict[str, NDArray[Any]] | None) -> NDArray[np.float32]:
+    """The ``[8,H,W]`` target stack of a label: its mask, and its body targets where they train the body.
 
-    def __len__(self) -> int:
-        return len(self.records)
+    ``mask`` is the label (0, 1, 255 excluded); ``targets`` the arrays of its
+    built body targets (:func:`library.load_targets`), or ``None`` when the
+    label trains the mask only, in which case the A-P and overlap rows are
+    invalid and the heatmaps NaN (they say nothing either way).
+    """
 
-    def __getitem__(self, index: int) -> dict[str, Tensor | str]:
-        record = self.records[index]
-        _, label, _ = self.store.load(record.sample_id)
-        fields, meta = body_fields.load(body_fields.field_path(self.store.root, record.sample_id))
-        if body_fields.is_stale(meta, record):
-            raise ValueError(f"{record.sample_id}: body fields are stale (rebuild them)")
-        context = fields["context"]
-        context_valid = fields["context_valid"]
-        centre = context.shape[0] // 2
-        # Only the frames the lags need are augmented and differenced.
-        needed = sorted({centre} | {centre + lag for lag in self.lags} | {centre - lag for lag in self.lags})
-        frames = context[needed].astype(np.float32)
-        shape = label.shape
-        targets = np.zeros((8, *shape), dtype=np.float32)
-        targets[_MASK] = label == 1
-        targets[_VALID] = label != IGNORE_LABEL
-        review = body_fields.review_status(meta)
-        usable = meta.get("fit_iou", 0.0) >= self.min_fit_iou or review == "accepted"
-        if meta.get("has_body") and usable and review != "rejected":
-            ap = fields["ap"].astype(np.float32)
-            body = (label == 1) & np.isfinite(ap)
-            targets[_AP] = np.where(body, ap, 0.0)
-            targets[_AP_VALID] = body
-            sigma = HEATMAP_SIGMA_DIAMETERS * float(fields["diameter_px"])
-            targets[_HEAD] = point_heatmap(shape, fields["head_xy"], sigma)
-            targets[_TAIL] = point_heatmap(shape, fields["tail_xy"], sigma)
-            targets[_OVERLAP] = fields["overlap"] & (label == 1)
-            targets[_OVERLAP_VALID] = label == 1
-        else:
-            # No usable body fields: the heatmaps say nothing either way.
-            targets[_HEAD] = targets[_TAIL] = np.nan
-        if self.augment:
-            rng = np.random.default_rng((self.seed, index, int(torch.initial_seed()) % (1 << 31)))
-            frames, targets = _augment(frames, targets, rng, self.crop_size)
-        position = {frame: k for k, frame in enumerate(needed)}
-        stack = np.zeros((2 * centre + 1, *frames.shape[1:]), dtype=np.float32)
-        for frame, k in position.items():
-            stack[frame] = frames[k]
-        image = ((frames[position[centre]] / 255.0 - INPUT_MEAN) / INPUT_STD)[None]
-        inputs = np.concatenate((image, difference_channels(stack, context_valid, self.lags)), axis=0)
-        return {
-            "image": torch.as_tensor(inputs),
-            "targets": torch.as_tensor(targets),
-            "sample_id": record.sample_id,
-        }
-
-
-def collate_body_fields(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Pad to a common multiple of 32; padded pixels are invalid for every loss."""
-
-    height = max(64, max(s["image"].shape[-2] for s in samples))
-    width = max(64, max(s["image"].shape[-1] for s in samples))
-    height, width = ((height + 31) // 32) * 32, ((width + 31) // 32) * 32
-
-    def pad(tensor: Tensor, value: float = 0.0) -> Tensor:
-        return F.pad(tensor, (0, width - tensor.shape[-1], 0, height - tensor.shape[-2]), value=value)
-
-    return {
-        "sample_id": [s["sample_id"] for s in samples],
-        "image": torch.stack([pad(s["image"]) for s in samples]),
-        "targets": torch.stack([pad(s["targets"]) for s in samples]),
-    }
-
-
-class BodyFieldDataModule(L.LightningDataModule):
-    def __init__(
-        self,
-        root: str | Path,
-        lags: Sequence[int],
-        *,
-        batch_size: int = 4,
-        crop_size: int | None = 512,
-        num_workers: int = 4,
-        seed: int = 0,
-        min_fit_iou: float = 0.9,
-    ) -> None:
-        super().__init__()
-        self.store = SegmentationStore(root)
-        self.lags = tuple(lags)
-        self.batch_size = batch_size
-        self.crop_size = crop_size
-        self.num_workers = num_workers
-        self.seed = seed
-        self.min_fit_iou = min_fit_iou
-
-    def counts(self) -> dict[str, int]:
-        return self.store.counts()
-
-    def setup(self, stage: str | None = None) -> None:
-        def make(split: str, augment: bool) -> BodyFieldDataset:
-            return BodyFieldDataset(
-                self.store, split, self.lags, augment=augment, crop_size=self.crop_size if augment else None,
-                seed=self.seed, min_fit_iou=self.min_fit_iou,
-            )
-
-        self.train_set = make("train", True)
-        self.val_set = make("val", False)
-        self.test_set = make("test", False)
-
-    def _loader(self, dataset: Dataset[Any], shuffle: bool, batch_size: int) -> DataLoader[Any]:
-        return DataLoader(
-            dataset, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available(), persistent_workers=self.num_workers > 0,
-            collate_fn=collate_body_fields,
-        )
-
-    def train_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.train_set, True, self.batch_size)
-
-    def val_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.val_set, False, max(1, self.batch_size // 2))
-
-    def test_dataloader(self) -> DataLoader[Any]:
-        return self._loader(self.test_set, False, max(1, self.batch_size // 2))
+    shape = mask.shape
+    rows = np.zeros((TARGET_ROWS, *shape), dtype=np.float32)
+    rows[_MASK] = mask == 1
+    rows[_VALID] = mask != IGNORE_LABEL
+    if targets is None:
+        rows[_HEAD] = rows[_TAIL] = np.nan
+        return rows
+    ap = targets["ap"].astype(np.float32)
+    body = (mask == 1) & np.isfinite(ap)
+    rows[_AP] = np.where(body, ap, 0.0)
+    rows[_AP_VALID] = body
+    sigma = HEATMAP_SIGMA_DIAMETERS * float(targets["diameter_px"])
+    rows[_HEAD] = point_heatmap(shape, targets["head_xy"], sigma)
+    rows[_TAIL] = point_heatmap(shape, targets["tail_xy"], sigma)
+    rows[_OVERLAP] = targets["overlap"] & (mask == 1)
+    rows[_OVERLAP_VALID] = mask == 1
+    return rows
 
 
 def heatmap_focal_loss(logits: Tensor, target: Tensor, alpha: float = 2.0, beta: float = 4.0) -> Tensor:

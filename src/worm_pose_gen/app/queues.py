@@ -220,7 +220,7 @@ def spread_queue(app: Any, setup_ref: str, paths: Sequence[Any], frames: Any, da
     spec_json = {
         "recordings": recordings, "frames": count, "model": model,
         "libraries": {"lab": None if app.libraries.lab is None else str(app.libraries.lab), "personal": str(app.libraries.personal)},
-        "video": setup.video, "dataset_root": str(app.config.dataset_root),
+        "video": setup.video, "fps": setup.fps, "dataset_root": str(app.config.dataset_root),
     }
     names = ", ".join(r["id"] for r in recordings[:3]) + ("…" if len(recordings) > 3 else "")
     spec = JobSpec(kind=FIND_JOB_KIND, params={"recordings": [r["id"] for r in recordings], "frames": count, "model": model},

@@ -29,8 +29,7 @@ helpers), :mod:`.setups` (setups, default models, recording -> setup),
 :mod:`.datasets` (datasets, per-recording splits, inheritance, saving
 labels), :mod:`.labels` (the label revision file), :mod:`.targets` (the body
 target cache), :mod:`.benchmarks`, :mod:`.models` (cards, weights,
-evaluations), :mod:`.runtime` (loading a model and asking it for masks or
-body fields).
+evaluations), :mod:`.inference` (running a model).
 
 Reading labels for training and evaluation
 ------------------------------------------
@@ -74,15 +73,14 @@ from .setups import (
     Setup, create_setup, defaults_log, get_setup, list_setups, recording_id, recording_sources, register_recording,
     set_default, setup_for_recording, write_setup,
 )
-from .runtime import LoadedModel, load_model
 from .targets import SETUP_DEFAULT, build_targets, cached_meta, load_targets, target_builder
 
 __all__ = [
-    "BENCHMARK_ORIGINS", "Benchmark", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "LoadedModel",
-    "ModelCard", "ORIGINS", "PERSONAL_LIBRARY_BY_HOST", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "assign_split", "benchmark_labels",
+    "BENCHMARK_ORIGINS", "Benchmark", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "ModelCard",
+    "ORIGINS", "PERSONAL_LIBRARY_BY_HOST", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "assign_split", "benchmark_labels",
     "build_targets", "cached_meta", "create_dataset", "create_model", "create_setup", "defaults_log", "evaluation_path",
     "evaluations", "fingerprint", "freeze_benchmark", "get_benchmark", "get_card", "get_setup", "labels",
-    "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_model", "load_targets", "make_inputs", "make_ref",
+    "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_targets", "make_inputs", "make_ref",
     "parse_ref", "recording_id", "recording_sources", "register_recording", "resolve", "save_evaluation", "set_default",
     "setup_for_recording", "target_builder", "trained_on", "training_dir", "weights_path", "write_benchmark", "write_model", "write_setup",
 ]

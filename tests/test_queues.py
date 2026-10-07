@@ -25,6 +25,7 @@ from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.app import labeling as labeling_service
 from worm_pose_gen.batch_fit import PRESETS
 from worm_pose_gen.label_app import data_url, mask_to_png_values
+from worm_pose_gen.library.inference import LoadedModel
 from worm_pose_gen.library.targets import write_targets
 from worm_pose_gen.mask_fit import default_width_template
 
@@ -71,6 +72,35 @@ class FrameSearchTests(unittest.TestCase):
         spread = frame_search.pick(100, 4, None, excluded={40})
         self.assertEqual([p["frame"] for p in spread], [15, 39, 65, 90])
         self.assertTrue(all(p["uncertainty"] is None for p in spread))
+
+
+class FrameSearchJobTests(unittest.TestCase):
+    def test_the_job_runs_a_library_model_over_the_recordings(self):
+        import torch
+
+        from tests.test_model_training import save_weights
+        from worm_pose_gen.segmenter import SegmentationModule
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            libraries = library.Libraries(lab=None, personal=root / "mine")
+            library.write_setup(libraries.personal, "rig", name="Rig", fps=20.0, video={"flat_field": False})
+            torch.manual_seed(0)
+            save_weights(SegmentationModule(pretrained=False), root / "seg.ckpt")
+            library.create_model(libraries, "seg", {"name": "seg", "kind": "segmenter", "setup": "mine:rig", "outputs": ["mask"],
+                                                    "inputs": library.make_inputs([], fps=20.0, pixel_size_um=1.0)}, root / "seg.ckpt")
+            path = root / "2024-05-05-01.h5"
+            write_recording(path, frames=30)
+            spec = {"recordings": [{"path": str(path), "id": "2024-05-05-01", "frames": 30, "exclude": [15]}], "frames": 3,
+                    "model": "mine:seg", "libraries": {"lab": None, "personal": str(libraries.personal)},
+                    "video": {"flat_field": False, "dataset_path": "/img_nir"}, "fps": 20.0, "dataset_root": str(root / "cache")}
+            progress = root / "progress.json"
+            with mock.patch.dict("os.environ", {"WORM_POSE_PROGRESS_FILE": str(progress)}):
+                self.assertEqual(frame_search.main(["--spec", json.dumps(spec), "--device", "cpu"]), 0)
+            entries = json.loads(progress.read_text())["result"]["entries"]
+            self.assertEqual([(e["recording"], e["path"]) for e in entries], [("2024-05-05-01", str(path))] * 3)
+            self.assertEqual([e["frame"] // 10 for e in entries], [0, 1, 2])  # one per third of the recording
+            self.assertTrue(all(isinstance(e["uncertainty"], float) and e["frame"] != 15 for e in entries))
 
 
 class LabelingApiBase(unittest.TestCase):
@@ -246,7 +276,7 @@ class ProposalTests(unittest.TestCase):
                                        device="cpu", gpus=(), lab_library=root / "nolab", library=libraries.personal))
             service = app.state.app_state.labeling
             card = library.get_card(libraries, "mine:body")
-            stub = library.LoadedModel(card=card, module=StubModule(prediction_from(centerline, mask)), weights=weights)
+            stub = LoadedModel(card, StubModule(prediction_from(centerline, mask)), lags=())
             with mock.patch.object(service, "model", return_value=stub):
                 request = {"setup": "mine:rig", "entry": {"recording": "rec", "frame": 3}, "mask": mask_url(mask.astype(np.uint8))}
                 proposal = service.proposal(request)
