@@ -148,6 +148,8 @@ const WS = '2026-03-14-01';
     assert.equal(queued.kind, 'relabel');
     assert.equal(queued.workspace, WS);
     assert.match(proposed, new RegExp(`Label ${queued.frames.length} keyframe`));
+    // Labeling cannot open the stand-in queue, so come back on a fresh load, as "Back to workspace" lands.
+    await page.goto('about:blank');
     await page.goto(`${base}/#workspace/${WS}/stitch/q-test`);
     await page.waitForSelector('.ws-preview', {timeout: 600000});
     assert.match(await page.locator('.ws-fix .ws-panel-head').textContent(), /Relabel/);
