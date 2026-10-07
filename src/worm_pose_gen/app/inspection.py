@@ -6,6 +6,12 @@ edit) drops the review.  Two views read it: ``issues`` (the Issues panel,
 ``worm_pose_gen.fixes.issue_report``: stretches with plain-language
 reasons, each unreviewed, reviewed or fixed) and ``inspection`` (the
 attention segments of the older Inspect task).
+
+Every computation of the issues also writes their counts with the review
+token to ``issues_summary.json`` (``ISSUES_SUMMARY``), so the Recordings
+screen can show "N issues to review" without loading the arrays of every
+workspace; ``cached_issue_summary`` returns them while the token still
+holds.
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ from .. import fixes
 from ..pipeline import placed_rows, workspace_lock
 from ..workspace import _write_json_atomic, utc_now
 
+ISSUES_SUMMARY = "issues_summary.json"
 _REVIEW_LOCK = threading.RLock()
 _FINGERPRINT_CACHE: WeakKeyDictionary = WeakKeyDictionary()
 
@@ -125,7 +132,23 @@ def _issues(view: WorkspaceView) -> dict[str, Any]:
     reviewed[sorted(_reviewed(view))] = True
     provenance = view.workspace.load_provenance()
     placed = placed_rows(run.arrays, provenance["algorithm"], provenance["job"])
-    return {"revision": token, **fixes.issue_report(run.arrays, placed, reviewed), "min_issue_frames": fixes.MIN_ISSUE_FRAMES}
+    report = fixes.issue_report(run.arrays, placed, reviewed)
+    path = view.workspace.path / ISSUES_SUMMARY
+    cached = json.loads(path.read_text()) if path.exists() else None
+    if cached != {"revision": token, "summary": report["summary"]}:
+        _write_json_atomic(path, {"revision": token, "summary": report["summary"]})
+    return {"revision": token, **report, "min_issue_frames": fixes.MIN_ISSUE_FRAMES}
+
+
+def cached_issue_summary(view: WorkspaceView) -> dict[str, Any] | None:
+    """The issue counts last computed for the workspace (``fixes.issue_report``'s summary), or ``None`` when anything changed since."""
+
+    path = view.workspace.path / ISSUES_SUMMARY
+    try:
+        cached = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return cached.get("summary") if cached.get("revision") == revision(view) else None
 
 
 def review_issue(view: WorkspaceView, first_frame: int, last_frame: int, expected_revision: str) -> dict[str, Any]:

@@ -5,8 +5,10 @@
 - ``POST .../issues/review`` ``{first, last, revision}``: Looks OK on those
   frames; answers with the issues.
 - ``POST .../fixes/flip`` ``{first, last}`` or ``{frame}``: Flip head/tail.
-- ``POST .../fixes/refit`` ``{first, last, algorithm?, params?}``: starts a
-  refit job; answers ``{job, preview, plan}``.
+- ``POST .../fixes/refit`` ``{first, last, algorithm?, params?, keep?}``:
+  starts a refit job (``keep``: the job keeps its preview itself, as after a
+  mask edit); answers ``{job, preview, plan}``.  Refit and stitch jobs are
+  placed like any job (``run_on``, ``slurm``, ``gpu``; ``routers/jobs.place``).
 - ``GET .../fixes/keyframes?first=&last=&spacing=``: Relabel's keyframes.
 - ``POST .../fixes/stitch`` ``{keyframes: [{frame, centerline_xy,
   width_profile}], params?}``: starts a stitch job; answers like refit.
@@ -31,6 +33,7 @@ from pydantic import BaseModel, StrictInt
 from . import get_state
 from .. import fixes as fix_ops
 from ..inspection import issues, review_issue
+from .jobs import place
 from ..state import AppState
 
 router = APIRouter(prefix="/api/workspaces")
@@ -63,7 +66,7 @@ def flip(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends
 @router.post("/{name}/fixes/refit")
 def refit(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
     spec, command, answer = fix_ops.refit_job(app.view(name), payload)
-    return {"job": app.runner.submit(spec, command).to_dict(), **answer}
+    return {"job": app.runner.submit(place(app, spec, payload), command).to_dict(), **answer}
 
 
 @router.get("/{name}/fixes/keyframes")
@@ -74,7 +77,7 @@ def keyframes(name: str, first: int, last: int, spacing: int | None = None, app:
 @router.post("/{name}/fixes/stitch")
 def stitch(name: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
     spec, command, answer = fix_ops.stitch_job(app.view(name), payload)
-    return {"job": app.runner.submit(spec, command).to_dict(), **answer}
+    return {"job": app.runner.submit(place(app, spec, payload), command).to_dict(), **answer}
 
 
 @router.get("/{name}/fixes/previews")

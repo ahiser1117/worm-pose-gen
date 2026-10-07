@@ -259,9 +259,10 @@ class AppTests(unittest.TestCase):
         self.assertIn("exists", self.post("/api/workspaces", {"name": "fresh", "recording": str(self.recording), "first": 0, "last": 2}, 400)["error"])
         self.assertIn("does not exist", self.post("/api/workspaces", {"name": "x", "recording": str(self.root / "recordings" / "nope.h5"), "first": 0, "last": 2}, 400)["error"])
         self.assertIn("recording roots", self.post("/api/workspaces", {"name": "x", "recording": "/nope.h5", "first": 0, "last": 2}, 404)["error"])
-        self.assertIn("name", self.post("/api/workspaces", {"recording": str(self.recording), "first": 0, "last": 2}, 400)["error"])
+        # Without a name a workspace is named after its recording (and its range when it is not the whole recording).
+        self.assertEqual(self.post("/api/workspaces", {"recording": str(self.recording), "first": 0, "last": 2})["name"], "rec-a_f0-2")
         self.assertIn("'first' must be an integer", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "first": "abc", "last": 2}, 400)["error"])
-        self.assertIn("'last' is required", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "first": 0}, 400)["error"])
+        self.assertIn("'step' must be an integer", self.post("/api/workspaces", {"name": "x", "recording": str(self.recording), "step": "two"}, 400)["error"])
         # An empty workspace still opens in the viewer: every row unfitted.
         empty = self.get("/api/workspaces/fresh")
         self.assertEqual(empty["series"]["fitted"], [0] * FRAMES)
@@ -316,7 +317,7 @@ class AppTests(unittest.TestCase):
         starts = self.get("/api/workspaces/fresh/starts?frame=2")
         self.assertTrue(starts["starts"])
         self.assertEqual(len(starts["starts"][0]["centerline_xy"]), 100)
-        self.assertGreater(self.get("/api/state")["workspaces"][0]["summary"]["mask_rows"], 0)
+        self.assertGreater(next(w for w in self.get("/api/state")["workspaces"] if w["name"] == "fresh")["summary"]["mask_rows"], 0)
 
     def test_file_explorer_registers_a_recording_with_its_own_dataset(self) -> None:
         listing = self.get(f"/api/files?path={self.root}")

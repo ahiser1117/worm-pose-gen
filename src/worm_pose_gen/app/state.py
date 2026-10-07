@@ -17,11 +17,12 @@ import torch
 
 from ..compute import detect_compute
 from ..jobs import JobRunner, LocalGPUBackend, SlurmBackend
+from .. import library
 from ..library import Libraries
 from ..pose_viewer import ViewerState
 from ..pipeline import WorkspaceBusy, workspace_dataset
 from ..recordings import DATASET_PATH, RecordingInfo, RecordingRegistry, default_video_dataset, hdf5_datasets, list_directory, list_recordings, probe_recording, thumbnail_png
-from ..workspace import Workspace, list_workspaces
+from ..workspace import Workspace, list_workspaces, read_recording_shape
 from .config import AppConfig
 from .workspace_view import WorkspaceView
 
@@ -75,7 +76,7 @@ class AppState:
         from .queues import QueueStore
         self.labeling = Labeling(self)
         self.queues = QueueStore(config.workspaces_root / "queues", self.runner)
-        self._body_net = None
+        self._body_nets: dict[Path, Any] = {}
         self._body_net_lock = threading.Lock()
         from .network_fields import NetworkFields
         self.network_fields = NetworkFields(self)
@@ -95,18 +96,22 @@ class AppState:
     def device(self) -> torch.device:
         return self.viewer.device
 
-    def body_net(self):
-        """The body-field network (``--body-net``), loaded on the app's device at first use; Body fields and the viewer's network layers share it."""
+    def body_net(self, path: Path | None = None):
+        """A body-field network loaded on the app's device at first use: ``path``, else ``--body-net``.
 
+        The Workspace's network layers pass the body model the workspace was
+        analysed with; a workspace analysed without one falls back to the app's.
+        """
+
+        path = self.config.body_net if path is None else Path(path)
         with self._body_net_lock:
-            if self._body_net is None:
-                path = self.config.body_net
+            if path not in self._body_nets:
                 if path is None or not path.is_file():
                     raise ValueError(f"no body-field network checkpoint at {path}; pass --body-net")
                 from ..body_net import load_body_net
 
-                self._body_net = load_body_net(path, self.device)
-            return self._body_net
+                self._body_nets[path] = load_body_net(path, self.device)
+            return self._body_nets[path]
 
     # ---------------------------------------------------------------- workspaces
 
@@ -168,20 +173,41 @@ class AppState:
         return entries
 
     def create_workspace(self, payload: dict[str, Any]) -> WorkspaceView:
-        name = _validate_name(str(payload["name"]))
+        """A new workspace on ``recording``: the whole recording, named by the recording's id.
+
+        ``first``, ``last``, ``step`` and ``name`` narrow it (a developer's
+        range; the Workspace page always takes the whole recording).  An
+        existing name gets a numbered suffix.
+        """
+
         recording = self.recording_path(str(payload["recording"]))
         if not recording.is_file():
             raise ValueError(f"recording {recording} does not exist")
         settings = dict(payload.get("settings") or {})
-        # A registered recording brings its dataset name; /img_nir needs no setting.
-        dataset = settings.get("dataset") or self.registry.dataset_of(recording) or DATASET_PATH
+        # The recording's own dataset (its setup's, or a registration's); /img_nir needs no setting.
+        dataset = settings.get("dataset") or self.recording_dataset(recording)
         if dataset != DATASET_PATH:
             settings["dataset"] = dataset
-        Workspace.create(
-            self.config.workspaces_root, name, recording, _integer(payload, "first"), _integer(payload, "last"), _integer(payload, "step", 1),
-            settings=settings or None,
-        )
+        shape = read_recording_shape(recording, dataset)
+        if shape is None:
+            raise ValueError(f"{recording} cannot be read as a recording with dataset {dataset}")
+        first, last = _integer(payload, "first", 0), _integer(payload, "last", shape[0] - 1)
+        step = _integer(payload, "step", 1)
+        name = str(payload.get("name") or "")
+        if not name:
+            base = recording.stem if (first, last, step) == (0, shape[0] - 1, 1) else f"{recording.stem}_f{first}-{last}"
+            name = next(candidate for candidate in (base, *(f"{base}-{k}" for k in range(2, 1000))) if not self.workspace_path(candidate).exists())
+        Workspace.create(self.config.workspaces_root, _validate_name(name), recording, first, last, step, settings=settings or None)
         return self.view(name)
+
+    def workspace_of_recording(self, recording: Path) -> str | None:
+        """The newest workspace on ``recording`` (one workspace per recording), or ``None``."""
+
+        resolved = Path(recording).resolve()
+        for info in list_workspaces(self.config.workspaces_root):
+            if Path(info.recording).resolve() == resolved:
+                return info.name
+        return None
 
     def import_workspace(self, payload: dict[str, Any]) -> WorkspaceView:
         run_dir = self.resolve_run(str(payload["run"]))
@@ -224,14 +250,20 @@ class AppState:
             resolved = recording.resolve()
         except OSError as error:
             raise NotFound(f"no recording at {path}") from error
-        if self.registry.dataset_of(resolved) is not None:
+        if self.registry.dataset_of(resolved) is not None or library.setup_for_recording(self.libraries, resolved) is not None:
             return resolved
         if not any(resolved.is_relative_to(root.resolve()) for root in self.config.recording_roots):
-            raise NotFound(f"{path} is not under the configured recording roots and is not a registered recording")
+            raise NotFound(f"{path} is not under the configured recording roots and does not belong to a setup")
         return recording
 
     def recording_dataset(self, path: Path) -> str:
-        return self.registry.dataset_of(path) or DATASET_PATH
+        """The HDF5 dataset of a recording's frames: its registration's, else its setup's video dataset, else ``/img_nir``."""
+
+        registered = self.registry.dataset_of(path)
+        if registered is not None:
+            return registered
+        setup = library.setup_for_recording(self.libraries, path)
+        return str(library.get_setup(self.libraries, setup).video["dataset_path"]) if setup is not None else DATASET_PATH
 
     # ----------------------------------------------------------------- file explorer
 
