@@ -42,6 +42,12 @@ chains and the path connect the region to the anchors the user chose.
 Every region run is one line in ``<workspaces root>/algorithm_outcomes.jsonl``
 with the region's metrics before and after (``region_metrics``), so the
 question of which defaults make manual work rare can be answered from the log.
+
+``run_algorithm`` is the run without the storage: the Refit fix
+(``worm_pose_gen.fixes``) previews its path and installs it through the
+edit log.  ``stitch`` serves the Relabel fix: it pins the poses of labeled
+keyframes and refits every gap between consecutive keyframes as a
+propagate stretch anchored on them.
 """
 
 from __future__ import annotations
