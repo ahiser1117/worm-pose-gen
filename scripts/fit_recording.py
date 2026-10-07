@@ -63,6 +63,7 @@ import numpy as np
 from worm_pose_gen.ambiguity import compute_ambiguity
 from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig
 from worm_pose_gen.pipeline import (
+    field_predictor,
     DEFAULT_CHECKPOINT,
     DEFAULT_PRIOR_CACHE,
     EXTERNAL_ROOT,
@@ -121,6 +122,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--raw-mask", action="store_true", help="shorthand for --no-fill-holes --no-largest-component")
     parser.add_argument("--min-worm-pixels", type=int, default=MIN_WORM_PIXELS, help="smaller cleaned masks are not fit")
+    parser.add_argument("--body-net", type=Path, default=None,
+                        help="body-field network checkpoint: its A-P field and ends score every fit (independent, propagation, track pass)"
+                        " and its trace starts the independent fits and the propagation chains")
     parser.add_argument("--init-workers", type=int, default=min(8, os.cpu_count() or 1), help="processes for skeleton/moment starts (0 = inline)")
     parser.add_argument(
         "--preset", default="fast", choices=tuple(PRESETS),
@@ -221,6 +225,7 @@ def fit_params(args: argparse.Namespace) -> FitParams:
         width_coefficients=args.width_coefficients, width_prior=args.width_prior, orient=not args.no_orient, prior=args.prior,
         prior_shape_weight=args.prior_shape_weight, min_bend_radius=args.min_bend_radius, row_pixel_budget=args.row_pixel_budget,
         init_workers=args.init_workers, slab=args.slab, min_worm_pixels=args.min_worm_pixels,
+        body_net=None if args.body_net is None else str(args.body_net),
         overrides={"compile_energy": True} if args.compile_energy else {},
     )
 
@@ -347,6 +352,7 @@ def main() -> int:
     # Independent fits, slab by slab: segment, clean, start, fit, store.
     mask_cache = _PackedMaskCache()
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
+    predictor = None if args.body_net is None else field_predictor(args.body_net, frames, device)
     try:
         for slab_start in range(0, n, args.slab):
             slab = indices[slab_start : slab_start + args.slab]
@@ -365,7 +371,12 @@ def main() -> int:
                 else:
                     fit_masks_here.append(mask)
                     fit_rows.append(row)
-            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, pool=pool, skipped=skipped)
+            predictions = None
+            if predictor is not None and fit_rows:
+                t_fields = time.perf_counter()
+                predictions = predictor.predict([indices[row] for row in fit_rows])
+                seg_timing["fields"] = time.perf_counter() - t_fields
+            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, pool=pool, skipped=skipped, predictions=predictions)
             for stage, seconds in {**seg_timing, **fit_timing}.items():
                 timing[stage] += seconds
             fitted_here = int(arrays["fitted"][slab_rows].sum())
@@ -384,6 +395,9 @@ def main() -> int:
     def segment_rows(rows: list[int]) -> dict[int, np.ndarray]:
         return _segment_cached_rows(rows, frames, model, arrays["frame_index"], segmentation, device, mask_cache)
 
+    # The body-field network scores the propagation and track refits too, as it scored the independent fits.
+    predictions_of = None if predictor is None else (lambda rows: predictor.predict([indices[row] for row in rows]))
+
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
     # independent pose itself is kept so a viewer can show what propagation
     # replaced (worm_pose_gen.pose_viewer).
@@ -394,14 +408,20 @@ def main() -> int:
     stretches: list[tuple[int, int]] = []
     if not args.no_propagate:
         # Temporal propagation (plan steps 5, 6a-c) across the ambiguous stretches.
-        outcome = propagation_pass(arrays, segment_rows, setup, propagate_params(args), device, image_shape=image_shape)
+        outcome = propagation_pass(
+            arrays, segment_rows, setup, propagate_params(args), device, image_shape=image_shape,
+            predictions_of=predictions_of,
+        )
         propagation_info, stretches = outcome.info, outcome.stretches
         timing["propagate"] = propagation_info["seconds"]
     # Track length pass (plan step 6b), after propagation: run before it, it
     # perturbed the stretch anchors (coil_0201: 0 -> 26 frames below 0.9).
     track_info: dict[str, Any] | None = None
     if not args.no_track_length:
-        track_info, _ = track_length_pass(arrays, segment_rows, setup, track_params(args), device, stretches=stretches, image_shape=image_shape)
+        track_info, _ = track_length_pass(
+            arrays, segment_rows, setup, track_params(args), device, stretches=stretches, image_shape=image_shape,
+            predictions_of=predictions_of,
+        )
         timing["track"] = track_info["seconds"]
 
     # The overlay video is rendered from the final arrays, after propagation, so it shows the poses as stored.
@@ -448,6 +468,8 @@ def main() -> int:
             "largest_component": segmentation.largest_only, "min_worm_pixels": args.min_worm_pixels,
         },
         "fit_config": asdict(config),
+        # As a workspace's fit stage records them: a workspace imported from this run knows the fit's body-field network.
+        "fit_params": fitting.to_dict(),
         "width_template": "default_width_template",
         "preset": args.preset,
         "starts": setup.start_set,

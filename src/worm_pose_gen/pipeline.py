@@ -69,7 +69,6 @@ from .mask_fit import (
     max_bend_widths,
     orient_tail_last,
     orientation_pair,
-    reverse_result,
     standard_initializations,
     taper_asymmetry,
 )
@@ -102,7 +101,7 @@ EXTERNAL_ROOT = Path(os.environ.get("WORM_POSE_EXTERNAL_ROOT", "/temp_data4/alex
 DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
 HOLE_FILL_RADIUS_PX = 8
 MIN_WORM_PIXELS = 500
-TIMING_STAGES = ("read", "flat_field", "network", "cleanup", "init", "fit", "video")
+TIMING_STAGES = ("read", "flat_field", "network", "cleanup", "fields", "init", "fit", "video")
 START_SETS: dict[str, tuple[str, ...] | None] = {
     "skeleton": ("skeleton_longest_path",),
     "skeleton+straight": ("skeleton_longest_path", "moments_straight"),
@@ -136,6 +135,7 @@ INDEPENDENT_COPIES = (
     ("width_shape_independent", "width_shape"),
     ("taper_asymmetry_independent", "taper_asymmetry"),
     ("energy_independent", "energy"),
+    ("field_energy_independent", "field_energy"),
     ("total_energy_independent", "total_energy"),
     ("points_in_fov_independent", "points_in_fov"),
     ("crop_independent", "crop"),
@@ -232,6 +232,11 @@ class FitParams(_Params):
     init_workers: int = _help("processes for skeleton/moment starts (0 = inline)", default=min(8, os.cpu_count() or 1))
     slab: int = _help("frames fit together", default=64)
     min_worm_pixels: int = _help("rows whose mask is smaller are not fit", default=MIN_WORM_PIXELS)
+    body_net: str | None = _help(
+        "body-field network checkpoint: its A-P field and ends score every fit (also in the propagate and track stages)"
+        " and its proposed trace starts the fit and the propagation chains; empty for none",
+        default=None,
+    )
     overrides: dict[str, Any] = _help("any BatchFitConfig field, applied after the flags above (lists become tuples)", default_factory=dict)
 
 
@@ -471,6 +476,11 @@ def build_fit_config(params: FitParams) -> BatchFitConfig:
         overrides["min_bend_radius_widths"] = float(params.min_bend_radius)
         if params.min_bend_radius <= 0:
             overrides["bend_weight"] = 0.0
+    if params.body_net:
+        # Imported here: body_proposal reaches back into this module through body_fields.
+        from .body_proposal import FIELD_AP_WEIGHT, FIELD_END_WEIGHT
+
+        overrides.update(field_ap_weight=FIELD_AP_WEIGHT, field_end_weight=FIELD_END_WEIGHT)
     known = {f.name for f in dataclass_fields(BatchFitConfig)}
     for key, value in (params.overrides or {}).items():
         if key not in known:
@@ -592,6 +602,8 @@ def new_arrays(frame_index: np.ndarray, config: BatchFitConfig) -> dict[str, np.
         "orientation_gap": _nan((n,)),
         "iou": _nan((n,)),
         "energy": _nan((n,)),
+        # The body-field evidence part of ``total_energy``; 0 for fits without evidence.
+        "field_energy": np.zeros(n, dtype=np.float64),
         "total_energy": _nan((n,)),
         "source": np.zeros(n, dtype=np.int8),
         "mask_on_border": np.zeros(n, dtype=bool),
@@ -626,6 +638,7 @@ def store_result(arrays: dict[str, np.ndarray], row: int, result: MaskFitResult)
     arrays["width_profile"][row] = result.width_profile
     arrays["iou"][row] = best["final_iou"]
     arrays["energy"][row] = best["final_soft_dice_energy"]
+    arrays["field_energy"][row] = best["final_field_energy"]
     arrays["total_energy"][row] = best["final_energy"]
     arrays["points_in_fov"][row] = result.points_in_fov
     arrays["body_length_px"][row] = result.body_length_px
@@ -644,6 +657,60 @@ def store_mask_stats(arrays: dict[str, np.ndarray], row: int, stats: dict[str, i
     arrays["mask_on_border"][row] = bool(stats.get("mask_on_border", 0))
 
 
+def field_predictor(checkpoint: str | Path, frames: Frames, device: torch.device) -> Any:
+    """A body-field predictor for one recording's frames (``body_proposal.RecordingFieldPredictor``)."""
+
+    # Imported here: body_proposal reaches back into this module through body_fields.
+    from .body_net import load_body_net
+    from .body_proposal import RecordingFieldPredictor
+
+    return RecordingFieldPredictor(load_body_net(checkpoint, device), frames)
+
+
+# Body-field network predictions (``body_proposal.FieldPrediction``) for rows, in their order.
+PredictionsOf = Callable[[Sequence[int]], Sequence[Any]]
+# Rows the propagation and track passes predict at once (the fit's default slab):
+# a prediction holds five full-image maps, so a whole stretch set at once would not fit in memory.
+PREDICTION_SLAB = 64
+
+
+def network_trace_start(prediction: Any, mask: MaskArray, setup: FitSetup) -> Initialization | None:
+    """The network's trace start for a frame (``body_proposal.trace_start``), with the prior's length and width profile."""
+
+    # Imported here: body_proposal reaches back into this module through body_fields.
+    from .body_proposal import trace_start
+
+    trace = trace_start(prediction, mask, config=setup.config, length_px=setup.start_length)
+    if trace is not None and setup.start_shape is not None:
+        trace = replace(trace, width_shape=np.asarray(setup.start_shape, dtype=np.float64))
+    return trace
+
+
+def body_field_inputs(
+    predictions_of: PredictionsOf | None, masks: dict[int, MaskArray], setup: FitSetup, trace_rows: Sequence[int] = ()
+) -> tuple[dict[int, Any], dict[int, Initialization]]:
+    """Per row of ``masks``: the body-field evidence and, for ``trace_rows``, the network's trace start (empty without a network).
+
+    Rows are predicted ``PREDICTION_SLAB`` at a time.
+    """
+
+    evidence: dict[int, Any] = {}
+    starts: dict[int, Initialization] = {}
+    if predictions_of is None:
+        return evidence, starts
+    # Imported here: body_proposal reaches back into this module through body_fields.
+    from .body_proposal import field_evidence
+
+    wanted = {int(r) for r in trace_rows}
+    for slab in _slabs(sorted(masks), PREDICTION_SLAB):
+        for row, prediction in zip(slab, predictions_of(slab), strict=True):
+            evidence[row] = field_evidence(prediction, masks[row])
+            start = network_trace_start(prediction, masks[row], setup) if row in wanted else None
+            if start is not None:
+                starts[row] = start
+    return evidence, starts
+
+
 def fit_frames(
     masks: Sequence[MaskArray],
     rows: Sequence[int],
@@ -653,12 +720,19 @@ def fit_frames(
     *,
     pool: ProcessPoolExecutor | None = None,
     skipped: dict[str, int] | None = None,
+    predictions: Sequence[Any] | None = None,
 ) -> dict[str, float]:
     """Independent multi-start fit of these masks into ``arrays[rows]``; returns init and fit seconds.
 
     Frames without a start are skipped (``skipped['no_starts']``); when the
     batch fails, the frames are fit one at a time and the ones that still
     fail are counted under ``fit_error``.
+
+    ``predictions`` (body-field network outputs, one per mask) score every
+    fit against the network's A-P field and ends (the config's ``field_*``
+    weights), add the network's proposed trace as a start, and fit every
+    start in both orientations, so the evidence rather than the taper
+    decides which end is the head.
     """
 
     skipped = skipped if skipped is not None else defaultdict(int)
@@ -673,21 +747,36 @@ def fit_frames(
         )
     else:
         starts = [initializations_for(m, config, names, setup.start_shape, setup.start_length) for m in masks]
+    fields: list[Any] | None = None
+    if predictions is not None:
+        # Imported here: body_proposal reaches back into this module through body_fields.
+        from .body_proposal import field_evidence
+
+        fields = [field_evidence(p, m) for p, m in zip(predictions, masks, strict=True)]
+        for k, (prediction, mask) in enumerate(zip(predictions, masks, strict=True)):
+            base = [s for s in starts[k] if not s.name.endswith("_reversed")]
+            trace = network_trace_start(prediction, mask, setup)
+            starts[k] = [s for start in base for s in orientation_pair(start, config=config)] + ([trace] if trace is not None else [])
     keep = [k for k, s in enumerate(starts) if s]
     skipped["no_starts"] += len(starts) - len(keep)
     masks = [masks[k] for k in keep]
     rows = [rows[k] for k in keep]
     starts = [starts[k] for k in keep]
+    if fields is not None:
+        fields = [fields[k] for k in keep]
     t5 = time.perf_counter()
     results: list[MaskFitResult | None] = []
     if masks:
         try:
-            results = list(fit_masks(masks, starts, width_template=setup.template, config=config, device=device))
+            results = list(fit_masks(masks, starts, width_template=setup.template, config=config, device=device, fields=fields))
         except (ValueError, RuntimeError) as error:
             print(f"batch fit failed ({error}); fitting frames one at a time", flush=True)
-            for mask, frame_starts in zip(masks, starts, strict=True):
+            for k, (mask, frame_starts) in enumerate(zip(masks, starts, strict=True)):
                 try:
-                    results.append(fit_masks([mask], [frame_starts], width_template=setup.template, config=config, device=device)[0])
+                    results.append(fit_masks(
+                        [mask], [frame_starts], width_template=setup.template, config=config, device=device,
+                        fields=None if fields is None else [fields[k]],
+                    )[0])
                 except (ValueError, RuntimeError):
                     results.append(None)
                     skipped["fit_error"] += 1
@@ -698,7 +787,7 @@ def fit_frames(
         arrays["n_starts"][row] = len(frame_starts)
         if result is None:
             continue
-        if setup.orient_after_fit:
+        if setup.orient_after_fit and fields is None:
             result, flipped = orient_tail_last(result, config=config)
             arrays["reversed"][row] = flipped
         else:
@@ -974,6 +1063,7 @@ def propagation_pass(
     image_shape: tuple[int, int] | None,
     progress: Progress | None = None,
     fixed: NDArray[np.generic] | None = None,
+    predictions_of: PredictionsOf | None = None,
 ) -> PropagationOutcome:
     """Plan steps 5, 6a-c on ``arrays`` in place: stretches, chains with prediction and beam, one path per stretch.
 
@@ -982,7 +1072,9 @@ def propagation_pass(
     ``source`` records where each came from, and the ambiguity is recomputed.
     Rows flagged in ``fixed`` (manual edits, accepted region runs) are never
     refit: the stretches are cut around them (``split_stretches``) so they
-    anchor the chains instead.
+    anchor the chains instead.  With ``predictions_of`` (the body-field
+    network, as in the fit) every fit of the pass is scored against the
+    network's evidence and the chains also start from its trace.
     """
 
     config, template = setup.config, setup.template
@@ -1009,10 +1101,12 @@ def propagation_pass(
     if progress is not None:
         progress(0.05, f"propagation: {len(stretches)} stretches, {len(stretch_rows)} frames")
     stretch_masks = masks_of(sorted(set(stretch_rows + anchor_rows)))
+    evidence, network_starts = body_field_inputs(predictions_of, stretch_masks, setup, stretch_rows)
     candidates, info = propagate(
         arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation,
         warm_config=refit_config,
         progress=None if progress is None else lambda fraction, message: progress(0.06 + 0.73 * fraction, message),
+        evidence=evidence, network_starts=network_starts,
     )
     if progress is not None:
         progress(0.8, "propagation: selecting paths")
@@ -1040,8 +1134,7 @@ def propagation_pass(
                 hyp_arrays["path_index"][row] = j
     chosen_source: dict[int, str] = {}
     for row, choice in chosen.items():
-        result = reverse_result(choice.candidate.result, config=config) if choice.mirrored else choice.candidate.result
-        store_result(arrays, row, result)
+        store_result(arrays, row, choice.candidate.oriented(choice.mirrored, config))
         arrays["source"][row] = SOURCE_CODES[choice.candidate.source]
         arrays["orientation_gap"][row] = np.nan
         arrays["reversed"][row] = False
@@ -1104,12 +1197,15 @@ def track_length_pass(
     *,
     stretches: Sequence[tuple[int, int]] = (),
     image_shape: tuple[int, int] | None,
+    predictions_of: PredictionsOf | None = None,
 ) -> tuple[dict[str, Any], list[int]]:
     """Plan step 6b on ``arrays`` in place: refit clipped and length-deviating frames with the track's length prior.
 
     A clipped body's length is not observable in one frame, so frames outside
     the stretches whose length departs from the track are refit with the
-    track's length prior.  Returns the diagnostics and the rows refit.
+    track's length prior.  With ``predictions_of`` the refits are scored
+    against the body-field network's evidence, as the fit was.  Returns the
+    diagnostics and the rows refit.
     """
 
     config, template, prior = setup.config, setup.template, setup.prior
@@ -1132,6 +1228,7 @@ def track_length_pass(
     }[params.track_refit]
     refit_rows = [int(r) for r in np.nonzero(arrays["fitted"] & select & ~in_stretch_rows)[0] if np.isfinite(track[r])]
     track_masks = masks_of(refit_rows)
+    evidence, _ = body_field_inputs(predictions_of, track_masks, setup)
     groups: dict[int, list[int]] = defaultdict(list)
     for r in refit_rows:
         if r in track_masks:
@@ -1143,7 +1240,10 @@ def track_length_pass(
         for chunk_start in range(0, len(rows), config.max_rows):
             chunk = rows[chunk_start : chunk_start + config.max_rows]
             starts = [[warm_initialization(arrays["latent"][r], float(arrays["width_px"][r]), arrays["width_shape"][r], "track_length")] for r in chunk]
-            results = fit_masks([track_masks[r] for r in chunk], starts, width_template=template, config=group_config, device=device)
+            results = fit_masks(
+                [track_masks[r] for r in chunk], starts, width_template=template, config=group_config, device=device,
+                fields=[evidence.get(r) for r in chunk] if evidence else None,
+            )
             for r, result in zip(chunk, results, strict=True):
                 store_result(arrays, r, result)
                 arrays["length_refit"][r] = True
@@ -1153,7 +1253,7 @@ def track_length_pass(
         "window": params.track_window, "sigma": params.track_sigma, "tolerance": params.track_tolerance, "refit": params.track_refit,
         "frames_clipped": int(np.sum(arrays["fitted"] & arrays["mask_on_border"])),
         "frames_deviating": int(np.sum(arrays["fitted"] & np.nan_to_num(deviates))),
-        "frames_refit": len(refit), "seconds": seconds,
+        "frames_refit": len(refit), "frames_with_evidence": len(evidence), "seconds": seconds,
         "track_length_p10_p50_p90": [float(v) for v in np.nanpercentile(track, [10, 50, 90])] if np.isfinite(track).any() else None,
     }
     if refit:
@@ -1326,6 +1426,21 @@ def workspace_frames(workspace: Any, params: SegmentParams | PriorParams) -> Fra
     return Frames(
         Path(workspace.info.recording), dataset_root=params.dataset_root, flat_field=params.flat_field, dataset=workspace_dataset(workspace)
     )
+
+
+@contextmanager
+def workspace_predictions(workspace: Any, params: SegmentParams, device: torch.device) -> Iterator[PredictionsOf | None]:
+    """Body-field predictions of workspace rows when the workspace's fit used the network (its ``fit_params.body_net``), else ``None``."""
+
+    checkpoint = (read_summary(workspace).get("fit_params") or {}).get("body_net")
+    if not checkpoint:
+        yield None
+        return
+    predictor = field_predictor(checkpoint, workspace_frames(workspace, params), device)
+    try:
+        yield lambda rows: predictor.predict(workspace.frame_index[np.asarray(rows, dtype=np.int64)])
+    finally:
+        predictor.frames.close()
 
 
 def workspace_dataset(workspace: Any) -> str:
@@ -1526,15 +1641,26 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     arrays["orientation_gap"][rows] = np.nan
     if "length_refit" in arrays:
         arrays["length_refit"][rows] = False
-    timing = {"init": 0.0, "fit": 0.0}
+    timing = {"init": 0.0, "fit": 0.0, "fields": 0.0}
     pool = ProcessPoolExecutor(max_workers=params.init_workers) if params.init_workers > 0 and rows else None
+    predictor = None
+    if params.body_net and rows:
+        predictor = field_predictor(params.body_net, workspace_frames(workspace, SegmentParams.from_dict(all_params)), device)
     done = 0
     try:
         masks_of = workspace_masks_of(workspace)
         for slab in _slabs(rows, params.slab):
             masks_by_row = masks_of(slab)
             slab_rows = [r for r in slab if r in masks_by_row]
-            slab_timing = fit_frames([masks_by_row[r] for r in slab_rows], slab_rows, setup, arrays, device, pool=pool, skipped=skipped)
+            predictions = None
+            if predictor is not None:
+                t = time.perf_counter()
+                predictions = predictor.predict(workspace.frame_index[slab_rows])
+                timing["fields"] += time.perf_counter() - t
+            slab_timing = fit_frames(
+                [masks_by_row[r] for r in slab_rows], slab_rows, setup, arrays, device, pool=pool, skipped=skipped,
+                predictions=predictions,
+            )
             for stage, seconds in slab_timing.items():
                 timing[stage] += seconds
             done += len(slab)
@@ -1543,6 +1669,8 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     finally:
         if pool is not None:
             pool.shutdown()
+        if predictor is not None:
+            predictor.frames.close()
     independent_copies(arrays, np.asarray(rows, dtype=np.int64) if "iou_independent" in arrays else None)
     if "ambiguity_score" in arrays:
         # The old scores and candidates described poses this fit replaced.
@@ -1672,7 +1800,9 @@ def keep_hypotheses(fresh: dict[str, np.ndarray], old: dict[str, np.ndarray], ro
         fresh["hypotheses_count"][index] = np.minimum(old["hypotheses_count"][index], fresh["hypotheses_energy"].shape[1])
 
 
-def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
+def run_propagate(
+    workspace: Any, params: PropagateParams, *, device: torch.device, progress: Progress | None, job: str, all_params: dict[str, Any] | None = None
+) -> dict[str, Any]:
     setup = workspace_setup(workspace)
     arrays = workspace_arrays(workspace, setup.config)
     image_shape = workspace_image_shape(workspace)
@@ -1694,9 +1824,11 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
     fixed = placed_rows(arrays, provenance["algorithm"], provenance["job"])
     old_hypotheses = workspace.load_hypotheses() if fixed.any() else {}
     # The pass writes a fresh set of hypotheses for every stretch frame; older ones are replaced.
-    outcome = propagation_pass(
-        arrays, workspace_masks_of(workspace), setup, params, device, image_shape=image_shape, progress=progress, fixed=fixed,
-    )
+    with workspace_predictions(workspace, SegmentParams.from_dict(all_params), device) as predictions_of:
+        outcome = propagation_pass(
+            arrays, workspace_masks_of(workspace), setup, params, device, image_shape=image_shape, progress=progress, fixed=fixed,
+            predictions_of=predictions_of,
+        )
     if old_hypotheses:
         keep_hypotheses(outcome.hypotheses, old_hypotheses, np.nonzero(fixed)[0].tolist())
     state = {k: v for k, v in arrays.items() if k not in outcome.hypotheses}
@@ -1721,16 +1853,20 @@ def run_propagate(workspace: Any, params: PropagateParams, *, device: torch.devi
     }
 
 
-def run_track(workspace: Any, params: TrackParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
+def run_track(
+    workspace: Any, params: TrackParams, *, device: torch.device, progress: Progress | None, job: str, all_params: dict[str, Any] | None = None
+) -> dict[str, Any]:
     setup = workspace_setup(workspace)
     image_shape = workspace_image_shape(workspace)
     # The scores must describe the stored poses, whatever ran since the last ambiguity stage.
     run_ambiguity(workspace, AmbiguityParams(), device=device, progress=None, job=job)
     arrays = workspace_arrays(workspace, setup.config)
     stretches = [(int(a), int(b)) for a, b in ((read_summary(workspace).get("propagation") or {}).get("stretches") or [])]
-    info, refit = track_length_pass(
-        arrays, workspace_masks_of(workspace), setup, params, device, stretches=stretches, image_shape=image_shape
-    )
+    with workspace_predictions(workspace, SegmentParams.from_dict(all_params), device) as predictions_of:
+        info, refit = track_length_pass(
+            arrays, workspace_masks_of(workspace), setup, params, device, stretches=stretches, image_shape=image_shape,
+            predictions_of=predictions_of,
+        )
     workspace.save_state(arrays)
     workspace.set_provenance(refit, TRACK_ALGORITHM, job, time.time())
     update_summary(
@@ -1860,9 +1996,9 @@ def run_stage(
         if stage == "ambiguity":
             return run_ambiguity(workspace, AmbiguityParams.from_dict(params), device=resolved, progress=progress, job=job_id)
         if stage == "propagate":
-            return run_propagate(workspace, PropagateParams.from_dict(params), device=resolved, progress=progress, job=job_id)
+            return run_propagate(workspace, PropagateParams.from_dict(params), device=resolved, progress=progress, job=job_id, all_params=params)
         if stage == "track":
-            return run_track(workspace, TrackParams.from_dict(params), device=resolved, progress=progress, job=job_id)
+            return run_track(workspace, TrackParams.from_dict(params), device=resolved, progress=progress, job=job_id, all_params=params)
         if stage == "fixed_body":
             from .fixed_body import run_fixed_body
             return run_fixed_body(workspace, FixedBodyParams.from_dict(params), progress=progress, job=job_id)

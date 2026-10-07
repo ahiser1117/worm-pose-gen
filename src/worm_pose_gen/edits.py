@@ -402,6 +402,9 @@ def _write_pose(arrays: dict[str, np.ndarray], row: int, pose: dict[str, Any]) -
     arrays["iou"][row] = pose["iou"]
     arrays["energy"][row] = pose["energy"]
     arrays["total_energy"][row] = pose["total_energy"]
+    if "field_energy" in arrays:
+        # A placed pose was not scored against the body-field network's evidence.
+        arrays["field_energy"][row] = np.nan
     arrays["points_in_fov"][row] = pose["points_in_fov"]
     arrays["body_length_px"][row] = pose["body_length_px"]
     arrays["crop"][row] = pose["crop"]
@@ -429,6 +432,8 @@ def _reverse_row(arrays: dict[str, np.ndarray], row: int) -> None:
     arrays["taper_asymmetry"][row] = taper_asymmetry(arrays["width_profile"][row])
     arrays["reversed"][row] = not bool(arrays["reversed"][row])
     arrays["orientation_gap"][row] = np.nan
+    if "field_energy" in arrays:
+        arrays["field_energy"][row] = np.nan  # the evidence energy of the reversed body is not known
 
 
 def _refresh_ambiguity(loaded: _Loaded, rows: Sequence[int]) -> list[int]:
@@ -760,7 +765,7 @@ def set_mask(workspace: Any, row: int, labels: np.ndarray | None, *, revision: s
         loaded.state["mask_stale"][row] = True
         # These measurements and independent baselines were scored against the
         # old mask. Keep them only in the undo snapshot, never as valid starts.
-        invalid = (*POSE_FIELDS, "taper_asymmetry", "orientation_gap", "tube_coverage", "max_bend_widths",
+        invalid = (*POSE_FIELDS, "field_energy", "taper_asymmetry", "orientation_gap", "tube_coverage", "max_bend_widths",
                    "tube_area_px", "tube_area_visible_px", "score_independent", *(name for name, _ in INDEPENDENT_COPIES))
         for key in invalid:
             if key in loaded.state:

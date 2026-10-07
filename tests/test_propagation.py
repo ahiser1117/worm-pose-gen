@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -17,11 +18,15 @@ from worm_pose_gen.mask_fit import (
     render_tube_segments,
 )
 from worm_pose_gen.batch_fit import PRESETS
+
+from tests.test_batch_fit import body_evidence
 from worm_pose_gen.propagation import (
     Candidate,
     PropagationConfig,
     ambiguous_stretches,
+    comparable_energy,
     continuity_summary,
+    independent_energy,
     jump_seeds,
     pose_distance_px,
     predict_latent,
@@ -228,6 +233,7 @@ class PropagationTests(unittest.TestCase):
         stretches = ambiguous_stretches(score, arrays["fitted"], PropagationConfig(pad=0))
         self.assertEqual(stretches, [(1, 4)])
         arrays["energy"] = np.array([r.records[r.best_index]["final_soft_dice_energy"] for r in results])
+        arrays["field_energy"] = np.array([r.records[r.best_index]["final_field_energy"] for r in results])
         arrays["centerline_xy"] = np.stack([r.centerline_xy for r in results])
         arrays["points_in_fov"] = np.array([r.points_in_fov for r in results])
         propagation = PropagationConfig(pad=0, beam=2)
@@ -282,6 +288,73 @@ class PropagationTests(unittest.TestCase):
             self.assertLess(pose_distance_px(oriented, anchor, None), pose_distance_px(oriented[::-1], anchor, None))
             self.assertTrue(np.isfinite(choice.cost))
 
+    def test_evidence_reaches_every_fit_and_every_energy(self) -> None:
+        curves, masks, latents = _sequence(7)
+        n = len(masks)
+        config = replace(SMALL, field_ap_weight=0.01, field_end_weight=0.01)
+        evidence = {k: body_evidence(curves[k], masks[k]) for k in range(n)}
+        fits = fit_masks(masks, [[Initialization("s", latents[k], 12.0)] for k in range(n)], config=config, device="cpu",
+                         fields=[evidence[k] for k in range(n)])
+        arrays = {
+            "frame_index": np.arange(n), "fitted": np.ones(n, dtype=bool),
+            "latent": np.stack([r.latent for r in fits]), "width_px": np.array([r.width_px for r in fits]),
+            "width_shape": np.stack([r.width_shape for r in fits]), "body_length_px": np.array([r.body_length_px for r in fits]),
+            "centerline_xy": np.stack([r.centerline_xy for r in fits]), "points_in_fov": np.array([r.points_in_fov for r in fits]),
+            "energy": np.array([r.records[0]["final_soft_dice_energy"] for r in fits]),
+            "field_energy": np.array([r.records[0]["final_field_energy"] for r in fits]),
+        }
+        # The network's trace of frame 3, here the true pose.
+        trace = Initialization("network_trace", latents[3], 12.0)
+        calls = []
+
+        def recording(masks_arg, starts_arg, **kwargs):
+            calls.append((masks_arg, starts_arg, kwargs.get("fields")))
+            return fit_masks(masks_arg, starts_arg, **kwargs)
+
+        stretch_masks = {k: masks[k] for k in range(n)}
+        with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording):
+            candidates, info = propagate(
+                arrays, [(2, 4)], stretch_masks, config=config, device="cpu", propagation=PropagationConfig(pad=0, beam=2),
+                evidence=evidence, network_starts={3: trace},
+            )
+        # Anchor refits, stored-pose refits and chain steps all score each mask against its own frame's evidence.
+        self.assertEqual(info["anchor_refits"], 2)
+        self.assertGreaterEqual(len(calls), 1 + 1 + 3)
+        for masks_arg, _, fields in calls:
+            self.assertIsNotNone(fields)
+            rows = [next(k for k in range(n) if stretch_masks[k] is m) for m in masks_arg]
+            self.assertEqual([id(f) for f in fields], [id(evidence[r]) for r in rows])
+        # The trace is one more start of each chain's best state at frame 3.
+        names = [s.name for _, starts, _ in calls for frame_starts in starts for s in frame_starts]
+        self.assertEqual(sorted(name for name in names if name.startswith("network_trace")), ["network_trace_backward", "network_trace_forward"])
+        self.assertEqual(info["network_starts_offered"], 2)
+        self.assertEqual(info["frames_with_evidence"], 3)
+        # Every candidate's energy holds its evidence energy; its mirror pays the mirror's.
+        for row, options in candidates.items():
+            for candidate in options:
+                record = candidate.result.records[candidate.result.best_index]
+                self.assertGreater(record["final_field_energy"], 0.0)
+                self.assertAlmostEqual(candidate.total_energy, comparable_energy(config, candidate.result))
+                self.assertAlmostEqual(
+                    candidate.total_energy,
+                    record["final_soft_dice_energy"] + record["final_field_energy"]
+                    + prior_penalty(config, candidate.result.body_length_px, candidate.result.width_px, candidate.result.width_shape),
+                )
+                self.assertGreater(candidate.energy(True), candidate.energy() + 1.0)
+                mirrored = candidate.oriented(True, config)
+                np.testing.assert_array_equal(mirrored.centerline_xy, candidate.result.centerline_xy[::-1])
+                self.assertEqual(mirrored.records[mirrored.best_index]["final_field_energy"], candidate.mirror_field_energy)
+                self.assertIs(candidate.oriented(False, config), candidate.result)
+        # The stored poses are compared on the same footing: their stored evidence energy counts.
+        self.assertAlmostEqual(
+            independent_energy(config, arrays, 3),
+            arrays["energy"][3] + arrays["field_energy"][3] + prior_penalty(config, arrays["body_length_px"][3], arrays["width_px"][3], arrays["width_shape"][3]),
+        )
+        # The path never mirrors a pose against the evidence, and covers the stretch.
+        chosen = select_path(candidates, arrays, [(2, 4)], config, PropagationConfig(pad=0, beam=2), image_shape=masks[0].shape)
+        self.assertEqual(sorted(chosen), [2, 3, 4])
+        self.assertFalse(any(choice.mirrored for choice in chosen.values()))
+
     def test_slow_schedule_takes_steps_from_the_preset_and_keeps_rasters(self) -> None:
         slow = slow_schedule(SMALL, replace(SMALL, stage_steps=(100, 200), within_stage_decay=0.03), length_sigma=0.02)
         self.assertEqual(slow.stage_steps, (100, 200))
@@ -327,6 +400,15 @@ class PropagationTests(unittest.TestCase):
         for row, choice in chosen.items():
             self.assertIs(choice.candidate.result, fits[row])
             self.assertTrue(choice.mirrored, f"row {row} kept the anchors' opposite orientation")
+        # Unless body-field evidence says the candidates' own orientation is right: a mirror pays its evidence energy.
+        for options in candidates.values():
+            for candidate in options:
+                candidate.mirror_field_energy = 10.0
+        chosen = select_path(candidates, reversed_arrays, [(1, 3)], SMALL, propagation, image_shape=masks[0].shape)
+        for row, choice in chosen.items():
+            self.assertIs(choice.candidate.result, fits[row])
+            self.assertFalse(choice.mirrored, f"row {row} was mirrored against the evidence")
+            self.assertAlmostEqual(choice.energy_gap, 0.01 + 0.002 * row)
 
     def test_selection_keeps_the_independent_fit_when_it_is_better(self) -> None:
         curves, masks, latents = _sequence(3)

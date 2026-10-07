@@ -18,13 +18,16 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import h5py
 import numpy as np
 import torch
 
 from worm_pose_gen.ambiguity import FLAG_NAMES
-from worm_pose_gen.batch_fit import BatchFitConfig
+from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks
+from worm_pose_gen.body_proposal import FIELD_AP_WEIGHT, FieldPrediction
+from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import default_width_template, render_tube_segments
 from worm_pose_gen import pipeline
@@ -77,21 +80,48 @@ FIT_PARAMS = {
 SEGMENT_PARAMS = {"checkpoint": None, "flat_field": False, "min_worm_pixels": 200, "slab": 4}
 
 
-def _bodies(n: int = FRAMES) -> list[np.ndarray]:
-    """Masks of a worm whose second half bends progressively, as in tests/test_propagation.py."""
+def _body_curve(k: int) -> np.ndarray:
+    """The head-first midline of frame ``k``: a worm whose second half bends progressively, as in tests/test_propagation.py."""
 
+    shape = np.zeros(16)
+    shape[10:] = 0.25 * k
+    return decode_centerline(np.concatenate((shape, [0.2, 150.0], [WIDTH / 2, HEIGHT / 2])))
+
+
+def _body_mask(curve: np.ndarray) -> np.ndarray:
     template = default_width_template()
-    masks = []
-    for k in range(n):
-        shape = np.zeros(16)
-        shape[10:] = 0.25 * k
-        latent = np.concatenate((shape, [0.2, 150.0], [WIDTH / 2, HEIGHT / 2]))
-        curve = decode_centerline(latent)
-        rendered = render_tube_segments(
-            torch.as_tensor(curve, dtype=torch.float32)[None], torch.as_tensor(12.0 * template, dtype=torch.float32)[None], HEIGHT, WIDTH
-        )[0]
-        masks.append((rendered >= 0.5).numpy())
-    return masks
+    rendered = render_tube_segments(
+        torch.as_tensor(curve, dtype=torch.float32)[None], torch.as_tensor(12.0 * template, dtype=torch.float32)[None], HEIGHT, WIDTH
+    )[0]
+    return (rendered >= 0.5).numpy()
+
+
+def _bodies(n: int = FRAMES) -> list[np.ndarray]:
+    """Masks of the bodies of ``_body_curve``."""
+
+    return [_body_mask(_body_curve(k)) for k in range(n)]
+
+
+class _StubPredictor:
+    """A perfect body-field network for the synthetic recording: each frame's fields from its known midline."""
+
+    def __init__(self, frames: Frames) -> None:
+        self.frames = frames
+        self.requested: list[list[int]] = []
+
+    def predict(self, frame_indices) -> list[FieldPrediction]:
+        self.requested.append([int(f) for f in frame_indices])
+        out = []
+        for frame in self.requested[-1]:
+            curve = _body_curve(frame)
+            mask = _body_mask(curve)
+            targets = render_body_targets(mask, curve, 12.0 * default_width_template())
+            out.append(FieldPrediction(
+                mask=mask.astype(np.float32), ap=np.nan_to_num(targets.ap, nan=0.5).astype(np.float32),
+                head=point_heatmap((HEIGHT, WIDTH), curve[0], 3.0), tail=point_heatmap((HEIGHT, WIDTH), curve[-1], 3.0),
+                overlap=targets.overlap.astype(np.float32),
+            ))
+        return out
 
 
 def _write_recording(path: Path, n: int = FRAMES) -> list[np.ndarray]:
@@ -263,6 +293,9 @@ class StageTests(unittest.TestCase):
         self.assertGreater(summary["iou"]["median"], 0.8)
         self.assertEqual(summary["frames_fitted"], FRAMES)
         self.assertIn("continuity", summary)
+        # No body-field network: no evidence energy.
+        self.assertFalse(state["field_energy"].any())
+        self.assertIn("field_energy_independent", state)
 
     def _ambiguity(self) -> None:
         result = run_stage(self.workspace, "ambiguity", {}, device="cpu")
@@ -460,6 +493,76 @@ class StageTests(unittest.TestCase):
         self.assertEqual(len(finished), 1)
         self.assertGreaterEqual(finished[0], released)
         self.assertTrue((self.workspace.path / "exports" / "locked.parquet").exists())
+
+
+class BodyFieldStageTests(unittest.TestCase):
+    """The stages of a workspace fit with the body-field network (a stub that knows the bodies): its evidence reaches every fit."""
+
+    def test_evidence_reaches_the_fit_propagate_and_track_stages(self) -> None:
+        predictors: list[_StubPredictor] = []
+
+        def field_predictor(checkpoint, frames, device):
+            self.assertEqual(checkpoint, "stub.ckpt")
+            predictors.append(_StubPredictor(frames))
+            return predictors[-1]
+
+        calls: list = []
+
+        def recording(masks, starts, **kwargs):
+            calls.append(kwargs.get("fields"))
+            return fit_masks(masks, starts, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pipeline, "field_predictor", side_effect=field_predictor):
+            root = Path(directory)
+            recording_path = root / "rec.h5"
+            _write_recording(recording_path)
+            workspace = Workspace.create(root / "workspaces", "fields", recording_path, 0, FRAMES - 1)
+            run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
+            run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
+            self.assertEqual(config_from_dict(read_summary(workspace)["fit_config"]).field_ap_weight, FIELD_AP_WEIGHT)
+            state = workspace.load_state()
+            # Every fit is scored against the evidence, which also decides the orientation: heads first.
+            self.assertTrue((state["field_energy"] > 0).all())
+            np.testing.assert_array_equal(state["field_energy_independent"], state["field_energy"])
+            for row in range(FRAMES):
+                self.assertLess(float(np.linalg.norm(state["centerline_xy"][row, 0] - _body_curve(row)[0])), 6.0)
+            run_stage(workspace, "ambiguity", {}, device="cpu")
+            # A pose two body widths off its mask seeds a stretch around row 3 (as in HypothesisArrayTests).
+            state = workspace.load_state()
+            state["centerline_xy"][3, :, 0] += 25.0
+            state["latent"][3, -2] += 25.0
+            state["iou"][3] = 0.5
+            workspace.save_state(state)
+            with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording):
+                result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1}, device="cpu")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
+            # The workspace's fit used the network, so the pass predicts the stretch and its anchors and scores every fit.
+            self.assertEqual(predictors[-1].requested, [[1, 2, 3, 4, 5]])
+            self.assertTrue(calls)
+            for fields in calls:
+                self.assertIsNotNone(fields)
+                self.assertTrue(all(f is not None for f in fields))
+            info = read_summary(workspace)["propagation"]
+            self.assertEqual(info["frames_with_evidence"], 3)
+            self.assertEqual(info["network_starts_offered"], 2 * 3)
+            state = workspace.load_state()
+            self.assertTrue((state["field_energy"][2:5] > 0).all())
+            hypotheses = workspace.load_hypotheses()
+            for row in (2, 3, 4):
+                count = int(hypotheses["hypotheses_count"][row])
+                self.assertTrue(np.all(hypotheses["hypotheses_energy"][row, :count] > hypotheses["hypotheses_soft_dice"][row, :count]))
+            # The track pass refits off the stretch, scored against the evidence too.
+            calls.clear()
+            with mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=recording):
+                track = run_stage(workspace, "track", {"track_refit": "deviating", "track_tolerance": 0.0}, device="cpu")
+            self.assertGreater(track["frames_refit"], 0)
+            self.assertEqual(track["frames_with_evidence"], track["frames_refit"])
+            self.assertTrue(calls)
+            for fields in calls:
+                self.assertTrue(fields is not None and all(f is not None for f in fields))
+            refit = np.nonzero(workspace.load_state()["length_refit"])[0]
+            self.assertTrue(set(refit.tolist()).isdisjoint({2, 3, 4}))
+            self.assertTrue((workspace.load_state()["field_energy"][refit] > 0).all())
 
 
 class IndependentCopyTests(unittest.TestCase):
