@@ -767,3 +767,19 @@ agent edits only its own section and files.
     `best.ckpt` promotion, `last.ckpt`, the old evaluation folders, and
     `segmenter_model_names.json`
 - Update the README and the browser tests, then run the full suite.
+
+### Wave 2 contracts between the pages
+
+- **UI shell** (`src/worm_pose_gen/app_ui/`):
+  - `shell.js` routes `#<page>/<params>` to the page module's `mount(section, ctx)` / `show(params)` / `hide()`.
+  - `ctx` offers `config`, `dev`, `navigate(page, params)`, `setHeader(page, {context, actions})` and `toast(message, kind)`.
+  - Shared helpers: `api.js` (`api`, `post`, `query`, `el`) and `frame_canvas.js` (`FrameCanvas`, `maskCanvas`, `drawMidline`).
+  - `style.css` holds the tokens and the shared classes. Each page owns `<page>.js` / `<page>.css` and any `<page>_*.js` modules. Changes to the shared files stay small and additive.
+- **Model picker** (Training owns it, the Workspace uses it): `openModelPicker(ctx, {setup, role, current}) → Promise<ref | null>` in `model_picker.js`.
+- **Relabel round trip** (Labeling owns the backend):
+  1. The Workspace creates the queue with `POST /api/queues {kind: "relabel", workspace, frames}` → `{id}` and calls `ctx.navigate("labeling", "queue/<id>")`.
+  2. When the queue is complete, Labeling offers **Back to workspace**, which goes to `#workspace/<workspace>/stitch/<id>`.
+  3. The Workspace then calls `POST /api/queues/<id>/stitch`. This writes the keyframe labels' masks into the workspace as mask overrides, then starts the stitch through `fixes.run_stitch`. It answers like `POST /api/workspaces/<ws>/fixes/stitch` (`{job, preview, plan}`), and the Workspace shows the preview with Keep / Discard.
+- **Edit mask** (Workspace): after the mask is saved, the refit's preview is kept automatically once its job finishes. It appears in the Fixes list with Undo.
+- **Analyse** does not export: `export` leaves the default stages, and exports come only from the Export button, which passes the setup's `pixel_size_um` and `fps`.
+- **Body-target cache key:** the label revision plus the model that built the targets, so changing the default model rebuilds them.
