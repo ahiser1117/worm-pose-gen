@@ -35,6 +35,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..compute import local_gpus
 from ..pose_viewer import DEFAULT_CHECKPOINT, DEFAULT_NOTES, DEFAULT_RUNS_ROOT
 from ..recordings import DEFAULT_RECORDING_ROOTS
 from ..segmentation_dataset import DEFAULT_DATASET_ROOT
@@ -123,9 +124,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
 def _gpu_list(text: str | None) -> tuple[int, ...]:
     if text is None:
-        import torch
-
-        return tuple(range(torch.cuda.device_count())) if torch.cuda.is_available() else ()
+        return tuple(gpu.index for gpu in local_gpus())
     return tuple(int(part) for part in text.split(",") if part.strip() != "")
 
 
@@ -172,7 +171,9 @@ def main(argv: list[str] | None = None) -> None:
     app = create_app(config)
     state: AppState = app.state.app_state
     print(f"pose app at http://{config.host}:{config.port}/", flush=True)
+    slurm = state.compute.slurm
     print(f"{len(state.viewer.catalog)} runs, workspaces in {config.workspaces_root}, jobs on gpus {list(config.gpus)}, device {state.device}", flush=True)
+    print(f"SLURM: {'available' if slurm.available else slurm.reason}; defaults {slurm.defaults}", flush=True)
     for path, error in state.viewer.catalog_errors.items():
         print(f"skipped {path}: {error}", flush=True)
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level)
