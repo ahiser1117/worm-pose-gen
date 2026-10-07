@@ -42,7 +42,7 @@ from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import DEFAULT_BODY_NET, AppConfig
 from .state import AppState, NotFound
 from ..pipeline import WorkspaceBusy
-from .routers import algorithms, body_fields, corpus, edits, jobs, library, masks, recordings, static, viewer, workspaces
+from .routers import algorithms, body_fields, config as config_routes, corpus, edits, jobs, library, masks, recordings, static, viewer, workspaces
 from .routers import labeling as labeling_routes
 from .routers import inspection as inspection_routes
 from .routers import fixes as fixes_routes
@@ -116,6 +116,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(algorithms.router)
     app.include_router(jobs.router)
     app.include_router(library.router)
+    app.include_router(config_routes.router)
     app.include_router(static.router)
     return app
 
@@ -146,6 +147,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default=None, help="device of the server's own segmenter (default: the first job GPU)")
     parser.add_argument("--lab-library", type=Path, default=None, help="the lab's model library, read-only (default: by host name)")
     parser.add_argument("--library", type=Path, default=None, help="your personal library (default: by host name)")
+    parser.add_argument("--dev", action="store_true", help="developer mode: also show the research diagnostics")
     parser.add_argument("--notes", type=Path, default=DEFAULT_NOTES, help="JSON file review notes are appended to")
     parser.add_argument("--log-level", default="info")
     return parser.parse_args(argv)
@@ -157,7 +159,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
         recording_roots=tuple(args.recording_roots) if args.recording_roots else tuple(DEFAULT_RECORDING_ROOTS),
         poses_root=args.poses_root, dataset_root=args.dataset_root, checkpoint=args.checkpoint, body_net=args.body_net, notes=args.notes,
         corpus_root=args.corpus_root, checkpoints_root=args.checkpoints_root,
-        lab_library=args.lab_library, library=args.library,
+        lab_library=args.lab_library, library=args.library, dev=args.dev,
         gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent, extra_runs=tuple(args.runs or ()),
     )
 

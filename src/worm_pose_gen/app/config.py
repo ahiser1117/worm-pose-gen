@@ -48,6 +48,8 @@ class AppConfig:
     # The lab library (read-only; None: the host's, from library.LAB_LIBRARY_BY_HOST) and the personal one (None: the host default).
     lab_library: Path | None = None
     library: Path | None = None
+    # Developer mode: the UI also shows the research diagnostics (docs/APP_SIMPLIFICATION.md).
+    dev: bool = False
 
     def __post_init__(self) -> None:
         self.workspaces_root = Path(self.workspaces_root)

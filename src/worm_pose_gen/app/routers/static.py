@@ -1,4 +1,4 @@
-"""The browser UI from ``worm_pose_gen.pose_viewer_ui``: ``/``, ``/static/<file>`` and the viewer's old asset paths."""
+"""The browser UI from ``worm_pose_gen.app_ui``: ``/`` and ``/static/<file>``."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from ..state import NotFound
 
 router = APIRouter()
-UI_PACKAGE = "worm_pose_gen.pose_viewer_ui"
+UI_PACKAGE = "worm_pose_gen.app_ui"
 
 
 def static_response(name: str) -> Response:
@@ -24,23 +24,14 @@ def static_response(name: str) -> Response:
     media_type = media_type or "application/octet-stream"
     if media_type.startswith("text/") or media_type in ("application/javascript", "application/json"):
         media_type += "; charset=utf-8"
-    return Response(content=resource.read_bytes(), media_type=media_type)
+    # The UI has no build step; revalidate so a server update is picked up on reload.
+    return Response(content=resource.read_bytes(), media_type=media_type, headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/", include_in_schema=False)
 @router.get("/index.html", include_in_schema=False)
 def index() -> Response:
     return static_response("index.html")
-
-
-@router.get("/app.js", include_in_schema=False)
-def app_js() -> Response:
-    return static_response("app.js")
-
-
-@router.get("/style.css", include_in_schema=False)
-def style_css() -> Response:
-    return static_response("style.css")
 
 
 @router.get("/static/{name}", include_in_schema=False)
