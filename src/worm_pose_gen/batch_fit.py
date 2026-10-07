@@ -24,6 +24,7 @@ model (scale, template, and log-space asymmetry correction) is the one in
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 import warnings
@@ -106,6 +107,8 @@ PRESETS: dict[str, "BatchFitConfig"] = {
 
 Renderer = Callable[..., Tensor]
 _COMPILED: dict[str, Renderer] = {}
+# Host threads preparing a group's targets (``_window_targets``).
+TARGET_THREADS = 8
 # Diagnostic count of groups that exceeded Dynamo's specialization budget.
 _ENERGY_COMPILE_FALLBACKS = 0
 # Per CUDA device: the side stream steps are recorded on, the memory pool
@@ -245,28 +248,50 @@ def _point_index(n_points: int, stride: int, device: torch.device) -> Tensor:
 def _window_targets(
     masks: Sequence[BoolArray], windows: Sequence[CropWindow], height: int, width: int, device: torch.device
 ) -> tuple[Tensor, Tensor, Tensor]:
-    """Hard target, signed edge distance (-inf off camera), and validity per frame."""
+    """Hard target, signed edge distance (-inf off camera), and validity per frame.
 
-    n = len(masks)
+    Frames that share a mask object and a window (propagation fits every
+    start of a chain step as its own frame) are prepared once, and distinct
+    ones in parallel threads: the exact distance transforms release the GIL.
+    """
+
     # Masks and the exact distance transform live on the host. Assemble the
     # whole group here, then transfer each array once instead of sending every
     # crop to the GPU and back for its distance transform and validity checks.
-    target = np.zeros((n, height, width), dtype=np.float32)
+    position: dict[tuple[int, CropWindow], int] = {}
+    distinct: list[tuple[BoolArray, CropWindow]] = []
+    source: list[int] = []
+    for mask, w in zip(masks, windows, strict=True):
+        key = (id(mask), w)
+        if key not in position:
+            position[key] = len(distinct)
+            distinct.append((mask, w))
+        source.append(position[key])
+    target = np.zeros((len(distinct), height, width), dtype=np.float32)
     valid = np.zeros_like(target)
     distance = np.full_like(target, -float("inf"))
-    for f, (mask, w) in enumerate(zip(masks, windows, strict=True)):
+
+    def prepare(k: int) -> None:
+        mask, w = distinct[k]
         ix0, ix1 = max(w.x0, 0), min(w.x1, w.image_width)
         iy0, iy1 = max(w.y0, 0), min(w.y1, w.image_height)
         local = mask[iy0:iy1, ix0:ix1]
         rows = slice(iy0 - w.y0, iy1 - w.y0)
         cols = slice(ix0 - w.x0, ix1 - w.x0)
-        target[f, rows, cols] = local
-        valid[f, rows, cols] = 1.0
+        target[k, rows, cols] = local
+        valid[k, rows, cols] = 1.0
         if local.all():
-            distance[f, rows, cols] = float("inf")
+            distance[k, rows, cols] = float("inf")
         else:
-            distance[f, rows, cols] = signed_edge_distance(torch.from_numpy(local)).numpy()
-    return tuple(torch.from_numpy(array).to(device=device) for array in (target, distance, valid))
+            distance[k, rows, cols] = signed_edge_distance(torch.from_numpy(local)).numpy()
+
+    if len(distinct) > 1:
+        with ThreadPoolExecutor(max_workers=min(TARGET_THREADS, len(distinct))) as pool:
+            list(pool.map(prepare, range(len(distinct))))
+    else:
+        prepare(0)
+    index = torch.as_tensor(source, device=device)
+    return tuple(torch.from_numpy(array).to(device=device)[index] for array in (target, distance, valid))
 
 
 @torch.no_grad()
