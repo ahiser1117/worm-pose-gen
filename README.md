@@ -214,7 +214,18 @@ centerline with head and tail markers, the residual (mask the tube misses
 in blue, tube outside the mask in red), the independent fit that
 propagation replaced (runs fit after 2026-09-07 store it), the pose of a
 second run of the same recording, the fitter's skeleton and moment starts,
-and the crop window. The right panel lists every per-frame statistic the
+and the crop window. In a workspace opened in the pose app, two more layers,
+off by default, show the body-field network's prediction for the shown frame
+(the app's `--body-net`, default `checkpoints/body_net/best.ckpt`; see
+[`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md)): **Network A-P field** (purple
+head to yellow tail on the predicted body, predicted crossings white; hovering
+reads `network A-P 0.43`) and **Network head / tail** (a green H and a red T,
+drawn only where the fitter would use the end: not below the heatmap
+threshold, at the image edge or off the mask). They are predicted only while
+one is on, one frame at a time, and cached per frame and mask revision;
+during playback the last prediction stays until the shown frame's arrives. A
+line under the layers names the frame, the ends' peaks, or why the network is
+unavailable. The right panel lists every per-frame statistic the
 run tracks, the nine ambiguity flags with the value each tested against its
 threshold, a classification of the frame (clean, watch, or ambiguous;
 coil, camera edge, fragmented mask, or suspected fit failure; propagated
@@ -639,11 +650,12 @@ The same operations are available through the API:
 | Training schema/job | `GET /api/training`, `POST /api/jobs` with `kind: fine_tune` and `params` |
 | List/select checkpoint | `GET /api/checkpoints`, `POST /api/workspaces/{name}/checkpoint` with `checkpoint` ID or path |
 | Body-field targets | `GET /api/body-fields`, `GET /api/body-fields/{id}` and `/{id}/context`; `POST /api/body-fields/{id}/flip`, `/review`, `/rebuild` ([`docs/BODY_FIELDS.md`](docs/BODY_FIELDS.md)) |
+| Body-field network on a workspace frame | `GET /api/workspaces/{name}/network-fields?frame=F` (A-P and crossings as PNG, head/tail or null, peaks) |
 
 Browser regressions include `mask_editor.cjs`, `masks_task.cjs`, `paint_section.cjs`,
 `task_labels_review.cjs`, `task_shortcuts.cjs`, `workflow_run.cjs`,
 `workflow_compare_export.cjs`, `inspection_filter.cjs`, `usability_library.cjs`,
-`usability_shell.cjs` and `body_fields.cjs` under `tests/browser`; the shell test uses a separately
+`usability_shell.cjs`, `body_fields.cjs`, `body_fields_proposal.cjs` and `network_fields.cjs` under `tests/browser`; the shell test uses a separately
 started `phase4_fixture.py` at `UI_BASE_URL` (default `http://127.0.0.1:18770`). The complete workflow
 is `tests/browser/phase4_workflow.cjs`, which starts its own synthetic CPU app,
 trains for one epoch, accepts a regional refit, checks undo, records human

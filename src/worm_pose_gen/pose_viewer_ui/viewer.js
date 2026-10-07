@@ -420,6 +420,7 @@ async function applyPayload(payload, row, stale = false, controller = null) {
   draw();
   renderDetails();
   if (row === state.row && !previewMoving()) { fetchSegment(row); if (typeof maskEditor !== "undefined") maskEditor.onFrame(); }
+  if (row === state.row) window.networkFields?.onFrame();
   return true;
 }
 

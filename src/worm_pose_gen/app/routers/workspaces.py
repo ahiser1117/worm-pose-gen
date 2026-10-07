@@ -1,4 +1,4 @@
-"""Workspaces: create, import a run, list, open, frames and snapshots (the edits live in ``routers/edits``)."""
+"""Workspaces: create, import a run, list, open, frames, network predictions and snapshots (the edits live in ``routers/edits``)."""
 
 from __future__ import annotations
 
@@ -40,6 +40,12 @@ def open_workspace(name: str, app: AppState = Depends(get_state)) -> dict[str, A
 @router.get("/{name}/frame")
 def frame(name: str, frame: int, detail: str = "full", threshold: str | None = None, raw: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
     return app.view(name).frame(frame, app.viewer.segmenters, query_float(threshold), app.device, raw=query_flag(raw), detail=detail)
+
+
+@router.get("/{name}/network-fields")
+def network_fields(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The body-field network's A-P field, crossings and head/tail on one frame (``app/network_fields.py``)."""
+    return app.network_fields.frame(name, frame)
 
 
 @router.get("/{name}/pose")

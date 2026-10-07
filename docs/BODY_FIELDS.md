@@ -200,6 +200,15 @@ proposal's points, Propose without a network).
 
 ## Body-field evidence in the pose fitter
 
+To see what the network tells the fitter on a workspace's frames, turn on
+**Network A-P field** and **Network head / tail** in the workspace viewer's
+Layers panel (README, "Fit poses over a recording", where the viewer's layers are listed). The frame is predicted as the fit
+stage predicts it (`GET /api/workspaces/{name}/network-fields`,
+`app/network_fields.py`: `pipeline.workspace_frames` with the app's flat-field
+cache, neighbours outside the recording as zero lag channels), and the ends
+are judged by `body_proposal.field_evidence` against the row's current mask,
+so an end the layer leaves out is one the fit does not use.
+
 The network's predictions also steer the tube fit of a recording. With
 `--body-net <checkpoint>` (`scripts/fit_recording.py`) or the fit stage's
 `body_net` parameter (`pipeline.FitParams`), every fitted frame is predicted

@@ -70,6 +70,8 @@ class AppState:
         self.startup_group: str | None = None
         self._body_net = None
         self._body_net_lock = threading.Lock()
+        from .network_fields import NetworkFields
+        self.network_fields = NetworkFields(self)
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -79,6 +81,7 @@ class AppState:
 
     def close(self) -> None:
         self.runner.stop()
+        self.network_fields.close()
         self.viewer.close()
 
     @property
@@ -86,7 +89,7 @@ class AppState:
         return self.viewer.device
 
     def body_net(self):
-        """The body-field network (``--body-net``), loaded on the app's device at first use."""
+        """The body-field network (``--body-net``), loaded on the app's device at first use; Body fields and the viewer's network layers share it."""
 
         with self._body_net_lock:
             if self._body_net is None:

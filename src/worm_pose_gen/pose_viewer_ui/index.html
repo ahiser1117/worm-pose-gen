@@ -182,6 +182,7 @@
         </section></div><div id="right-layers" class="right-content" role="tabpanel" aria-labelledby="right-tab-layers" hidden><section class="group">
           <h3>Layers <small>(number keys toggle)</small></h3>
           <div id="layers"></div>
+          <div id="network-fields-status" class="note" role="status"></div>
 
           <label for="threshold">Threshold override <output id="threshold-value">run</output>
             <input id="threshold" type="range" min="0.05" max="0.95" step="0.05" value="0.5">
@@ -376,7 +377,7 @@
 <footer id="app-status"><div id="toast" class="toast" hidden></div><div id="status" class="status" role="status" aria-live="polite"></div><button aria-pressed="false" data-drawer="shortcuts">Shortcuts</button></footer>
 </div><section id="preview-progress" role="status" aria-live="polite" hidden><strong id="preview-progress-title">Preparing preview</strong><ol id="preview-progress-steps"></ol><button id="preview-progress-close" hidden>Dismiss</button></section><dialog id="draft-decision"><form method="dialog"><h2>Unsaved mask draft</h2><p>Save this draft before leaving its frame?</p><div class="row wrap"><button value="save" class="primary">Save and continue</button><button value="discard">Discard</button><button value="stay" autofocus>Stay</button></div></form></dialog>
 <script src="/static/api.js"></script>
-<script src="/static/layers.js"></script>
+<script src="/static/layers.js"></script><script src="/static/network_fields.js"></script>
 <script src="/static/charts.js"></script>
 <script src="/static/viewer.js"></script>
 <script src="/static/edits.js"></script>

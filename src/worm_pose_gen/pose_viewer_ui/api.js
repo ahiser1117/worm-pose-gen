@@ -36,6 +36,9 @@ const LAYERS = [
   { id: "cand_b", name: "Candidate set B", kind: "vector", on: true, alpha: 1.0, color: [255, 110, 40] },
   { id: "editable_mask", name: "Editable mask (Masks)", kind: "editor", on: true, alpha: 0.45, color: [255, 65, 155] },
   { id: "fixed_body", name: "Fixed body (dashed = extrapolated)", kind: "vector", on: true, alpha: 0.9, color: [100, 235, 255] },
+  // The body-field network's prediction for the shown frame (network_fields.js), fetched only while one is on.
+  { id: "net_ap", name: "Network A-P field", kind: "network", on: false, alpha: 0.6, color: [33, 145, 140] },
+  { id: "net_ends", name: "Network head / tail", kind: "network", on: false, alpha: 1.0, color: [60, 255, 60] },
 ];
 
 const NOTE_TAGS = ["coil", "edge", "fragment", "orientation", "length", "jump", "segmentation", "propagation", "good example", "other"];
@@ -54,6 +57,12 @@ const EXTRA_SERIES = [
   ["tube_coverage", "Tube coverage by mask"],
   ["max_bend_widths", "Tightest bend (width / radius)"],
 ];
+// The A-P colour map of Body fields and the viewer's network layer: purple head (0) to yellow tail (1).
+const VIRIDIS = [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
+function viridis(t) {
+  const x = Math.max(0, Math.min(1, t)) * (VIRIDIS.length - 1), i = Math.min(VIRIDIS.length - 2, Math.floor(x)), f = x - i;
+  return VIRIDIS[i].map((v, k) => Math.round(v + (VIRIDIS[i + 1][k] - v) * f));
+}
 const HYP_COLORS = { forward: [255, 211, 77], backward: [192, 128, 255], independent: [120, 200, 255] };
 
 // Pipeline stages in their natural order; the server's /api/stages payload

@@ -72,6 +72,7 @@ function bindEvents() {
         if (d.probability) bits.push(`p ${(d.probability[i] / 255).toFixed(2)}`);
         if (d.mask_final) bits.push(d.mask_final[i] ? "mask" : "");
         if (d.tube) bits.push(d.tube[i] ? "tube" : "");
+        bits.push(window.networkFields?.readout(x, y));
         canvas.title = bits.filter(Boolean).join(" · ");
       }
     }

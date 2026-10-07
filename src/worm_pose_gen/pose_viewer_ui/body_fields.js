@@ -22,7 +22,6 @@ const bodyFields = (() => {
   ];
   const PROPOSAL = "rgb(190,110,255)";
   const TRACE_METHODS = {traced: "traced", trace_as_drawn: "trace as drawn"};
-  const VIRIDIS = [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
   const layers = LAYER_DEFS.map(l => ({...l}));
   let rows = [], detail = null, context = null, overlays = {}, request = 0, contextRequest = 0, busy = false;
   // Trace mode: the clicked points (head first) and the preview fit along them, if any.
@@ -35,10 +34,6 @@ const bodyFields = (() => {
   const maxLag = () => detail?.max_lag ?? 16;
   const id = () => detail?.sample.sample_id;
 
-  function viridis(t) {
-    const x = Math.max(0, Math.min(1, t)) * (VIRIDIS.length - 1), i = Math.min(VIRIDIS.length - 2, Math.floor(x)), f = x - i;
-    return VIRIDIS[i].map((v, k) => Math.round(v + (VIRIDIS[i + 1][k] - v) * f));
-  }
   function paintCanvas(width, height, fill) {
     const out = document.createElement("canvas"); out.width = width; out.height = height;
     const c = out.getContext("2d"), image = c.createImageData(width, height);

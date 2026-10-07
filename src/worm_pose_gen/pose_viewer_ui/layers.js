@@ -74,6 +74,7 @@ function renderLegend() {
     if (l.id === "compare" && !state.comparePose) continue;
     if (l.id === "fixed_body" && !state.frame?.fixed_body?.centerline_xy) continue;
     if (l.id === "starts" && !state.starts) continue;
+    if (l.kind === "network" && !window.networkFields?.available()) continue;
     if (l.id.startsWith("hyp_") && !(state.frame && state.frame.pose && state.frame.pose.hypotheses && state.frame.pose.hypotheses.some((h) => h.source === l.id.slice(4)))) continue;
     if (l.id === "prediction" && !(state.frame && state.frame.pose && state.frame.pose.prediction_xy)) continue;
     if (l.id === "cand_a" || l.id === "cand_b") {
@@ -206,6 +207,7 @@ function draw() {
   if (base.on && image) { ctx.globalAlpha = base.alpha; ctx.drawImage(image, 0, 0); ctx.globalAlpha = 1; }
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, d.width, d.height); }
   if (!rasterLayersDeferred()) ctx.drawImage(overlayCanvas, 0, 0);
+  window.networkFields?.drawField(ctx);
   if (typeof maskEditor !== "undefined" && !state.playing && !state.timeline.dragging) maskEditor.draw();
   const pose = state.frame && state.frame.pose;
   if (pose) {
@@ -259,6 +261,7 @@ function draw() {
       ctx.fillText(s.name, x + 6 / v.scale, y - 6 / v.scale); ctx.restore();
     });
   }
+  window.networkFields?.drawEnds(ctx);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   renderCaption();
   window.workflowCompare?.renderSide();
@@ -533,6 +536,7 @@ function renderLayers() {
 function relayer(l) {
   if (l.id === "editable_mask" && typeof maskEditor !== "undefined") { maskEditor.setDisplay(l); return; }
   if (l.id === "starts") syncStartsToggle();
+  if (l.kind === "network") window.networkFields?.onLayer();
   if (l.kind === "pixel" || l.kind === "both") buildOverlay();
   renderLegend();
   draw();
@@ -554,11 +558,11 @@ function renderLayerAvailability() {
   for (const node of document.querySelectorAll(".layer")) {
     const deferred = rasterLayersDeferred() && layer(node.dataset.layer)?.kind === "pixel";
     node.classList.toggle("deferred", deferred);
-    node.title = node.dataset.layer === "editable_mask" ? "Editable workspace mask shown in Masks: magenta is worm, yellow is ignored." : deferred ? "Shown when playback or scrubbing stops and detailed layers finish loading." : "";
+    node.title = node.dataset.layer === "editable_mask" ? "Editable workspace mask shown in Masks: magenta is worm, yellow is ignored." : node.dataset.layer === "net_ap" ? "The body-field network's A-P field on this frame: purple head to yellow tail, crossings white (the app's --body-net)." : node.dataset.layer === "net_ends" ? "The network's head (green H) and tail (red T), when the fitter would use them." : deferred ? "Shown when playback or scrubbing stops and detailed layers finish loading." : "";
   }
   if (state.frame && state.frame.detail === "light") {
     const hyp = (src) => pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === src);
-    const light = { fixed_body: !!state.frame?.fixed_body?.centerline_xy, editable_mask: editable, independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy, cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1] };
+    const light = { fixed_body: !!state.frame?.fixed_body?.centerline_xy, editable_mask: editable, independent: pose && pose.independent, compare: state.comparePose, starts: state.starts, hyp_forward: hyp("forward"), hyp_backward: hyp("backward"), hyp_independent: hyp("independent"), prediction: pose && pose.prediction_xy, cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1], net_ap: window.networkFields?.usable(), net_ends: window.networkFields?.usable() };
     for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", node.dataset.layer in light && !light[node.dataset.layer]);
     return;
   }
@@ -574,6 +578,7 @@ function renderLayerAvailability() {
     hyp_independent: !!(pose && pose.hypotheses && pose.hypotheses.some((h) => h.source === "independent")),
     prediction: !!(pose && pose.prediction_xy),
     cand_a: !!state.shownSets[0], cand_b: !!state.shownSets[1],
+    net_ap: window.networkFields?.usable(), net_ends: window.networkFields?.usable(),
   };
   for (const node of document.querySelectorAll(".layer")) node.classList.toggle("unavailable", available[node.dataset.layer] === false);
 }
