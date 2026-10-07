@@ -783,3 +783,19 @@ agent edits only its own section and files.
 - **Edit mask** (Workspace): after the mask is saved, the refit's preview is kept automatically once its job finishes. It appears in the Fixes list with Undo.
 - **Analyse** does not export: `export` leaves the default stages, and exports come only from the Export button, which passes the setup's `pixel_size_um` and `fps`.
 - **Body-target cache key:** the label revision plus the model that built the targets, so changing the default model rebuilds them.
+
+## 6. Follow-ups after this branch
+
+Decided with Alex 2026-10-07, outside this branch's scope:
+
+- **SLURM defaults on Engaging:** partition `ou_bcs_normal`, 12:00:00, 1 GPU,
+  8 CPUs, 32 GB, as in `compute.SLURM_DEFAULTS_BY_HOST`. `ou_bcs_low` is
+  avoided because preempted jobs requeue and restart from scratch.
+- **Automatic head/tail patches:** short head/tail swaps between consecutive
+  frames (about 12 issues on a real 1200-frame workspace) stay in the issue
+  list for now. The next step is to repair them automatically before review,
+  so the analyst sees only the ones the automatic patch could not settle.
+- **Masks first, before mask-free stitching:** when a stitch gap's masks are
+  bad, improve the masks rather than bridging without them. One candidate is
+  a hole fill that fills only holes fully enclosed by the worm (full
+  containment), leaving openings to the background unfilled.
