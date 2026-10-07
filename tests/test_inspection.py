@@ -10,7 +10,9 @@ from worm_pose_gen.pipeline import workspace_lock, WorkspaceBusy
 from worm_pose_gen.app.routers.inspection import get_inspection, review, ReviewRequest
 from pydantic import ValidationError
 
-from worm_pose_gen.app.inspection import inspection, mark_reviewed
+from worm_pose_gen.app.inspection import inspection, issues, mark_reviewed, review_issue
+from worm_pose_gen.app.routers import fixes as fix_routes
+from worm_pose_gen import edits
 from worm_pose_gen.app.workspace_view import WorkspaceView
 from worm_pose_gen.workspace import Workspace
 from tests.test_pose_viewer import _write_recording, _write_run
@@ -134,3 +136,40 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(inspection(reopened)['reviewed_rows'], [row])
         set_mask(self.workspace, row, np.zeros(self.workspace.image_shape, dtype=np.uint8))
         self.assertEqual(inspection(self.view)['reviewed_rows'], [])
+
+    def test_issues_have_plain_reasons_and_follow_review_and_fixes(self):
+        payload = issues(self.view)
+        self.assertEqual(payload['summary']['issues'], 1)
+        issue = payload['issues'][0]
+        last = self.workspace.n - 1
+        self.assertEqual((issue['rows'], issue['reasons'], issue['state']), ([last, last], ['coiled', 'mask fits poorly'], 'unreviewed'))
+        self.assertEqual(issue['refit']['algorithm'], 'beam_path')
+        with self.assertRaises(HTTPException) as error:
+            review_issue(self.view, issue['frames'][0], issue['frames'][1], 'stale')
+        self.assertEqual(error.exception.status_code, 409)
+        reviewed = review_issue(self.view, issue['frames'][0], issue['frames'][1], payload['revision'])
+        self.assertEqual((reviewed['issues'][0]['state'], reviewed['summary']['done']), ('reviewed', 1))
+        # The review is shared with the older inspection view.
+        self.assertEqual(inspection(self.view)['reviewed_rows'], [last])
+        # A fix next to the issue drops its review (the neighbour's pose is part of the fingerprint) and is an issue of its own, fixed.
+        edits.flip_orientation(self.workspace, [last - 1])
+        # (The ambiguity refresh around the flip may flag the frame before it as well.)
+        after = issues(self.view)
+        self.assertEqual(len(after['issues']), 1)
+        merged = after['issues'][0]
+        self.assertEqual((merged['rows'][1], merged['state']), (last, 'unreviewed'))
+        self.assertLessEqual(merged['rows'][0], last - 1)
+        self.assertIn('head/tail uncertain', merged['reasons'])
+        review_issue(self.view, merged['frames'][0], merged['frames'][1], after['revision'])
+        self.assertEqual(issues(self.view)['issues'][0]['state'], 'fixed')
+        with self.assertRaises(ValueError):
+            review_issue(self.view, 0, 99, issues(self.view)['revision'])
+
+    def test_issue_router_contract(self):
+        app = SimpleNamespace(view=lambda name: self.view, check_writable=lambda name: None)
+        payload = fix_routes.get_issues('example', app)
+        frames = payload['issues'][0]['frames']
+        response = fix_routes.review('example', fix_routes.ReviewRequest(first=frames[0], last=frames[1], revision=payload['revision']), app)
+        self.assertEqual(response['issues'][0]['state'], 'reviewed')
+        with self.assertRaises(ValidationError):
+            fix_routes.ReviewRequest(first=0.5, last=1, revision='x')
