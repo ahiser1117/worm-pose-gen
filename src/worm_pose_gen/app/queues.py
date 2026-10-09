@@ -5,7 +5,8 @@ survives restarts::
 
     {"id", "kind", "name", "setup", "origin", "author", "created_at",
      "workspace": name (relabel), "job": id (spread), "state": "finding" | "ready" | "failed", "error",
-     "entries": [{"path", "recording", "frame", "uncertainty"?, "saved": label identity | null}]}
+     "types": [frame type, ...] (spread: what the search was limited to; empty for all),
+     "entries": [{"path", "recording", "frame", "uncertainty"?, "types"?, "saved": label identity | null}]}
 
 There are three kinds (``docs/APP_SIMPLIFICATION.md``, section 3):
 
@@ -15,8 +16,10 @@ There are three kinds (``docs/APP_SIMPLIFICATION.md``, section 3):
     keyframe is saved the page offers *Back to workspace*, and the
     Workspace calls :func:`stitch`.
 ``spread``
-    frames a *Find frames* job picked over recordings of the setup
-    (:func:`spread_queue`, :mod:`frame_search`); the queue stays
+    frames a *Find frames* job picked over recordings of the setup,
+    optionally only frames of some types (``contact``, ``edge``, ...;
+    :data:`frame_search.TYPES`) (:func:`spread_queue`,
+    :mod:`frame_search`); each entry records its ``types``; the queue stays
     ``finding`` until the job is done and then takes the job's frames.
     Its labels have origin ``spread``, so their test labels can go into a
     benchmark.
@@ -40,7 +43,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from .. import edits, library
+from .. import edits, frame_search, library
 from ..jobs import JobSpec
 from ..library.roots import locked, read_json, write_json
 from ..workspace import utc_now
@@ -113,7 +116,7 @@ class QueueStore:
         def change(queue: dict[str, Any]) -> None:
             for item in queue["entries"]:
                 if item["recording"] == entry["recording"] and int(item["frame"]) == int(entry["frame"]):
-                    item["saved"] = {k: identity[k] for k in ("dataset", "recording", "frame", "revision", "sha256")}
+                    item["saved"] = {k: identity[k] for k in ("scope", "setup", "recording", "frame", "revision", "sha256")}
                     return
             raise ValueError(f"{entry['recording']} frame {entry['frame']} is not in queue {queue['id']}")
 
@@ -188,8 +191,11 @@ def relabel_queue(app: Any, workspace_name: str, frames: Sequence[Any]) -> dict[
     return app.queues.create({"kind": "relabel", "name": name, "setup": setup, "workspace": workspace_name, "entries": entries})
 
 
-def spread_queue(app: Any, setup_ref: str, paths: Sequence[Any], frames: Any, dataset: str | None = None) -> dict[str, Any]:
-    """A New queue: a Find-frames job over recordings of the setup; the queue fills when the job is done."""
+TYPE_NAMES = {"contact": "self-contact", "edge": "edge", "pieces": "in pieces", "empty": "no worm", "clear": "clear"}
+
+
+def spread_queue(app: Any, setup_ref: str, paths: Sequence[Any], frames: Any, types: Sequence[Any] | None = None) -> dict[str, Any]:
+    """A New queue: a Find-frames job over recordings of the setup, of any of ``types`` (all by default); the queue fills when the job is done."""
 
     from .routers.jobs import place
 
@@ -202,11 +208,16 @@ def spread_queue(app: Any, setup_ref: str, paths: Sequence[Any], frames: Any, da
         raise ValueError("'frames' must be a number") from error
     if not 1 <= count <= MAX_FRAMES:
         raise ValueError(f"'frames' must be between 1 and {MAX_FRAMES}")
-    target = app.labeling.saving(setup_ref, dataset)
+    if types is not None and not isinstance(types, list):
+        raise ValueError("'types' must be a list of frame types")
+    requested = set(map(str, types or ()))
+    chosen = [t for t in frame_search.TYPES if t in requested]
+    unknown = sorted(requested - set(frame_search.TYPES))
+    if unknown:
+        raise ValueError(f"unknown frame types {unknown}; choose from {list(frame_search.TYPES)}")
     labeled: dict[str, set[int]] = {}
-    if target["reading"]:
-        for record in library.Dataset(app.libraries, target["reading"]).labels():
-            labeled.setdefault(record.recording, set()).add(record.frame)
+    for record in library.Collection(app.libraries, setup_ref).labels():
+        labeled.setdefault(record.recording, set()).add(record.frame)
     setup = library.get_setup(app.libraries, setup_ref)
     recordings = []
     for value in paths:
@@ -217,18 +228,21 @@ def spread_queue(app: Any, setup_ref: str, paths: Sequence[Any], frames: Any, da
         name = library.recording_id(path)
         recordings.append({"path": str(path), "id": name, "frames": count_frames, "exclude": sorted(labeled.get(name, ()))})
     model = setup.defaults.get("mask")
+    if chosen and not model:
+        raise ValueError(f"{setup_ref} has no mask model yet, so frames cannot be chosen by type")
     spec_json = {
-        "recordings": recordings, "frames": count, "model": model,
+        "recordings": recordings, "frames": count, "types": chosen, "model": model,
         "libraries": {"lab": None if app.libraries.lab is None else str(app.libraries.lab), "personal": str(app.libraries.personal)},
         "video": setup.video, "fps": setup.fps, "dataset_root": str(app.config.dataset_root),
     }
     names = ", ".join(r["id"] for r in recordings[:3]) + ("…" if len(recordings) > 3 else "")
-    spec = JobSpec(kind=FIND_JOB_KIND, params={"recordings": [r["id"] for r in recordings], "frames": count, "model": model},
-                   gpus=1 if app.config.gpus and model else 0, label=f"Find {count} frames in {names}")
+    kinds = f"{', '.join(TYPE_NAMES[t] for t in chosen)} " if chosen else ""
+    spec = JobSpec(kind=FIND_JOB_KIND, params={"recordings": [r["id"] for r in recordings], "frames": count, "types": chosen, "model": model},
+                   gpus=1 if app.config.gpus and model else 0, label=f"Find {count} {kinds}frames in {names}")
     job = app.runner.submit(place(app, spec, {}), find_command(spec_json))
     return app.queues.create({
-        "kind": "spread", "name": f"{count} frames from {names}", "setup": setup_ref, "state": "finding", "job": job.id,
-        "model": model, "entries": [],
+        "kind": "spread", "name": f"{count} {kinds}frames from {names}", "setup": setup_ref, "state": "finding", "job": job.id,
+        "model": model, "types": chosen, "entries": [],
     })
 
 
@@ -301,7 +315,8 @@ def stitch(app: Any, queue_id: str, params: dict[str, Any] | None = None) -> dic
     keyframes = []
     for entry in queue["entries"]:
         saved = entry["saved"]
-        record = library.Dataset(app.libraries, saved["dataset"]).get(saved["recording"], int(saved["frame"]), int(saved["revision"]))
+        record = library.Collection(app.libraries, saved["setup"]).get(
+            saved["recording"], int(saved["frame"]), int(saved["revision"]), saved["scope"])
         label = record.load()
         row = workspace.row_of(int(entry["frame"]))
         current = workspace.get_override_mask(row)

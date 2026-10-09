@@ -5,10 +5,13 @@
   first_unsaved, complete, workspace, job, ...}``).
 - ``POST /api/queues``: ``{kind: "relabel", workspace, frames: [frame, ...]}``
   (the Workspace's Relabel) or ``{kind: "spread", setup, recordings:
-  [path, ...], frames: N, dataset?}`` (New queue: starts a Find-frames job,
-  ``job`` names it); answers with the queue's summary, ``id`` among it.
+  [path, ...], frames: N, types?: [type, ...]}`` (New queue:
+  starts a Find-frames job, ``job`` names it; ``types`` limits it to frames
+  of any of ``contact``, ``edge``, ``pieces``, ``empty``, ``clear``, and
+  needs the setup's mask model); answers with the queue's summary, ``id``
+  among it.
 - ``GET /api/queues/{id}``: the summary with ``entries`` (``{path,
-  recording, frame, uncertainty?, saved}``).
+  recording, frame, uncertainty?, types?, saved}``).
 - ``DELETE /api/queues/{id}``.
 - ``POST /api/queues/{id}/stitch`` ``{params?}``: a finished Relabel queue's
   labels become mask overrides in its workspace and a stitch job starts;
@@ -40,7 +43,7 @@ def create(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_stat
         queue = queues.relabel_queue(app, str(payload.get("workspace") or ""), payload.get("frames"))
     elif kind == "spread":
         queue = queues.spread_queue(app, str(payload.get("setup") or ""), payload.get("recordings"), payload.get("frames"),
-                                    payload.get("dataset") or None)
+                                    payload.get("types"))
     else:
         raise ValueError("'kind' must be relabel or spread")
     return queues.summary(queue)

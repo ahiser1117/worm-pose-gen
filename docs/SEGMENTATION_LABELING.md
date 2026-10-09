@@ -149,13 +149,16 @@ were retired in round 2 (below), and every label since is hand-refined.
 Labels are made on the pose app's **Labeling** page
 (`python -m worm_pose_gen.app`, then `http://127.0.0.1:8768/#labeling`). It
 labels one frame at a time, mask first, then body, then **Save & next**
-(Enter), into your personal dataset for the setup (created on the first
-save, extending the lab's `nir-labels`). Frames come from queues:
+(Enter), into the setup's label collection (your part of it, in your
+personal library). A newly labeled recording is in no dataset's splits
+until you choose them in the Training page's Datasets tab. Frames come from
+queues:
 
 - a workspace's **Relabel** keyframes (the Workspace page's fix), which are
   stitched back into the workspace when the queue is done;
 - **New queue**: a job that picks frames spread over the chosen recordings,
-  favouring those the current model is least sure of;
+  favouring those the current model is least sure of, optionally only frames
+  of some image types (self-contact, at the edge, in pieces, no worm, clear);
 - **Browse labels**: existing labels by recording, split and status, lowest
   body fit IoU first;
 - a labeling manifest such as `docs/labeling_round_2/manifest.json`, opened

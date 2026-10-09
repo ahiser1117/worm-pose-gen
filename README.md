@@ -169,11 +169,19 @@ several runs side by side on the same frames.
 
 `--body-net <weights>` (a body-field model's `models/<id>/weights.ckpt` in a
 library) adds the body-field network:
-its A-P field and head/tail score every fit (independent, propagation and
-track pass), its proposed trace is an extra start, and the evidence rather
-than the taper decides the orientation. On the sequence set it cuts the
+its A-P field (over the front half of the body) and head score every fit
+(independent, propagation and track pass), its proposed trace is an extra
+start, and the evidence rather than the taper decides the orientation. With
+a recording prior every fit keeps the prior's length: the trace start is
+laid from the predicted head along the trace to that length, and the tail
+ends wherever the body does (the network's tail, which people label
+inconsistently, only orients starts). On the sequence set it cuts the
 independent fits' frames below IoU 0.9 from 599 to 107, at about 230 ms
 more per frame ([Body-field evidence in the pose fitter](docs/BODY_FIELDS.md#body-field-evidence-in-the-pose-fitter)).
+With `--mask-source body_net` the masks also come from that network instead
+of the segmenter (`--checkpoint`), cleaned the same way; the segmenter is the
+default, as its masks score better on the held-out labels
+([Masks from the network](docs/BODY_FIELDS.md#masks-from-the-network)).
 
 Runtime improvements and reproducible GPU 3 benchmarks are documented in
 [Runtime optimization](docs/RUNTIME_OPTIMIZATION.md). The default optimizations
@@ -194,7 +202,9 @@ bounds (`recording_prior.json` in the run directory, cached under
 leaves the camera is started at the prior length, extended off camera
 through the point where the mask meets the border, and its off-camera part
 is censored; the in-view fraction reports how much was seen. Every frame is
-started in both orientations and the energy gap between them is stored.
+started in both orientations and the energy gap between them is stored
+(with `--body-net`, a frame where the network sees both ends is started
+head first by them only, and has no gap).
 `--prior none` restores the hard bounds, `--prior-file` reuses a stored
 prior, `--rebootstrap` ignores the cache. Every frame also gets an
 ambiguity score (`worm_pose_gen.ambiguity`: low overlap, self-overlap or
@@ -280,10 +290,15 @@ The header switches between three pages. The addresses are
 
 - **Workspace.** The Recordings screen lists the recordings of a setup, with
   their status (not analysed, analysing, *N* issues to review, reviewed,
-  exported). **Add recording** registers a file from anywhere to a setup.
-  **Analyse** runs the pipeline over the whole recording with the setup's
-  default models as one job, and **Change** picks other models first.
-  **Open** shows the recording's workspace:
+  exported): first the ones analysed or analysing, most recently opened
+  first, then the ones not analysed yet. **Add recording** registers a file from anywhere
+  to a setup; an `.avi` video is first converted (about a minute per ten
+  minutes of video) to an HDF5 recording `videos/<id>.h5` in the personal
+  library, and that file is what is registered. **Analyse** runs the pipeline over the whole recording with
+  the setup's default models as one job and opens its workspace, where a
+  progress bar per stage follows the analysis; **Change** picks other
+  models first, and with a body model where the masks come from (**Masks
+  from**: the mask model, the default, or the body model). **Open** shows the recording's workspace:
   - on the left, the **Issues** list (stretches with plain reasons such as
     "head/tail uncertain", "coiled", "mask fits poorly" or "leaves the
     view"), **Looks OK** (O) and Prev/Next;
@@ -297,7 +312,8 @@ The header switches between three pages. The addresses are
   - in the middle, the frame with four layers (keys 1–4): Mask, Midline
     (head a square, tail a circle), Outline, and the A-P field when the
     workspace's body model has one;
-  - at the bottom, transport, the issue track and the curvature kymograph;
+  - at the bottom, transport, the issue track and the curvature kymograph
+    (a left drag scrubs, a right drag selects a range for a fix);
   - **Export** in the header, which writes one documented table per
     recording (`exports/<recording>_<UTC time>/`: a Parquet table with
     midline, curvature, width profile, head/tail, centroid, velocity and
@@ -310,7 +326,9 @@ The header switches between three pages. The addresses are
   your personal dataset for the setup, created on the first save and
   extending the lab dataset. Frames come from queues: a workspace's Relabel
   keyframes, **New queue** (a job that picks frames spread over the chosen
-  recordings, favouring those the model is least sure of), and **Browse
+  recordings, favouring those the model is least sure of, optionally only of
+  some image types: self-contact, at the edge, in pieces, no worm, clear;
+  a queue's list filters by recording, status and type and sorts), and **Browse
   labels** (existing labels, lowest body fit IoU first). The body-field
   model's proposal is computed when a frame opens if the server has a GPU.
   Without one it takes 15–20 s on the CPU, so it is computed only on
@@ -354,9 +372,12 @@ layout (`worm_pose_gen.library`):
 A **setup** is one microscope: its video dataset and flat-field setting, its
 pixel size and frame rate, its recording roots, and the default model of
 each role (`mask`, `body`). A personal override of a lab setup's defaults
-is logged with who changed it and why. A **dataset** is a set of labels for
-one setup. Its splits are assigned per recording and are append-only, and a
-personal dataset can extend a lab one. A **label** revision stores the frame,
+is logged with who changed it and why. Every label of a setup is in the
+setup's **collection** (the lab's labels and your own; your edit of a lab
+label is a newer revision). A **dataset** chooses, per recording of the
+collection, whether its labels train, validate, test or are not included;
+every recording starts not included, so you choose its split in the
+Training page's Datasets tab. A **label** revision stores the frame,
 its context frames, the mask and the human body fields. A **benchmark** is a
 frozen list of test-label revisions. A **model** is a card (`model.json`),
 `weights.ckpt`, its training records and its evaluations. Items are named
@@ -370,10 +391,11 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/migrate_to_libra
   --out /path/to/new-lab-library --body-run checkpoints/body_net/runs/<run> [--seed-cache <personal library>]
 ```
 
-It writes setup `nir-flv`, dataset `nir-labels` (splits per recording),
+It writes setup `nir-flv`, its label collection, dataset `nir-labels` (splits per recording),
 benchmark `nir-v1`, and the model cards of the segmenter run
 (`--segmenter-run`, `nir-hand284`) and the body-field net run. Publishing a
-personal setup, dataset or model into the lab library is a developer step:
+personal setup, your labels of a setup (`publish.py labels lab:nir-flv`), a
+dataset's splits or a model into the lab library is a developer step:
 
 ```bash
 scripts/project_env.sh uv run --no-sync --frozen python scripts/publish.py model mine:copper-ft \
@@ -424,16 +446,30 @@ generated OpenAPI page.
 
 ### Tests
 
-Python tests use `unittest`. List the modules explicitly, because
-`unittest discover` does not work with this layout. Run them from the
-repository root, on the CPU:
+Python tests use `unittest`. `scripts/run_tests.py` runs them on the CPU,
+one process per test class, twelve at a time with four OpenMP threads each
+(torch otherwise takes 128 threads per process and parallel runs slow each
+other down several times over), slowest classes first. It tests the code of
+the checkout it sits in, so a worktree runs its own copy. `--fast` skips the
+25 tests marked `@slow` (`tests/slow.py`): they run the pose optimizer for
+ten seconds or more each and make up nearly 90% of the suite's time.
 
 ```bash
-env PYTHONPATH=$PWD/src:$PWD CUDA_VISIBLE_DEVICES= MPLBACKEND=Agg \
-  .venv/bin/python -m unittest tests.test_app tests.test_fixes tests.test_queues
-# the whole suite (about 20 minutes on one flv machine):
-env PYTHONPATH=$PWD/src:$PWD CUDA_VISIBLE_DEVICES= MPLBACKEND=Agg \
-  .venv/bin/python -m unittest $(ls tests/test_*.py | sed 's|/|.|; s|\.py$||')
+# everything but @slow, about a minute on one flv machine:
+scripts/project_env.sh uv run --no-sync --frozen python scripts/run_tests.py --fast
+# the whole suite, about 7 minutes:
+scripts/project_env.sh uv run --no-sync --frozen python scripts/run_tests.py
+# some modules:
+scripts/project_env.sh uv run --no-sync --frozen python scripts/run_tests.py tests.test_pipeline tests.test_fixes
+```
+
+Mark a new test `@slow` when it takes ten seconds or more. A single test
+runs with `unittest` directly; list modules explicitly, because
+`unittest discover` does not work with this layout:
+
+```bash
+env PYTHONPATH=$PWD/src:$PWD CUDA_VISIBLE_DEVICES= MPLBACKEND=Agg OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 \
+  .venv/bin/python -m unittest tests.test_pipeline.StageTests
 ```
 
 The browser tests drive the three pages with Playwright against synthetic
@@ -488,7 +524,7 @@ import its per-frame fitting code.
 - `scripts/` contains environment setup, the builders and evaluators of the
   geometric pipeline, the fitting and evaluation scripts, and the library's
   command-line steps (`train.py`, `evaluate_model.py`, `migrate_to_library.py`,
-  `publish.py`).
+  `publish.py`), and the test runner (`run_tests.py`).
 - `docs/` contains the current algorithm narrative and its generated evidence.
 - `tests/` contains focused geometry tests plus reusable-library coverage.
 - `experiments/` retains machine-readable research outputs. The primary audit

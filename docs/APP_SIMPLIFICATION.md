@@ -45,10 +45,12 @@ and settings produced them.
 ```
 <library>/
   setups/<setup>.json
+  labels/<setup>/                       # the setup's label collection
+    index.json
+    <recording>/<frame>/<revision>.npz
   datasets/<dataset>/
     dataset.json
-    splits.json                         # recording -> split, append-only
-    labels/<recording>/<frame>.npz
+    splits.json                         # recording -> split; absent = not included
   benchmarks/<benchmark>.json           # frozen test-label list
   models/<model>/
     model.json                          # the model card
@@ -98,19 +100,29 @@ record exactly which revisions it used.
 
 ### Dataset and splits
 
-A dataset is a named set of labels for one setup. A personal dataset can
-**extend** a lab dataset (`extends: lab:<dataset>@<version>`). Training on it
-uses the lab labels plus the user's own, without copying them.
+Every label of a setup goes into the setup's **collection**: the lab
+library's part (published by the developer) and the user's personal part,
+where the app saves. A frame's label is its newest revision in either part,
+so a user's edit of a lab label is a personal revision and nothing is
+copied. The collection holds every recording that has a label.
+
+A **dataset** holds no labels. It chooses, for each recording of its
+setup's collection, the split its labels go to: train, val, test or **not
+included**. Every recording starts not included, in a new dataset and when
+it is labeled for the first time, so nothing joins a training split unless
+someone puts it there (decided October 9, 2026; this replaces datasets that
+held labels, extended a lab dataset and pledged a split by a recording's
+first label). Training reads a dataset's labels as they are when it starts
+and records the exact revisions and their splits.
 
 **Splits are assigned per recording, not per frame.** The question a user
 asks is "will this model work on my next recording", and frames from the same
 16-minute recording are not independent. Today the 3 largest of the 12
 labeled recordings have frames in train, val *and* test, while the newer
 corpus recordings already fall into a single split. With per-recording
-splits, a new recording's first label decides its split, and later labels
-from that recording follow it. Assignments are append-only, as `splits.json`
-is today. If you label a recording that is already in a lab dataset, it keeps
-the lab's split.
+splits, a recording's labels all go to the split its dataset chooses, and
+labels added to the recording later follow it. A split can be changed;
+models already trained keep the record of what they used.
 
 ### Benchmark
 
@@ -221,19 +233,25 @@ Everything marked *dev* below is shown only when the app is started with
 | Screen tabs: Workspace, Paint, Labels, Body fields, Training | **Redesign:** Workspace · Labeling · Training |
 | Side panel toggle | **Remove** (the side panel becomes dev-only) |
 | Workspace menu, fit-network badge, active recording | **Merge** into one title: recording · model name |
-| Context strip: frame, selection first/last, Use current frame, Use stretch | **Remove.** An issue defines the range a fix acts on. For a range with no issue, drag on the timeline. |
+| Context strip: frame, selection first/last, Use current frame, Use stretch | **Remove.** An issue defines the range a fix acts on. For a range with no issue, right-drag on the timeline (a left drag scrubs). |
 | — | **New:** analysis progress (stage + %, failure with Retry) |
 | — | **New:** Export button |
 
 ### Recordings screen (replaces Import and Open)
 
-One table of recordings for the chosen setup. Columns: recording, length,
-status (not analysed / analysing / *N* issues to review / reviewed /
-exported), last opened. One action per row: **Analyse**, or **Open** if a
-workspace already exists.
+Two tables of recordings for the chosen setup: the ones analysed or
+analysing (including a failed analysis), most recently opened first, then
+the ones not analysed yet; each recording is in one of them. Columns:
+recording, length, status (not analysed / analysing / *N* issues to review /
+reviewed / exported), last opened. One action per row: **Analyse**, or
+**Open** if a workspace already exists. While an analysis runs the tables
+poll; a poll rebuilds only the rows that changed, so the scroll position and
+the thumbnails stay.
 
-Analyse uses the setup's default model on the whole recording. The model is
-shown with a **Change** link that opens the model picker.
+Analyse uses the setup's default model on the whole recording and opens the
+new workspace, whose left panel shows one progress bar per stage (from the
+analysis job's `stages` in the workspace status). The model is shown with a
+**Change** link that opens the model picker.
 
 | Today | Proposal |
 |---|---|
@@ -308,7 +326,7 @@ Below the fixes is a **Fixes** list: what each fix changed, with Undo on each.
 | Today | Proposal |
 |---|---|
 | Raw / flat | *dev* (analysts see the flat-fielded frame) |
-| Fit view | **Keep** (also double-click) |
+| Fit view | **Keep**: the Fit button or 0 (double-click does not fit) |
 | Starts | **Remove** |
 | Original prediction / Editable mask / Opacity | **Show only while editing a mask** |
 | 35 layers, each with an opacity slider | **Redesign** as 4 toggles: Mask, Midline + head/tail, Body outline, A-P field (only if the model outputs one). *dev:* the full list. |
@@ -390,7 +408,7 @@ halves, and moving between the halves goes through "Edit mask in Paint" and
 then body, then **Save & next**.
 
 ```
-┌ Labeling ──────────────── saving to: mine:nir-copper ▾ ─────────────────────────────────────────┐
+┌ Labeling ──────────────── Saving to the setup's labels ─────────────────────────────────────────┐
 ├──────────────┬─────────────────────────────────────────────────────┬────────────────────────────┤
 │ Queue        │                                                     │ 1 Mask                     │
 │ relabel      │                                                     │  Worm Bkgd Ignore  size    │
@@ -405,11 +423,10 @@ then body, then **Save & next**.
 └──────────────┴─────────────────────────────────────────────────────┴────────────────────────────┘
 ```
 
-**Saving to** names the dataset in the user's personal library that saves go
-to. It is set once per setup and rarely changed. Lab datasets are read-only,
-so a user edit of a lab label saves a new revision into the personal dataset
-that extends it. The label's split is shown as a badge but cannot be edited:
-it comes from the recording.
+Saves go to the setup's collection, in the user's personal library. The lab
+library is read-only, so a user's edit of a lab label saves a new personal
+revision, which is then the frame's label. The Labeling page shows no split:
+splits are each dataset's choice, made in the Training page's Datasets tab.
 
 ### Queues (replaces Paint's chooser and the Labels screen)
 
@@ -421,8 +438,14 @@ one:
 - **New queue**: pick recordings and a number of frames, then **Find
   frames**. A background job runs the current model over the recordings and
   picks frames spread over each recording, favouring frames the model is
-  least sure of. A progress bar shows the search, and the queue opens when it
-  finishes. This is the bootstrap path for a new microscope.
+  least sure of. **Image types** limit the search to frames of any of the
+  checked kinds: self-contact, at the edge, in pieces, no worm, clear (from
+  the model's prediction; needs the setup's mask model). A progress bar
+  shows the search, and the queue opens when it finishes. This is the
+  bootstrap path for a new microscope. A queue's frame list can be filtered
+  by recording, status (to do / saved) and image type, and sorted by queue
+  order, least sure first, or recording and frame; Prev/Next and Save &
+  next walk the list as shown.
 - **Browse labels**: existing labels, filtered by recording, split and status
   (mask only / complete). They can be sorted by **body fit IoU, lowest
   first**: the IoU between the label's mask and the body fitted to it, so
@@ -526,10 +549,13 @@ One table, one row per model. Lab and personal models are mixed together, and
 
 ### Datasets tab
 
-One row per dataset for the setup (Lab, and Mine with what it extends):
-labels by split, recordings, mask-only vs complete. Expanding a row lists
-its recordings with each one's split and label count. Clicking a recording
-opens Labeling's Browse labels filtered to it.
+A dataset picker (Lab and Mine) and **New dataset…** (a name, and either
+nothing included or another dataset's splits to start from). The chosen
+dataset shows every recording of the setup's collection with its label
+count and status, and a split for each: Train, Val, Test or Not included
+(read-only for a lab dataset). Totals by split, in labels and recordings,
+including Not included, update with every choice. Clicking a recording
+opens Labeling's Browse labels filtered to it, with the dataset's splits.
 
 - **Readiness:** the tab warns when a dataset can't train or be evaluated
   honestly: no validation recording, no test recording, or too few labels.
@@ -545,7 +571,7 @@ opens Labeling's Browse labels filtered to it.
 |---|---|
 | Start from | A model (default: the setup's default) or **From scratch** |
 | Temporal context | From scratch only: none / short (±1, 4, 16 frames). Lags are stored in seconds on the card, so another frame rate converts them. |
-| Training data | The datasets to use (default: your dataset plus the lab dataset it extends) |
+| Training data | One dataset of the setup (default: your first): its train and val recordings' labels |
 | Max epochs, learning rate, batch size | Shown; early stopping normally ends the run first |
 | Advanced (collapsed): crop size, patience, plateau patience, encoder LR scale, loss weights (A-P, heatmap, overlap), minimum body fit IoU, seed | Kept for the developer and experienced trainers |
 | Name, notes | The name is generated (dataset + label count) and editable; notes go on the card |
@@ -641,13 +667,15 @@ wave the app still starts and its tests pass.
   personal `setups/<id>.override.json` can override the defaults of a lab
   setup. A recording belongs to the setup whose root contains it, or is
   registered in the personal `recordings.json`.
-- **Dataset** (`datasets/<id>/dataset.json`: `setup`, `extends`, `name`,
-  `description`) has `splits.json`, which maps recording id → split. It is
-  append-only. A recording's first label assigns the split furthest below
-  80/10/10 by label count, and a recording already split in an extended
-  dataset keeps that split.
-- **Label**: immutable revisions under `labels/<recording>/<frame>/`, with an
-  index for fast listing. A revision stores:
+- **Collection** (`labels/<setup ref as lab.id>/` in each library): every
+  label of the setup. A frame's label is its newest revision in either
+  library (by `saved_at`, the lab's on a tie).
+- **Dataset** (`datasets/<id>/dataset.json`: `setup`, `name`,
+  `description`) has `splits.json`, which maps recording id → split for the
+  recordings it includes; any other recording of the collection is not
+  included. Personal datasets' splits can be changed at any time.
+- **Label**: immutable revisions under `labels/<setup>/<recording>/<frame>/`,
+  with an index for fast listing. A revision stores:
   - `image` (flat-fielded uint8), `image_raw`, and `mask` (0/1; 255 = ignore,
     only in migrated labels)
   - the context frames t−16..t+16 with their validity
@@ -658,10 +686,11 @@ wave the app still starts and its tests pass.
   
   Derived body targets (tube fit, A-P, heatmaps, overlap, `fit_iou`,
   self-contact) are a cache in the personal library, keyed by label
-  revision. A label in a personal dataset overrides the same
-  (recording, frame) inherited from the dataset it extends.
-- **Benchmark** (`benchmarks/<id>.json`) is a frozen list of (dataset, label,
-  revision) entries for one setup. It takes only `spread` and `migrated`
+  revision. A personal revision of a frame is newer than the lab's, so it
+  is the frame's label.
+- **Benchmark** (`benchmarks/<id>.json`) is a frozen list of (library,
+  setup, recording, frame, revision, sha256) entries for one setup, taken
+  from one dataset's test recordings. It takes only `spread` and `migrated`
   test labels, and is never updated in place.
 - **Model card** (`models/<id>/model.json`) holds:
   - `name` and `kind`: `segmenter` or `body_net`, which says how to load it
@@ -805,7 +834,10 @@ queue.
 
 - **The segmenter stays** until a body-field net matches its mask IoU
   (section 4, decision 1): a setup has a `mask` and a `body` default, and
-  the Train form fine-tunes a segmenter from a segmenter.
+  the Train form fine-tunes a segmenter from a segmenter. Analyse can take
+  the masks from the body model instead (**Masks from**; the workspace
+  settings record `mask_source`), which then needs no mask model
+  ([`BODY_FIELDS.md`](BODY_FIELDS.md#masks-from-the-network)).
 - **Analyse is one job** of kind `analyse`, `pipeline --stages` over the
   default stages in one process, so its progress spans the analysis. The
   dev stage list includes the opt-in `fixed_body` stage.
@@ -815,7 +847,12 @@ queue.
   parameter values, not a generated form; `GET /api/algorithms` documents
   the parameters.
 - **New queue** picks, in each window of a recording, the candidate frame
-  with the highest mask entropy per worm pixel (`frame_search.py`).
+  with the highest mask entropy per worm pixel (`frame_search.py`). Image
+  types come from the same prediction: overlap output or an enclosed hole
+  (self-contact), mask on the border (edge), two or more pieces, under 200
+  worm pixels (no worm), else clear. A type-limited search looks at three
+  times the candidates per window and gives empty windows' frames to the
+  recording's other matches; a recording short of matches gives fewer.
 - **The body-target builder** is the setup's default mask model, part of
   the cache key with the label revision; changing the default makes the
   targets missing until rebuilt.

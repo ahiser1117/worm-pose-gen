@@ -2,8 +2,10 @@
 
 Libraries from ``tests/test_model_training.make_library`` (lab setup ``rig``
 with dataset ``base``, benchmark ``rig-v1``, models ``body`` and ``seg`` as
-the defaults), plus a personal dataset ``copper`` extending ``base`` and a
-personal fine-tune ``copper-ft`` with a loss curve and an evaluation.
+the defaults), plus two personal labeled recordings ``copper-1`` and
+``copper-2``, a personal dataset ``copper`` using them and base's
+recordings (``rec-train`` and ``copper-1`` train, ``rec-val`` val,
+``rec-test`` and ``copper-2`` test) and a personal fine-tune ``copper-ft`` with a loss curve and an evaluation.
 ``lab:seg`` has no evaluation, so the page queues one (a real CPU job).
 Two training jobs are already there: one running that reports a growing
 loss curve and waits to be cancelled, and one that failed.
@@ -23,7 +25,6 @@ from test_model_training import label_inputs, make_library, store_targets  # noq
 from worm_pose_gen import library, model_eval  # noqa: E402
 from worm_pose_gen.app import AppConfig, create_app  # noqa: E402
 from worm_pose_gen.jobs import JobSpec  # noqa: E402
-from worm_pose_gen.library.roots import write_json  # noqa: E402
 
 RUNNING = """
 import time
@@ -40,11 +41,12 @@ FAILED = "import sys; print('Traceback (most recent call last):'); print('Runtim
 
 
 def personal_items(libraries, root: Path) -> None:
-    copper = library.create_dataset(libraries, "copper", setup="lab:rig", extends="lab:base", name="Copper plates")
-    write_json(copper.root / "splits.json", {"copper-1": "train", "copper-2": "test"})
+    library.create_dataset(libraries, "copper", setup="lab:rig", name="Copper plates", splits={
+        "rec-train": "train", "rec-val": "val", "rec-test": "test", "copper-1": "train", "copper-2": "test"})
+    collection = library.Collection(libraries, "lab:rig")
     for recording, frame in (("copper-1", 3), ("copper-1", 9), ("copper-2", 4)):
         centerline, inputs = label_inputs(frame % 3)
-        record = copper.save(recording=recording, frame=frame, origin="spread", orientation="manual", head_xy=[10.0, 32.0], **inputs)
+        record = collection.save(recording=recording, frame=frame, origin="spread", orientation="manual", head_xy=[10.0, 32.0], **inputs)
         store_targets(libraries, record, centerline)
     metrics = root / "metrics.csv"
     with open(metrics, "w", newline="") as handle:
@@ -53,10 +55,10 @@ def personal_items(libraries, root: Path) -> None:
         for epoch in range(24):
             writer.writerow([epoch, epoch * 5, "", round(0.9 / (epoch + 1) ** 0.5 + 0.12 + 0.01 * (epoch > 15) * (epoch - 15), 4)])
             writer.writerow([epoch, epoch * 5 + 4, round(1.1 / (epoch + 1) ** 0.6 + 0.05, 4), ""])
-    records = library.labels(libraries, ["mine:copper"], "train") + library.labels(libraries, ["mine:copper"], "val")
+    records = library.labels(libraries, "mine:copper", "train") + library.labels(libraries, "mine:copper", "val")
     library.create_model(libraries, "copper-ft", {
         "name": "copper-ft", "kind": "body_net", "setup": "lab:rig", "outputs": ["mask", "ap", "head", "tail", "overlap"],
-        "inputs": library.make_inputs([1, 2], fps=20.0, pixel_size_um=2.0), "trained_on": library.trained_on(records),
+        "inputs": library.make_inputs([1, 2], fps=20.0, pixel_size_um=2.0), "trained_on": library.trained_on("mine:copper", records),
         "parent": "lab:body", "hparams": {"max_epochs": 300, "learning_rate": 3e-4, "batch_size": 4, "lags": [1, 2], "min_fit_iou": 0.9},
         "notes": "Fine-tune on the copper plates; heads looked better on copper-1.",
     }, root / "body.ckpt", training_files={"metrics.csv": metrics}, training_records={
@@ -84,7 +86,7 @@ def main():
     # empty), but the page must see a place to run them, as on a GPU node.
     state.config.gpus = (0,)
     runner = state.runner
-    base = {"kind": "body_net", "setup": "lab:rig", "datasets": ["mine:copper"], "train": 4, "val": 1, "recordings": 3, "context": "none"}
+    base = {"kind": "body_net", "setup": "lab:rig", "dataset": "mine:copper", "train": 4, "val": 1, "recordings": 3, "context": "none"}
     runner.submit(JobSpec(kind="train", gpus=0, label="Train copper-big", params={**base, "name": "copper-big", "start_from": "lab:body"}),
                   [sys.executable, "-c", FAILED])
     runner.submit(JobSpec(kind="train", gpus=0, label="Train copper-ft-2", params={**base, "name": "copper-ft-2", "start_from": "mine:copper-ft"}),

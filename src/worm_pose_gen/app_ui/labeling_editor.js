@@ -1,7 +1,7 @@
 // The frame editor of the Labeling page: one frame's label, mask first, then body, then Save.
 //
 // The page (labeling.js) owns the queues and navigation; it hands the editor
-// a request naming the frame ({setup, dataset, entry, queue}) and asks it to
+// a request naming the frame ({setup, entry, queue}) and asks it to
 // save. Everything the editor shows comes from /api/labeling (see
 // app/routers/labeling.py):
 //
@@ -13,7 +13,16 @@
 //           the targets builder orients it), "head" (a head end, from Flip or
 //           from accepting the shown body) or "trace" (a midline, head first,
 //           traced by hand or the proposal's). Its fit, when there is one, is
-//           what the Midline and A-P layers draw. The body model's proposal is
+//           what the Midline and A-P layers draw. While tracing, the points
+//           are numbered head first: a click adds one at the chosen end
+//           (the tail, or the head after clicking the head point), a click
+//           on the line inserts one, a drag moves one and a right click
+//           removes one; points may lie outside the frame, where the body
+//           leaves the view, and the fit follows them there. The fitted
+//           head and tail sit on the first and last points, unless Extend
+//           off camera (X) continues a trace that ends at the border to the
+//           recording's typical body length. Fit shows the fitted midline
+//           and body outline. The body model's proposal is
 //           computed as the frame opens when the server has a GPU; without one
 //           (15-20 s a frame on the CPU) only when asked: Propose, or Use
 //           proposal (G).
@@ -45,7 +54,17 @@ const LAYERS = [
 ];
 
 const button = (label, onclick, attributes = {}) => el("button", {type: "button", onclick, ...attributes}, label);
+// A button's label with its key, "Trace midline (T)".
+const keyed = (label, key) => `${label} (${key})`;
+// Screen pixels within which a press grabs a trace point, or a click lands on the trace's line.
+const GRAB_PX = 9, LINE_PX = 6;
+// Where an extension's body length came from (app.labeling.Labeling.body_length).
+const LENGTH_SOURCES = {
+  labels: "from this recording's labels", analysis: "from this recording's analysis",
+  estimate: "estimated over this recording's frames", setup: "(a rough guess from the setup's other recordings)",
+};
 const keyHint = (key) => el("kbd", {}, key);
+const spinner = () => el("span", {class: "spinner", "aria-hidden": "true"});
 
 export class FrameEditor {
   constructor(ctx, {center, side, onSaved, onChange}) {
@@ -76,24 +95,25 @@ export class FrameEditor {
     this.layerButtons = {};
     const layerBar = node("div", {class: "lb-layers", role: "group", "aria-label": "Layers"},
       ...LAYERS.map((layer) => {
-        const toggle = button(layer.label, () => this.toggleLayer(layer.id), {"aria-pressed": "true", class: layer.dev ? "dev-only" : null, title: layer.key ? `${layer.label} (${layer.key})` : layer.label});
+        const toggle = button(layer.key ? keyed(layer.label, layer.key) : layer.label, () => this.toggleLayer(layer.id), {"aria-pressed": "true", class: layer.dev ? "dev-only" : null, title: layer.key ? `${layer.label} (${layer.key})` : layer.label});
         this.layerButtons[layer.id] = toggle;
         return toggle;
       }));
     this.opacityInput = node("input", {type: "range", min: 0, max: 1, step: 0.05, value: this.opacity, "aria-label": "Mask opacity", oninput: (e) => { this.opacity = Number(e.target.value); this.maskShown = true; this._syncLayers(); this.view.redraw(); }});
-    this.rawButton = button("Raw", () => this.toggleRaw(), {"aria-pressed": "false", title: "Show the frame as recorded (R)"});
-    const toolbar = node("div", {class: "lb-toolbar"}, layerBar, node("label", {class: "inline lb-opacity"}, "Opacity", this.opacityInput), this.rawButton);
+    this.rawButton = button(keyed("Raw", "R"), () => this.toggleRaw(), {"aria-pressed": "false", title: "Show the frame as recorded (R)"});
+    const fitButton = button(keyed("Fit", "0"), () => this.view.fit(), {title: "Fit the frame to the view"});
+    const toolbar = node("div", {class: "lb-toolbar"}, layerBar, node("label", {class: "inline lb-opacity"}, "Opacity", this.opacityInput), this.rawButton, fitButton);
 
     this.canvasBox = node("div", {class: "lb-canvas"});
     this.empty = node("div", {class: "lb-empty empty"}, "Choose a queue, or browse labels.");
 
     this.modeButtons = {
       frame: button("Frames", () => this.setContextMode("frame"), {"aria-pressed": "true"}),
-      difference: button("Difference", () => this.setContextMode("difference"), {"aria-pressed": "false", title: "frame[t+lag] − frame[t−lag] (D)"}),
+      difference: button(keyed("Difference", "D"), () => this.setContextMode("difference"), {"aria-pressed": "false", title: "frame[t+lag] − frame[t−lag] (D)"}),
     };
     this.offsetInput = node("input", {type: "range", min: -16, max: 16, step: 1, value: 0, "aria-label": "Context offset", oninput: (e) => this.setOffset(Number(e.target.value))});
     this.offsetValue = node("span", {class: "lb-value"}, "t");
-    this.playButton = button("Play", () => this.togglePlay(), {title: "Play the context (Space)"});
+    this.playButton = button(keyed("Play", "Space"), () => this.togglePlay(), {title: "Play the context (Space)"});
     this.lagInput = node("input", {type: "range", min: 1, max: 16, step: 1, value: this.lag, "aria-label": "Lag", oninput: (e) => this.setLag(Number(e.target.value))});
     this.lagValue = node("span", {class: "lb-value"}, `±${this.lag}`);
     this.offsetGroup = node("span", {class: "lb-group"}, this.offsetInput, this.offsetValue, this.playButton);
@@ -105,31 +125,33 @@ export class FrameEditor {
     center.append(this.centerBody, this.empty);
 
     this.view = new FrameCanvas(this.canvasBox);
+    this.proposingBadge = node("div", {class: "lb-proposing", hidden: true, role: "status"}, spinner(), "Proposing the body…");
+    this.canvasBox.append(this.proposingBadge);
     this.view.onPointer = (event) => this._pointer(event);
     this.canvasBox.addEventListener("pointerleave", () => { this.cursor = null; this.view.redraw(); });
     this._installLayers();
 
     // ---- right panel: 1 Mask, 2 Body, Save
     this.brushButtons = {
-      [WORM]: button("Worm", () => this.setBrush(WORM), {"aria-pressed": "true", title: "Paint worm (W)"}),
-      [BACKGROUND]: button("Background", () => this.setBrush(BACKGROUND), {"aria-pressed": "false", title: "Paint background (E)"}),
+      [WORM]: button(keyed("Worm", "W"), () => this.setBrush(WORM), {"aria-pressed": "true", title: "Paint worm (W)"}),
+      [BACKGROUND]: button(keyed("Background", "E"), () => this.setBrush(BACKGROUND), {"aria-pressed": "false", title: "Paint background (E)"}),
     };
     this.sizeInput = node("input", {type: "range", min: 2, max: 60, step: 1, value: this.size, "aria-label": "Brush size", oninput: (e) => { this.size = Number(e.target.value); this.sizeValue.textContent = `${this.size}px`; }});
     this.sizeValue = node("span", {class: "lb-value"}, `${this.size}px`);
     this.proposalButtons = {
-      network: button("Network", () => this.preview("network"), {"aria-pressed": "false", title: "The model's mask (N)"}),
+      network: button(keyed("Network", "N"), () => this.preview("network"), {"aria-pressed": "false", title: "The model's mask (N)"}),
       threshold: button("Threshold", () => this.preview("threshold"), {"aria-pressed": "false", title: "Dark pixels"}),
     };
     this.thresholdInput = node("input", {type: "range", min: 0.05, max: 0.95, step: 0.01, value: this.threshold, "aria-label": "Threshold", oninput: (e) => this.setThreshold(Number(e.target.value))});
     this.thresholdValue = node("span", {class: "lb-value"}, this.threshold.toFixed(2));
     this.applyButton = button("Apply (A)", () => this.applyPreview(), {class: "primary", title: "Take the proposal (A)"});
-    this.cancelPreviewButton = button("Cancel", () => this.cancelPreview());
+    this.cancelPreviewButton = button(keyed("Cancel", "Esc"), () => this.cancelPreview());
     this.previewRow = node("div", {class: "row", hidden: true}, this.applyButton, this.cancelPreviewButton);
     const refine = node("div", {class: "lb-grid"}, ...[
       ["Fill holes", "fill_holes", "Fill narrow holes inside the worm"], ["Largest", "largest", "Keep only the largest piece"],
       ["Grow", "grow", "Grow the mask by one pixel"], ["Shrink", "shrink", "Shrink the mask by one pixel"],
     ].map(([label, method, title]) => button(label, () => this.refine(method), {title})));
-    this.undoButton = button("Undo", () => this.undo(), {title: "Undo (Z)"});
+    this.undoButton = button(keyed("Undo", "Z"), () => this.undo(), {title: "Undo (Z)"});
     this.revertButton = button("Revert", () => this.revert(), {title: "Back to the mask the frame opened with"});
     const maskSection = node("section", {class: "section"},
       node("h3", {}, "1 · Mask"),
@@ -144,19 +166,23 @@ export class FrameEditor {
 
     this.bodyNote = node("p", {class: "note lb-body-note"});
     this.bodyControls = node("div", {class: "lb-body-controls"});
-    this.useButton = button("Use proposal", () => this.useProposal(), {class: "primary", title: "Use the model's body (G)"});
+    this.useButton = button(keyed("Use proposal", "G"), () => this.useProposal(), {class: "primary", title: "Use the model's body (G)"});
     // Without a GPU the proposal is computed only on request (see the header).
     this.proposeButton = button("Propose", () => this.requestProposal(), {title: "Compute the body model's proposal for the current mask (about 15-20 s without a GPU)"});
-    this.flipButton = button("Flip head/tail", () => this.flip(), {title: "Swap head and tail (H)"});
-    this.traceButton = button("Trace midline", () => this.startTrace(false), {title: "Click from head to tail (T)"});
+    this.flipButton = button(keyed("Flip head/tail", "H"), () => this.flip(), {title: "Swap head and tail (H)"});
+    this.traceButton = button(keyed("Trace midline", "T"), () => this.startTrace(false), {title: "Click from head to tail"});
     this.editButton = button("Edit proposal", () => this.startTrace(true), {title: "Trace, starting from the proposal's points"});
     this.traceNote = node("p", {class: "note"});
-    this.fitButton = button("Fit", () => this.fitTrace(), {class: "primary"});
-    this.removeButton = button("Remove last", () => this.removeLastPoint());
-    this.cancelTraceButton = button("Cancel", () => this.endTrace());
-    this.acceptButton = button("Accept", () => this.acceptTrace(), {class: "primary"});
-    this.discardButton = button("Discard", () => this.endTrace());
-    this.tracePanel = node("div", {class: "lb-trace", hidden: true}, this.traceNote,
+    this.fitButton = button(keyed("Fit", "Enter"), () => this.fitTrace(), {class: "primary"});
+    this.removeButton = button(keyed("Remove end", "Backspace"), () => this.removeEndPoint(), {title: "Remove the point at the end being added to"});
+    this.cancelTraceButton = button(keyed("Cancel", "Esc"), () => this.endTrace());
+    this.acceptButton = button(keyed("Accept", "Enter"), () => this.acceptTrace(), {class: "primary"});
+    this.discardButton = button(keyed("Discard", "Esc"), () => this.endTrace());
+    this.extendInput = node("input", {type: "checkbox", onchange: (event) => this.setExtend(event.target.checked)});
+    const extendToggle = node("label", {class: "inline lb-extend",
+      title: "When the trace ends at the border or past it, continue the body straight off camera to the recording's typical length; the tail is then left free instead of pinned to the last point"},
+    this.extendInput, keyed("Extend off camera", "X"));
+    this.tracePanel = node("div", {class: "lb-trace", hidden: true}, this.traceNote, extendToggle,
       node("div", {class: "row"}, this.fitButton, this.removeButton, this.cancelTraceButton, this.acceptButton, this.discardButton));
     this.maskOnly = node("input", {type: "checkbox", onchange: () => this._changed()});
     this.bodyControls.append(
@@ -171,12 +197,12 @@ export class FrameEditor {
       node("label", {class: "inline lb-maskonly", title: "The body is unclear: this label trains the mask only"}, this.maskOnly, "Mask only (body unclear)"),
     );
 
-    this.saveNextButton = button("Save & next", () => this.save({next: true}), {class: "primary lb-save", title: "Save and open the next frame (Enter)"});
-    this.saveButton = button("Save", () => this.save({next: false}), {title: "Save and stay (S)"});
+    this.saveNextButton = button(keyed("Save & next", "Enter"), () => this.save({next: true}), {class: "primary lb-save", title: "Save and open the next frame (Enter)"});
+    this.saveButton = button(keyed("Save", "S"), () => this.save({next: false}), {title: "Save and stay"});
     this.saveNote = node("p", {class: "note lb-save-note"});
     const saveSection = node("section", {class: "section lb-save-row"},
       node("div", {class: "row"}, this.saveNextButton, this.saveButton),
-      node("p", {class: "note lb-keys"}, keyHint("Enter"), " save & next · ", keyHint("S"), " save · ", keyHint("?"), " all keys"),
+      node("p", {class: "note lb-keys"}, keyHint("?"), " all keys"),
       this.saveNote);
     this.sideBody = node("div", {class: "lb-side", hidden: true}, maskSection, bodySection, saveSection);
     side.append(this.sideBody);
@@ -208,6 +234,10 @@ export class FrameEditor {
     v.setLayer("proposal", (g, view) => {
       const p = this.proposal;
       if (p?.status !== "ready") return;
+      // The body outline dotted (round caps on zero-length dashes), the midline dashed.
+      g.lineCap = "round";
+      g.setLineDash([0, 6 / view.scale]);
+      drawTube(g, view, p.centerline_xy, p.width_profile, {color: "#6cb4ff", width: 2.5});
       g.setLineDash([6 / view.scale, 5 / view.scale]);
       drawMidline(g, view, p.centerline_xy, {color: "#6cb4ff", head: "#6cb4ff", tail: "#6cb4ff", width: 2});
     });
@@ -223,9 +253,13 @@ export class FrameEditor {
       if (trace) drawPoints(g, view, trace, "#e0b04d");
     }, false);
     v.setLayer("trace", (g, view) => {
-      if (!this.trace) return;
-      if (this.trace.fit) drawMidline(g, view, this.trace.fit.centerline_xy, {color: "#e0b04d", head: "#e0b04d", width: 2.5});
-      drawPoints(g, view, this.trace.points, "#ffd23c");
+      const trace = this.trace;
+      if (!trace) return;
+      if (trace.fit) {
+        drawTube(g, view, trace.fit.centerline_xy, trace.fit.width_profile, {color: "#ffffff", width: 1.5});
+        drawMidline(g, view, trace.fit.centerline_xy, {color: "#e0b04d", head: "#e0b04d", width: 2.5});
+      }
+      drawNumberedPoints(g, view, trace.points, trace.end);
     });
     v.setLayer("cursor", (g, view) => {
       if (!this.cursor || this.trace || !this.frame) return;
@@ -306,7 +340,9 @@ export class FrameEditor {
   async _initialBody(frame) {
     const targets = frame.targets;
     const fit = targets?.centerline_xy ? {...targets, fit_iou: targets.meta?.fit_iou, apValues: await grayOf(targets.ap)} : null;
-    if (frame.body.trace_xy) return {kind: "trace", trace: frame.body.trace_xy, head: null, fit};
+    if (frame.body.trace_xy) {
+      return {kind: "trace", trace: frame.body.trace_xy, head: null, fit, extend: !!frame.body.trace_extend, length: frame.body.trace_length_px ?? null};
+    }
     if (frame.body.head_xy) return {kind: "head", trace: null, head: frame.body.head_xy, fit};
     return {kind: "auto", trace: null, head: null, fit};
   }
@@ -327,8 +363,7 @@ export class FrameEditor {
     const f = this.frame;
     if (!f) return "";
     const parts = [f.entry.recording, `frame ${f.entry.frame}`];
-    parts.push(f.split ? `split ${f.split}` : f.split_note ? `split ${f.split_note}` : "");
-    if (f.label) parts.push(`saved revision ${f.label.revision}${f.label.dataset !== f.saving.dataset ? ` (${f.label.dataset})` : ""}`);
+    if (f.label) parts.push(`saved revision ${f.label.revision}${f.label.scope === "lab" ? " (lab)" : ""}`);
     else parts.push({workspace: "mask from the workspace", network: "mask from the model", empty: "no mask yet"}[f.mask_source] || "");
     if (this.dirty) parts.push("unsaved changes");
     return parts.filter(Boolean).join(" · ");
@@ -349,9 +384,16 @@ export class FrameEditor {
     this.fitButton.hidden = this.removeButton.hidden = this.cancelTraceButton.hidden = fitted;
     this.acceptButton.hidden = this.discardButton.hidden = !fitted;
     if (tracing) {
-      const n = this.trace.points.length;
-      this.traceNote.textContent = fitted ? `Fit IoU ${this.trace.fit.fit_iou.toFixed(3)}. Accept it as the body?`
-        : `Click along the midline from head to tail (${n} point${n === 1 ? "" : "s"}). Backspace removes the last, Enter fits.`;
+      const n = this.trace.points.length, fit = this.trace.fit;
+      this.extendInput.checked = this.trace.extend;
+      const extension = !fit || !this.trace.extend ? ""
+        : fit.extended_px > 0 ? ` Extended ${Math.round(fit.extended_px)} px off camera, to a body length of ${Math.round(fit.length_px)} px ${LENGTH_SOURCES[fit.length_source]}.`
+          : fit.length_px ? " Not extended: the trace does not end at the border."
+            : " Not extended: there is no body length for this recording or its setup yet.";
+      this.traceNote.textContent = fitted
+        ? `Fit IoU ${fit.fit_iou.toFixed(3)}, outline in white.${extension} Accept it as the body, or move the points and fit again.`
+        : n < 2 ? "Click along the midline, head first."
+          : `${n} points, head first. Click: add at the ${this.trace.end} · click the line: insert · drag: move · right-click: remove · click the head or tail point: add from that end. Points may lie outside the frame where the body leaves the view (zoom out to make room).`;
       this.fitButton.disabled = n < 2;
       this.removeButton.disabled = !n;
     }
@@ -364,7 +406,9 @@ export class FrameEditor {
     this.traceButton.disabled = tracing;
     this.flipButton.disabled = tracing;
     this.bodyControls.classList.toggle("lb-muted", this.maskOnly.checked);
-    this.bodyNote.textContent = this._bodyText();
+    const proposing = p?.status === "loading";
+    this.proposingBadge.hidden = !proposing;
+    this.bodyNote.replaceChildren(...(proposing ? [spinner()] : []), this._bodyText());
     this.saveNextButton.disabled = this.saveButton.disabled = this.busy > 0 || tracing;
   }
 
@@ -372,13 +416,13 @@ export class FrameEditor {
     const body = this.body, p = this.proposal;
     if (this.maskOnly.checked) return "Mask only: the body is left out of this label.";
     let text;
-    if (body.kind === "trace") text = `Body: traced${body.fit?.fit_iou != null ? `, fit IoU ${body.fit.fit_iou.toFixed(3)}` : ""}.`;
+    if (body.kind === "trace") text = `Body: traced${body.extend ? ", extended off camera" : ""}${body.fit?.fit_iou != null ? `, fit IoU ${body.fit.fit_iou.toFixed(3)}` : ""}.`;
     else if (body.kind === "head") text = "Body: head end chosen.";
     else if (body.fit) text = "Body: fitted automatically; saving accepts it.";
     else text = "Body: automatic.";
     if (!this.frame.models.body) return `${text} No body model for this setup.`;
     if (p?.status === "loading") return `${text} Proposal: computing…`;
-    if (p?.status === "ready") return `${text} Proposal ready (fit IoU ${p.fit_iou.toFixed(3)})${p.stale ? ", for an earlier mask" : ""}.`;
+    if (p?.status === "ready") return `${text} Proposal ${p.edited ? "edited" : "ready"} (fit IoU ${p.fit_iou.toFixed(3)})${p.stale ? ", for an earlier mask" : ""}.`;
     if (p?.status === "no_trace") return `${text} The model found no body to propose.`;
     if (p?.status === "error") return `${text} Proposal failed: ${p.error}`;
     if (!this.autoPropose) return `${text} Propose computes the model's body (slow without a GPU).`;
@@ -416,8 +460,9 @@ export class FrameEditor {
     this.view.redraw();
   }
 
+  // The A-P field of the trace's fit while one is shown, else the body's, else the proposal's.
   _apCanvas() {
-    const values = this.body?.fit?.apValues || (this.proposal?.status === "ready" ? this.proposal.apValues : null);
+    const values = this.trace?.fit?.apValues || this.body?.fit?.apValues || (this.proposal?.status === "ready" ? this.proposal.apValues : null);
     if (!values) return null;
     if (this._apSource !== values) { this._apSource = values; this._apOverlay = apOverlay(values, this.width, this.height); }
     return this._apOverlay;
@@ -429,10 +474,7 @@ export class FrameEditor {
 
   _pointer({type, x, y}) {
     if (!this.frame) return;
-    if (this.trace) {
-      if (type === "down" && !this.trace.fit) { this.trace.points.push([x, y]); this._syncControls(); this.view.redraw(); }
-      return;
-    }
+    if (this.trace) { this._tracePointer(type, x, y); return; }
     this.cursor = {x, y};
     if (type === "down") {
       this.cancelPreview();
@@ -578,7 +620,7 @@ export class FrameEditor {
     if (p?.status === "loading") { this._status("The proposal is still being computed…"); return; }
     if (!p || p.stale || p.status === "error") p = await this.requestProposal();
     if (p?.status !== "ready") { this.ctx.toast("There is no proposal for this frame; trace the midline instead.", "error"); return; }
-    this.body = {kind: "trace", trace: p.trace_xy, head: null, fit: p};
+    this.body = {kind: "trace", trace: p.trace_xy, head: null, fit: p, extend: !!p.extend, length: p.length ?? null};
     this.bodyChanged = true;
     this._changed();
     this.view.redraw();
@@ -589,7 +631,8 @@ export class FrameEditor {
     const body = this.body;
     const fit = body.fit ? reversedFit(body.fit) : null;
     if (body.kind === "trace") {
-      this.body = {kind: "trace", trace: [...body.trace].reverse(), head: null, fit};
+      // The extension continued the old tail; the flipped trace is saved without it.
+      this.body = {kind: "trace", trace: [...body.trace].reverse(), head: null, fit, extend: false, length: null};
     } else if (fit && fit.head_xy) {
       this.body = {kind: "head", trace: null, head: fit.head_xy, fit};
     } else if (this.proposal?.status === "ready") {
@@ -608,18 +651,88 @@ export class FrameEditor {
     if (!this.frame || this.trace) return;
     if (fromProposal && this.proposal?.status !== "ready") return;
     this.cancelPreview();
-    this.trace = {points: fromProposal ? this.proposal.trace_xy.map((p) => [...p]) : [], fit: null};
+    // end: where a click adds a point; press: the pointer press being handled.
+    // extend: continue off camera (starts as the body or proposal being edited has it).
+    const extend = fromProposal ? !!this.proposal.extend : this.body?.kind === "trace" && !!this.body.extend;
+    this.trace = {points: fromProposal ? this.proposal.trace_xy.map((p) => [...p]) : [], fit: null, end: "tail", press: null, fromProposal, extend};
     this.view.setLayerVisible("midline", false);
     this._syncLayers();
     this._syncControls();
     this.view.redraw();
   }
 
-  removeLastPoint() {
-    if (!this.trace || this.trace.fit) return;
-    this.trace.points.pop();
+  // A press on a point drags it, or picks it as the end to extend when it is the head or tail and does not move;
+  // a click elsewhere inserts a point on the line under it or adds one at that end; a right click removes a point.
+  _tracePointer(type, x, y) {
+    const trace = this.trace;
+    if (this.busy) return;
+    const scale = this.view.view.scale, point = [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+    if (type === "down") {
+      trace.press = {hit: this._nearestPoint(x, y), x, y, moved: false};
+    } else if (type === "move" && trace.press) {
+      const press = trace.press;
+      if (!press.moved && Math.hypot(x - press.x, y - press.y) * scale < 3) return;
+      press.moved = true;
+      if (press.hit >= 0) { trace.points[press.hit] = point; this._traceEdited(); }
+    } else if (type === "up" && trace.press) {
+      const {hit, moved} = trace.press, last = trace.points.length - 1;
+      trace.press = null;
+      if (moved) return;
+      if (hit >= 0) {
+        if (last > 0 && (hit === 0 || hit === last)) { trace.end = hit === 0 ? "head" : "tail"; this._syncControls(); this.view.redraw(); }
+        return;
+      }
+      const segment = this._nearestSegment(x, y);
+      if (segment >= 0) trace.points.splice(segment + 1, 0, point);
+      else if (trace.end === "head") trace.points.unshift(point);
+      else trace.points.push(point);
+      this._traceEdited();
+    } else if (type === "rightclick") {
+      const hit = this._nearestPoint(x, y);
+      if (hit >= 0) { trace.points.splice(hit, 1); this._traceEdited(); }
+    }
+  }
+
+  _nearestPoint(x, y) {
+    let best = -1, bestDistance = GRAB_PX / this.view.view.scale;
+    this.trace.points.forEach(([px, py], i) => {
+      const d = Math.hypot(px - x, py - y);
+      if (d <= bestDistance) { best = i; bestDistance = d; }
+    });
+    return best;
+  }
+
+  // The segment (its first point's index) within LINE_PX of (x, y), or -1.
+  _nearestSegment(x, y) {
+    const points = this.trace.points;
+    let best = -1, bestDistance = LINE_PX / this.view.view.scale;
+    for (let i = 0; i + 1 < points.length; i++) {
+      const [ax, ay] = points[i], [bx, by] = points[i + 1], dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+      const d = Math.hypot(ax + t * dx - x, ay + t * dy - y);
+      if (d <= bestDistance) { best = i; bestDistance = d; }
+    }
+    return best;
+  }
+
+  // Any change to the points drops the fit along the old ones.
+  _traceEdited() {
+    this.trace.fit = null;
     this._syncControls();
     this.view.redraw();
+  }
+
+  // Extending changes the fit, so the old one is dropped.
+  setExtend(value) {
+    if (!this.trace || this.trace.extend === value) return;
+    this.trace.extend = value;
+    this._traceEdited();
+  }
+
+  removeEndPoint() {
+    if (!this.trace?.points.length) return;
+    if (this.trace.end === "head") this.trace.points.shift(); else this.trace.points.pop();
+    this._traceEdited();
   }
 
   async fitTrace() {
@@ -628,7 +741,7 @@ export class FrameEditor {
     this.traceNote.textContent = "Fitting the body along the trace…";
     const generation = this.generation;
     try {
-      const fit = await post("/api/labeling/fit", {...this.request, mask: encodeMask(this.mask, this.width, this.height), trace_xy: this.trace.points});
+      const fit = await post("/api/labeling/fit", {...this.request, mask: encodeMask(this.mask, this.width, this.height), trace_xy: this.trace.points, extend: this.trace.extend});
       if (generation !== this.generation || !this.trace) return;
       fit.apValues = await grayOf(fit.ap);
       this.trace.fit = fit;
@@ -639,7 +752,13 @@ export class FrameEditor {
 
   acceptTrace() {
     if (!this.trace?.fit) return;
-    this.body = {kind: "trace", trace: this.trace.points, head: null, fit: this.trace.fit};
+    // length: the body length the fit was extended to (null when it was not).
+    const extend = this.trace.extend, length = extend && this.trace.fit.extended_px > 0 ? this.trace.fit.length_px : null;
+    this.body = {kind: "trace", trace: this.trace.points, head: null, fit: this.trace.fit, extend, length};
+    // An edited proposal replaces the proposal: Edit proposal and Use proposal start from the edit from now on.
+    if (this.trace.fromProposal) {
+      this.proposal = {...this.proposal, ...this.trace.fit, trace_xy: this.trace.points.map((p) => [...p]), stale: false, edited: true, extend, length};
+    }
     this.bodyChanged = true;
     this.endTrace();
   }
@@ -733,7 +852,7 @@ export class FrameEditor {
     this.lagInput.value = this.lag;
     this.offsetValue.textContent = this.offset ? `t${this.offset > 0 ? "+" : ""}${this.offset}` : "t";
     this.lagValue.textContent = `±${this.lag}`;
-    this.playButton.textContent = this.playTimer ? "Pause" : "Play";
+    this.playButton.textContent = keyed(this.playTimer ? "Pause" : "Play", "Space");
     if (this.contextLoading) return;
     const valid = this.frame.context_valid, L = this.frame.max_lag;
     let note = "";
@@ -749,7 +868,12 @@ export class FrameEditor {
       ...this.request, mask: encodeMask(this.mask, this.width, this.height), mask_only: this.maskOnly.checked,
       expected_revision: this.frame.expected_revision,
     };
-    if (body.kind === "trace") payload.trace_xy = body.trace;
+    if (body.kind === "trace") {
+      payload.trace_xy = body.trace;
+      payload.trace_extend = !!body.extend;
+      // The length the body was extended to, so rebuilding the targets extends it the same way.
+      if (body.extend && body.length) payload.trace_length_px = body.length;
+    }
     else if (body.kind === "head") payload.head_xy = body.head;
     else if (body.fit?.head_xy) payload.head_xy = body.fit.head_xy;  // the shown body: saving accepts it
     return payload;
@@ -762,7 +886,7 @@ export class FrameEditor {
     this._status("Saving…");
     try {
       const answer = await post("/api/labeling/save", this.savePayload());
-      this._status(`Saved revision ${answer.label.revision} to ${answer.dataset}${answer.job ? "; body targets are rebuilding" : ""}.`, "ok");
+      this._status(`Saved revision ${answer.label.revision} to the setup's labels${answer.job ? "; body targets are rebuilding" : ""}.`, "ok");
       this.frame.label = answer.label;
       this.frame.expected_revision = answer.label.revision;
       this.frame.body = {...this.frame.body, mask_only: this.maskOnly.checked};
@@ -789,7 +913,8 @@ export class FrameEditor {
     }
     if (this.trace) {
       if (key === "Enter") { this.trace.fit ? this.acceptTrace() : this.fitTrace(); return true; }
-      if (key === "Backspace") { this.removeLastPoint(); return true; }
+      if (key === "Backspace" || key === "Delete") { this.removeEndPoint(); return true; }
+      if (key.toLowerCase() === "x" && !event.shiftKey && !event.altKey) { this.setExtend(!this.trace.extend); return true; }
       if (key === "Escape") { this.endTrace(); return true; }
     }
     if (key === "Escape" && this.previewMask) { this.cancelPreview(); return true; }
@@ -797,7 +922,7 @@ export class FrameEditor {
       w: () => this.setBrush(WORM), e: () => this.setBrush(BACKGROUND),
       "[": () => this._resize(-2), "]": () => this._resize(2),
       n: () => this.preview("network"), a: () => this.applyPreview(), z: () => this.undo(),
-      m: () => this.toggleMask(), r: () => this.toggleRaw(), f: () => this.view.fit(),
+      m: () => this.toggleMask(), r: () => this.toggleRaw(), 0: () => this.view.fit(),
       g: () => this.useProposal(), h: () => this.flip(), t: () => this.startTrace(false),
       d: () => this.setContextMode(this.contextMode === "frame" ? "difference" : "frame"),
       " ": () => this.togglePlay(), s: () => this.save({next: false}), Enter: () => this.save({next: true}),
@@ -820,9 +945,9 @@ export class FrameEditor {
 
 export const SHORTCUTS = [
   ["W / E", "Worm / Background brush"], ["[ ]", "Brush size"], ["N", "Network proposal"], ["A", "Apply the proposal"],
-  ["Z", "Undo"], ["G", "Use the body proposal"], ["H", "Flip head/tail"], ["T", "Trace the midline (Enter fits, Backspace removes a point, Esc cancels)"],
+  ["Z", "Undo"], ["G", "Use the body proposal"], ["H", "Flip head/tail"], ["T", "Trace the midline: click adds a point at the tail (or the head, after clicking the head point), a click on the line inserts one, drag moves one, right-click removes one, points may lie outside the frame; X extends the body off camera to its typical length; Enter fits, Backspace removes the end point, Esc cancels"],
   ["D", "Frames / Difference"], ["Space", "Play the context"], ["← →", "Context offset (or lag)"], ["M", "Mask on/off"],
-  ["R", "Raw / flat-fielded frame"], ["F", "Fit the view (or double-click)"], ["Enter", "Save & next"], ["S", "Save"],
+  ["R", "Raw / flat-fielded frame"], ["0", "Fit the frame to the view"], ["Enter", "Save & next"], ["S", "Save"],
   ["Shift + ← →", "Previous / next frame"], ["Shift + drag, right drag", "Pan; wheel zooms"],
 ];
 
@@ -850,6 +975,27 @@ function drawPoints(g, view, points, color) {
   });
 }
 
+// The trace being edited: its line and numbered points, head (1) in green, with a ring on the end that clicks extend.
+function drawNumberedPoints(g, view, points, end) {
+  if (!points.length) return;
+  const px = 1 / view.scale, r = 7 * px, last = points.length - 1;
+  g.strokeStyle = "#ffd23c"; g.lineWidth = 1.5 * px; g.lineJoin = g.lineCap = "round";
+  g.beginPath();
+  points.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.stroke();
+  if (last > 0) {
+    const [x, y] = points[end === "head" ? 0 : last];
+    g.strokeStyle = "#ffffff"; g.lineWidth = 2 * px;
+    g.beginPath(); g.arc(x, y, r + 3 * px, 0, Math.PI * 2); g.stroke();
+  }
+  g.font = `600 ${9 * px}px system-ui, sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
+  points.forEach(([x, y], i) => {
+    g.fillStyle = i === 0 ? "#57d68d" : "#ffd23c";
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#000"; g.fillText(String(i + 1), x, y + 0.5 * px);
+  });
+}
+
 function drawNose(g, view, [x, y]) {
   const r = 6 / view.scale;
   g.strokeStyle = "#ffffff"; g.lineWidth = 1.5 / view.scale;
@@ -858,7 +1004,7 @@ function drawNose(g, view, [x, y]) {
   g.stroke();
 }
 
-function drawTube(g, view, centerline, widths) {
+function drawTube(g, view, centerline, widths, {color = "#e6ebef", width = 1} = {}) {
   if (!widths) return;
   const left = [], right = [];
   for (let i = 0; i < centerline.length; i++) {
@@ -867,7 +1013,7 @@ function drawTube(g, view, centerline, widths) {
     left.push([centerline[i][0] - dy / n * r, centerline[i][1] + dx / n * r]);
     right.push([centerline[i][0] + dy / n * r, centerline[i][1] - dx / n * r]);
   }
-  g.strokeStyle = "#e6ebef"; g.lineWidth = 1 / view.scale;
+  g.strokeStyle = color; g.lineWidth = width / view.scale;
   g.beginPath();
   [...left, ...right.reverse()].forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
   g.closePath();

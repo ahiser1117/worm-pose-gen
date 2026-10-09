@@ -1,7 +1,8 @@
 """One label revision: what a person decided about one frame, stored with everything needed to train on it.
 
 A revision is an immutable ``.npz`` file
-(``datasets/<id>/labels/<recording>/<frame:06d>/<revision:04d>.npz``) with:
+(``labels/<setup>/<recording>/<frame:06d>/<revision:04d>.npz`` in a library,
+:mod:`.collection`) with:
 
 ``image`` / ``image_raw``
     the frame as the network sees it (flat-fielded when the setup says so)
@@ -18,15 +19,21 @@ A revision is an immutable ``.npz`` file
     the acquisition's nose landmark on each context frame (NaN and false
     where there is none); the automatic orientation and chain fits use it.
 ``trace_xy`` (optional)
-    a traced midline, head first; the body is fit along it.
+    a traced midline, head first; the body is fit along it, from its first
+    point to its last unless the meta's ``trace_extend`` asks for it to be
+    continued off camera to the recording's typical body length.
 ``head_xy`` (optional)
     the head end a person chose without tracing (orientation ``manual``).
 ``meta``
     JSON: ``recording``, ``frame``, ``revision``, ``orientation`` (``auto``
     or ``manual``), ``mask_only`` (the body is unclear and the label trains
     the mask only), ``origin`` (``spread``, ``fix`` or ``migrated``),
-    ``author``, ``saved_at``, ``source_path``, ``dataset_path``, and for
-    migrated labels where they came from (``migrated_from``).
+    ``author``, ``saved_at``, ``source_path``, ``dataset_path``,
+    ``trace_extend`` (with a trace: continue it off camera when it ends at
+    the border) and ``trace_length_px`` (the body length it was continued
+    to, as the Labeling page showed it; ``None`` for the recording's
+    length from its labels), and for migrated labels where they came from
+    (``migrated_from``).
 
 A label's *status* is ``mask_only``; else ``complete`` when a person
 settled its body (a trace or a manual orientation) or the frame holds no
@@ -75,9 +82,16 @@ def label_status(*, mask_only: bool, empty: bool, has_trace: bool, orientation: 
 
 @dataclass(frozen=True)
 class LabelRecord:
-    """One label revision as the index lists it; :meth:`load` reads its arrays."""
+    """One label revision as the index lists it; :meth:`load` reads its arrays.
 
-    dataset: str
+    ``scope`` is the library that holds it (``lab`` or ``mine``) and
+    ``setup`` the setup whose collection it belongs to; ``split`` is the
+    recording's split in the dataset it was read through (``None`` read from
+    the collection, or not included).
+    """
+
+    scope: str
+    setup: str
     recording: str
     frame: int
     revision: int
@@ -110,7 +124,7 @@ class LabelRecord:
     def identity(self) -> dict[str, Any]:
         """What a benchmark or a training run records to name exactly this revision."""
 
-        return {"dataset": self.dataset, "recording": self.recording, "frame": self.frame,
+        return {"scope": self.scope, "setup": self.setup, "recording": self.recording, "frame": self.frame,
                 "revision": self.revision, "sha256": self.sha256}
 
     def load(self) -> "Label":
@@ -189,6 +203,8 @@ def encode_label(
     trace_xy: Any,
     mask_only: bool,
     origin: str,
+    trace_extend: bool = False,
+    trace_length_px: float | None = None,
     author: str,
     saved_at: str,
     source_path: str,
@@ -243,6 +259,8 @@ def encode_label(
         "recording": recording, "frame": int(frame), "revision": int(revision), "orientation": orientation,
         "mask_only": bool(mask_only), "origin": origin, "author": author, "saved_at": saved_at,
         "source_path": str(source_path), "dataset_path": str(dataset_path),
+        "trace_extend": bool(trace_extend) and trace is not None,
+        "trace_length_px": float(trace_length_px) if trace_extend and trace is not None and trace_length_px else None,
     }
     arrays: dict[str, Any] = dict(
         image=image, image_raw=image_raw, mask=labels, context=stack, context_valid=valid,

@@ -2,10 +2,10 @@
 
 ``benchmarks/<id>.json``::
 
-    {"setup": ref, "datasets": [refs], "author", "created_at", "description",
-     "labels": [{"dataset", "recording", "frame", "revision", "sha256"}, ...]}
+    {"setup": ref, "dataset": ref, "author", "created_at", "description",
+     "labels": [{"scope", "setup", "recording", "frame", "revision", "sha256"}, ...]}
 
-A benchmark takes the test-split labels of a dataset whose origin is
+A benchmark takes the labels of a dataset's test recordings whose origin is
 ``spread`` or ``migrated``: frames chosen to sample recordings, not frames a
 person relabeled because a model failed on them, which would make any model
 look worse than it is.  It is written once and never changed; when the test
@@ -16,11 +16,12 @@ as ``mine:<dataset>-b<n>``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import getpass
 from pathlib import Path
 from typing import Any, Sequence
 
+from .collection import Collection
 from .datasets import Dataset, labels
 from .labels import BENCHMARK_ORIGINS, LabelRecord
 from .roots import Libraries, check_id, make_ref, parse_ref, read_json, write_json
@@ -34,7 +35,7 @@ BENCHMARKS_DIR = "benchmarks"
 class Benchmark:
     ref: str
     setup: str
-    datasets: tuple[str, ...]
+    dataset: str
     author: str
     created_at: str
     description: str
@@ -42,7 +43,7 @@ class Benchmark:
 
     def summary(self) -> dict[str, Any]:
         return {
-            "ref": self.ref, "setup": self.setup, "datasets": list(self.datasets), "author": self.author,
+            "ref": self.ref, "setup": self.setup, "dataset": self.dataset, "author": self.author,
             "created_at": self.created_at, "description": self.description, "labels": len(self.entries),
             "recordings": sorted({e["recording"] for e in self.entries}),
         }
@@ -59,7 +60,7 @@ def benchmark_records(records: Sequence[LabelRecord]) -> list[LabelRecord]:
 
 
 def write_benchmark(
-    root: Path, benchmark_id: str, *, setup: str, datasets: Sequence[str], records: Sequence[LabelRecord],
+    root: Path, benchmark_id: str, *, setup: str, dataset: str, records: Sequence[LabelRecord],
     author: str | None = None, description: str = "",
 ) -> None:
     """Freeze ``records`` as a benchmark in a library root; an existing benchmark is never replaced."""
@@ -71,7 +72,7 @@ def write_benchmark(
     if not chosen:
         raise ValueError("no test labels sampled by spread or migration to freeze")
     write_json(path, {
-        "setup": setup, "datasets": list(datasets), "author": author or getpass.getuser(), "created_at": utc_now(),
+        "setup": setup, "dataset": dataset, "author": author or getpass.getuser(), "created_at": utc_now(),
         "description": description, "labels": [r.identity for r in sorted(chosen, key=lambda r: (r.recording, r.frame))],
     })
 
@@ -79,7 +80,7 @@ def write_benchmark(
 def freeze_benchmark(
     libraries: Libraries, dataset_ref: str, benchmark_id: str | None = None, *, author: str | None = None, description: str = "",
 ) -> Benchmark:
-    """Freeze a dataset's spread-sampled test labels (its inherited ones included) as a personal benchmark.
+    """Freeze a dataset's spread-sampled test labels as a personal benchmark.
 
     The id defaults to ``<dataset id>-b<n>`` with the next free ``n``.
     """
@@ -91,8 +92,8 @@ def freeze_benchmark(
             n += 1
         benchmark_id = f"{dataset.id}-b{n}"
     write_benchmark(
-        libraries.personal, benchmark_id, setup=dataset.setup, datasets=[dataset_ref],
-        records=labels(libraries, [dataset_ref], "test"), author=author, description=description,
+        libraries.personal, benchmark_id, setup=dataset.setup, dataset=dataset_ref,
+        records=labels(libraries, dataset_ref, "test"), author=author, description=description,
     )
     return get_benchmark(libraries, make_ref("mine", benchmark_id))
 
@@ -103,7 +104,7 @@ def get_benchmark(libraries: Libraries, ref: str) -> Benchmark:
     if data is None:
         raise LookupError(f"unknown benchmark {ref}")
     return Benchmark(
-        ref=ref, setup=str(data["setup"]), datasets=tuple(data.get("datasets") or ()), author=str(data.get("author") or ""),
+        ref=ref, setup=str(data["setup"]), dataset=str(data["dataset"]), author=str(data.get("author") or ""),
         created_at=str(data.get("created_at") or ""), description=str(data.get("description") or ""),
         entries=tuple(data["labels"]),
     )
@@ -123,12 +124,12 @@ def list_benchmarks(libraries: Libraries, setup: str | None = None) -> list[Benc
 def benchmark_labels(libraries: Libraries, ref: str) -> list[LabelRecord]:
     """The exact label revisions of a benchmark, checked against their recorded hashes."""
 
+    benchmark = get_benchmark(libraries, ref)
+    collection = Collection(libraries, benchmark.setup)
     result = []
-    datasets: dict[str, Dataset] = {}
-    for entry in get_benchmark(libraries, ref).entries:
-        dataset = datasets.setdefault(entry["dataset"], Dataset(libraries, entry["dataset"]))
-        record = dataset.get(entry["recording"], entry["frame"], entry["revision"])
+    for entry in benchmark.entries:
+        record = collection.get(entry["recording"], entry["frame"], entry["revision"], entry["scope"])
         if record.sha256 != entry["sha256"]:
-            raise ValueError(f"{ref}: {record.dataset}/{record.key}@{record.revision} does not match the frozen label")
-        result.append(record)
+            raise ValueError(f"{ref}: {record.scope}:{record.key}@{record.revision} does not match the frozen label")
+        result.append(replace(record, split="test"))
     return result

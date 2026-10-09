@@ -17,9 +17,10 @@ from worm_pose_gen.body_net import BodyFieldModule
 from worm_pose_gen.body_targets import render_body_targets, self_contact
 from worm_pose_gen.library import Libraries
 from worm_pose_gen.library.inference import Outputs, lags_at, load_model
-from worm_pose_gen.library.roots import write_json
 from worm_pose_gen.library.targets import write_targets
 from worm_pose_gen.segmenter import SegmentationModule
+
+from tests.slow import slow
 
 SHAPE = (64, 96)
 MAX_LAG = 2
@@ -68,13 +69,13 @@ def make_library(root: Path) -> Libraries:
     lab, personal = root / "lab", root / "mine"
     library.write_setup(lab, "rig", name="Rig", fps=20.0, pixel_size_um=2.0, defaults={})
     libraries = Libraries(lab=lab, personal=personal)
-    base = library.create_dataset(libraries, "base", setup="lab:rig", scope="lab")
-    write_json(base.root / "splits.json", {"rec-train": "train", "rec-val": "val", "rec-test": "test"})
+    library.create_dataset(libraries, "base", setup="lab:rig", splits={"rec-train": "train", "rec-val": "val", "rec-test": "test"}, scope="lab")
+    collection = library.Collection(libraries, "lab:rig")
     for recording, frame in (("rec-train", 10), ("rec-train", 20), ("rec-val", 5), ("rec-test", 7)):
         centerline, inputs = label_inputs(frame % 3)
-        record = base.save(recording=recording, frame=frame, origin="spread", **inputs)
+        record = collection.save(recording=recording, frame=frame, origin="spread", scope="lab", **inputs)
         store_targets(libraries, record, centerline)
-    library.write_benchmark(lab, "rig-v1", setup="lab:rig", datasets=["lab:base"], records=library.labels(libraries, ["lab:base"], "test"))
+    library.write_benchmark(lab, "rig-v1", setup="lab:rig", dataset="lab:base", records=library.labels(libraries, "lab:base", "test"))
     torch.manual_seed(0)
     save_weights(BodyFieldModule(lags=(1, 2), pretrained=False), root / "body.ckpt")
     save_weights(SegmentationModule(pretrained=False), root / "seg.ckpt")
@@ -99,7 +100,7 @@ class LibraryTestCase(unittest.TestCase):
 
 class LabelDatasetTests(LibraryTestCase):
     def records(self, split="train"):
-        return library.labels(self.libraries, ["lab:base"], split)
+        return library.labels(self.libraries, "lab:base", split)
 
     def test_body_items_and_loss(self):
         dataset = model_training.LabelDataset(self.libraries, self.records(), kind="body_net", lags=(1, 2))
@@ -124,13 +125,13 @@ class LabelDatasetTests(LibraryTestCase):
         self.assertFalse(bool(targets[3].any()))
         self.assertTrue(bool(torch.isnan(targets[4]).all()))
         self.assertTrue(bool(targets[0].any()))  # the mask still trains
-        mine = library.create_dataset(self.libraries, "mine", setup="lab:rig", extends="lab:base")
+        collection = library.Collection(self.libraries, "lab:rig")
         _, inputs = label_inputs(record.frame % 3)
-        settled = mine.save(recording=record.recording, frame=record.frame, origin="fix", orientation="manual", head_xy=[10.0, 32.0], **inputs)
+        settled = collection.save(recording=record.recording, frame=record.frame, origin="fix", orientation="manual", head_xy=[10.0, 32.0], **inputs)
         store_targets(self.libraries, settled, centerline, fit_iou=0.5)
         self.assertEqual(settled.status, "complete")
         self.assertTrue(bool(model_training.LabelDataset(self.libraries, [settled], kind="body_net")[0]["targets"][3].any()))
-        masked = mine.save(recording=record.recording, frame=record.frame, origin="fix", mask_only=True, **inputs)
+        masked = collection.save(recording=record.recording, frame=record.frame, origin="fix", mask_only=True, **inputs)
         store_targets(self.libraries, masked, centerline)
         self.assertFalse(bool(model_training.LabelDataset(self.libraries, [masked], kind="body_net")[0]["targets"][3].any()))
 
@@ -144,30 +145,29 @@ class LabelDatasetTests(LibraryTestCase):
         self.assertEqual(int(batch["valid"][0].sum()), 48 * 48)  # padding is excluded
 
     def test_missing_targets_are_an_error(self):
-        mine = library.create_dataset(self.libraries, "new", setup="lab:rig")
         _, inputs = label_inputs()
-        record = mine.save(recording="rec-train", frame=99, origin="spread", **inputs)
+        record = library.Collection(self.libraries, "lab:rig").save(recording="rec-train", frame=99, origin="spread", **inputs)
         with self.assertRaises(FileNotFoundError):
             model_training.LabelDataset(self.libraries, [record], kind="body_net")[0]
 
 
 class PlanTests(LibraryTestCase):
     def test_kind_lags_and_name_follow_the_start(self):
-        request = model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"], start_from="lab:body")
+        request = model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:body")
         plan = model_training.plan(self.libraries, request)
         self.assertEqual((plan.kind, plan.lags, len(plan.train), len(plan.val)), ("body_net", (1, 2), 2, 1))
         self.assertEqual(plan.request.name, "base-2")
         self.assertEqual(plan.params["patience"], 15)
-        segmenter = model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"], start_from="lab:seg"))
+        segmenter = model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:seg"))
         self.assertEqual((segmenter.kind, segmenter.lags, segmenter.params["patience"]), ("segmenter", (), 5))
         self.assertNotIn("ap_weight", segmenter.params)
-        scratch = model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"], context="short"),
+        scratch = model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", context="short"),
                                       taken=["base-2"])
         self.assertEqual((scratch.kind, scratch.lags, scratch.request.name), ("body_net", (1, 4, 16), "base-2-2"))
 
     def test_refusals(self):
         bad = [
-            ({"datasets": []}, "at least one dataset"),
+            ({"dataset": ""}, "choose a dataset"),
             ({"params": {"max_epochs": 1.5}}, "integer"),
             ({"params": {"learning_rate": -1}}, "must lie"),
             ({"params": {"warmup": 3}}, "unknown training parameters"),
@@ -175,22 +175,25 @@ class PlanTests(LibraryTestCase):
             ({"name": "bad name"}, "invalid library id"),
         ]
         for change, message in bad:
-            request = model_training.TrainRequest(**{"setup": "lab:rig", "datasets": ["lab:base"], **change})
+            request = model_training.TrainRequest(**{"setup": "lab:rig", "dataset": "lab:base", **change})
             with self.assertRaisesRegex(ValueError, message):
                 model_training.plan(self.libraries, request)
         library.create_setup(self.libraries, "other", name="Other")
         with self.assertRaisesRegex(ValueError, "not of mine:other"):
-            model_training.plan(self.libraries, model_training.TrainRequest(setup="mine:other", datasets=["lab:base"]))
-        write_json(library.Dataset(self.libraries, "lab:base").root / "splits.json", {"rec-train": "train", "rec-val": "train", "rec-test": "test"})
+            model_training.plan(self.libraries, model_training.TrainRequest(setup="mine:other", dataset="lab:base"))
+        library.create_dataset(self.libraries, "no-val", setup="lab:rig", splits={"rec-train": "train", "rec-val": "train"})
         with self.assertRaisesRegex(ValueError, "no validation labels"):
-            model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"]))
+            model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="mine:no-val"))
+        library.create_dataset(self.libraries, "empty", setup="lab:rig")
+        with self.assertRaisesRegex(ValueError, "no training labels"):
+            model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="mine:empty"))
 
 
 class InferenceTests(LibraryTestCase):
     def test_predict_matches_sequence_and_lags_convert(self):
         model = load_model(self.libraries, "lab:body", device="cpu")
         self.assertEqual((model.lags, model.max_lag, model.outputs), ((1, 2), 2, tuple(BODY_OUTPUTS)))
-        label = library.labels(self.libraries, ["lab:base"], "test")[0].load()
+        label = library.labels(self.libraries, "lab:base", "test")[0].load()
         out = model.predict(label.context, label.context_valid)
         self.assertEqual(out.mask.shape, SHAPE)
         self.assertTrue(np.all((out.ap >= 0) & (out.ap <= 1)))
@@ -217,7 +220,7 @@ class ScoringTests(unittest.TestCase):
         head[32, 10] = 1
         outputs = Outputs(mask=mask.astype(np.float32), ap=np.nan_to_num(targets.ap).astype(np.float32), head=head)
         label = type("Label", (), {"mask": mask.astype(np.uint8), "record": type("R", (), {
-            "identity": {"dataset": "lab:d", "recording": "r", "frame": 1, "revision": 1, "sha256": "x"}, "split": "test",
+            "identity": {"scope": "lab", "setup": "lab:d", "recording": "r", "frame": 1, "revision": 1, "sha256": "x"}, "split": "test",
             "status": "auto"})()})()
         arrays = {"ap": targets.ap, "head_xy": targets.head_xy, "tail_xy": targets.tail_xy}
         row = model_eval.score_label(outputs, label, ({"fit_iou": 0.97}, arrays), True)
@@ -235,7 +238,7 @@ class TrainEndToEndTests(LibraryTestCase):
     def test_one_cpu_epoch_fine_tunes_evaluates_and_writes_the_card(self):
         reports = []
         request = model_training.TrainRequest(
-            setup="lab:rig", datasets=["lab:base"], start_from="lab:body", name="tuned", notes="first try",
+            setup="lab:rig", dataset="lab:base", start_from="lab:body", name="tuned", notes="first try",
             params={"max_epochs": 1, "batch_size": 2, "crop_size": 64},
         )
         card = model_training.train(self.libraries, request, device="cpu", progress=lambda f, m, r=None: reports.append((f, m, r)))
@@ -264,12 +267,12 @@ class TrainEndToEndTests(LibraryTestCase):
         self.assertEqual(reports[-1][0], 1.0)
         self.assertEqual(reports[-1][2]["curve"][0]["epoch"], 1)
         with self.assertRaisesRegex(ValueError, "already exists"):
-            model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"], name="tuned"))
+            model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", name="tuned"))
         loaded = load_model(self.libraries, "mine:tuned", device="cpu")
         self.assertEqual(loaded.lags, (1, 2))
 
     def test_segmenter_fine_tune(self):
-        request = model_training.TrainRequest(setup="lab:rig", datasets=["lab:base"], start_from="lab:seg",
+        request = model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:seg",
                                               params={"max_epochs": 1, "batch_size": 2, "crop_size": 64})
         card = model_training.train(self.libraries, request, device="cpu")
         self.assertEqual((card.kind, card.outputs, card.inputs["lags_frames"]), ("segmenter", ("mask",), []))
@@ -300,6 +303,7 @@ class CommandLineTests(LibraryTestCase):
     def library_flags(self):
         return ["--lab-library", str(self.libraries.lab), "--library", str(self.libraries.personal), "--device", "cpu"]
 
+    @slow
     def test_evaluate_and_train_scripts(self):
         output = self.run_script("scripts/evaluate_model.py", *self.library_flags(), "--model", "lab:seg")
         self.assertIn("lab:seg on lab:rig-v1", output)

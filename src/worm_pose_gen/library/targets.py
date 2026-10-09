@@ -23,7 +23,7 @@ until someone deletes the directory.  Every user builds targets in their own
 library, lab labels included, since the lab library is read-only.
 
 The readers take ``builder``; left at :data:`SETUP_DEFAULT` they look up
-the setup's current default for the label's dataset.  A listing of many
+the setup's current default for the label's setup.  A listing of many
 labels of one setup passes the builder it looked up once.
 
 Building needs the fitter (a GPU makes it seconds instead of tens of
@@ -39,7 +39,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .datasets import Dataset
+from .collection import Collection
 from .labels import LabelRecord
 from .roots import Libraries, read_json, ref_filename, write_json
 from ..workspace import utc_now
@@ -62,7 +62,7 @@ def target_builder(libraries: Libraries, setup_ref: str) -> str | None:
 def _builder(libraries: Libraries, record: LabelRecord, builder: str | None) -> str | None:
     if builder != SETUP_DEFAULT:
         return builder
-    return target_builder(libraries, Dataset(libraries, record.dataset).setup)
+    return target_builder(libraries, record.setup)
 
 
 def cache_paths(libraries: Libraries, sha256: str, builder: str | None) -> tuple[Path, Path]:
@@ -115,28 +115,63 @@ def describe_body(meta: dict[str, Any], centerline: np.ndarray, width_profile: n
                                   & (centerline[:, 1] >= 0) & (centerline[:, 1] <= height - 1)))
 
 
-def recording_length(
-    libraries: Libraries, dataset_ref: str, recording: str, builder: str | None, *, exclude: str | None = None,
-) -> float | None:
-    """Median length of the whole, well-fit, untraced bodies among a dataset's built labels of one recording.
+def body_lengths(
+    libraries: Libraries, setup_ref: str, builder: str | None, *, recording: str | None = None, exclude: str | None = None,
+) -> dict[str, list[float]]:
+    """Per recording, the lengths of the whole, well-fit, untraced bodies among a setup's built labels (of ``recording`` only, when given).
 
-    It sets the length of a body that leaves the camera
-    (:func:`body_fields.mark_exits`, :func:`body_fields.extend_trace`), as
-    :func:`body_fields.recording_length` does for the old store.  ``exclude``
-    is the ``sha256`` of the label being built.
+    ``exclude`` is the ``sha256`` of a label left out (the one being built).
     """
 
     from ..body_fields import LENGTH_REFERENCE_IOU, TRACE_METHODS
 
-    lengths = []
-    for other in Dataset(libraries, dataset_ref).labels():
-        if other.recording != recording or other.sha256 == exclude:
+    lengths: dict[str, list[float]] = {}
+    for other in Collection(libraries, setup_ref).labels():
+        if (recording is not None and other.recording != recording) or other.sha256 == exclude:
             continue
         meta = cached_meta(libraries, other, builder)
         if (meta and meta.get("has_body") and meta.get("in_view") and meta.get("fit_iou", 0.0) >= LENGTH_REFERENCE_IOU
                 and meta.get("fit_method") not in TRACE_METHODS):
-            lengths.append(float(meta["body_length_px"]))
+            lengths.setdefault(other.recording, []).append(float(meta["body_length_px"]))
+    return lengths
+
+
+def recording_length(
+    libraries: Libraries, setup_ref: str, recording: str, builder: str | None, *, exclude: str | None = None,
+) -> float | None:
+    """Median length of the whole, well-fit, untraced bodies among a setup's built labels of one recording.
+
+    It sets the length of a body that leaves the camera
+    (:func:`body_fields.mark_exits`), as :func:`body_fields.recording_length`
+    does for the old store.  ``exclude`` is the ``sha256`` of the label
+    being built.
+    """
+
+    lengths = body_lengths(libraries, setup_ref, builder, recording=recording, exclude=exclude).get(recording)
     return float(np.median(lengths)) if lengths else None
+
+
+def extension_length(libraries: Libraries, record: LabelRecord, meta: dict[str, Any], builder: str | None) -> float | None:
+    """How far a label's trace is extended off camera: the length saved with it (what the Labeling page showed), else the
+    recording's from the labels; ``None`` when the label does not ask for an extension."""
+
+    if not meta.get("trace_extend"):
+        return None
+    if meta.get("trace_length_px"):
+        return float(meta["trace_length_px"])
+    return recording_length(libraries, record.setup, record.recording, builder, exclude=record.sha256)
+
+
+def setup_length(libraries: Libraries, setup_ref: str, builder: str | None) -> float | None:
+    """The median over a setup's recordings of each one's :func:`recording_length`: a first guess for a recording without one.
+
+    Worms differ in size between recordings (684 to 827 px over the eight
+    nir-flv recordings with labels in October 2026, a median of 765 px), so
+    this is about 10% off at worst.
+    """
+
+    lengths = body_lengths(libraries, setup_ref, builder)
+    return float(np.median([np.median(values) for values in lengths.values()])) if lengths else None
 
 
 def build_targets(
@@ -176,8 +211,8 @@ def build_targets(
     built, arrays, targets = body_fields.fit_targets(
         mask, label.context, label.context_valid, tracking, config=config,
         template=default_width_template(config.n_points), device=device,
-        length_px=lambda: recording_length(libraries, record.dataset, record.recording, builder, exclude=record.sha256),
-        trace=None if label.trace_xy is None else (label.trace_xy, False),
+        length_px=lambda: recording_length(libraries, record.setup, record.recording, builder, exclude=record.sha256),
+        trace=None if label.trace_xy is None else (label.trace_xy, False, extension_length(libraries, record, label.meta, builder)),
         head_xy=label.head_xy, segmenter=segmenter,
     )
     meta = {
@@ -196,7 +231,7 @@ def _load_builder(libraries: Libraries, record: LabelRecord, builder: str, devic
     from .inference import load_model
     from .setups import get_setup
 
-    fps = get_setup(libraries, Dataset(libraries, record.dataset).setup).fps
+    fps = get_setup(libraries, record.setup).fps
     return load_model(libraries, builder, device=device, fps=fps)
 
 
@@ -210,7 +245,7 @@ def targets_command(libraries: Libraries, identities: Sequence[dict[str, Any]]) 
     import sys
 
     command = [sys.executable, "-m", "worm_pose_gen.library.targets", "--personal", str(libraries.personal),
-               "--labels", json.dumps([{k: i[k] for k in ("dataset", "recording", "frame", "revision")} for i in identities])]
+               "--labels", json.dumps([{k: i[k] for k in ("scope", "setup", "recording", "frame", "revision")} for i in identities])]
     if libraries.lab is not None:
         command += ["--lab", str(libraries.lab)]
     return command
@@ -226,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--personal", type=Path, required=True)
     parser.add_argument("--lab", type=Path, default=None)
-    parser.add_argument("--labels", required=True, help="JSON list of {dataset, recording, frame, revision}")
+    parser.add_argument("--labels", required=True, help="JSON list of {scope, setup, recording, frame, revision}")
     parser.add_argument("--device", default=None)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
@@ -235,7 +270,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     models: dict[str | None, Any] = {}
     built = []
     for k, identity in enumerate(wanted):
-        record = Dataset(libraries, identity["dataset"]).get(identity["recording"], int(identity["frame"]), int(identity["revision"]))
+        record = Collection(libraries, identity["setup"]).get(
+            identity["recording"], int(identity["frame"]), int(identity["revision"]), identity["scope"])
         builder = _builder(libraries, record, SETUP_DEFAULT)
         report_progress(k / len(wanted), f"building body targets of {record.key}")
         if builder is not None and builder not in models and (args.force or cached_meta(libraries, record, builder) is None):

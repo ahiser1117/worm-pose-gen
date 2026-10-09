@@ -67,32 +67,13 @@ export async function render(container, page, params) {
     key === "none" ? "None (single frame)" : `Short: ±${lags.join(", ")} frames${setup.fps ? ` (${lags.map((l) => +(l / setup.fps).toFixed(2)).join(", ")} s)` : ""}`));
   const contextRow = el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Temporal context"), el("div", {class: "row"}, contextRadios));
 
-  // ----- training data
-  const mine = datasets.filter((d) => d.ref.startsWith("mine:"));
-  const chosen = new Set(mine.length ? mine.map((d) => d.ref) : datasets.map((d) => d.ref));
-  const dataList = el("div", {class: "stack tr-datasets-choice"});
-  const included = () => {
-    const result = new Map();
-    for (const ref of chosen) {
-      let parent = datasets.find((d) => d.ref === ref)?.extends;
-      while (parent) {
-        if (!result.has(parent)) result.set(parent, ref);
-        parent = datasets.find((d) => d.ref === parent)?.extends;
-      }
-    }
-    return result;
-  };
-  const drawData = () => {
-    const viaChild = included();
-    dataList.replaceChildren(...datasets.map((d) => {
-      const auto = viaChild.has(d.ref);
-      const box = el("input", {type: "checkbox", value: d.ref, checked: chosen.has(d.ref) || auto, disabled: auto,
-        onchange: () => { box.checked ? chosen.add(d.ref) : chosen.delete(d.ref); drawData(); check(); }});
-      return el("label", {class: "inline"}, box, el("span", {}, d.name),
-        el("span", {class: "note"}, `${d.ref.startsWith("lab:") ? "Lab" : "Mine"} · ${d.by_split.train} train / ${d.by_split.val} val`
-          + (auto ? ` · included: ${viaChild.get(d.ref)} extends it` : d.extends ? ` · extends ${d.extends}` : "")));
-    }));
-  };
+  // ----- training data: one dataset; its recordings' splits decide what trains and validates
+  const counts = (d) => `${d.ref.startsWith("lab:") ? "Lab" : "Mine"} · ${d.by_split.train} train / ${d.by_split.val} val labels`;
+  const preferred = datasets.find((d) => d.ref.startsWith("mine:")) || datasets[0];
+  const dataSelect = el("select", {name: "dataset", "aria-label": "Dataset", onchange: () => check()},
+    datasets.map((d) => el("option", {value: d.ref, selected: d === preferred}, `${d.name} (${counts(d)})`)));
+  const dataList = datasets.length ? dataSelect
+    : el("p", {class: "note"}, "No dataset for this setup yet: make one in the Datasets tab and choose its recordings' splits.");
 
   // ----- settings
   let kind = (byRef[start]?.kind === "segmenter") ? "segmenter" : "body_net";
@@ -123,7 +104,7 @@ export async function render(container, page, params) {
     const values = {};
     for (const [key, input] of Object.entries(fields)) if (input.isConnected && input.value !== "") values[key] = Number(input.value);
     return {
-      setup: setup.ref, datasets: [...new Set([...chosen, ...included().keys()])], start_from: startSelect.value || null,
+      setup: setup.ref, dataset: datasets.length ? dataSelect.value : "", start_from: startSelect.value || null,
       context: startSelect.value ? "none" : (container.querySelector('input[name="context"]:checked')?.value || "none"),
       params: values, name: name.dataset.edited ? name.value.trim() : "", notes: notes.value.trim(),
     };
@@ -188,7 +169,6 @@ export async function render(container, page, params) {
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, ""), el("div", {class: "row"}, startButton,
       runOn.can ? null : el("span", {class: "note error"}, `Training is unavailable: ${runOn.reason}`))),
   );
-  drawData();
   drawFields();
   onStart();
   container.append(form);

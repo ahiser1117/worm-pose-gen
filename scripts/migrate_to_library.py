@@ -8,7 +8,7 @@ Writes into a fresh ``--out`` directory (the real run into
   the recordings' frame timestamps, the pixel size left null (no recording
   or code states it), the two raw-data roots, and the two models below as
   its defaults (logged with the reason);
-- dataset ``nir-labels``: the union of the source stores' live labels
+- the setup's label collection: the union of the source stores' live labels
   (``--store``, by default ``segmentation_v1`` and the app corpus).  A
   (recording, frame) labeled in more than one place keeps the newest save.
   A recording is named by its file stem, so the same file under two mount
@@ -22,14 +22,12 @@ Writes into a fresh ``--out`` directory (the real run into
   the human body fields from the record: a rejected record is mask-only, a
   traced one keeps its trace, an accepted or hand-flipped one keeps its
   head end as a manual orientation, and the rest stay automatic;
-- splits per recording: a recording any of whose old labels was a training
+- dataset ``nir-labels``, with splits per recording: a recording any of whose old labels was a training
   label is train, else test if any was test, else validation.  The old
   store split frames, and both migrated models trained on its training
   frames, so this is the split that holds out, for them too, every frame of
   a validation or test recording (the balancing rule alone put a recording
-  with 30 of their training frames into test).  It leaves test and
-  validation below 10%, so the dataset's rule sends the next new
-  recordings there;
+  with 30 of their training frames into test);
 - benchmark ``nir-v1``: the test labels;
 - model cards for the segmenter run (``--segmenter-run``, outputs
   ``mask``) and the body-field net run (``--body-run``, all five outputs),
@@ -46,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import replace
 import getpass
 import json
 from pathlib import Path
@@ -57,8 +56,10 @@ import numpy as np
 
 from worm_pose_gen.body_fields import TRACE_METHODS
 from worm_pose_gen.head_tracking import read_head_tracking
-from worm_pose_gen.library import Libraries, benchmark_labels, create_dataset, labels, make_inputs, write_benchmark, write_model, write_setup
-from worm_pose_gen.library.datasets import SPLITS, Dataset, fingerprint
+from worm_pose_gen.library import (
+    Collection, Libraries, benchmark_labels, create_dataset, labels, make_inputs, write_benchmark, write_model, write_setup,
+)
+from worm_pose_gen.library.datasets import SPLITS, fingerprint
 from worm_pose_gen.library.labels import MAX_LAG, LabelRecord
 from worm_pose_gen.library.roots import write_json
 from worm_pose_gen.library.setups import log_default, recording_id
@@ -325,12 +326,12 @@ def main(argv: list[str] | None = None) -> None:
     log_default(out, SETUP, "body", f"lab:{body_id}", previous=None, who=args.author,
                 reason=f"migrated: the body-field net {body_run.name} given to the migration")
 
-    dataset = create_dataset(libraries, DATASET_ID, setup=SETUP, name="NIR hand labels",
-                             description="Hand labels of segmentation_v1 and the app corpus, migrated " + utc_now()[:10], author=args.author, scope="lab")
     splits = recording_splits(samples)
     if not {"val", "test"} <= set(splits.values()):
         sys.exit(f"no recording is held out entirely in validation or test: {splits}")
-    write_json(dataset.root / "splits.json", splits)
+    dataset = create_dataset(libraries, DATASET_ID, setup=SETUP, name="NIR hand labels", splits=splits,
+                             description="Hand labels of segmentation_v1 and the app corpus, migrated " + utc_now()[:10], author=args.author, scope="lab")
+    collection = Collection(libraries, SETUP)
     print(f"recording splits: {splits}", flush=True)
     order = sorted(samples)
 
@@ -359,7 +360,7 @@ def main(argv: list[str] | None = None) -> None:
             context_valid = np.arange(2 * MAX_LAG + 1) == MAX_LAG
         nose_xy, nose_valid, nose_source = nose_landmarks(paths_of[recording], frame, image.shape, with_context)
         nose_sources[nose_source] += 1
-        record = dataset.save(
+        record = collection.save(
             recording=recording, frame=frame, image=image, image_raw=image_raw, mask=mask, context=context,
             context_valid=context_valid, nose_xy=nose_xy, nose_valid=nose_valid, origin="migrated", author=args.author,
             saved_at=saved_at, source_path=sample["source_path"], dataset_path=sample.get("dataset_path") or "/img_nir",
@@ -370,8 +371,9 @@ def main(argv: list[str] | None = None) -> None:
                 "body_fit_method": None if found is None else found[1].get("fit_method"),
                 "nose_landmarks": nose_source,
             }},
-            **fields,
+            scope="lab", **fields,
         )
+        record = replace(record, split=splits[recording])
         migrated[sample["sample_id"]], sources[sample["sample_id"]] = record, sample
         if args.seed_cache is not None and found is not None and current:
             seed_targets(libraries, record, found[0], found[1], fields, sample["store"] / "body_fields" / f"{sample['sample_id']}.npz",
@@ -379,12 +381,12 @@ def main(argv: list[str] | None = None) -> None:
         if number % 25 == 0 or number == len(order):
             print(f"{number}/{len(order)} labels", flush=True)
 
-    records = labels(libraries, [DATASET])
+    records = labels(libraries, DATASET)
     test_recordings = {r.recording for r in records if r.split == "test"}
     val_recordings = {r.recording for r in records if r.split == "val"}
     if not test_recordings or not val_recordings:
         sys.exit("the split left no validation or no test recording; the library is incomplete")
-    write_benchmark(out, BENCHMARK_ID, setup=SETUP, datasets=[DATASET], records=records, author=args.author,
+    write_benchmark(out, BENCHMARK_ID, setup=SETUP, dataset=DATASET, records=records, author=args.author,
                     description="The test recordings of nir-labels at migration.")
     write_json(dataset.root / "migration.json", {
         "migrated_at": utc_now(), "stores": [str(s) for s in stores], "author": args.author,

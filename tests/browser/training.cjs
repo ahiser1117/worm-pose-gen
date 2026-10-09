@@ -73,7 +73,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await details.locator('polyline.tr-val').waitFor();
     assert.match(await details.innerText(), /Started from\s+lab:body/);
     assert.match(await details.innerText(), /heads looked better on copper-1/);
-    assert.match(await details.innerText(), /copper-1\s+mine:copper\s+2\s+0/);
+    assert.match(await details.innerText(), /copper-1\s+2\s+0/);
     await details.locator('.tr-worst img').first().waitFor();
     await page.waitForFunction(() => document.querySelector('dialog.tr-details .tr-worst img').naturalWidth > 0);
     await shot(page, 'details');
@@ -94,20 +94,53 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(setup.defaults.body, 'mine:copper-ft');
     assert.equal(setup.defaults_log.at(-1).reason, 'better heads on copper');
 
-    // ----- Datasets: rows, expansion, Browse in Labeling, Freeze benchmark.
+    // ----- Datasets: the collection's recordings with a split each, live totals, New dataset, Browse, Freeze benchmark.
     await page.locator('.tr-tabs [data-tab="datasets"]').click();
-    const copper = page.locator('tr.tr-dataset[data-ref="mine:copper"]');
-    await copper.waitFor();
-    assert.match(await copper.innerText(), /extends lab:base/);
-    assert.match(await copper.innerText(), /only 4 training labels/);
-    await copper.getByRole('button', {name: 'Recordings of Copper plates'}).click();
-    const detail = page.locator('tr.tr-dataset-detail');
-    assert.match(await detail.innerText(), /copper-2\s+test\s+1/);
+    const totals = page.locator('.tr-split-totals');
+    const tile = (split) => totals.locator(`.tr-split-${split} strong`);
+    const splitOf = (recording) => page.locator(`tr[data-recording="${recording}"] select`);
+    await totals.waitFor();
+    assert.equal(await page.locator('.tr-dataset-select').inputValue(), 'mine:copper');  // a personal dataset first
+    assert.deepEqual([await tile('train').innerText(), await tile('val').innerText(), await tile('test').innerText(), await tile('none').innerText()],
+      ['4', '1', '2', '0']);
+    assert.match(await totals.innerText(), /only 4 training labels/);
+    assert.equal(await splitOf('copper-2').inputValue(), 'test');
+    // Taking the validation recording out shows at once and is saved.
+    await splitOf('rec-val').selectOption('');
+    await page.waitForFunction(() => document.querySelector('.tr-split-totals .tr-split-val strong').textContent === '0');
+    assert.match(await totals.innerText(), /no validation recording/);
+    await page.waitForFunction(() => !document.querySelector('tr[data-recording="rec-val"] select').disabled);
+    let copper = await (await fetch(base + '/api/library/datasets/mine:copper')).json();
+    assert.deepEqual([copper.by_split, copper.not_included], [{train: 4, val: 0, test: 2}, {recordings: 1, labels: 1}]);
+    await splitOf('rec-val').selectOption('val');
+    await page.waitForFunction(() => document.querySelector('.tr-split-totals .tr-split-val strong').textContent === '1');
+    await page.waitForFunction(() => !document.querySelector('tr[data-recording="rec-val"] select').disabled);
     await shot(page, 'datasets');
-    await detail.getByRole('button', {name: 'copper-1'}).click();
-    await page.waitForFunction(() => location.hash === '#labeling/browse/mine:copper/copper-1');
-    await page.goto(base + '/#training/datasets');
-    await copper.getByRole('button', {name: 'Freeze benchmark'}).click();
+    // A new dataset includes nothing until its recordings get a split.
+    await page.getByRole('button', {name: 'New dataset…'}).click();
+    const make = page.locator('dialog.tr-dialog');
+    await make.getByRole('textbox', {name: 'Name'}).fill('Heat shock');
+    await make.getByRole('button', {name: 'Create'}).click();
+    await page.waitForFunction(() => location.hash === '#training/datasets/mine%3Aheat-shock');
+    await page.waitForFunction(() => document.querySelector('.tr-dataset-select')?.value === 'mine:heat-shock');
+    assert.deepEqual(await page.locator('.tr-recordings select').evaluateAll(s => s.map(x => x.value)), ['', '', '', '', '']);
+    assert.equal(await tile('none').innerText(), '7');
+    await splitOf('copper-1').selectOption('train');
+    await page.waitForFunction(() => document.querySelector('.tr-split-totals .tr-split-train strong').textContent === '2');
+    await page.waitForFunction(() => !document.querySelector('tr[data-recording="copper-1"] select').disabled);
+    const heat = await (await fetch(base + '/api/library/datasets/mine:heat-shock')).json();
+    assert.deepEqual(heat.by_split, {train: 2, val: 0, test: 0});
+    // A lab dataset shows its splits read-only.
+    await page.locator('.tr-dataset-select').selectOption('lab:base');
+    await page.waitForFunction(() => location.hash === '#training/datasets/lab%3Abase');
+    await page.locator('.tr-recordings').waitFor();
+    assert.equal(await page.locator('.tr-recordings select').count(), 0);
+    await page.locator('.tr-dataset-select').selectOption('mine:copper');
+    await page.waitForFunction(() => document.querySelector('.tr-dataset-select')?.value === 'mine:copper' && document.querySelector('.tr-recordings select'));
+    await page.locator('tr[data-recording="copper-1"]').getByRole('button', {name: 'copper-1'}).click();
+    await page.waitForFunction(() => location.hash === '#labeling/browse/mine%3Acopper/copper-1');
+    await page.goto(base + '/#training/datasets/mine%3Acopper');
+    await page.getByRole('button', {name: 'Freeze benchmark'}).click();
     await page.locator('dialog.tr-dialog').getByRole('button', {name: 'Freeze benchmark'}).click();
     await page.waitForFunction(() => /Froze mine:copper-b1/.test(document.querySelector('#toast').textContent));
     const benchmarks = await (await fetch(base + '/api/library/benchmarks?setup=lab:rig')).json();
@@ -122,7 +155,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.waitForFunction(() => /training and \d+ validation labels/.test(document.querySelector('.tr-plan').textContent));
     assert.match(await form.locator('.tr-plan').innerText(), /4 training and 1 validation labels from 3 recordings/);
     assert.equal(await form.locator('input[name="name"]').inputValue(), 'copper-4');
-    assert.equal(await form.locator('input[value="lab:base"]').isDisabled(), true);  // included by mine:copper
+    assert.equal(await form.locator('select[name="dataset"]').inputValue(), 'mine:copper');
     assert(await form.locator('input[name="crop_size"]').isHidden());
     await form.locator('select[name="start_from"]').selectOption('');
     assert(await page.getByText('Temporal context').isVisible());

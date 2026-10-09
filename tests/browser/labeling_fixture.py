@@ -108,11 +108,12 @@ def main():
     library.write_model(lab, "nir-body", {"name": "nir-body", "kind": "body_net", "setup": "lab:nir",
                                           "outputs": ["mask", "ap", "head", "tail", "overlap"], "inputs": inputs}, weights)
     libraries = library.Libraries(lab=lab, personal=personal)
-    dataset = library.create_dataset(libraries, "nir-labels", setup="lab:nir", name="NIR labels", scope="lab")
+    library.create_dataset(libraries, "nir-labels", setup="lab:nir", name="NIR labels", splits={RECORDING: "train"}, scope="lab")
+    collection = library.Collection(libraries, "lab:nir")
     for frame, iou in ((5, 0.71), (15, 0.93), (25, 0.88), (35, None)):
         captured = read_label_inputs(path, frame, video=video, flat_field_cache=root / "cache")
         centerline, mask = body(frame)
-        record = dataset.save(recording=RECORDING, frame=frame, mask=mask.astype(np.uint8), origin="migrated", **captured)
+        record = collection.save(recording=RECORDING, frame=frame, mask=mask.astype(np.uint8), origin="migrated", scope="lab", **captured)
         if iou is not None:
             widths = np.full(len(centerline), 14.0)
             targets = render_body_targets(mask, centerline, widths)

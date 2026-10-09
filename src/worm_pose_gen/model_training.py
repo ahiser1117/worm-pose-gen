@@ -3,10 +3,9 @@
 One training run is one job (the Train tab, ``scripts/train.py``; see
 docs/APP_SIMPLIFICATION.md, section 4):
 
-1. **Labels.**  The run reads the chosen datasets' ``train`` and ``val``
-   labels resolved together (:func:`library.labels`: a dataset brings the
-   labels of the dataset it extends, and its own label of a frame overrides
-   the inherited one).  Splits are per recording, so validation is on
+1. **Labels.**  The run reads the labels of the recordings the chosen
+   dataset puts in ``train`` and ``val`` (:func:`library.labels`), as they
+   are when it starts.  Splits are per recording, so validation is on
    recordings the model never trains on.
 2. **Prepare targets.**  A body-field model needs every label's body
    targets; missing ones are built first (:func:`model_eval.prepare_targets`).
@@ -23,8 +22,8 @@ docs/APP_SIMPLIFICATION.md, section 4):
    (:func:`model_eval.evaluate`).
 5. **Write the card** into the personal library (:func:`library.create_model`):
    inputs with the lags in frames and seconds at the setup's frame rate,
-   outputs, ``trained_on`` (the exact label revisions by dataset, with
-   counts), the parent, every hyperparameter and the notes; ``training/``
+   outputs, ``trained_on`` (the dataset, and a fingerprint of the exact
+   label revisions and their splits, with counts), the parent, every hyperparameter and the notes; ``training/``
    holds ``metrics.csv`` (the loss curves), ``hparams.yaml``,
    ``labels.json`` (the revisions used, by split) and ``run.json``.
 
@@ -141,7 +140,7 @@ class TrainRequest:
     """What the Train tab (or the command line) asks for."""
 
     setup: str
-    datasets: list[str]
+    dataset: str
     name: str = ""
     start_from: str | None = None
     # From scratch only: "none" or "short" (CONTEXTS).
@@ -176,23 +175,14 @@ class Plan:
         }
 
 
-def own_dataset_id(libraries: Libraries, datasets: Sequence[str]) -> str:
-    """The dataset a generated name starts with: the first personal one, else the first."""
-
-    for ref in datasets:
-        if parse_ref(ref)[0] == "mine":
-            return parse_ref(ref)[1]
-    return parse_ref(datasets[0])[1]
-
-
 def model_exists(libraries: Libraries, model_id: str) -> bool:
     return (libraries.personal / library.models.MODELS_DIR / model_id).exists()
 
 
-def suggest_name(libraries: Libraries, datasets: Sequence[str], train_labels: int, taken: Sequence[str] = ()) -> str:
+def suggest_name(libraries: Libraries, dataset: str, train_labels: int, taken: Sequence[str] = ()) -> str:
     """``<dataset>-<training labels>``, with ``-2``, ``-3``... when that model exists or a queued run claims it."""
 
-    base = f"{own_dataset_id(libraries, datasets)}-{train_labels}"
+    base = f"{parse_ref(dataset)[1]}-{train_labels}"
     name, n = base, 1
     while model_exists(libraries, name) or name in taken:
         n += 1
@@ -204,12 +194,11 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
     """Check a request against the libraries; ``taken`` are names queued runs will write."""
 
     setup = library.get_setup(libraries, request.setup)
-    if not request.datasets:
-        raise ValueError("choose at least one dataset to train on")
-    for ref in request.datasets:
-        dataset = library.Dataset(libraries, ref)
-        if dataset.setup != setup.ref:
-            raise ValueError(f"{ref} is a dataset of {dataset.setup}, not of {setup.ref}")
+    if not request.dataset:
+        raise ValueError("choose a dataset to train on")
+    dataset = library.Dataset(libraries, request.dataset)
+    if dataset.setup != setup.ref:
+        raise ValueError(f"{request.dataset} is a dataset of {dataset.setup}, not of {setup.ref}")
     parent_kind = None
     if request.start_from:
         parent = library.get_card(libraries, request.start_from)
@@ -223,13 +212,13 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
             raise ValueError(f"unknown temporal context {request.context!r}; expected one of {tuple(CONTEXTS)}")
         kind, lags = "body_net", CONTEXTS[request.context]
     params = validate_params(kind, request.params)
-    train = library.labels(libraries, request.datasets, "train")
-    val = library.labels(libraries, request.datasets, "val")
+    train = library.labels(libraries, request.dataset, "train")
+    val = library.labels(libraries, request.dataset, "val")
     if not train:
-        raise ValueError("the chosen datasets have no training labels")
+        raise ValueError(f"{request.dataset} has no training labels (no labeled recording is in the train split)")
     if not val:
-        raise ValueError("the chosen datasets have no validation labels (no recording is in the val split)")
-    request.name = request.name.strip() if request.name else suggest_name(libraries, request.datasets, len(train), taken)
+        raise ValueError(f"{request.dataset} has no validation labels (no labeled recording is in the val split)")
+    request.name = request.name.strip() if request.name else suggest_name(libraries, request.dataset, len(train), taken)
     check_id(request.name)
     if model_exists(libraries, request.name) or request.name in taken:
         raise ValueError(f"a model named {request.name} already exists; choose another name")
@@ -467,7 +456,7 @@ def train(
             "name": name, "kind": plan_.kind, "setup": setup.ref,
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
-            "trained_on": library.trained_on(records), "parent": request.start_from or None,
+            "trained_on": library.trained_on(request.dataset, records), "parent": request.start_from or None,
             "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context},
             "notes": request.notes,
         }
@@ -506,8 +495,7 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
             "--setup", request.setup, "--name", plan_.request.name]
     if libraries.lab is not None:
         argv += ["--lab-library", str(libraries.lab)]
-    for ref in request.datasets:
-        argv += ["--dataset", ref]
+    argv += ["--dataset", request.dataset]
     if request.start_from:
         argv += ["--start-from", request.start_from]
     else:
@@ -523,7 +511,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_library_arguments(parser)
     parser.add_argument("--setup", required=True, help="setup reference, e.g. lab:nir-flv")
-    parser.add_argument("--dataset", action="append", required=True, help="dataset reference to train on (repeatable)")
+    parser.add_argument("--dataset", required=True, help="dataset reference to train on")
     parser.add_argument("--name", default="", help="model id (default: <dataset>-<training labels>)")
     parser.add_argument("--start-from", default=None, help="model to fine-tune (default: from scratch, a body-field model)")
     parser.add_argument("--context", choices=tuple(CONTEXTS), default="none", help="temporal context from scratch: none or short (±1, 4, 16 frames)")
@@ -539,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     request = TrainRequest(
-        setup=args.setup, datasets=list(args.dataset), name=args.name, start_from=args.start_from, context=args.context,
+        setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
     )
     started = time.monotonic()

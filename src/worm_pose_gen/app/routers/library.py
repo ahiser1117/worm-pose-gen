@@ -1,11 +1,13 @@
-"""The library for the Workspace, Labeling and Training pages: setups, recordings, datasets, labels, benchmarks, models.
+"""The library for the Workspace, Labeling and Training pages: setups, recordings, labels, datasets, benchmarks, models.
 
 Everything is read from both libraries (:mod:`worm_pose_gen.library`) and
 named by reference (``lab:<id>``, ``mine:<id>``); references go in paths as
-they are (``/api/library/datasets/lab:nir-labels``).  The writes are the
-ones the pages need: create a personal setup or dataset, register a
-recording to a setup, save a label revision, freeze a benchmark, and set a
-default model.  A write that names a lab item is refused with 403, since
+they are (``/api/library/datasets/lab:nir-labels``).  A setup's labels are
+its collection (``/api/library/setups/<ref>/labels``); a dataset chooses the
+split of each of the collection's recordings.  The writes are the ones the
+pages need: create a personal setup or dataset, set a dataset's splits,
+register a recording to a setup, save a label revision, freeze a benchmark,
+and set a default model.  A write that names a lab item is refused with 403, since
 the app never writes the lab library.
 
 Images go to the browser as PNG data URLs: a mask as 0 background, 255
@@ -16,6 +18,7 @@ the A-P field as 0 (undefined) or ``1 + round(254 * ap)``.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 import binascii
 from typing import Any, Iterator
 
@@ -121,7 +124,7 @@ def register_recording(payload: dict[str, Any] = Body(...), app: AppState = Depe
         return library.register_recording(_libraries(app), str(payload.get("path") or ""), str(payload.get("setup") or ""))
 
 
-# --------------------------------------------------------------------------- datasets and labels
+# --------------------------------------------------------------------------- datasets
 
 
 def _dataset(app: AppState, ref: str) -> library.Dataset:
@@ -137,11 +140,16 @@ def datasets(setup: str = "", app: AppState = Depends(get_state)) -> dict[str, A
 
 @router.post("/datasets")
 def create_dataset(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """A new personal dataset of a setup: every recording not included, unless ``splits`` (recording -> split) says otherwise."""
+
+    splits = payload.get("splits") or {}
+    if not isinstance(splits, dict):
+        raise ValueError("'splits' must map recordings to a split")
     with _found():
         dataset = library.create_dataset(
             _libraries(app), str(payload.get("id") or ""), setup=str(payload.get("setup") or ""),
-            extends=payload.get("extends") or None, name=str(payload.get("name") or ""),
-            description=str(payload.get("description") or ""),
+            name=str(payload.get("name") or ""), description=str(payload.get("description") or ""),
+            splits={str(k): str(v) for k, v in splits.items()},
         )
         return dataset.summary()
 
@@ -150,6 +158,27 @@ def create_dataset(payload: dict[str, Any] = Body(...), app: AppState = Depends(
 def dataset(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
     with _found():
         return _dataset(app, ref).summary()
+
+
+@router.post("/datasets/{ref}/splits")
+def set_splits(ref: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """``{"splits": {recording: "train" | "val" | "test" | null}}``: put recordings in a split or (null) out of the dataset."""
+
+    changes = payload.get("splits")
+    if not isinstance(changes, dict):
+        raise ValueError("'splits' must map recordings to a split or null")
+    with _found():
+        dataset = _dataset(app, ref)
+        dataset.set_splits({str(k): None if v is None else str(v) for k, v in changes.items()})
+        return dataset.summary()
+
+
+# --------------------------------------------------------------------------- labels
+
+
+def _collection(app: AppState, setup: str) -> library.Collection:
+    with _found():
+        return library.Collection(_libraries(app), setup)
 
 
 def label_row(app: AppState, record: library.LabelRecord, builder: str | None = library.SETUP_DEFAULT) -> dict[str, Any]:
@@ -161,10 +190,20 @@ def label_row(app: AppState, record: library.LabelRecord, builder: str | None = 
             "self_contact": None if meta is None else meta.get("self_contact")}
 
 
-@router.get("/datasets/{ref}/labels")
-def dataset_labels(ref: str, recording: str = "", split: str = "", status: str = "", contact: str = "", sort: str = "",
-                   app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """The dataset's labels (inherited ones included), filtered; ``sort=fit_iou`` puts the lowest body fit IoU first."""
+@router.get("/setups/{ref}/collection")
+def collection(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The setup's label collection: each recording with a label and its number of labeled frames."""
+
+    with _found():
+        recordings = _collection(app, ref).recordings()
+    return {"setup": ref, "labels": sum(recordings.values()), "recordings": [{"recording": k, "labels": n} for k, n in recordings.items()]}
+
+
+@router.get("/setups/{ref}/labels")
+def setup_labels(ref: str, recording: str = "", dataset: str = "", split: str = "", status: str = "", contact: str = "",
+                 sort: str = "", app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The setup's labels, filtered; with ``dataset`` each carries its recording's split there, which ``split`` filters on
+    (``none`` for the recordings it does not include).  ``sort=fit_iou`` puts the lowest body fit IoU first."""
 
     if status and status not in library.STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {library.STATUSES}")
@@ -172,15 +211,30 @@ def dataset_labels(ref: str, recording: str = "", split: str = "", status: str =
         raise ValueError("contact must be yes or no")
     if sort not in SORTS:
         raise ValueError(f"unknown sort {sort!r}; expected one of {SORTS}")
+    if split and split != "none":
+        library.datasets.check_split(split)
+    if split and not dataset:
+        raise ValueError("filtering by split needs a dataset")
     with _found():
-        records = library.labels(_libraries(app), [ref], split or None, recording=recording or None, status=status or None)
-        builder = library.target_builder(_libraries(app), _dataset(app, ref).setup)
+        records = _collection(app, ref).labels()
+        if dataset:
+            found = _dataset(app, dataset)
+            if found.setup != ref:
+                raise ValueError(f"{dataset} is a dataset of {found.setup}, not of {ref}")
+            splits = found.splits()
+            records = [replace(r, split=splits.get(r.recording)) for r in records]
+        builder = library.target_builder(_libraries(app), ref)
+    records = [
+        r for r in records
+        if (not recording or r.recording == recording) and (not status or r.status == status)
+        and (not split or r.split == (None if split == "none" else split))
+    ]
     rows = [label_row(app, record, builder) for record in records]
     if contact:
         rows = [row for row in rows if row["self_contact"] is (contact == "yes")]
     if sort == "fit_iou":
         rows.sort(key=lambda row: (row["fit_iou"] is None, row["fit_iou"] if row["fit_iou"] is not None else 0.0))
-    return {"dataset": ref, "total": len(rows), "labels": rows}
+    return {"setup": ref, "dataset": dataset or None, "total": len(rows), "labels": rows}
 
 
 def _point(xy: np.ndarray) -> list[float] | None:
@@ -206,20 +260,22 @@ def targets_layers(app: AppState, record: library.LabelRecord) -> dict[str, Any]
     return result
 
 
-def _label(app: AppState, ref: str, recording: str, frame: int, revision: int | None) -> library.LabelRecord:
+def _label(app: AppState, ref: str, recording: str, frame: int, revision: int | None, scope: str) -> library.LabelRecord:
+    if revision is not None and not scope:
+        raise ValueError("a revision needs its scope (lab or mine)")
     with _found():
-        return _dataset(app, ref).get(recording, frame, revision)
+        return _collection(app, ref).get(recording, frame, revision, scope or None)
 
 
-@router.get("/datasets/{ref}/labels/{recording}/{frame}")
-def label(ref: str, recording: str, frame: int, revision: int | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """A label as the dataset sees it (its own, else inherited), with its images, human fields and built targets."""
+@router.get("/setups/{ref}/labels/{recording}/{frame}")
+def label(ref: str, recording: str, frame: int, revision: int | None = None, scope: str = "",
+          app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """A frame's current label (or one revision), with its images, human fields, built targets and every revision."""
 
-    record = _label(app, ref, recording, frame, revision)
+    record = _label(app, ref, recording, frame, revision, scope)
     loaded = record.load()
-    owner = _dataset(app, record.dataset)
     return {
-        "label": label_row(app, record), "revisions": [r.to_dict() for r in owner.revisions(recording, frame)],
+        "label": label_row(app, record), "revisions": [r.to_dict() for r in _collection(app, ref).revisions(recording, frame)],
         "width": record.width, "height": record.height, "meta": loaded.meta,
         "image": data_url(loaded.image), "image_raw": data_url(loaded.image_raw), "mask": data_url(mask_to_png_values(loaded.mask)),
         "orientation": record.orientation, "mask_only": record.mask_only,
@@ -231,23 +287,24 @@ def label(ref: str, recording: str, frame: int, revision: int | None = None, app
     }
 
 
-@router.get("/datasets/{ref}/labels/{recording}/{frame}/context")
-def label_context(ref: str, recording: str, frame: int, revision: int | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    loaded = _label(app, ref, recording, frame, revision).load()
+@router.get("/setups/{ref}/labels/{recording}/{frame}/context")
+def label_context(ref: str, recording: str, frame: int, revision: int | None = None, scope: str = "",
+                  app: AppState = Depends(get_state)) -> dict[str, Any]:
+    loaded = _label(app, ref, recording, frame, revision, scope).load()
     return {"max_lag": loaded.max_lag, "valid": loaded.context_valid.tolist(), "frames": [data_url(f) for f in loaded.context]}
 
 
-@router.post("/datasets/{ref}/labels")
+@router.post("/setups/{ref}/labels")
 def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """Save a new revision of a frame's label into a personal dataset.
+    """Save a new revision of a frame's label into the setup's collection (the personal library's part).
 
     With ``path`` the frame, its context and its nose landmarks are read
-    from that recording (which must belong to the dataset's setup);
-    without it they are taken from the label the dataset already has (its
-    own or inherited), so an edit never needs the recording.  The body
+    from that recording (which must belong to the setup); without it they
+    are taken from the frame's current label, so an edit never needs the
+    recording.  The body
     fields are ``orientation`` (``auto`` or ``manual`` with ``head_xy``),
     ``trace_xy`` (head first) and ``mask_only``; ``origin`` is ``spread`` or
-    ``fix``; ``expected_revision`` is the dataset's own revision the editor
+    ``fix``; ``expected_revision`` is the personal revision the editor
     started from (0 for none).
     """
 
@@ -257,22 +314,20 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
     if origin not in ("spread", "fix"):
         raise ValueError("'origin' must be spread or fix")
     with _found():
-        dataset = _dataset(app, ref)
-        if not dataset.writable:
-            raise PermissionError(f"{ref} is in the lab library, which is read-only")
+        collection = _collection(app, ref)
         if payload.get("path"):
             path = str(payload["path"])
             owner = library.setup_for_recording(libraries, path)
-            if owner != dataset.setup:
-                raise ValueError(f"{path} belongs to {owner or 'no setup'}, not to {dataset.setup}; register it first")
+            if owner != collection.setup:
+                raise ValueError(f"{path} belongs to {owner or 'no setup'}, not to {collection.setup}; register it first")
             from ...library.capture import read_label_inputs
 
-            setup = library.get_setup(libraries, dataset.setup)
+            setup = library.get_setup(libraries, collection.setup)
             inputs = read_label_inputs(path, frame, video=setup.video, flat_field_cache=app.config.dataset_root / "flat_fields")
             recording = library.recording_id(path)
         else:
             recording = str(payload.get("recording") or "")
-            existing = dataset.get(recording, frame).load()
+            existing = collection.get(recording, frame).load()
             inputs = {
                 "image": existing.image, "image_raw": existing.image_raw, "context": existing.context,
                 "context_valid": existing.context_valid, "nose_xy": existing.nose_xy, "nose_valid": existing.nose_valid,
@@ -283,7 +338,7 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
         except (OSError, binascii.Error) as error:
             raise ValueError("mask must contain a readable base64 PNG image") from error
         expected = payload.get("expected_revision")
-        record = dataset.save(
+        record = collection.save(
             recording=recording, frame=frame, mask=mask, origin=origin,
             orientation=str(payload.get("orientation") or "auto"), head_xy=payload.get("head_xy"),
             trace_xy=payload.get("trace_xy"), mask_only=bool(payload.get("mask_only")),

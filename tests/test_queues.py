@@ -26,10 +26,11 @@ from worm_pose_gen.app import labeling as labeling_service
 from worm_pose_gen.batch_fit import PRESETS
 from worm_pose_gen.app.images import data_url, decode_mask_data_url, mask_to_png_values, png_values_to_mask
 from worm_pose_gen.segmenter import IGNORE_LABEL
-from worm_pose_gen.library.inference import LoadedModel
+from worm_pose_gen.library.inference import LoadedModel, Outputs
 from worm_pose_gen.library.targets import write_targets
 from worm_pose_gen.mask_fit import default_width_template
 
+from tests.slow import slow
 from tests.test_fixes_api import _cpu_fix_command
 
 NO_OP = [sys.executable, "-c", "pass"]
@@ -95,7 +96,7 @@ class FrameSearchTests(unittest.TestCase):
     def test_pick_favours_the_least_sure_candidate_of_each_window(self):
         def predict(frames):
             # Frame 37 is the only one the model hesitates on.
-            return [np.full((8, 8), 0.5 if f == 37 else 0.01, np.float32) for f in frames]
+            return [Outputs(mask=np.full((8, 8), 0.5 if f == 37 else 0.01, np.float32)) for f in frames]
 
         picked = frame_search.pick(100, 2, predict, per_window=6)
         self.assertEqual([p["frame"] for p in picked][0], 37)
@@ -104,10 +105,49 @@ class FrameSearchTests(unittest.TestCase):
         # Without a model: the middle candidate of each window, never an excluded frame.
         spread = frame_search.pick(100, 4, None, excluded={40})
         self.assertEqual([p["frame"] for p in spread], [15, 39, 65, 90])
-        self.assertTrue(all(p["uncertainty"] is None for p in spread))
+        self.assertTrue(all(p["uncertainty"] is None and p["types"] is None for p in spread))
+
+    def test_frame_types(self):
+        def mask(*boxes):
+            image = np.zeros((60, 60), np.float32)
+            for y0, y1, x0, x1 in boxes:
+                image[y0:y1, x0:x1] = 1.0
+            return image
+
+        body = mask((20, 30, 10, 50))
+        self.assertEqual(frame_search.frame_types(Outputs(mask=body)), ["clear"])
+        self.assertEqual(frame_search.frame_types(Outputs(mask=np.zeros((60, 60), np.float32))), ["empty"])
+        self.assertEqual(frame_search.frame_types(Outputs(mask=mask((20, 30, 0, 40)))), ["edge"])
+        self.assertEqual(frame_search.frame_types(Outputs(mask=mask((20, 30, 10, 50), (40, 45, 10, 20)))), ["pieces"])
+        # A loop encloses a hole; a body-field model's overlap output says so directly.
+        loop = mask((10, 50, 10, 50))
+        loop[18:42, 18:42] = 0
+        self.assertEqual(frame_search.frame_types(Outputs(mask=loop)), ["contact"])
+        overlap = np.zeros_like(body)
+        overlap[20:30, 25:35] = 1
+        self.assertEqual(frame_search.frame_types(Outputs(mask=body, overlap=overlap)), ["contact"])
+
+    def test_pick_limited_to_types(self):
+        clear, edge = np.zeros((60, 60), np.float32), np.zeros((60, 60), np.float32)
+        clear[20:30, 10:50] = 0.9
+        edge[20:30, 0:40] = 0.9
+
+        def predict(frames):
+            # Only frames 5, 12 and 13 show the body at the edge, all in the first of four windows.
+            return [Outputs(mask=edge if f in (5, 12, 13) else clear) for f in frames]
+
+        picked = frame_search.pick(100, 4, predict, per_window=25, types=["edge"])
+        self.assertEqual([p["frame"] for p in picked], [5, 12, 13])  # the other windows give their frames to these
+        self.assertTrue(all(p["types"] == ["edge"] for p in picked))
+        self.assertEqual(len(frame_search.pick(100, 4, predict, per_window=25)), 4)
+        with self.assertRaises(ValueError):
+            frame_search.find_frames([{"path": "x", "id": "x", "frames": 10}], 2, lambda r: (None, lambda: None), types=["edge"])
+        with self.assertRaises(ValueError):
+            frame_search.find_frames([{"path": "x", "id": "x", "frames": 10}], 2, lambda r: (None, lambda: None), types=["blurry"])
 
 
 class FrameSearchJobTests(unittest.TestCase):
+    @slow
     def test_the_job_runs_a_library_model_over_the_recordings(self):
         import torch
 
@@ -126,7 +166,8 @@ class FrameSearchJobTests(unittest.TestCase):
             write_recording(path, frames=30)
             spec = {"recordings": [{"path": str(path), "id": "2024-05-05-01", "frames": 30, "exclude": [15]}], "frames": 3,
                     "model": "mine:seg", "libraries": {"lab": None, "personal": str(libraries.personal)},
-                    "video": {"flat_field": False, "dataset_path": "/img_nir"}, "fps": 20.0, "dataset_root": str(root / "cache")}
+                    "video": {"flat_field": False, "dataset_path": "/img_nir"}, "fps": 20.0, "dataset_root": str(root / "cache"),
+                    "prior_cache": str(root / "priors")}
             progress = root / "progress.json"
             with mock.patch.dict("os.environ", {"WORM_POSE_PROGRESS_FILE": str(progress)}):
                 self.assertEqual(frame_search.main(["--spec", json.dumps(spec), "--device", "cpu"]), 0)
@@ -134,6 +175,78 @@ class FrameSearchJobTests(unittest.TestCase):
             self.assertEqual([(e["recording"], e["path"]) for e in entries], [("2024-05-05-01", str(path))] * 3)
             self.assertEqual([e["frame"] // 10 for e in entries], [0, 1, 2])  # one per third of the recording
             self.assertTrue(all(isinstance(e["uncertainty"], float) and e["frame"] != 15 for e in entries))
+            self.assertTrue(all(set(e["types"]) <= set(frame_search.TYPES) and e["types"] for e in entries))
+            # The job also leaves a body-length estimate per recording (none here: an untrained model finds no whole body).
+            self.assertEqual(list(json.loads(progress.read_text())["result"]["lengths"]), ["2024-05-05-01"])
+
+
+class BodyLengthTests(unittest.TestCase):
+    """Where the body length a trace is extended to comes from (``Labeling.body_length``, ``frame_search.estimate_lengths``)."""
+
+    def test_the_first_source_with_a_length_wins(self):
+        from types import SimpleNamespace
+
+        from worm_pose_gen import pipeline
+        from worm_pose_gen.workspace import Workspace
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            libraries = library.Libraries(lab=None, personal=root / "mine")
+            library.write_setup(libraries.personal, "rig", name="Rig")
+            app = create_app(AppConfig(workspaces_root=root / "workspaces", dataset_root=root / "cache", device="cpu", gpus=(),
+                                       lab_library=root / "nolab", library=libraries.personal))
+            state = app.state.app_state
+            service = state.labeling
+            entry = {"recording": "rec", "frame": 3, "path": str(root / "rec.h5")}
+            prior = lambda length: SimpleNamespace(length_px=length)  # noqa: E731
+            sources = {"labels": None, "workspace": None, "analysis": None, "estimate": None, "setup": None}
+
+            def length():
+                with mock.patch.object(labeling_service, "recording_length", return_value=sources["labels"]), \
+                        mock.patch.object(labeling_service, "setup_length", return_value=sources["setup"]), \
+                        mock.patch.object(state, "workspace_of_recording", return_value=sources["workspace"]), \
+                        mock.patch.object(Workspace, "open", return_value=None), \
+                        mock.patch.object(pipeline, "workspace_prior", return_value=sources["analysis"]), \
+                        mock.patch.object(pipeline, "cached_prior", return_value=sources["estimate"]):
+                    return service.body_length("mine:rig", entry, None)
+
+            self.assertEqual(length(), (None, None))
+            sources["setup"] = 765.0
+            self.assertEqual(length(), (765.0, "setup"))
+            sources["estimate"] = prior(740.0)
+            self.assertEqual(length(), (740.0, "estimate"))
+            sources["workspace"], sources["analysis"] = "rec", prior(750.0)
+            self.assertEqual(length(), (750.0, "analysis"))
+            sources["labels"] = 776.0
+            self.assertEqual(length(), (776.0, "labels"))
+            state.close()
+
+    def test_find_frames_estimates_the_recordings_without_one(self):
+        from worm_pose_gen import pipeline
+
+        recordings = [{"path": f"/data/{name}.h5", "id": name} for name in ("cached", "new", "empty")]
+        cached = {"/data/cached.h5": mock.Mock(length_px=700.0)}
+
+        def bootstrap(frames, params, config, device):
+            if Path(frames.path).stem == "empty":
+                raise ValueError("no bootstrap mask produced a start")
+            return mock.Mock(length_px=760.0), "bootstrap", {}
+
+        with mock.patch.object(pipeline, "cached_prior", side_effect=lambda path, cache: cached.get(path)), \
+                mock.patch.object(pipeline, "resolve_prior", side_effect=bootstrap) as resolve, \
+                mock.patch.object(pipeline, "Frames", side_effect=lambda path, **_: mock.Mock(path=path)):
+            lengths = frame_search.estimate_lengths({"recordings": recordings, "video": {}, "dataset_root": "/cache"}, "seg.ckpt", "cpu")
+        self.assertEqual(lengths, {"cached": 700.0, "new": 760.0, "empty": None})
+        self.assertEqual(resolve.call_count, 2)  # the cached recording is not bootstrapped again
+
+    def test_a_label_is_extended_to_the_length_saved_with_it(self):
+        from worm_pose_gen.library import targets
+
+        record = mock.Mock(setup="mine:rig", recording="rec", sha256="x")
+        with mock.patch.object(targets, "recording_length", return_value=776.0):
+            self.assertIsNone(targets.extension_length(None, record, {"trace_extend": False, "trace_length_px": 640.0}, None))
+            self.assertEqual(targets.extension_length(None, record, {"trace_extend": True, "trace_length_px": 640.0}, None), 640.0)
+            self.assertEqual(targets.extension_length(None, record, {"trace_extend": True}, None), 776.0)
 
 
 class LabelingApiBase(unittest.TestCase):
@@ -203,14 +316,12 @@ class LabelingApiTests(LabelingApiBase):
     def entry(self, frame, path=True):
         return {"recording": "2024-05-05-01", "frame": frame, **({"path": str(self.path)} if path else {})}
 
-    def test_open_save_creates_the_dataset_and_reopens_from_the_label(self):
-        saving = self.call("GET", "/api/labeling/saving?setup=mine:rig")
-        self.assertEqual((saving["dataset"], saving["create"], saving["extends"], saving["choices"]), (None, "mine:rig-labels", None, []))
+    def test_open_save_into_the_collection_and_reopen_from_the_label(self):
+        library.create_dataset(self.libraries, "rig-set", setup="mine:rig")
         opened = self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(5)})
         self.assertEqual((opened["mask_source"], opened["label"], opened["expected_revision"], opened["max_lag"]), ("empty", None, 0, 16))
         self.assertEqual((opened["width"], opened["height"], opened["models"]), (64, 48, {"mask": None, "body": None}))
         self.assertEqual(opened["context_valid"][:11], [False] * 11)
-        self.assertIn("train", opened["split_note"] or "train")
         refused = self.client.post("/api/labeling/network", json={"setup": "mine:rig", "entry": self.entry(5)})
         self.assertIn("no default mask model", refused.json()["error"])
 
@@ -221,19 +332,20 @@ class LabelingApiTests(LabelingApiBase):
         saved = self.call("POST", "/api/labeling/save", {
             "setup": "mine:rig", "entry": self.entry(5), "mask": mask_url(self.masks[5]), "head_xy": [10, 15], "expected_revision": 0,
         })
-        self.assertEqual((saved["dataset"], saved["created"], saved["label"]["origin"], saved["label"]["status"]), ("mine:rig-labels", True, "spread", "complete"))
+        self.assertEqual((saved["label"]["scope"], saved["label"]["setup"], saved["label"]["origin"], saved["label"]["status"]),
+                         ("mine", "mine:rig", "spread", "complete"))
         self.assertEqual((saved["job"]["spec"]["kind"], saved["job"]["command"]), ("body_targets", NO_OP))
         self.assertIsNone(saved["queue"])
-        dataset = library.Dataset(self.libraries, "mine:rig-labels")
-        self.assertIsNone(dataset.extends)
-        label = dataset.get("2024-05-05-01", 5).load()
+        # The recording joins the setup's collection, and the dataset lists it as not included.
+        self.assertEqual(library.Dataset(self.libraries, "mine:rig-set").summary()["not_included"], {"recordings": 1, "labels": 1})
+        label = library.Collection(self.libraries, "mine:rig").get("2024-05-05-01", 5).load()
         np.testing.assert_array_equal(label.mask, self.masks[5])
         np.testing.assert_array_equal(label.head_xy, [10, 15])
 
         # The label now opens from itself: no recording path needed.
         reopened = self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(5, path=False)})
-        self.assertEqual((reopened["mask_source"], reopened["expected_revision"], reopened["split"]), ("label", 1, "train"))
-        self.assertEqual(reopened["body"], {"trace_xy": None, "head_xy": [10.0, 15.0], "mask_only": False})
+        self.assertEqual((reopened["mask_source"], reopened["expected_revision"]), ("label", 1))
+        self.assertEqual(reopened["body"], {"trace_xy": None, "head_xy": [10.0, 15.0], "mask_only": False, "trace_extend": False, "trace_length_px": None})
         context = self.call("POST", "/api/labeling/context", {"setup": "mine:rig", "entry": self.entry(5, path=False)})
         self.assertEqual((len(context["frames"]), context["valid"][16]), (33, True))
         stale = self.client.post("/api/labeling/save", json={"setup": "mine:rig", "entry": self.entry(5), "mask": mask_url(self.masks[5]),
@@ -241,8 +353,12 @@ class LabelingApiTests(LabelingApiBase):
         self.assertIn("changed since it was opened", stale.json()["error"])
         trace = [[10, 11], [30, 11], [50, 11]]
         again = self.call("POST", "/api/labeling/save", {"setup": "mine:rig", "entry": self.entry(5), "mask": mask_url(self.masks[5]),
-                                                          "trace_xy": trace, "mask_only": True, "expected_revision": 1})
-        self.assertEqual((again["created"], again["label"]["revision"], again["label"]["status"]), (False, 2, "mask_only"))
+                                                          "trace_xy": trace, "trace_extend": True, "trace_length_px": 640.0,
+                                                          "mask_only": True, "expected_revision": 1})
+        self.assertEqual((again["label"]["revision"], again["label"]["status"]), (2, "mask_only"))
+        # Extend off camera is saved with the trace and comes back when the frame reopens.
+        reopened = self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(5)})
+        self.assertEqual((reopened["body"]["trace_xy"], reopened["body"]["trace_extend"], reopened["body"]["trace_length_px"]), (trace, True, 640.0))
         self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(6, path=False)}, 404)
 
     def test_a_labeling_manifest_becomes_a_queue(self):
@@ -275,6 +391,9 @@ class LabelingApiTests(LabelingApiBase):
         stray = Path(elsewhere.name) / "stray.h5"
         write_recording(stray, frames=5)
         self.assertIn("belongs to no setup", self.call("POST", "/api/queues", {"kind": "spread", "setup": "mine:rig", "recordings": [str(stray)], "frames": 2}, 400)["error"])
+        # Image types need the setup's mask model to sort frames by.
+        self.assertIn("unknown frame types", self.call("POST", "/api/queues", {"kind": "spread", "setup": "mine:rig", "recordings": [str(self.path)], "frames": 2, "types": ["blurry"]}, 400)["error"])
+        self.assertIn("no mask model", self.call("POST", "/api/queues", {"kind": "spread", "setup": "mine:rig", "recordings": [str(self.path)], "frames": 2, "types": ["edge"]}, 400)["error"])
         created = self.call("POST", "/api/queues", {"kind": "spread", "setup": "mine:rig", "recordings": [str(self.path), str(other)], "frames": 5})
         self.assertEqual((created["state"], created["kind"], created["origin"], created["progress"]["total"]), ("finding", "spread", "spread", 0))
         spec = json.loads(self.state.runner.get(created["job"]).command[-1])
@@ -304,6 +423,7 @@ class LabelingApiTests(LabelingApiBase):
 class ProposalTests(unittest.TestCase):
     """The body proposal and the trace fit, with a stub network that predicts the true fields of a looped body."""
 
+    @slow
     @mock.patch.object(body_fields, "fit_config", fast_fit_config)
     def test_proposal_and_trace_fit_of_a_label(self):
         from tests.test_body_proposal import StubModule, looped_body, prediction_from
@@ -321,9 +441,8 @@ class ProposalTests(unittest.TestCase):
             centerline, mask = looped_body()
             image = np.where(mask, 60, 200).astype(np.uint8)
             context = np.repeat(image[None], 5, 0)
-            dataset = library.create_dataset(libraries, "rig-labels", setup="mine:rig")
-            dataset.save(recording="rec", frame=3, image=image, image_raw=image, mask=mask.astype(np.uint8), context=context,
-                         context_valid=np.ones(5, bool), origin="spread")
+            library.Collection(libraries, "mine:rig").save(recording="rec", frame=3, image=image, image_raw=image, mask=mask.astype(np.uint8),
+                                                           context=context, context_valid=np.ones(5, bool), origin="spread")
             app = create_app(AppConfig(workspaces_root=root / "workspaces",
                                        dataset_root=root / "cache",
                                        device="cpu", gpus=(), lab_library=root / "nolab", library=libraries.personal))
@@ -357,6 +476,7 @@ class RelabelStitchTests(LabelingApiBase):
         # The recording <root>/synthetic.h5 (inside the setup's root) and the workspace <root>/workspaces/synthetic.
         posed_workspace(self.root, "synthetic")
 
+    @slow
     def test_relabel_round_trip(self):
         from tests.test_pipeline import _body_curve
 
@@ -378,7 +498,7 @@ class RelabelStitchTests(LabelingApiBase):
                                                               "mask_only": k == 1, "expected_revision": 0})
             self.assertEqual(saved["label"]["origin"], "fix")
             # The targets the background job would build: the true body, head first.
-            record = library.Dataset(self.libraries, saved["dataset"]).get(entry["recording"], entry["frame"])
+            record = library.Collection(self.libraries, "mine:rig").get(entry["recording"], entry["frame"])
             curve = _body_curve(entry["frame"])
             write_targets(self.libraries, record.sha256, None, {"has_body": True, "fit_iou": 0.97},
                           {"centerline_xy": curve, "width_profile": 12.0 * default_width_template(len(curve))})

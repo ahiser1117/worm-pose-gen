@@ -31,8 +31,19 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .library.datasets import SPLITS, assign_split
+from .library.datasets import SPLITS
 from .segmenter import IGNORE_LABEL
+
+
+SPLIT_FRACTIONS = (0.8, 0.1, 0.1)
+
+
+def assign_split(counts: dict[str, int]) -> str:
+    """The split furthest below its target share after one more sample."""
+
+    total = sum(int(counts.get(name, 0)) for name in SPLITS) + 1
+    deficits = [fraction * total - int(counts.get(name, 0)) for name, fraction in zip(SPLITS, SPLIT_FRACTIONS, strict=True)]
+    return SPLITS[int(np.argmax(deficits))]
 
 
 DEFAULT_DATASET_ROOT = Path(

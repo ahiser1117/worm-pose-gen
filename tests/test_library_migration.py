@@ -88,7 +88,7 @@ class MigrationTests(unittest.TestCase):
                           "--segmenter-run", str(root / "seg"), "--body-run", str(root / "body"), "--author", "alex"])
 
             libraries = Libraries(lab=out, personal=seed)
-            records = {r.key: r for r in library.labels(libraries, ["lab:nir-labels"])}
+            records = {r.key: r for r in library.labels(libraries, "lab:nir-labels")}
             self.assertEqual(sorted(records), ["2023-01-01-01/000001", "2023-01-01-01/000002", "2023-01-01-01/000003",
                                                "2023-02-02-02/000001", "2023-03-03-03/000005", "2023-03-03-03/000006"])
             first = records["2023-01-01-01/000001"].load()

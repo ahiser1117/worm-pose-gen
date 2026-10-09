@@ -80,22 +80,22 @@ class TrainingApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/training/models/lab:body/overlays/lab:rig-v1/..%2Fx.png").status_code, 404)
         self.assertEqual(details["curve"], [])
         write_json(library.training_dir(self.libraries, "lab:body") / "labels.json",
-                   {"train": [r.identity for r in library.labels(self.libraries, ["lab:base"], "train")]})
+                   {"train": [r.identity for r in library.labels(self.libraries, "lab:base", "train")]})
         labels = self.get("/api/training/models/lab:body")["labels"]
-        self.assertEqual(labels, [{"dataset": "lab:base", "recording": "rec-train", "train": 2, "val": 0}])
+        self.assertEqual(labels, [{"recording": "rec-train", "train": 2, "val": 0}])
         self.get("/api/training/models/lab:none", status=404)
 
     def test_plan_and_schema(self):
-        plan = self.post("/api/training/plan", {"setup": "lab:rig", "datasets": ["lab:base"], "start_from": "lab:body"})
+        plan = self.post("/api/training/plan", {"setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:body"})
         self.assertEqual((plan["kind"], plan["lags"], plan["train"], plan["val"], plan["name"]), ("body_net", [1, 2], 2, 1, "base-2"))
-        self.post("/api/training/plan", {"setup": "lab:rig", "datasets": []}, status=400)
+        self.post("/api/training/plan", {"setup": "lab:rig", "dataset": ""}, status=400)
         schema = self.get("/api/training/schema")
         names = [p["name"] for p in schema["parameters"]]
         self.assertEqual(names[:3], ["max_epochs", "learning_rate", "batch_size"])
         self.assertEqual(schema["contexts"], {"none": [], "short": [1, 4, 16]})
 
     def test_train_and_evaluate_jobs(self):
-        job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "datasets": ["lab:base"], "start_from": "lab:body",
+        job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:body",
                                       "params": {"max_epochs": 2}, "notes": "n", "run_on": "local"})
         self.assertEqual((job["spec"]["kind"], job["state"], job["spec"]["params"]["name"]), ("train", "queued", "base-2"))
         command = job["command"]
@@ -104,9 +104,9 @@ class TrainingApiTests(unittest.TestCase):
         self.assertEqual(command[command.index("--max-epochs") + 1], "2")
         self.assertEqual(command[command.index("--lab-library") + 1], str(self.libraries.lab))
         # The queued run claims its name.
-        again = self.post("/api/training/plan", {"setup": "lab:rig", "datasets": ["lab:base"]})
+        again = self.post("/api/training/plan", {"setup": "lab:rig", "dataset": "lab:base"})
         self.assertEqual(again["name"], "base-2-2")
-        self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "datasets": ["lab:base"], "name": "base-2"}, status=400)
+        self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "name": "base-2"}, status=400)
         runs = self.get("/api/training/runs", setup="lab:rig")["runs"]
         self.assertEqual([r["id"] for r in runs], [job["id"]])
         self.post(f"/api/training/runs/{job['id']}/dismiss", {}, status=409)
@@ -124,7 +124,7 @@ class TrainingApiTests(unittest.TestCase):
         self.assertTrue(all(row["evaluating"]["state"] == "queued" for row in table["models"]))
 
     def test_failed_run_shows_until_dismissed(self):
-        job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "datasets": ["lab:base"], "start_from": "lab:seg"})
+        job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:seg"})
         record = self.state.runner.get(job["id"])
         record.state, record.error = "failed", "CUDA out of memory"
         runs = self.get("/api/training/runs", setup="lab:rig")["runs"]

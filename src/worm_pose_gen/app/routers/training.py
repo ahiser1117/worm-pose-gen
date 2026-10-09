@@ -11,7 +11,7 @@ new microscope picks its first default.
 
 Jobs go through ``POST /api/jobs`` like every other job:
 
-- ``{"kind": "train", "setup", "datasets": [refs], "start_from": ref | null,
+- ``{"kind": "train", "setup", "dataset": ref, "start_from": ref | null,
   "context": "none" | "short", "params": {...}, "name", "notes"}`` checks
   the request (:func:`model_training.plan`) and queues
   ``python -m worm_pose_gen.model_training`` (prepare targets, train,
@@ -183,10 +183,9 @@ def model_details(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any
         training = library.training_dir(libraries, ref)
         setup = library.get_setup(libraries, card.setup)
     used = _labels_used(training / "labels.json")
-    by_recording: dict[tuple[str, str], dict[str, Any]] = {}
+    by_recording: dict[str, dict[str, Any]] = {}
     for entry in used:
-        row = by_recording.setdefault((entry["dataset"], entry["recording"]),
-                                      {"dataset": entry["dataset"], "recording": entry["recording"], "train": 0, "val": 0})
+        row = by_recording.setdefault(entry["recording"], {"recording": entry["recording"], "train": 0, "val": 0})
         if entry.get("split") in ("train", "val"):
             row[entry["split"]] += 1
     evaluations = {}
@@ -197,7 +196,7 @@ def model_details(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any
         }
     return {
         "card": card.to_dict(), "missing": missing_outputs(card.outputs), "curve": model_training.read_curve(training / "metrics.csv"),
-        "run": read_json(training / "run.json"), "labels": sorted(by_recording.values(), key=lambda r: (r["dataset"], r["recording"])),
+        "run": read_json(training / "run.json"), "labels": sorted(by_recording.values(), key=lambda r: r["recording"]),
         "label_count": len(used), "evaluations": evaluations,
         "defaults_log": [e for e in library.defaults_log(libraries, setup.ref) if e.get("model") == ref],
     }
@@ -239,7 +238,7 @@ def training_job(app: AppState, payload: dict[str, Any]) -> tuple[JobSpec, list[
     request = model_training.TrainRequest.from_dict({k: v for k, v in payload.items() if k not in ("kind", "run_on", "slurm", "gpu")})
     with _found():
         planned = model_training.plan(app.libraries, request, taken=_taken_names(app))
-    params = {**planned.summary(), "setup": request.setup, "datasets": list(request.datasets), "start_from": request.start_from,
+    params = {**planned.summary(), "setup": request.setup, "dataset": request.dataset, "start_from": request.start_from,
               "context": request.context, "notes": request.notes}
     spec = JobSpec(kind="train", params=params, label=f"Train {planned.request.name}")
     return spec, model_training.command(app.libraries, request, planned)

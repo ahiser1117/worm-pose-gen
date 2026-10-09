@@ -267,7 +267,7 @@ def evaluate(
         row = rows[index]
         name = f"worst{rank}-{row['recording']}-{row['frame']:06d}.png"
         overlay_png(*kept[index], directory / name)
-        overlays.append({"file": name, "recording": row["recording"], "frame": row["frame"], "dataset": row["dataset"],
+        overlays.append({"file": name, "recording": row["recording"], "frame": row["frame"], "scope": row["scope"],
                          "iou": row["iou"], "head_tail_correct": row["head_tail_correct"], "ap_error": row["ap_error"]})
     result = {
         **summarize(rows), "lags_frames": list(model.lags), "min_fit_iou": float(min_fit_iou),

@@ -6,15 +6,13 @@ an *entry* ``{"recording", "frame", "path"?}`` within the current setup;
 ``path`` is the recording file, needed only while the frame has no label
 yet.
 
-**Saving to.** Saves go to the user's personal dataset for the setup: the
-one the page asks for (``dataset``), else ``mine:<setup-id>-labels`` when it
-exists, else the first personal dataset of the setup.  When there is none,
-the first save creates ``mine:<setup-id>-labels``, extending the setup's lab
-dataset (the first, when there are several) or standalone when the lab has
-none.  Until then the lab dataset is where existing labels are read from.
+**Saving to.** Saves go to the setup's label collection, in the personal
+library (:class:`library.Collection`); a recording's first label adds it to
+the collection, and every dataset of the setup lists it as not included
+until someone chooses its split (the Training page's Datasets tab).
 
-**Where a frame comes from.** A frame the dataset (or the one it extends)
-has labeled opens from the label, which holds the image, the context frames
+**Where a frame comes from.** A frame the collection has labeled (in
+either library) opens from its current label, which holds the image, the context frames
 and the nose landmarks, so the recording is not needed.  Any other frame is
 captured from its recording (:func:`library.capture.read_label_inputs`);
 the captures of the last few frames stay in memory for the proposals and
@@ -28,7 +26,7 @@ its predicted A-P field (:func:`body_proposal.propose_trace`) fit like a hand
 trace (:func:`body_fields.trace_fit`).  Library models are loaded once on
 the app's device (:mod:`library.inference`); fits run one at a time.
 
-**Saving** writes a new label revision (:meth:`library.Dataset.save`) with
+**Saving** writes a new label revision (:meth:`library.Collection.save`) with
 the body as decided: a trace (traced by hand or the proposal's), a head end
 (``head_xy``: the orientation was flipped or confirmed without a trace),
 neither (the automatic orientation), and ``mask_only``.  The origin is the
@@ -39,7 +37,7 @@ Then a job rebuilds the label's body targets (:mod:`library.targets`).
 
 from __future__ import annotations
 
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 import binascii
 import threading
 from pathlib import Path
@@ -49,8 +47,7 @@ import numpy as np
 
 from .. import library
 from ..jobs import JobSpec
-from ..library.datasets import assign_split
-from ..library.targets import recording_length, targets_command
+from ..library.targets import recording_length, setup_length, targets_command
 from .images import data_url, decode_mask_data_url, mask_to_png_values, probability_to_png
 from .routers.jobs import place
 from .routers.library import label_row, targets_layers
@@ -125,6 +122,15 @@ def _points(value: Any, name: str) -> np.ndarray | None:
     return points
 
 
+def _positive(value: Any, name: str) -> float | None:
+    if value is None:
+        return None
+    number = float(value)
+    if not np.isfinite(number) or number <= 0:
+        raise ValueError(f"'{name}' must be a positive number of pixels")
+    return number
+
+
 def body_layers(mask: np.ndarray, centerline: np.ndarray, width_profile: np.ndarray, fit_iou: float) -> dict[str, Any]:
     """A head-first body as the page draws it: midline, widths, A-P field, ends and how well it fits the mask."""
 
@@ -152,54 +158,13 @@ class Labeling:
     def libraries(self) -> library.Libraries:
         return self.app.libraries
 
-    # ------------------------------------------------------------------ datasets
+    # ------------------------------------------------------------------ labels
 
-    def saving(self, setup_ref: str, requested: str | None = None) -> dict[str, Any]:
-        """Where saves for a setup go: ``{"setup", "dataset", "create", "extends", "choices", "reading"}``.
+    def existing(self, setup_ref: str, recording: str, frame: int) -> library.LabelRecord | None:
+        """The frame's current label in the setup's collection, if it has one."""
 
-        ``dataset`` is the existing personal dataset saves go to, or ``None``
-        when the first save will create ``create`` (extending ``extends``);
-        ``reading`` is the dataset existing labels are read from meanwhile.
-        """
-
-        libraries = self.libraries
-        setup = library.get_setup(libraries, setup_ref)
-        _, setup_id = library.parse_ref(setup.ref)
-        datasets = library.list_datasets(libraries, setup.ref)
-        mine = [d.ref for d in datasets if d.scope == "mine"]
-        lab = [d.ref for d in datasets if d.scope == "lab"]
-        default_id = f"{setup_id}-labels"
-        if requested:
-            if requested not in mine:
-                raise ValueError(f"{requested} is not a personal dataset of {setup.ref}")
-            chosen = requested
-        else:
-            chosen = f"mine:{default_id}" if f"mine:{default_id}" in mine else (mine[0] if mine else None)
-        extends = lab[0] if lab else None
-        return {
-            "setup": setup.ref, "dataset": chosen, "create": None if chosen else f"mine:{default_id}",
-            "extends": extends, "choices": mine, "reading": chosen or extends,
-        }
-
-    def dataset_for_save(self, setup_ref: str, requested: str | None) -> tuple[library.Dataset, bool]:
-        """The dataset to save into, created on the first save; and whether it was just created."""
-
-        target = self.saving(setup_ref, requested)
-        if target["dataset"]:
-            return library.Dataset(self.libraries, target["dataset"]), False
-        _, dataset_id = library.parse_ref(target["create"])
-        setup = library.get_setup(self.libraries, setup_ref)
-        dataset = library.create_dataset(
-            self.libraries, dataset_id, setup=setup_ref, extends=target["extends"], name=f"{setup.name}: my labels",
-            description="Labels saved from the Labeling page.",
-        )
-        return dataset, True
-
-    def existing(self, reading: str | None, recording: str, frame: int) -> library.LabelRecord | None:
-        if reading is None:
-            return None
         try:
-            return library.Dataset(self.libraries, reading).get(recording, frame)
+            return library.Collection(self.libraries, setup_ref).get(recording, frame)
         except LookupError:
             return None
 
@@ -250,11 +215,10 @@ class Labeling:
             raise NotFound(f"{entry['recording']} frame {entry['frame']} has no label; its recording path is needed")
         return self.capture(setup_ref, str(entry["path"]), entry["frame"])
 
-    def _resolve(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any], library.LabelRecord | None, dict[str, Any]]:
+    def _resolve(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any], library.LabelRecord | None, dict[str, Any]]:
         setup, entry = self._entry(payload)
-        target = self.saving(setup, payload.get("dataset") or None)
-        record = self.existing(target["reading"], entry["recording"], entry["frame"])
-        return setup, entry, target, record, self.inputs(setup, entry, record)
+        record = self.existing(setup, entry["recording"], entry["frame"])
+        return setup, entry, record, self.inputs(setup, entry, record)
 
     def model(self, setup_ref: str, ref: str) -> Any:
         """A library model on the app's device at the setup's frame rate (:func:`library.inference.load_model` caches it)."""
@@ -280,45 +244,33 @@ class Labeling:
     def open(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Everything the page shows for an entry; see the module docstring for where the mask comes from."""
 
-        setup, entry, target, record, inputs = self._resolve(payload)
+        setup, entry, record, inputs = self._resolve(payload)
         image = inputs["image"]
         shape = image.shape
         probability = None
-        body: dict[str, Any] = {"trace_xy": None, "head_xy": None, "mask_only": False}
+        body: dict[str, Any] = {"trace_xy": None, "head_xy": None, "mask_only": False, "trace_extend": False, "trace_length_px": None}
         targets = None
         if record is not None:
             label = record.load()
             mask, source = label.mask, "label"
             body = {"trace_xy": None if label.trace_xy is None else label.trace_xy.tolist(),
-                    "head_xy": None if label.head_xy is None else label.head_xy.tolist(), "mask_only": record.mask_only}
+                    "head_xy": None if label.head_xy is None else label.head_xy.tolist(), "mask_only": record.mask_only,
+                    "trace_extend": bool(label.meta.get("trace_extend")), "trace_length_px": label.meta.get("trace_length_px")}
             targets = targets_layers(self.app, record)
         else:
             mask, source = self._workspace_mask(payload.get("queue"), entry, shape)
             if mask is None:
                 probability = self.probability(setup, inputs)
                 mask, source = ((probability >= 0.5).astype(np.uint8), "network") if probability is not None else (np.zeros(shape, np.uint8), "empty")
-        own_revision = 0
-        split = None
-        if target["dataset"]:
-            dataset = library.Dataset(self.libraries, target["dataset"])
-            own = dataset.revisions(entry["recording"], entry["frame"])
-            own_revision = own[-1].revision if own else 0
-            split = dataset.splits().get(entry["recording"])
-        elif target["extends"]:
-            split = library.Dataset(self.libraries, target["extends"]).splits().get(entry["recording"])
-        if split is None and target["reading"]:
-            counts = Counter(r.split for r in library.Dataset(self.libraries, target["reading"]).labels())
-            split_note = f"{assign_split(counts)} (new recording: set by its first label)"
-        else:
-            split_note = None
+        own_revision = library.Collection(self.libraries, setup).own_revision(entry["recording"], entry["frame"])
         centre = len(inputs["context"]) // 2
         return {
-            "setup": setup, "saving": target, "entry": entry, "width": int(shape[1]), "height": int(shape[0]),
+            "setup": setup, "entry": entry, "width": int(shape[1]), "height": int(shape[0]),
             "image": data_url(image), "image_raw": data_url(inputs["image_raw"]),
             "mask": encode_mask(mask), "mask_source": source,
             "probability": None if probability is None else data_url(probability_to_png(probability)),
             "label": None if record is None else label_row(self.app, record), "expected_revision": own_revision,
-            "split": split, "split_note": split_note, "body": body, "targets": targets,
+            "body": body, "targets": targets,
             "nose_xy": _point(inputs["nose_xy"][centre]) if bool(inputs["nose_valid"][centre]) else None,
             "max_lag": centre, "context_valid": np.asarray(inputs["context_valid"]).tolist(), "models": self.defaults(setup),
         }
@@ -367,7 +319,7 @@ class Labeling:
 
     # ------------------------------------------------------------------ bodies
 
-    def _fit(self, mask: np.ndarray, trace: np.ndarray, length_px: float | None) -> dict[str, Any]:
+    def _fit(self, mask: np.ndarray, trace: np.ndarray, extend_to_px: float | None = None) -> dict[str, Any]:
         import torch
 
         from ..body_fields import fit_config, trace_fit
@@ -375,16 +327,41 @@ class Labeling:
 
         config = fit_config()
         centerline, profile, iou = trace_fit(
-            mask, trace, length_px=length_px, config=config, template=default_width_template(config.n_points),
-            device=torch.device(self.app.device),
+            mask, trace, config=config, template=default_width_template(config.n_points),
+            device=torch.device(self.app.device), extend_to_px=extend_to_px,
         )
         return body_layers(mask, centerline, profile, iou)
 
-    def _length(self, target: dict[str, Any], recording: str) -> float | None:
-        if target["reading"] is None:
-            return None
-        builder = library.target_builder(self.libraries, target["setup"])
-        return recording_length(self.libraries, target["reading"], recording, builder)
+    def body_length(self, setup_ref: str, entry: dict[str, Any], record: library.LabelRecord | None) -> tuple[float | None, str | None]:
+        """The recording's typical body length, which a trace extended off camera runs to, and where it came from.
+
+        The first of: ``labels`` (the median whole, well-fit body among the
+        recording's labels), ``analysis`` (the body-size prior of its
+        analysed workspace), ``estimate`` (the cached prior a Find frames job
+        or an earlier analysis bootstrapped over its frames), ``setup`` (the
+        median over the setup's recordings with labels: a rough guess).
+        """
+
+        from ..pipeline import cached_prior, workspace_prior
+        from ..workspace import Workspace
+
+        builder = library.target_builder(self.libraries, setup_ref)
+        length = recording_length(self.libraries, setup_ref, entry["recording"], builder)
+        if length is not None:
+            return length, "labels"
+        path = entry.get("path") or (record.source_path if record is not None else None)
+        if path:
+            name = self.app.workspace_of_recording(Path(path))
+            prior = None if name is None else workspace_prior(Workspace.open(self.app.workspace_path(name)))
+            if prior is not None:
+                return prior.length_px, "analysis"
+        prior = cached_prior(path or entry["recording"])
+        if prior is not None:
+            return prior.length_px, "estimate"
+        length = setup_length(self.libraries, setup_ref, builder)
+        if length is not None:
+            return length, "setup"
+        return None, None
 
     def proposal(self, payload: dict[str, Any]) -> dict[str, Any]:
         """The body model's proposal for the frame's current mask: ``{"status": "ready", "trace_xy", ...body layers}``,
@@ -392,7 +369,7 @@ class Labeling:
 
         from ..body_proposal import propose_trace
 
-        setup, entry, target, _, inputs = self._resolve(payload)
+        setup, _, _, inputs = self._resolve(payload)
         ref = self.defaults(setup)["body"]
         if ref is None:
             return {"status": "unavailable", "reason": "this setup has no body-field model"}
@@ -404,19 +381,32 @@ class Labeling:
             trace = propose_trace(prediction, mask)
             if trace is None:
                 return {"status": "no_trace", "model": ref}
-            body = self._fit(mask, trace, self._length(target, entry["recording"]))
+            body = self._fit(mask, trace)
         return {"status": "ready", "model": ref, "trace_xy": trace.tolist(), **body}
 
     def fit(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """The body fit along a traced midline (head first) on the frame's current mask."""
+        """The body fit along a traced midline (head first) on the frame's current mask.
 
-        setup, entry, target, _, inputs = self._resolve(payload)
+        ``extend`` continues a trace ending at or past the border off camera
+        to the recording's typical body length (:meth:`body_length`,
+        :func:`body_fields.trace_fit`); the answer's ``extended_px`` says how
+        far it went (0: it did not, as for a trace ending in view or without
+        any length), with ``length_px`` and ``length_source``.
+        """
+
+        from ..body_fields import extend_trace
+
+        setup, entry, record, inputs = self._resolve(payload)
         trace = _points(payload.get("trace_xy"), "trace_xy")
         mask = decode_mask(payload.get("mask"), inputs["image"].shape) == 1
         if not mask.any():
             raise ValueError("paint the worm before tracing its midline")
+        length, source = self.body_length(setup, entry, record) if payload.get("extend") else (None, None)
+        path = extend_trace(trace, mask.shape, length)
+        extended = float(np.linalg.norm(path[-1] - trace[-1])) if len(path) > len(trace) else 0.0
         with self.fit_lock:
-            return {"trace_xy": trace.tolist(), **self._fit(mask, trace, self._length(target, entry["recording"]))}
+            body = self._fit(mask, trace, length)
+        return {"trace_xy": trace.tolist(), "extended_px": extended, "length_px": length, "length_source": source, **body}
 
     # ------------------------------------------------------------------ saving
 
@@ -425,8 +415,8 @@ class Labeling:
 
         setup, entry = self._entry(payload)
         queue = self.app.queues.get(str(payload["queue"])) if payload.get("queue") else None
-        dataset, created = self.dataset_for_save(setup, payload.get("dataset") or None)
-        record = self.existing(dataset.ref, entry["recording"], entry["frame"])
+        collection = library.Collection(self.libraries, setup)
+        record = self.existing(setup, entry["recording"], entry["frame"])
         inputs = self.inputs(setup, entry, record)
         if queue is not None:
             origin = queue["origin"]
@@ -436,9 +426,11 @@ class Labeling:
         trace = _points(payload.get("trace_xy"), "trace_xy")
         head = payload.get("head_xy")
         expected = payload.get("expected_revision")
-        saved = dataset.save(
+        saved = collection.save(
             recording=entry["recording"], frame=entry["frame"], mask=mask, origin=origin,
             orientation="manual" if trace is not None or head is not None else "auto", head_xy=head, trace_xy=trace,
+            trace_extend=bool(payload.get("trace_extend")) and trace is not None,
+            trace_length_px=_positive(payload.get("trace_length_px"), "trace_length_px"),
             mask_only=bool(payload.get("mask_only")), expected_revision=None if expected is None else int(expected), **inputs,
         )
         job = None
@@ -449,5 +441,5 @@ class Labeling:
         summary = None
         if queue is not None:
             summary = self.app.queues.mark_saved(queue["id"], entry, saved.identity)
-        return {"label": label_row(self.app, saved), "dataset": dataset.ref, "created": created, "job": job, "queue": summary}
+        return {"label": label_row(self.app, saved), "job": job, "queue": summary}
 

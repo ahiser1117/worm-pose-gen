@@ -1,5 +1,6 @@
-"""The library: references, setups and defaults, per-recording splits, label revisions and inheritance, benchmarks, model cards."""
+"""The library: references, setups and defaults, label collections and revisions, datasets' per-recording splits, benchmarks, model cards."""
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -9,7 +10,8 @@ import numpy as np
 
 from worm_pose_gen import library
 from worm_pose_gen.library import Libraries
-from worm_pose_gen.library.datasets import Dataset, assign_split
+from worm_pose_gen.library import Collection
+from worm_pose_gen.library.datasets import Dataset
 from worm_pose_gen.library.roots import default_lab_root, default_personal_root, parse_ref, ref_filename, write_json
 
 
@@ -28,14 +30,16 @@ def label_inputs(seed=0, *, max_lag=2):
 
 
 def make_libraries(root: Path) -> Libraries:
-    """A lab library with setup ``nir`` and dataset ``base`` (two labels), and an empty personal one."""
+    """A lab library with setup ``nir``, two lab labels of ``rec-a`` and dataset ``base`` putting it in train; an empty personal one."""
 
     lab, personal = root / "lab", root / "mine"
     library.write_setup(lab, "nir", name="NIR", fps=20.0, pixel_size_um=2.5, recording_roots=[str(root / "recordings")])
     libraries = Libraries(lab=lab, personal=personal)
-    base = library.create_dataset(libraries, "base", setup="lab:nir", scope="lab")
-    base.save(recording="rec-a", frame=10, origin="spread", **label_inputs(1))
-    base.save(recording="rec-a", frame=20, origin="spread", orientation="manual", head_xy=[4.0, 11.0], **label_inputs(2))
+    collection = Collection(libraries, "lab:nir")
+    collection.save(recording="rec-a", frame=10, origin="spread", scope="lab", saved_at="2026-01-01T00:00:00+00:00", **label_inputs(1))
+    collection.save(recording="rec-a", frame=20, origin="spread", orientation="manual", head_xy=[4.0, 11.0], scope="lab",
+                    saved_at="2026-01-01T00:00:00+00:00", **label_inputs(2))
+    library.create_dataset(libraries, "base", setup="lab:nir", splits={"rec-a": "train"}, scope="lab")
     return libraries
 
 
@@ -116,49 +120,59 @@ class SetupTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             library.register_recording(self.libraries, outside, "mine:nope")
 
+    def test_a_video_is_registered_as_its_converted_recording(self):
+        import h5py
+        import imageio_ffmpeg
 
-class DatasetTests(unittest.TestCase):
+        video = self.root / "elsewhere" / "worm004.avi"
+        video.parent.mkdir(parents=True)
+        frames = [np.full((48, 64), 40 * k, dtype=np.uint8) for k in range(5)]
+        writer = imageio_ffmpeg.write_frames(str(video), (64, 48), pix_fmt_in="gray", pix_fmt_out="yuvj420p", fps=20.0, codec="mjpeg", quality=10)
+        writer.send(None)
+        for frame in frames:
+            writer.send(frame.tobytes())
+        writer.close()
+        entry = library.register_recording(self.libraries, video, "lab:nir")
+        converted = self.libraries.personal / "videos" / "worm004.h5"
+        self.assertEqual(entry, {"id": "worm004", "path": str(converted.resolve()), "setup": "lab:nir"})
+        self.assertEqual(library.setup_for_recording(self.libraries, converted), "lab:nir")
+        with h5py.File(converted, "r") as handle:
+            data = handle["/img_nir"]
+            self.assertEqual((data.shape, data.dtype, data.chunks), ((5, 48, 64), np.uint8, (1, 48, 64)))
+            self.assertEqual((data.attrs["source_video"], data.attrs["fps"]), (str(video.resolve()), 20.0))
+            np.testing.assert_allclose(data[:].mean(axis=(1, 2)), [f.mean() for f in frames], atol=3)
+        self.assertEqual(list(converted.parent.iterdir()), [converted])
+
+
+class CollectionTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.libraries = make_libraries(self.root)
-
-    def test_splits_are_per_recording_and_balanced_by_label_count(self):
-        counts = {"train": 0, "val": 0, "test": 0}
-        for _ in range(10):
-            counts[assign_split(counts)] += 1
-        self.assertEqual(counts, {"train": 8, "val": 1, "test": 1})
-        dataset = library.create_dataset(self.libraries, "solo", setup="lab:nir")
-        splits = []
-        for k, recording in enumerate(["r1", "r1", "r1", "r2", "r3", "r3", "r4", "r5"]):
-            record = dataset.save(recording=recording, frame=k, origin="spread", **label_inputs(k))
-            splits.append((recording, record.split))
-        by_recording = {}
-        for recording, split in splits:
-            by_recording.setdefault(recording, set()).add(split)
-        self.assertTrue(all(len(s) == 1 for s in by_recording.values()))  # a recording never straddles splits
-        self.assertEqual(dataset.own_splits(), {r: s.pop() for r, s in by_recording.items()})
-        self.assertEqual(dataset.own_splits()["r1"], "train")
+        self.collection = Collection(self.libraries, "lab:nir")
 
     def test_revisions_are_immutable_and_concurrent_edits_refused(self):
-        dataset = library.create_dataset(self.libraries, "edits", setup="lab:nir")
-        first = dataset.save(recording="rec-b", frame=3, origin="spread", expected_revision=0, **label_inputs(3))
+        collection = self.collection
+        first = collection.save(recording="rec-b", frame=3, origin="spread", expected_revision=0, **label_inputs(3))
         with self.assertRaisesRegex(ValueError, "changed since it was opened"):
-            dataset.save(recording="rec-b", frame=3, origin="fix", expected_revision=0, **label_inputs(3))
+            collection.save(recording="rec-b", frame=3, origin="fix", expected_revision=0, **label_inputs(3))
         inputs = label_inputs(3)
         inputs["mask"] = np.zeros(SHAPE, np.uint8)
-        second = dataset.save(recording="rec-b", frame=3, origin="fix", expected_revision=1, mask_only=True, **{k: v for k, v in inputs.items() if k != "mask"}, mask=inputs["mask"])
+        second = collection.save(recording="rec-b", frame=3, origin="fix", expected_revision=1, mask_only=True, **inputs)
         self.assertEqual((first.revision, second.revision), (1, 2))
+        self.assertEqual((first.scope, first.setup, first.split), ("mine", "lab:nir", None))
         self.assertNotEqual(first.sha256, second.sha256)
-        self.assertEqual([r.revision for r in dataset.revisions("rec-b", 3)], [1, 2])
+        self.assertEqual([r.revision for r in collection.revisions("rec-b", 3)], [1, 2])
         self.assertTrue(first.load().mask.any())  # the old revision still reads as it was
         self.assertEqual(second.status, "mask_only")
-        self.assertEqual(dataset.get("rec-b", 3).revision, 2)
-        self.assertEqual(dataset.get("rec-b", 3, revision=1).sha256, first.sha256)
+        self.assertEqual(collection.get("rec-b", 3).revision, 2)
+        self.assertEqual(collection.get("rec-b", 3, revision=1, scope="mine").sha256, first.sha256)
+        self.assertEqual(collection.own_revision("rec-b", 3), 2)
+        self.assertEqual(collection.recordings(), {"rec-a": 2, "rec-b": 1})
 
     def test_label_validation(self):
-        dataset = library.create_dataset(self.libraries, "checks", setup="lab:nir")
+        collection = self.collection
         inputs = label_inputs(4)
         bad = [
             dict(inputs, mask=np.full(SHAPE, 2, np.uint8)),
@@ -167,62 +181,94 @@ class DatasetTests(unittest.TestCase):
         ]
         for case in bad:
             with self.assertRaises(ValueError):
-                dataset.save(recording="rec-c", frame=1, origin="spread", **case)
+                collection.save(recording="rec-c", frame=1, origin="spread", **case)
         with self.assertRaises(ValueError):
-            dataset.save(recording="rec-c", frame=1, origin="painted", **inputs)
+            collection.save(recording="rec-c", frame=1, origin="painted", **inputs)
         with self.assertRaises(ValueError):  # manual without a head or trace
-            dataset.save(recording="rec-c", frame=1, origin="spread", orientation="manual", **inputs)
-        traced = dataset.save(recording="rec-c", frame=1, origin="spread", trace_xy=[[4, 11], [16, 11], [27, 11]], **inputs)
+            collection.save(recording="rec-c", frame=1, origin="spread", orientation="manual", **inputs)
+        traced = collection.save(recording="rec-c", frame=1, origin="spread", trace_xy=[[4, 11], [16, 11], [27, 11]], **inputs)
         self.assertEqual((traced.orientation, traced.has_trace, traced.status), ("manual", True, "complete"))
         loaded = traced.load()
         self.assertIsNone(loaded.head_xy)
         np.testing.assert_array_equal(loaded.trace_xy[0], [4, 11])
         self.assertEqual(loaded.max_lag, 2)
         self.assertFalse(loaded.nose_valid.any())
-        with self.assertRaises(PermissionError):
-            Dataset(self.libraries, "lab:base").save(recording="rec-a", frame=10, origin="fix", **label_inputs(1))
 
-    def test_personal_dataset_extends_and_overrides_the_lab_one(self):
-        lab = Dataset(self.libraries, "lab:base")
-        lab_split = lab.splits()["rec-a"]
-        mine = library.create_dataset(self.libraries, "copper", setup="lab:nir", extends="lab:base")
-        edited = mine.save(recording="rec-a", frame=10, origin="fix", expected_revision=0, **label_inputs(9))
-        self.assertEqual(edited.split, lab_split)  # an inherited recording keeps the lab's split
-        self.assertEqual(mine.own_splits(), {"rec-a": lab_split})
-        new = mine.save(recording="rec-new", frame=5, origin="spread", **label_inputs(10))
-        records = library.labels(self.libraries, ["mine:copper"])
-        self.assertEqual([(r.dataset, r.key) for r in records],
-                         [("mine:copper", "rec-a/000010"), ("lab:base", "rec-a/000020"), ("mine:copper", "rec-new/000005")])
-        self.assertEqual(library.labels(self.libraries, ["lab:base", "mine:copper"]), records)
-        self.assertEqual(mine.get("rec-a", 20).dataset, "lab:base")
-        self.assertEqual(library.labels(self.libraries, ["lab:base"])[0].revision, 1)  # the lab label is untouched
-        self.assertEqual(len(library.labels(self.libraries, ["mine:copper"], new.split, recording="rec-new")), 1)
-        summary = mine.summary()
-        self.assertEqual((summary["labels"], summary["own_labels"], summary["extends"]), (3, 2, "lab:base"))
-        self.assertEqual({r["recording"]: r["labels"] for r in summary["recordings"]}, {"rec-a": 2, "rec-new": 1})
-        self.assertIn("no test recording", summary["readiness"])
+    def test_a_personal_edit_of_a_lab_label_is_its_newest_revision(self):
+        collection = self.collection
+        edited = collection.save(recording="rec-a", frame=10, origin="fix", expected_revision=0, **label_inputs(9))
+        records = collection.labels()
+        self.assertEqual([(r.scope, r.key, r.revision) for r in records], [("mine", "rec-a/000010", 1), ("lab", "rec-a/000020", 1)])
+        self.assertEqual(records[0], edited)
+        self.assertEqual([r.scope for r in collection.revisions("rec-a", 10)], ["lab", "mine"])
+        self.assertEqual(collection.get("rec-a", 10, revision=1, scope="lab").origin, "spread")  # the lab label is untouched
+        with self.assertRaises(LookupError):
+            collection.get("rec-a", 10, revision=2, scope="mine")
         statuses = {r.key: r.status for r in records}
-        self.assertEqual(statuses, {"rec-a/000010": "auto", "rec-a/000020": "complete", "rec-new/000005": "auto"})
-        with self.assertRaises(ValueError):  # a personal dataset for another setup cannot extend it
-            library.create_setup(self.libraries, "other", name="Other")
-            library.create_dataset(self.libraries, "x", setup="mine:other", extends="lab:base")
+        self.assertEqual(statuses, {"rec-a/000010": "auto", "rec-a/000020": "complete"})
+        # A lab copy with the same saved_at (a published label) is current from then on.
+        lab = collection.save(recording="rec-a", frame=10, origin="fix", scope="lab", saved_at=edited.saved_at, **label_inputs(9))
+        self.assertEqual(collection.get("rec-a", 10), lab)
 
-    def test_conflicting_splits_cannot_be_combined(self):
-        a = library.create_dataset(self.libraries, "a", setup="lab:nir")
-        b = library.create_dataset(self.libraries, "b", setup="lab:nir")
-        a.save(recording="shared", frame=1, origin="spread", **label_inputs(1))
-        (b.root / "splits.json").write_text(json.dumps({"shared": "test"}))
-        b.save(recording="shared", frame=2, origin="spread", **label_inputs(2))
-        with self.assertRaisesRegex(ValueError, "shared is train"):
-            library.labels(self.libraries, ["mine:a", "mine:b"])
 
-    def test_trained_on_names_exact_revisions(self):
-        records = library.labels(self.libraries, ["lab:base"])
-        summary = library.trained_on(records)
+class DatasetTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.libraries = make_libraries(self.root)
+        self.collection = Collection(self.libraries, "lab:nir")
+
+    def test_a_new_dataset_includes_nothing_until_splits_are_chosen(self):
+        mine = library.create_dataset(self.libraries, "copper", setup="lab:nir")
+        self.assertEqual(mine.labels(), [])
+        summary = mine.summary()
+        self.assertEqual(summary["by_split"], {"train": 0, "val": 0, "test": 0})
+        self.assertEqual(summary["not_included"], {"recordings": 1, "labels": 2})
+        self.assertEqual([(r["recording"], r["split"], r["labels"]) for r in summary["recordings"]], [("rec-a", None, 2)])
+        self.assertEqual(summary["readiness"], ["no training labels", "no validation recording", "no test recording"])
+
+        mine.set_splits({"rec-a": "val"})
+        self.assertEqual([(r.key, r.split) for r in mine.labels()], [("rec-a/000010", "val"), ("rec-a/000020", "val")])
+        # A recording labeled for the first time joins the collection, and every dataset lists it as not included.
+        self.collection.save(recording="rec-new", frame=5, origin="spread", **label_inputs(10))
+        for dataset in (mine, Dataset(self.libraries, "lab:base")):
+            rows = {r["recording"]: r["split"] for r in dataset.summary()["recordings"]}
+            self.assertIsNone(rows["rec-new"])
+        self.assertEqual(len(mine.labels()), 2)
+        # Once it has a split, its later labels follow it.
+        mine.set_splits({"rec-new": "test"})
+        self.collection.save(recording="rec-new", frame=6, origin="spread", **label_inputs(11))
+        self.assertEqual([r.frame for r in library.labels(self.libraries, "mine:copper", "test")], [5, 6])
+        self.assertEqual(mine.summary()["by_split"], {"train": 0, "val": 2, "test": 2})
+        self.assertEqual(len(library.labels(self.libraries, "mine:copper", recording="rec-a", status="complete")), 1)
+        mine.set_splits({"rec-a": None})
+        self.assertEqual(mine.splits(), {"rec-new": "test"})
+        self.assertEqual(Dataset(self.libraries, "lab:base").splits(), {"rec-a": "train"})  # datasets are independent
+        with self.assertRaises(ValueError):
+            mine.set_splits({"rec-a": "holdout"})
+        with self.assertRaises(ValueError):
+            library.labels(self.libraries, "mine:copper", "holdout")
+        with self.assertRaises(PermissionError):
+            Dataset(self.libraries, "lab:base").set_splits({"rec-a": "test"})
+        with self.assertRaises(FileExistsError):
+            library.create_dataset(self.libraries, "copper", setup="lab:nir")
+
+    def test_a_dataset_can_start_from_given_splits(self):
+        copy = library.create_dataset(self.libraries, "copy", setup="lab:nir", splits=Dataset(self.libraries, "lab:base").splits())
+        self.assertEqual({r.split for r in copy.labels()}, {"train"})
+        with self.assertRaises(ValueError):
+            library.create_dataset(self.libraries, "bad", setup="lab:nir", splits={"rec-a": "everything"})
+
+    def test_trained_on_names_exact_revisions_and_splits(self):
+        records = library.labels(self.libraries, "lab:base")
+        summary = library.trained_on("lab:base", records)
         self.assertEqual(summary[0]["dataset"], "lab:base")
-        self.assertEqual(sum(summary[0]["counts"].values()), 2)
+        self.assertEqual(summary[0]["counts"], {"train": 2, "val": 0, "test": 0})
         self.assertEqual(library.fingerprint(records), library.fingerprint(records[::-1]))
         self.assertNotEqual(library.fingerprint(records), library.fingerprint(records[:1]))
+        moved = library.create_dataset(self.libraries, "moved", setup="lab:nir", splits={"rec-a": "val"})
+        self.assertNotEqual(library.fingerprint(moved.labels()), library.fingerprint(records))  # same revisions, other split
 
 
 class BenchmarkAndModelTests(unittest.TestCase):
@@ -233,16 +279,16 @@ class BenchmarkAndModelTests(unittest.TestCase):
         self.libraries = make_libraries(self.root)
 
     def test_freeze_takes_spread_and_migrated_test_labels_once(self):
-        mine = library.create_dataset(self.libraries, "copper", setup="lab:nir", extends="lab:base")
-        (mine.root / "splits.json").write_text(json.dumps({"held": "test"}))
-        spread = mine.save(recording="held", frame=1, origin="spread", **label_inputs(1))
-        mine.save(recording="held", frame=2, origin="fix", **label_inputs(2))
+        collection = Collection(self.libraries, "lab:nir")
+        library.create_dataset(self.libraries, "copper", setup="lab:nir", splits={"held": "test"})
+        spread = collection.save(recording="held", frame=1, origin="spread", **label_inputs(1))
+        collection.save(recording="held", frame=2, origin="fix", **label_inputs(2))
         frozen = library.freeze_benchmark(self.libraries, "mine:copper")
-        self.assertEqual(frozen.ref, "mine:copper-b1")
+        self.assertEqual((frozen.ref, frozen.dataset), ("mine:copper-b1", "mine:copper"))
         self.assertEqual([e["frame"] for e in frozen.entries], [1])
-        self.assertEqual(library.benchmark_labels(self.libraries, frozen.ref), [spread])
+        self.assertEqual(library.benchmark_labels(self.libraries, frozen.ref), [replace(spread, split="test")])
         # Frozen means frozen: a later label does not join it, and the next freeze is b2.
-        mine.save(recording="held", frame=3, origin="spread", **label_inputs(3))
+        collection.save(recording="held", frame=3, origin="spread", **label_inputs(3))
         self.assertEqual(len(library.get_benchmark(self.libraries, frozen.ref).entries), 1)
         self.assertEqual(library.freeze_benchmark(self.libraries, "mine:copper").ref, "mine:copper-b2")
         with self.assertRaises(FileExistsError):

@@ -1,33 +1,44 @@
 // The Labeling page (docs/APP_SIMPLIFICATION.md, section 3): label frames
-// one at a time, mask then body then Save & next, into your dataset for the
-// setup.
+// one at a time, mask then body then Save & next, into the setup's label
+// collection (which recordings train, validate or test is each dataset's
+// choice, in the Training page's Datasets tab).
 //
 //   #labeling                    the queues of the setup, New queue, Browse labels
-//   #labeling/new                New queue: recordings and a number of frames → Find frames (a job)
-//   #labeling/queue/<id>[/<n>]   a queue's frames (Relabel keyframes from the Workspace, found frames, a manifest)
-//   #labeling/browse[/<dataset>/<recording>]   existing labels, filtered, lowest body fit IoU first
+//   #labeling/new                New queue: recordings, a number of frames and optionally image types → Find frames (a job)
+//   #labeling/queue/<id>[/<n>]   a queue's frames (Relabel keyframes from the Workspace, found frames, a manifest),
+//                                filtered by recording, status and image type and sorted; <n> is the entry's place in the queue
+//   #labeling/browse[/<dataset>[/<recording>]]   the setup's labels, filtered, lowest body fit IoU first;
+//                                with a dataset, with their recordings' splits in it
 //                                (the Training page's Datasets tab links a dataset's recording here)
 //
 // The left panel walks the frames; the editor (labeling_editor.js) labels the
 // open one. A finished Relabel queue offers Back to workspace, which hands the
 // queue to the Workspace page to stitch (#workspace/<workspace>/stitch/<id>).
-// The setup and the dataset saves go to are chosen in the header and
-// remembered in this browser.
+// The setup is chosen in the header and remembered in this browser.
 
 import {api, el, post, query} from "./api.js";
 import {FrameEditor, SHORTCUTS} from "./labeling_editor.js";
 
 const STORE_SETUP = "labeling.setup";
-const storeDataset = (setup) => `labeling.dataset.${setup}`;
 const remembered = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const remember = (key, value) => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch { /* private mode */ } };
 const button = (label, onclick, attributes = {}) => el("button", {type: "button", onclick, ...attributes}, label);
 const KIND_LABELS = {relabel: "Relabel", spread: "Found frames", manifest: "Manifest"};
+// The image types a Find frames job sorts frames into (frame_search.TYPES).
+const TYPES = [
+  ["contact", "Self-contact", "The body touches or crosses itself"],
+  ["edge", "At the edge", "The body reaches the image border"],
+  ["pieces", "In pieces", "The worm is predicted in several pieces: debris, a second animal, a broken mask"],
+  ["empty", "No worm", "The model finds no worm"],
+  ["clear", "Clear", "One whole body in view, apart from itself"],
+];
+const TYPE_LABELS = Object.fromEntries(TYPES.map(([type, label]) => [type, label]));
+const QUEUE_VIEW = {recording: "", status: "", type: "", sort: "order"};
 
 let ctx, root, left, editor;
 const page = {
-  setups: [], setup: null, saving: null, mode: "home",
-  queue: null, index: -1, browse: {rows: [], token: 0, filters: {recording: "", split: "", status: "", contact: false}},
+  setups: [], setup: null, mode: "home",
+  queue: null, index: -1, queueView: {...QUEUE_VIEW}, browse: {rows: [], token: 0, filters: {recording: "", split: "", status: "", contact: false}},
   poll: null, visible: false,
 };
 
@@ -95,17 +106,6 @@ async function setSetup(ref) {
   ctx.navigate("labeling");
 }
 
-async function refreshSaving() {
-  if (!page.setup) { page.saving = null; return; }
-  const chosen = remembered(storeDataset(page.setup));
-  try {
-    page.saving = await api(`/api/labeling/saving${query({setup: page.setup, dataset: chosen})}`);
-  } catch {
-    remember(storeDataset(page.setup), null);
-    page.saving = await api(`/api/labeling/saving${query({setup: page.setup})}`);
-  }
-}
-
 function renderHeader() {
   if (!page.visible) return;
   const context = [];
@@ -116,23 +116,8 @@ function renderHeader() {
   } else if (page.setups.length === 1) {
     context.push(el("span", {}, page.setups[0].name));
   }
-  const saving = page.saving;
-  if (saving) {
-    let target;
-    if (saving.choices.length > 1) {
-      target = el("select", {class: "lb-header-select", "aria-label": "Saving to", onchange: (e) => {
-        if (!leaveFrame()) { renderHeader(); return; }
-        remember(storeDataset(page.setup), e.target.value);
-        refreshSaving().then(() => { renderHeader(); reopen(); });
-      }}, saving.choices.map((ref) => el("option", {value: ref, selected: ref === saving.dataset}, ref)));
-    } else {
-      target = el("strong", {title: saving.dataset ? "" : `Created on your first save${saving.extends ? `, extending ${saving.extends}` : ""}`},
-        saving.dataset || `${saving.create} (new)`);
-    }
-    context.push(el("span", {class: "lb-saving"}, "Saving to ", target));
-  }
-  const split = editor.open ? editor.frame.split || null : null;
-  if (split) context.push(el("span", {class: "badge", title: "The split comes from the recording"}, `${split} split`));
+  if (page.setup) context.push(el("span", {class: "lb-saving", title: "Each dataset of the setup chooses which recordings train, validate or test"},
+    "Saving to the setup's labels"));
   ctx.setHeader("labeling", {context, actions: [button("?", showHelp, {title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts"})]});
 }
 
@@ -151,7 +136,6 @@ function showHelp() {
 
 async function renderHome() {
   editor.clear();
-  await refreshSaving();
   const body = el("div", {class: "stack"});
   left.replaceChildren(
     el("section", {class: "section"}, el("h3", {}, "Queues"), body),
@@ -218,12 +202,17 @@ async function renderNew() {
   const list = el("div", {class: "stack lb-recordings"}, el("p", {class: "note"}, "Loading the recordings…"));
   const frames = el("input", {type: "number", min: 1, max: 500, value: 20, "aria-label": "Frames to find"});
   const status = el("div", {class: "stack"});
+  const setup = page.setups.find((s) => s.ref === page.setup);
+  const types = el("fieldset", {class: "lb-types", disabled: !setup?.defaults?.mask},
+    el("legend", {}, "Image types"),
+    ...TYPES.map(([type, label, title]) => el("label", {class: "inline lb-check", title}, el("input", {type: "checkbox", value: type}), label)),
+    el("p", {class: "note"}, "Only frames of the checked types; none checked finds any frame."));
   const find = button("Find frames", () => start(), {class: "primary"});
   left.replaceChildren(
     button("← Queues", () => ctx.navigate("labeling"), {class: "link"}),
     el("section", {class: "section"}, el("h3", {}, "New queue"),
       el("p", {class: "note"}, "Pick recordings and how many frames to label. The model looks over each recording and picks frames spread over it, favouring those it is least sure of."),
-      list, el("label", {}, "Frames", frames), el("div", {class: "row"}, find), status),
+      list, el("label", {}, "Frames", frames), types, el("div", {class: "row"}, find), status),
   );
   let recordings = [];
   try {
@@ -236,15 +225,15 @@ async function renderNew() {
   list.replaceChildren(...(readable.length ? readable.map((r) => el("label", {class: "inline lb-check"},
     el("input", {type: "checkbox", value: r.path}), el("span", {class: "lb-grow"}, r.id), el("span", {class: "note"}, r.frames ? `${r.frames} frames` : "")))
     : [el("p", {class: "note"}, "No readable recordings in this setup.")]));
-  const setup = page.setups.find((s) => s.ref === page.setup);
-  if (!setup?.defaults?.mask) status.append(el("p", {class: "note warn"}, "This setup has no model yet: the frames will simply be spread out."));
+  if (!setup?.defaults?.mask) status.append(el("p", {class: "note warn"}, "This setup has no model yet: the frames will simply be spread out, of any type."));
 
   async function start() {
     const chosen = [...list.querySelectorAll("input:checked")].map((input) => input.value);
+    const kinds = [...types.querySelectorAll("input:checked")].map((input) => input.value);
     if (!chosen.length) { ctx.toast("Choose at least one recording.", "error"); return; }
     find.disabled = true;
     try {
-      const queue = await post("/api/queues", {kind: "spread", setup: page.setup, recordings: chosen, frames: Number(frames.value), dataset: page.saving?.dataset});
+      const queue = await post("/api/queues", {kind: "spread", setup: page.setup, recordings: chosen, frames: Number(frames.value), types: kinds});
       const meter = el("progress", {max: 1, value: 0}), note = el("span", {class: "note", dataset: {job: queue.job}}, "Starting…");
       status.replaceChildren(meter, note);
       pollJobs([queue], (job) => {
@@ -275,7 +264,7 @@ async function openQueue(id, index) {
     return;
   }
   if (queue.setup !== page.setup) { page.setup = queue.setup; remember(STORE_SETUP, queue.setup); }
-  await refreshSaving();
+  if (page.queue?.id !== queue.id) page.queueView = {...QUEUE_VIEW};
   page.mode = "queue";
   page.queue = queue;
   renderQueue();
@@ -283,12 +272,48 @@ async function openQueue(id, index) {
   if (queue.entries.length) await go(start, {force: true});
 }
 
+// The queue's entries (their places in the queue) the view's filters keep, in its order.
+function visibleEntries() {
+  const list = page.queue.entries, v = page.queueView;
+  const kept = list.map((_, k) => k).filter((k) => {
+    const entry = list[k];
+    return (!v.recording || entry.recording === v.recording) && (!v.status || (v.status === "saved") === Boolean(entry.saved))
+      && (!v.type || (entry.types || []).includes(v.type));
+  });
+  if (v.sort === "uncertainty") kept.sort((a, b) => (list[b].uncertainty ?? -1) - (list[a].uncertainty ?? -1) || a - b);
+  else if (v.sort === "frame") kept.sort((a, b) => list[a].recording.localeCompare(list[b].recording) || list[a].frame - list[b].frame);
+  return kept;
+}
+
+function queueControls() {
+  const list = page.queue.entries, v = page.queueView;
+  const select = (name, options, label) => el("select", {"aria-label": label, onchange: (e) => { v[name] = e.target.value; renderQueue(); }},
+    options.map(([value, text]) => el("option", {value, selected: v[name] === value}, text)));
+  const recordings = [...new Set(list.map((entry) => entry.recording))];
+  const types = TYPES.filter(([type]) => list.some((entry) => (entry.types || []).includes(type)));
+  const sorts = [["order", "Queue order"], ["frame", "Recording, frame"]];
+  if (list.some((entry) => entry.uncertainty != null)) sorts.splice(1, 0, ["uncertainty", "Least sure first"]);
+  return el("div", {class: "stack lb-filters"},
+    recordings.length > 1 ? select("recording", [["", "All recordings"], ...recordings.map((r) => [r, r])], "Recording") : null,
+    el("div", {class: "row lb-tight"},
+      select("status", [["", "Any status"], ["todo", "To do"], ["saved", "Saved"]], "Status"),
+      types.length ? select("type", [["", "Any type"], ...types.map(([type, label]) => [type, label])], "Image type") : null),
+    select("sort", sorts, "Sort"));
+}
+
 function renderQueue() {
   const queue = page.queue, {saved, total} = queue.progress;
-  const items = queue.entries.map((entry, k) => el("div", {class: "item lb-entry", "aria-current": String(k === page.index), dataset: {index: k}, onclick: () => go(k)},
-    el("span", {class: `lb-dot ${entry.saved ? "done" : ""}`, "aria-label": entry.saved ? "saved" : "to do"}),
-    el("span", {class: "lb-grow"}, `${entry.recording} · ${entry.frame}`),
-    entry.uncertainty != null ? el("span", {class: "note", title: "How unsure the model was (entropy per worm pixel)"}, entry.uncertainty.toFixed(2)) : null));
+  const visible = visibleEntries();
+  const items = visible.map((k) => {
+    const entry = queue.entries[k];
+    const types = (entry.types || []).map((type) => TYPE_LABELS[type] || type).join(", ");
+    return el("div", {class: "item lb-entry", "aria-current": String(k === page.index), dataset: {index: k}, onclick: () => go(k)},
+      el("span", {class: `lb-dot ${entry.saved ? "done" : ""}`, "aria-label": entry.saved ? "saved" : "to do"}),
+      el("div", {class: "stack lb-grow"},
+        el("span", {}, `${entry.recording} · ${entry.frame}`),
+        types ? el("span", {class: "note lb-sub"}, types) : null),
+      entry.uncertainty != null ? el("span", {class: "note", title: "How unsure the model was (entropy per worm pixel)"}, entry.uncertainty.toFixed(2)) : null);
+  });
   const back = queue.kind === "relabel" && queue.complete
     ? el("div", {class: "lb-done"}, el("p", {class: "note"}, "Every keyframe is labeled. The workspace can now stitch the stretch between them."),
       button("Back to workspace", () => backToWorkspace(), {class: "primary"}))
@@ -301,8 +326,10 @@ function renderQueue() {
       el("progress", {max: Math.max(total, 1), value: saved}),
       el("div", {class: "note"}, `${saved} of ${total} saved`),
       back),
-    el("section", {class: "section lb-fill"}, el("div", {class: "list lb-entries"}, items)),
-    el("div", {class: "row lb-nav"}, button("◀ Prev", () => step(-1), {title: "Previous frame (Shift+←)"}), button("Next ▶", () => step(1), {title: "Next frame (Shift+→)"})),
+    el("section", {class: "section"}, queueControls(),
+      el("div", {class: "note lb-count"}, visible.length === total ? `${total} frame${total === 1 ? "" : "s"}` : `${visible.length} of ${total} frames shown`)),
+    el("section", {class: "section lb-fill"}, el("div", {class: "list lb-entries"}, items.length ? items : el("p", {class: "note"}, "No frames match these filters."))),
+    el("div", {class: "row lb-nav"}, button("◀ Prev (Shift+←)", () => step(-1), {title: "Previous frame (Shift+←)"}), button("Next (Shift+→) ▶", () => step(1), {title: "Next frame (Shift+→)"})),
   );
   left.querySelector('[aria-current="true"]')?.scrollIntoView({block: "nearest"});
 }
@@ -330,7 +357,7 @@ async function go(index, {force = false} = {}) {
     if (location.hash !== hash) history.replaceState(null, "", hash);
   }
   renderLeftMarks();
-  const request = {setup: page.setup, dataset: page.saving?.dataset || null, entry: list[index]};
+  const request = {setup: page.setup, entry: list[index]};
   if (page.mode === "queue") request.queue = page.queue.id;
   try {
     await editor.load(request);
@@ -342,7 +369,13 @@ async function go(index, {force = false} = {}) {
   return true;
 }
 
-function step(direction) { return go(page.index + direction); }
+// Prev/Next walk the frames in the order the left panel shows them (a queue's filtered and sorted view).
+function step(direction) {
+  if (page.mode !== "queue") return go(page.index + direction);
+  const visible = visibleEntries(), at = visible.indexOf(page.index);
+  const target = at < 0 ? visible[direction > 0 ? 0 : visible.length - 1] : visible[at + direction];
+  return target === undefined ? false : go(target);
+}
 
 // Mark the current entry in the list without rebuilding it.
 function renderLeftMarks() {
@@ -350,24 +383,17 @@ function renderLeftMarks() {
   left.querySelector('.lb-entry[aria-current="true"]')?.scrollIntoView({block: "nearest"});
 }
 
-function reopen() {
-  if (page.index >= 0 && editor.open) go(page.index, {force: true});
-}
-
 async function onSaved(answer, {next}) {
-  if (page.saving && !page.saving.dataset) {
-    remember(storeDataset(page.setup), answer.dataset);
-    await refreshSaving();
-    renderHeader();
-  }
   if (page.mode === "queue") {
+    // The view as it was before this save, so a "To do" filter that now hides this frame still continues after it.
+    const order = visibleEntries(), at = order.indexOf(page.index);
     page.queue = await api(`/api/queues/${page.queue.id}`);
     renderQueue();
     if (!next) return;
-    const list = page.queue.entries;
-    const later = list.findIndex((entry, k) => k > page.index && !entry.saved);
-    const target = later >= 0 ? later : list.findIndex((entry) => !entry.saved);
-    if (target >= 0) go(target);
+    // The next unsaved frame of the view after this one, wrapping round to its start.
+    const target = [...order.slice(at + 1), ...order.slice(0, at + 1)].find((k) => !page.queue.entries[k].saved);
+    if (target !== undefined) go(target);
+    else if (!page.queue.complete) ctx.toast("Every frame these filters show is saved; change them to see the rest.", "ok");
     else ctx.toast(page.queue.kind === "relabel" ? "Every keyframe is labeled: go back to the workspace to stitch." : "This queue is done.", "ok");
   } else if (page.mode === "browse") {
     const row = page.browse.rows[page.index];
@@ -379,7 +405,8 @@ async function onSaved(answer, {next}) {
 
 // ------------------------------------------------------------------ browse labels
 
-// Browse the labels of `datasetRef` (by default the dataset saves read from), optionally of one recording.
+// Browse the setup's labels, optionally of one recording; with `datasetRef` (a dataset of the setup) each shows its
+// recording's split there and the split filter applies.
 async function openBrowse(datasetRef = null, recording = "") {
   if (!leaveFrame()) return;
   const f = page.browse.filters;
@@ -387,24 +414,22 @@ async function openBrowse(datasetRef = null, recording = "") {
     try {
       const summary = await api(`/api/library/datasets/${encodeURIComponent(datasetRef)}`);
       if (summary.setup !== page.setup) { page.setup = summary.setup; remember(STORE_SETUP, summary.setup); }
-      if (summary.writable) remember(storeDataset(summary.setup), summary.ref);  // a dataset of mine: saves go there too
     } catch (error) {
       ctx.toast(`Could not open ${datasetRef}: ${error.message}`, "error");
       datasetRef = null;
     }
     Object.assign(f, {recording, split: "", status: "", contact: false});
   }
-  await refreshSaving();
+  if (!datasetRef) f.split = "";
   page.mode = "browse";
   page.index = -1;
-  page.browse.dataset = datasetRef || page.saving?.reading || null;
+  page.browse.dataset = datasetRef;
   editor.clear();
-  const dataset = page.browse.dataset;
   const select = (name, options, label) => el("select", {"aria-label": label, onchange: (e) => { f[name] = e.target.value; loadBrowse(); }},
     options.map(([value, text]) => el("option", {value, selected: f[name] === value}, text)));
   let recordings = [];
-  if (dataset) {
-    try { recordings = (await api(`/api/library/datasets/${encodeURIComponent(dataset)}`)).recordings.map((r) => r.recording); } catch { recordings = []; }
+  if (page.setup) {
+    try { recordings = (await api(`/api/library/setups/${encodeURIComponent(page.setup)}/collection`)).recordings.map((r) => r.recording); } catch { recordings = []; }
   }
   const contact = el("input", {type: "checkbox", checked: f.contact, onchange: (e) => { f.contact = e.target.checked; loadBrowse(); }});
   page.browse.list = el("div", {class: "list lb-entries"});
@@ -412,26 +437,27 @@ async function openBrowse(datasetRef = null, recording = "") {
   left.replaceChildren(
     button("← Queues", () => ctx.navigate("labeling"), {class: "link"}),
     el("section", {class: "section"}, el("h3", {}, "Browse labels"),
-      dataset ? el("p", {class: "note lb-dataset"}, `Labels of ${dataset}`) : el("p", {class: "note"}, "There are no labels for this setup yet."),
+      recordings.length ? el("p", {class: "note lb-dataset"}, datasetRef ? `The setup's labels, with their splits in ${datasetRef}` : "The setup's labels")
+        : el("p", {class: "note"}, "There are no labels for this setup yet."),
       select("recording", [["", "All recordings"], ...recordings.map((r) => [r, r])], "Recording"),
       el("div", {class: "row lb-tight"},
-        select("split", [["", "All splits"], ["train", "Train"], ["val", "Validation"], ["test", "Test"]], "Split"),
+        datasetRef ? select("split", [["", "All splits"], ["train", "Train"], ["val", "Validation"], ["test", "Test"], ["none", "Not included"]], "Split") : null,
         select("status", [["", "Any status"], ["complete", "Complete"], ["mask_only", "Mask only"], ["auto", "Body unconfirmed"]], "Status")),
       el("label", {class: "inline", title: "Bodies that touch or cross themselves: the hard frames"}, contact, "Self-contact only"),
       page.browse.count),
     el("section", {class: "section lb-fill"}, el("div", {class: "note lb-sort"}, "Lowest body fit IoU first"), page.browse.list),
-    el("div", {class: "row lb-nav"}, button("◀ Prev", () => step(-1)), button("Next ▶", () => step(1))),
+    el("div", {class: "row lb-nav"}, button("◀ Prev (Shift+←)", () => step(-1), {title: "Previous frame (Shift+←)"}), button("Next (Shift+→) ▶", () => step(1), {title: "Next frame (Shift+→)"})),
   );
   await loadBrowse();
 }
 
 async function loadBrowse() {
-  const dataset = page.browse.dataset, f = page.browse.filters, token = ++page.browse.token;
-  if (!dataset) { page.browse.rows = []; renderBrowseList(); return; }
+  const f = page.browse.filters, token = ++page.browse.token;
+  if (!page.setup) { page.browse.rows = []; renderBrowseList(); return; }
   let rows = [];
   try {
-    rows = (await api(`/api/library/datasets/${encodeURIComponent(dataset)}/labels${query({
-      recording: f.recording, split: f.split, status: f.status, contact: f.contact ? "yes" : "", sort: "fit_iou",
+    rows = (await api(`/api/library/setups/${encodeURIComponent(page.setup)}/labels${query({
+      dataset: page.browse.dataset, recording: f.recording, split: f.split, status: f.status, contact: f.contact ? "yes" : "", sort: "fit_iou",
     })}`)).labels;
   } catch (error) {
     ctx.toast(error.message, "error");

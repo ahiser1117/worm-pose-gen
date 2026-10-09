@@ -58,10 +58,11 @@ function labelsUsed(details) {
       : "No record of the labels used.");
   }
   return el("div", {},
-    el("p", {class: "note"}, `${details.label_count} label revisions; the exact list is in training/labels.json.`),
+    el("p", {class: "note"}, `${details.label_count} label revisions of ${(details.card.trained_on || []).map((e) => e.dataset).join(", ") || "the dataset"}; `
+      + "the exact list is in training/labels.json."),
     el("table", {class: "data"},
-      el("thead", {}, el("tr", {}, el("th", {}, "Recording"), el("th", {}, "Dataset"), el("th", {class: "num"}, "Train"), el("th", {class: "num"}, "Val"))),
-      el("tbody", {}, details.labels.map((r) => el("tr", {}, el("td", {}, r.recording), el("td", {}, r.dataset),
+      el("thead", {}, el("tr", {}, el("th", {}, "Recording"), el("th", {class: "num"}, "Train"), el("th", {class: "num"}, "Val"))),
+      el("tbody", {}, details.labels.map((r) => el("tr", {}, el("td", {}, r.recording),
         el("td", {class: "num"}, r.train), el("td", {class: "num"}, r.val))))));
 }
 

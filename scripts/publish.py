@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Publish a personal setup, dataset or model into the lab library (the developer's step; the app never writes there).
+"""Publish a personal setup, dataset, model or labels into the lab library (the developer's step; the app never writes there).
 
     scripts/publish.py setup mine:rig2
+    scripts/publish.py labels lab:nir-flv
     scripts/publish.py dataset mine:copper-plates
     scripts/publish.py model mine:copper-ft --default body --reason "fixes heads on copper plates"
 
 The item is copied, never moved, under the same id (``--as`` renames it),
 and an id the lab already has is refused: a published item is frozen, and a
-new version gets a new id.  References inside it (``setup``, ``extends``,
-``parent``, ``trained_on``) that name personal items become lab references,
-so those items must be published first; the script says which.  A model
+new version gets a new id.  References inside it (``setup``, ``parent``,
+``trained_on``) that name personal items become lab references, so those
+items must be published first; the script says which.
+
+``labels`` takes a setup and copies the current personal label of each
+frame of its collection into the lab's part (of the published setup, for a
+personal one) as the frame's next lab revision, unless the lab has that
+revision's file already.  The file is copied as it is, so its ``sha256``
+and built targets stay valid, and its ``saved_at`` makes it the frame's
+current label for everyone.  A dataset holds only its splits, so publish
+the labels of its recordings too.  A model
 keeps its training records and its evaluations on lab benchmarks (stored
 in the personal library, since the app cannot write the lab's), not those on
 personal benchmarks.  ``--default ROLE`` also makes a published model the lab
@@ -28,20 +37,22 @@ import shutil
 import sys
 from typing import Any
 
-from worm_pose_gen.library import Libraries, get_card, get_setup
+from worm_pose_gen.library import Collection, Libraries, get_card, get_setup
+from worm_pose_gen.library.collection import ENTRY_FIELDS, collection_dir
 from worm_pose_gen.library.datasets import Dataset, dataset_dir
+from worm_pose_gen.library.labels import label_key
 from worm_pose_gen.library.models import model_dir
-from worm_pose_gen.library.roots import check_id, make_ref, parse_ref, read_json, write_json
+from worm_pose_gen.library.roots import check_id, locked, make_ref, parse_ref, read_json, write_json
 from worm_pose_gen.library.setups import ROLE_OUTPUTS, log_default, setup_path
 
 
-KINDS = ("setup", "dataset", "model")
+KINDS = ("setup", "labels", "dataset", "model")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("kind", choices=KINDS)
-    parser.add_argument("ref", help="the personal item, mine:<id>")
+    parser.add_argument("ref", help="the personal item, mine:<id> (for labels: the setup, lab:<id> or mine:<id>)")
     parser.add_argument("--as", dest="lab_id", default=None, help="its id in the lab library (default: the same)")
     parser.add_argument("--lab", type=Path, default=None, help="the lab library root")
     parser.add_argument("--library", type=Path, default=None, help="the personal library root")
@@ -84,13 +95,40 @@ def publish_setup(libraries: Libraries, ref: str, lab_id: str) -> str:
     return make_ref("lab", lab_id)
 
 
+def publish_labels(libraries: Libraries, setup_ref: str) -> int:
+    """Copy the setup's current personal labels into the lab's part of its collection; returns how many were copied."""
+
+    target_setup = lab_ref(libraries, setup_ref)
+    target = Collection(libraries, target_setup)
+    root = collection_dir(libraries.root("lab"), target_setup)
+    mine = [r for r in Collection(libraries, setup_ref).labels() if r.scope == "mine"]
+    copied = 0
+    with locked(root):
+        index = read_json(root / "index.json", {}) or {}
+        for record in mine:
+            key = label_key(record.recording, record.frame)
+            entries = index.get(key, [])
+            if any(entry["sha256"] == record.sha256 for entry in entries):
+                continue
+            revision = (entries[-1]["revision"] if entries else 0) + 1
+            path = target.label_path("lab", record.recording, record.frame, revision)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(record.path, path)
+            index[key] = [*entries, {**{name: getattr(record, name) for name in ENTRY_FIELDS}, "revision": revision}]
+            copied += 1
+        write_json(root / "index.json", index)
+    return copied
+
+
 def publish_dataset(libraries: Libraries, ref: str, lab_id: str) -> str:
     dataset = Dataset(libraries, ref)
     target = dataset_dir(libraries.root("lab"), lab_id)
-    info = {**dataset.info, "setup": lab_ref(libraries, dataset.setup), "extends": lab_ref(libraries, dataset.extends),
-            "published_from": ref}
-    staging = staged_copy(dataset.root, target)
+    info = {**dataset.info, "setup": lab_ref(libraries, dataset.setup), "published_from": ref}
+    staging = target.with_name(f".{target.name}.partial")
+    if staging.exists():
+        shutil.rmtree(staging)
     write_json(staging / "dataset.json", info)
+    write_json(staging / "splits.json", dataset.splits())
     staging.rename(target)
     return make_ref("lab", lab_id)
 
@@ -135,6 +173,10 @@ def main(argv: list[str] | None = None) -> None:
     if libraries.lab is None or not libraries.lab.is_dir():
         sys.exit(f"no lab library at {libraries.lab}; pass --lab")
     scope, item_id = parse_ref(args.ref)
+    if args.kind == "labels":
+        get_setup(libraries, args.ref)
+        print(f"published {publish_labels(libraries, args.ref)} label(s) of {args.ref} into {libraries.lab}")
+        return
     if scope != "mine":
         sys.exit(f"{args.ref} is already in the lab library")
     lab_id = check_id(args.lab_id or item_id)
