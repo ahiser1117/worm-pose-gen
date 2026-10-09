@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -31,12 +32,14 @@ from worm_pose_gen.algorithms import (
     resolve_params,
     run_algorithm,
 )
+from worm_pose_gen.body_smoother import MotionScales
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.pipeline import read_summary, run_stage
 from worm_pose_gen.propagation import pose_distance_px
 from worm_pose_gen.workspace import Workspace
 
-from tests.test_pipeline import FIT_PARAMS, FRAMES, HEIGHT, SEGMENT_PARAMS, WIDTH, _write_recording
+from tests.slow import slow
+from tests.test_pipeline import FIT_PARAMS, FRAMES, HEIGHT, SEGMENT_PARAMS, WIDTH, _body_curve, _StubPredictor, _write_recording
 
 
 PRISTINE = ("state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "edits.jsonl")
@@ -299,6 +302,7 @@ class RegionRunTests(unittest.TestCase):
 
     # ----- independent multi-start
 
+    @slow
     def test_independent_multistart_keeps_every_start_and_round_trips(self) -> None:
         try:
             candidate_set = run_algorithm(self.workspace, "independent_multistart", 1, 4, {"preset": "fast"}, anchor_before=0, anchor_after=5, device="cpu")
@@ -358,6 +362,7 @@ class RegionRunTests(unittest.TestCase):
 
     # ----- chains and the beam path
 
+    @slow
     def test_beam_path_with_non_adjacent_anchors_and_the_chains(self) -> None:
         try:
             params = {"beam": 2, "preset": "fast", "anchor_diversity": True, "refit_independent": True}
@@ -420,6 +425,107 @@ class RegionRunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no stored pose"):
             CandidatePose.from_state({**state, "fitted": np.zeros(FRAMES, dtype=bool)}, 2, config)
 
+
+class RegionEvidenceTests(unittest.TestCase):
+    """Region algorithms on a workspace fit with the body-field network (the stub of tests/test_pipeline.py that knows the bodies)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.directory = tempfile.TemporaryDirectory()
+        root = Path(cls.directory.name)
+        recording = root / "rec.h5"
+        _write_recording(recording)
+        cls.predictors: list[_StubPredictor] = []
+        cls.patch = mock.patch.object(pipeline, "field_predictor", side_effect=lambda checkpoint, frames, device: cls.predictors.append(_StubPredictor(frames)) or cls.predictors[-1])
+        cls.patch.start()
+        cls.workspace = Workspace.create(root / "workspaces", "fields", recording, 0, FRAMES - 1)
+        run_stage(cls.workspace, "segment", SEGMENT_PARAMS, device="cpu")
+        run_stage(cls.workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
+        run_stage(cls.workspace, "ambiguity", {}, device="cpu")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.patch.stop()
+        cls.directory.cleanup()
+
+    def _heads_first(self, candidate_set: CandidateSet) -> None:
+        for row in candidate_set.rows:
+            chosen = candidate_set.chosen(row)
+            self.assertLess(float(np.linalg.norm(chosen.centerline_xy[0] - _body_curve(row)[0])), 6.0)
+
+    def test_context_holds_the_evidence_and_the_trace_starts(self) -> None:
+        ctx = build_context(self.workspace, 1, 4, 0, 5, device="cpu")
+        self.assertEqual(sorted(ctx.evidence), list(range(FRAMES)))
+        self.assertEqual(sorted(ctx.network_starts), [1, 2, 3, 4])
+        self.assertIs(ctx.fields_of([1, 2])[1], ctx.evidence[2])
+        self.assertEqual([s.name for s in ctx.with_trace(2, [])], ["network_trace"])
+        self.assertEqual(sorted(build_context(self.workspace, 1, 4, 0, 5, device="cpu", trace_starts=False).network_starts), [])
+
+    def test_every_fit_is_scored_against_the_evidence_and_offered_the_trace(self) -> None:
+        calls: list = []
+
+        def recording(masks, starts, **kwargs):
+            calls.append((kwargs.get("fields"), [[s.name for s in frame] for frame in starts]))
+            return algorithms_fit_masks(masks, starts, **kwargs)
+
+        algorithms_fit_masks = algorithms.fit_masks
+        with mock.patch.object(algorithms, "fit_masks", side_effect=recording):
+            candidate_set = run_algorithm(self.workspace, "independent_multistart", 1, 4, {"preset": "fast"}, anchor_before=0, anchor_after=5, device="cpu")
+        self.assertTrue(calls)
+        for fields, _ in calls:
+            self.assertTrue(fields is not None and all(f is not None for f in fields))
+        self.assertIn("network_trace", {name for _, names in calls for frame in names for name in frame})
+        for row in candidate_set.rows:
+            starts = {p.start for p in candidate_set.candidates[row]}
+            self.assertIn("network_trace", starts)
+            self.assertTrue(any(s.endswith("_reversed") for s in starts))  # both orientations without a prior
+            for pose in candidate_set.candidates[row]:
+                self.assertGreater(pose.field_energy, 0.0)
+                # Whichever end a start converged on, the orientation with the true head first pays less evidence.
+                head_first = np.linalg.norm(pose.centerline_xy[0] - _body_curve(row)[0]) < np.linalg.norm(pose.centerline_xy[-1] - _body_curve(row)[0])
+                self.assertEqual(head_first, pose.field_energy < pose.mirror_field_energy)
+        self._heads_first(candidate_set)
+        self.assertEqual(candidate_set.metrics["orientation_flips"], 0)
+
+    def test_a_mirror_pays_its_own_evidence(self) -> None:
+        candidate_set = run_algorithm(self.workspace, "mirror", 1, 4, {}, anchor_before=0, anchor_after=5, device="cpu")
+        for row in candidate_set.rows:
+            current, mirrored = candidate_set.candidates[row]
+            self.assertEqual(mirrored.field_energy, current.mirror_field_energy)
+            self.assertGreater(mirrored.energy - current.energy, 0.0)
+            self.assertAlmostEqual(mirrored.energy - current.energy, mirrored.field_energy - current.field_energy)
+            # Mirroring the mirror gives the pose and its energy back.
+            back = mirrored.mirrored(len(mirrored.latent) - 4)
+            self.assertAlmostEqual(back.energy, current.energy)
+            self.assertEqual((back.field_energy, back.mirror_field_energy), (current.field_energy, current.mirror_field_energy))
+        self._heads_first(candidate_set)
+
+    def test_chains_use_the_evidence_and_placed_poses_are_scored(self) -> None:
+        propagated: list = []
+        propagate = algorithms.propagate
+
+        def recording_propagate(*args, **kwargs):
+            propagated.append(kwargs)
+            return propagate(*args, **kwargs)
+
+        with mock.patch.object(algorithms, "propagate", side_effect=recording_propagate):
+            beam = run_algorithm(self.workspace, "beam_path", 2, 3, {"beam": 1}, anchor_before=0, anchor_after=5, device="cpu")
+        # The local view puts the anchors next to the region: local rows 0 (anchor 0), 1-2 (rows 2-3), 3 (anchor 5).
+        self.assertEqual(sorted(propagated[0]["evidence"]), [0, 1, 2, 3])
+        self.assertEqual(sorted(propagated[0]["network_starts"]), [1, 2])
+        self.assertTrue(all(p.field_energy > 0 for row in beam.rows for p in beam.candidates[row]))
+        self._heads_first(beam)
+        # The smoother places poses rather than fitting them; they are scored like the fits.
+        state = self.workspace.load_state()
+        with mock.patch.object(algorithms, "motion_scales", return_value=MotionScales(2.0, np.full(16, 0.05), 20)), \
+                mock.patch.object(algorithms, "calibrate_body", return_value=([0, 5], float(state["body_length_px"][0]), state["width_profile"][0])):
+            smoothed = run_algorithm(self.workspace, "fixed_body_smoother", 1, 4, {}, anchor_before=0, anchor_after=5, device="cpu")
+        for row in smoothed.rows:
+            pose = smoothed.candidates[row][0]
+            self.assertGreater(pose.field_energy, 0.0)
+            self.assertGreater(pose.mirror_field_energy, pose.field_energy)
+            self.assertAlmostEqual(pose.energy - pose.field_energy, pose.soft_dice + algorithms.prior_penalty(
+                pipeline.workspace_setup(self.workspace).config, pose.body_length_px, pose.width_px, pose.width_shape), places=6)
 
 if __name__ == "__main__":
     unittest.main()

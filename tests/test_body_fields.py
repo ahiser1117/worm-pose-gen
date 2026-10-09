@@ -11,6 +11,8 @@ from worm_pose_gen.body_targets import render_body_targets
 from worm_pose_gen.head_tracking import HeadTracking
 from worm_pose_gen.segmentation_dataset import SegmentationStore
 
+from tests.slow import slow
+
 
 SHAPE = (64, 96)
 MAX_LAG = 2
@@ -95,20 +97,64 @@ def looped_worm():
     return centerline, (distance <= 14).reshape(LOOP_SHAPE)
 
 
+def no_tracking() -> HeadTracking:
+    return HeadTracking(
+        xy=np.full((1, 2), np.nan, np.float32), valid=np.zeros(1, bool), confidence=np.full(1, np.nan, np.float32),
+        frame_indices=np.zeros(1, np.int64), source_frame_ids=np.full(1, -1), source_timestamps=np.full(1, -1), provenance={},
+    )
+
+
 class TraceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.centerline, cls.mask = looped_worm()
 
-    def test_trace_ending_at_the_border_continues_off_camera(self):
-        trace = np.array([[50.0, 30.0], [80.0, 30.0], [415.0, 30.0]])
-        extended = body_fields.extend_trace(trace, LOOP_SHAPE, 500.0)
-        self.assertEqual(len(extended), 4)
-        np.testing.assert_allclose(extended[-1], [550.0, 30.0])
-        inside = np.array([[50.0, 30.0], [80.0, 30.0]])
-        np.testing.assert_array_equal(body_fields.extend_trace(inside, LOOP_SHAPE, 500.0), inside)
-        np.testing.assert_array_equal(body_fields.extend_trace(trace, LOOP_SHAPE, None), trace)
+    @slow
+    def test_the_trace_ends_are_the_body_ends(self):
+        import torch
+        from worm_pose_gen.classical import resample_centerline
+        from worm_pose_gen.mask_fit import default_width_template
+        from worm_pose_gen.pose_run import render_tube
 
+        # A worm leaving the right edge of a 320 px wide view, its tail 40 px off camera.
+        config = body_fields.fit_config()
+        template = default_width_template(config.n_points)
+        x = np.linspace(150, 360, 400)
+        truth = resample_centerline(np.stack([x, 120 + 30 * np.sin((x - 150) / 40)], 1), config.n_points)
+        mask = render_tube(truth, template * 12.0, 240, 320, device="cpu")
+        context = np.where(mask, 60, 200).astype(np.uint8)[None]
+
+        def fit(trace, extend=False):
+            return body_fields.fit_targets(
+                mask, context, np.array([True]), no_tracking(), config=config, template=template,
+                device=torch.device("cpu"), length_px=lambda: 300.0, trace=(trace, False, 300.0 if extend else None),
+            )[:2]
+
+        # Clicked off camera, the tail stays where it was put: the body is whole, not cut off.
+        clicks = resample_centerline(truth, 12)
+        self.assertGreater(clicks[-1, 0], 319)
+        meta, arrays = fit(clicks)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][0] - clicks[0]), 2.0)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][-1] - clicks[-1]), 3.0)
+        self.assertFalse(meta["tail_off_camera"])
+        # Stopped at the border, the body ends there, and the camera cuts it off (no tail in view).
+        border = np.vstack((clicks[clicks[:, 0] < 300], [[319.0, float(np.interp(319.0, truth[:, 0], truth[:, 1]))]]))
+        meta, arrays = fit(border)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][-1] - border[-1]), 3.0)
+        self.assertTrue(meta["tail_off_camera"])
+        self.assertTrue(np.isnan(arrays["tail_xy"]).all())
+        # Asked to extend, it continues off camera to the recording's length instead, and is whole.
+        meta, arrays = fit(border, extend=True)
+        curve = arrays["centerline_xy"]
+        self.assertGreater(curve[-1, 0], 340)
+        self.assertAlmostEqual(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()), 300.0, delta=15.0)
+        self.assertFalse(meta["tail_off_camera"])
+        # An extension continues only a trace that ends at the border.
+        inside = clicks[clicks[:, 0] < 280]
+        np.testing.assert_array_equal(body_fields.extend_trace(inside, mask.shape, 300.0), inside)
+        np.testing.assert_array_equal(body_fields.extend_trace(border, mask.shape, None), border)
+
+    @slow
     def test_trace_through_the_crossing_sets_the_ap_field(self):
         import torch
         from worm_pose_gen.mask_fit import default_width_template
@@ -118,13 +164,10 @@ class TraceTests(unittest.TestCase):
                           [290, 253], [243, 247], [238, 180], [244, 110], [240, 63]], float)
         config = body_fields.fit_config()
         context = np.where(self.mask, 60, 200).astype(np.uint8)[None]
-        tracking = HeadTracking(
-            xy=np.full((1, 2), np.nan, np.float32), valid=np.zeros(1, bool), confidence=np.full(1, np.nan, np.float32),
-            frame_indices=np.zeros(1, np.int64), source_frame_ids=np.full(1, -1), source_timestamps=np.full(1, -1), provenance={},
-        )
+        tracking = no_tracking()
         meta, arrays, _ = body_fields.fit_targets(
             self.mask, context, np.array([True]), tracking, config=config, template=default_width_template(config.n_points),
-            device=torch.device("cpu"), length_px=lambda: None, trace=(trace, False),
+            device=torch.device("cpu"), length_px=lambda: None, trace=(trace, False, None),
         )
         self.assertEqual((meta["fit_method"], meta["orientation"]), ("traced", "manual"))
         # Square corners and flat ends that a smooth tube cannot match cap the overlap.
@@ -137,7 +180,7 @@ class TraceTests(unittest.TestCase):
         # As drawn, the trace is the midline.
         meta, arrays, _ = body_fields.fit_targets(
             self.mask, context, np.array([True]), tracking, config=config, template=default_width_template(config.n_points),
-            device=torch.device("cpu"), length_px=lambda: None, trace=(LOOP_CORNERS.copy(), True),
+            device=torch.device("cpu"), length_px=lambda: None, trace=(LOOP_CORNERS.copy(), True, None),
         )
         self.assertEqual(meta["fit_method"], "trace_as_drawn")
         np.testing.assert_allclose(arrays["centerline_xy"][[0, -1]], LOOP_CORNERS[[0, -1]], atol=1e-6)

@@ -4,10 +4,11 @@
 // selection, a fix's preview range and Relabel's keyframes drawn over it.
 // Developers can add one extra per-frame series below.
 //
-// Everything is in workspace rows; the page converts to frames. Click seeks,
-// drag selects a range (for a fix without an issue), the wheel zooms about
-// the cursor (Shift+wheel pans) and double-click shows the whole recording.
-// In keyframe mode a click adds or removes a keyframe instead.
+// Everything is in workspace rows; the page converts to frames. A left press
+// seeks and a left drag scrubs; a right drag selects a range (for a fix
+// without an issue); the wheel zooms about the cursor (Shift+wheel pans) and
+// double-click shows the whole recording. In keyframe mode a left click adds
+// or removes a keyframe instead of seeking (a left drag still scrubs).
 
 const ISSUE_H = 10, GAP = 3, KYMO_H = 96, AXIS_H = 16, SERIES_H = 34;
 const ISSUE_COLORS = {unreviewed: "#e0b04d", reviewed: "#3f7a5a", fixed: "#6cb4ff"};
@@ -147,7 +148,7 @@ export class Timeline {
       g.strokeStyle = stroke; g.lineWidth = 1; g.strokeRect(x0 + 0.5, 0.5, x1 - x0 - 1, full - 1);
     };
     band(this.preview, "rgba(255, 122, 217, 0.10)", "rgba(255, 122, 217, 0.7)");
-    const selection = this.drag?.moved ? [Math.min(this.drag.start, this.drag.end), Math.max(this.drag.start, this.drag.end)] : this.selection;
+    const selection = this.drag?.kind === "select" && this.drag.moved ? [Math.min(this.drag.start, this.drag.end), Math.max(this.drag.start, this.drag.end)] : this.selection;
     band(selection, "rgba(108, 180, 255, 0.14)", "rgba(108, 180, 255, 0.85)");
     if (this.keyframes) {
       g.fillStyle = "#ff7ad9";
@@ -165,7 +166,7 @@ export class Timeline {
     } else {
       g.fillStyle = "#ffffff"; g.fillRect(Math.round(x0 + perRow / 2) - 1, 0, 2, full);
     }
-    if (this.hover !== null && !this.drag) {
+    if (this.hover !== null && this.drag?.kind !== "select") {
       const hx = this._x(this.hover + 0.5, width), text = String(this.frameOf(this.hover));
       g.fillStyle = "rgba(255,255,255,0.35)"; g.fillRect(Math.round(hx), ISSUE_H, 1, full - ISSUE_H);
       g.font = "11px system-ui, sans-serif";
@@ -177,19 +178,23 @@ export class Timeline {
 
   _bind() {
     const canvas = this.canvas, width = () => this.container.clientWidth;
+    // drag: the press being handled; kind "scrub" (left button) or "select" (right). Only a select drag draws a band.
+    canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     canvas.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || !this.rows) return;
+      if ((event.button !== 0 && event.button !== 2) || !this.rows) return;
       canvas.setPointerCapture(event.pointerId);
-      const row = this._row(event.offsetX, width());
-      this.drag = {x: event.offsetX, start: row, end: row, moved: false};
-      if (!this.keyframes) this.onSeek(row);
+      const row = this._row(event.offsetX, width()), kind = event.button === 0 ? "scrub" : "select";
+      this.drag = {kind, x: event.offsetX, start: row, end: row, moved: false};
+      if (kind === "scrub" && !this.keyframes) this.onSeek(row);
     });
     canvas.addEventListener("pointermove", (event) => {
       if (!this.rows) return;
       this.hover = this._row(event.offsetX, width());
-      if (this.drag) {
-        this.drag.end = this.hover;
-        if (Math.abs(event.offsetX - this.drag.x) > DRAG_PX && !this.keyframes) this.drag.moved = true;
+      const drag = this.drag;
+      if (drag) {
+        if (Math.abs(event.offsetX - drag.x) > DRAG_PX) drag.moved = true;
+        if (drag.kind === "scrub" && drag.moved && this.hover !== drag.end) this.onSeek(this.hover);
+        drag.end = this.hover;
       }
       this.draw();
     });
@@ -198,8 +203,8 @@ export class Timeline {
       const drag = this.drag;
       this.drag = null;
       if (!drag) return;
-      if (drag.moved) this.onSelect({first: Math.min(drag.start, drag.end), last: Math.max(drag.start, drag.end)});
-      else if (this.keyframes) this.onKeyframe(drag.end);
+      if (drag.kind === "select" && drag.moved) this.onSelect({first: Math.min(drag.start, drag.end), last: Math.max(drag.start, drag.end)});
+      else if (drag.kind === "scrub" && !drag.moved && this.keyframes) this.onKeyframe(drag.end);
       this.draw();
     };
     canvas.addEventListener("pointerup", end);

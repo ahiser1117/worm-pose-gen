@@ -21,6 +21,7 @@ from worm_pose_gen import edits, fixes
 from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.mask_fit import default_width_template
 
+from tests.slow import slow
 from tests.test_fixes import posed_workspace
 from tests.test_pipeline import _body_curve
 
@@ -147,6 +148,7 @@ class FixesApiTests(unittest.TestCase):
         self.assertIn("'first' is required", self.request("POST", "/fixes/flip", {"last": 4}, 400)["error"])
         self.assertEqual(self.client.get("/api/workspaces/missing/issues").status_code, 404)
 
+    @slow
     def test_keyframes_and_stitch(self) -> None:
         self.assertEqual(self.request("GET", "/fixes/keyframes?first=0&last=9"), {"frames": [0, 9], "spacing": 10})
         self.assertEqual(self.request("GET", "/fixes/keyframes?first=0&last=9&spacing=4")["frames"], [0, 3, 6, 9])

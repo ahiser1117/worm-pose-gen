@@ -24,6 +24,8 @@ from worm_pose_gen.mask_fit import (
     taper_asymmetry,
 )
 
+from tests.slow import slow
+
 
 SMALL = MaskFitConfig(
     stage_downsample=(2, 1, 1),
@@ -127,6 +129,7 @@ class WidthModelTests(unittest.TestCase):
         twice = reverse_result(reverse_result(oriented))
         np.testing.assert_array_equal(twice.centerline_xy, curve)
 
+    @slow
     def test_asymmetric_fit_beats_symmetric_and_labels_the_tail(self) -> None:
         _, curve, template, profile, mask = _asymmetric_case()
         starts = standard_initializations(mask, config=SMALL)

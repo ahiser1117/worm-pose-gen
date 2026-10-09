@@ -48,8 +48,9 @@ def stage_job(app: AppState, payload: dict[str, Any], stage: str) -> tuple[JobSp
     workspace = app.workspace(name)
     params = dict(payload.get("params") or {})
     if stage in ("segment", "prior", "fit"):
-        # The segmenter the workspace was analysed with (Analyse records it).
-        params.setdefault("checkpoint", workspace.info.settings.get("checkpoint"))
+        # The models and mask source the workspace was analysed with (Analyse records them).
+        for key, default in (("mask_source", "segmenter"), ("checkpoint", None), ("body_net", None)):
+            params.setdefault(key, workspace.info.settings.get(key, default))
         params.setdefault("dataset_root", str(app.config.dataset_root))
     spec = JobSpec(
         kind=str(payload.get("kind") or "stage"), params={"stage": stage, "params": params}, workspace=name,

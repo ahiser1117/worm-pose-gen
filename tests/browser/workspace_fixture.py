@@ -120,7 +120,7 @@ def main():
     library.write_model(lab, "nir-body-lags3", {"name": "nir-body-lags3", "kind": "body_net", "setup": "lab:nir",
                                                 "outputs": ["mask", "ap", "head", "tail", "overlap"], "inputs": inputs}, weights)
 
-    analysis.analysis_params = lambda app, setup, models: dict(CPU_PARAMS)
+    analysis.analysis_params = lambda app, setup, models, mask_source="segmenter": dict(CPU_PARAMS)
     analysis.analysis_command = lambda path, stages, params: cpu_command(
         "pipeline", ["--workspace", str(path), "--stages", ",".join(stages), "--params", json.dumps(params), "--device", "cpu"])
     fixes.fix_command = lambda path, spec: cpu_command("fixes", ["--workspace", str(path), "--run", json.dumps(spec), "--device", "cpu"])

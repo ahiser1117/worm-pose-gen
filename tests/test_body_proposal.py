@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -8,6 +9,8 @@ from worm_pose_gen.body_proposal import OVERLAP_THRESHOLD, FieldPrediction, fiel
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import MaskFitConfig
+from worm_pose_gen.pipeline import FitParams, fit_setup, network_trace_start
+from worm_pose_gen.recording_prior import RecordingPrior
 
 SHAPE = (300, 420)
 CORNERS = np.array([[80, 150], [340, 150], [340, 250], [240, 250], [240, 60]], float)
@@ -101,6 +104,65 @@ class TraceStartTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()), 650.0, delta=10.0)
         self.assertLess(curve[-1, 1], -50.0)  # the tail, off the top edge
         np.testing.assert_allclose(curve[0], CORNERS[0] - [0, cut], atol=3)
+
+    def test_with_a_length_the_body_is_laid_from_the_head(self):
+        centerline, mask = looped_body()
+        config = MaskFitConfig()
+        prediction = prediction_from(centerline, mask)
+        start = trace_start(prediction, mask, config=config, length_px=500.0, width_px=28.0)
+        curve = decode_centerline(start.latent, config.coefficients)
+        self.assertEqual(start.latent[config.coefficients + 1], 500.0)
+        np.testing.assert_allclose(curve[0], CORNERS[0], atol=3)
+        # The 650 px body is cut 500 px from the head, on its last run (which starts 460 px along it,
+        # at y=250), well short of the tail (y=60); the trace cuts corners, so a little further along.
+        self.assertLess(abs(curve[-1, 0] - 240.0), 8.0)
+        self.assertTrue(150.0 < curve[-1, 1] < 230.0)
+        # The tail is an outcome, not an input: a tail heatmap elsewhere on the body changes nothing.
+        moved = FieldPrediction(prediction.mask, prediction.ap, prediction.head, point_heatmap(SHAPE, np.array([340.0, 200.0]), 6.0), prediction.overlap)
+        np.testing.assert_array_equal(trace_start(moved, mask, config=config, length_px=500.0, width_px=28.0).latent, start.latent)
+
+    def test_a_short_trace_is_continued_along_the_mask(self):
+        centerline, mask = looped_body()
+        config = MaskFitConfig()
+        prediction = prediction_from(centerline, mask)
+        # A-P saturates over the last 150 px (a label whose tail stopped short): the bands end there, the body does not.
+        ap = np.minimum(prediction.ap * 650 / 500, 1.0).astype(np.float32)
+        short = FieldPrediction(prediction.mask, ap, prediction.head, prediction.tail, prediction.overlap)
+        self.assertGreater(float(np.linalg.norm(propose_trace(short, mask, tail=False)[-1] - CORNERS[-1])), 50.0)
+        curve = decode_centerline(trace_start(short, mask, config=config, length_px=640.0, width_px=28.0).latent, config.coefficients)
+        self.assertLess(float(np.linalg.norm(curve[-1] - CORNERS[-1])), 15.0)
+
+    def test_without_the_head_the_trace_runs_to_the_tail(self):
+        centerline, mask = looped_body()
+        config = MaskFitConfig()
+        prediction = prediction_from(centerline, mask)
+        headless = FieldPrediction(prediction.mask, prediction.ap, np.zeros_like(prediction.head), prediction.tail, prediction.overlap)
+        curve = decode_centerline(trace_start(headless, mask, config=config, length_px=500.0, width_px=28.0).latent, config.coefficients)
+        np.testing.assert_allclose(curve[-1], CORNERS[-1], atol=3)
+        self.assertGreater(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()), 600.0)
+
+    def test_a_known_width_replaces_the_measurement(self):
+        centerline, mask = looped_body()
+        config = MaskFitConfig()
+        prediction = prediction_from(centerline, mask)
+        self.assertAlmostEqual(trace_start(prediction, mask, config=config).width_px, 28.0, delta=3.0)
+        shape = np.linspace(-0.1, 0.1, config.width_coefficients)
+        with mock.patch("worm_pose_gen.mask_fit.estimate_width_along_normals", side_effect=AssertionError("measured")):
+            start = trace_start(prediction, mask, config=config, width_px=21.0, width_shape=shape)
+        self.assertEqual(start.width_px, 21.0)
+        np.testing.assert_array_equal(start.width_shape, shape)
+
+    def test_the_pipeline_start_takes_the_recording_priors_width(self):
+        centerline, mask = looped_body()
+        coefficients = MaskFitConfig().width_coefficients
+        prior = RecordingPrior(
+            length_px=700.0, log_length_sigma=0.05, width_px=24.0, log_width_sigma=0.05,
+            width_shape=tuple(np.linspace(-0.2, 0.2, coefficients)), width_shape_sigma=(0.1,) * coefficients,
+            frames_used=12, frames_candidates=12, selection={},
+        )
+        start = network_trace_start(prediction_from(centerline, mask), mask, fit_setup(FitParams(), prior))
+        self.assertEqual(start.width_px, 24.0)
+        np.testing.assert_array_equal(start.width_shape, prior.width_shape)
 
 
 class FieldEvidenceTests(unittest.TestCase):

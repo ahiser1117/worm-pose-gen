@@ -278,8 +278,14 @@ class LoadedRun:
 
     @property
     def segmentation_checkpoint(self) -> str | None:
-        """Selected model for previews; the stored mask's checkpoint stays in the summary."""
+        """Selected segmenter for previews; the stored mask's checkpoint stays in the summary.
 
+        ``None`` when the masks came from the body-field network, which a
+        single-frame preview cannot run.
+        """
+
+        if self.summary.get("mask_source") == "body_net":
+            return None
         return self.summary.get("selected_checkpoint") or (self.summary.get("checkpoint") or {}).get("path")
 
     def row_of(self, frame: int) -> int:

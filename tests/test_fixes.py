@@ -27,6 +27,7 @@ from worm_pose_gen.pipeline import FitParams, build_fit_config, run_stage, updat
 from worm_pose_gen.propagation import pose_distance_px
 from worm_pose_gen.workspace import Workspace
 
+from tests.slow import slow
 from tests.test_pipeline import FIT_PARAMS, HEIGHT, SEGMENT_PARAMS, WIDTH, _body_curve, _write_recording
 
 
@@ -376,6 +377,7 @@ class WorkspaceFixTests(unittest.TestCase):
         self.assertEqual([f["id"] for f in fixes.fixes_list(self.workspace)], [third.edit_id])
         np.testing.assert_array_equal(self.workspace.load_state()["centerline_xy"][3:6], np.stack([_body_curve(r) for r in (3, 4, 5)]))
 
+    @slow
     def test_stitch_pins_the_keyframes_and_refits_the_gaps(self) -> None:
         self.reverse([2, 3, 4, 5, 6, 7])
         # Labeled keyframes: the true bodies, one of them traced with fewer points.

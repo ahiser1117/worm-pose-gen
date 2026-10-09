@@ -2,8 +2,8 @@
 // left, the frame in the middle, transport, issue track and kymograph at
 // the bottom (docs/APP_SIMPLIFICATION.md, section 2).
 //
-// The fixes act on a *target*: the selected issue, or a range dragged on the
-// timeline (which replaces the issue), or the current frame when there is
+// The fixes act on a *target*: the selected issue, or a range right-dragged on
+// the timeline (which replaces the issue), or the current frame when there is
 // neither. Refit and Relabel's stitch run as jobs whose result is a preview
 // drawn on the frame (before dashed, after in pink) to Keep or Discard; Edit
 // mask saves the frame's mask and refits around it with a job that keeps
@@ -18,7 +18,7 @@ import {api, el, post, query} from "./api.js";
 import {FrameCanvas, drawMidline, maskCanvas} from "./frame_canvas.js";
 import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
 import {AP_LUT, KYMOGRAPH_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage} from "./workspace_draw.js";
-import {describeStatus} from "./workspace_home.js";
+import {STAGE_WORDS, describeStatus} from "./workspace_home.js";
 import {MaskEditor} from "./workspace_mask.js";
 import {Timeline} from "./workspace_timeline.js";
 import {DevTools} from "./workspace_dev.js";
@@ -35,6 +35,19 @@ const STATE_WORDS = {unreviewed: "to review", reviewed: "looks OK", fixed: "fixe
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const range = ([a, b]) => (a === b ? `${a}` : `${a}–${b}`);
+
+// One progress bar per stage of the analysis job, with the running stage's own message under its bar.
+function stageList(job) {
+  const detail = String(job?.message || "").split(":").slice(1).join(":").trim();
+  return el("ol", {class: "ws-stage-list"}, (job?.stages || []).map((stage) => {
+    const word = STAGE_WORDS[stage.stage] || stage.stage, pct = `${Math.round(stage.progress * 100)}%`;
+    return el("li", {class: `ws-stage ${stage.state}`},
+      el("div", {class: "ws-stage-head"}, el("span", {}, word[0].toUpperCase() + word.slice(1)),
+        el("span", {class: "ws-stage-pct"}, stage.state === "done" ? "done" : stage.state === "waiting" ? "" : pct)),
+      el("progress", {max: 1, value: stage.progress}),
+      stage.state === "running" && detail ? el("div", {class: "note"}, detail) : null);
+  }));
+}
 
 export class WorkspaceView {
   constructor(section, ctx, {onHome}) {
@@ -63,7 +76,7 @@ export class WorkspaceView {
       onclick: () => this.toggleLayer(layer.id),
     }, layer.label));
     this.toolbar = el("div", {class: "ws-toolbar"}, el("div", {class: "ws-layers", role: "group", "aria-label": "Layers"}, this.layerButtons),
-      el("button", {type: "button", class: "ws-fit", title: "Fit the frame to the view (double-click)", onclick: () => this.canvas.fit()}, "Fit"));
+      el("button", {type: "button", class: "ws-fit", title: "Fit the frame to the view (0)", onclick: () => this.canvas.fit()}, "Fit"));
     this.canvasHost = el("div", {class: "ws-canvas"});
     this.legend = el("div", {class: "ws-legend", hidden: true});
     this.frameStatus = el("div", {class: "ws-frame-status"});
@@ -87,7 +100,7 @@ export class WorkspaceView {
       el("label", {class: "inline"}, "Frame", this.frameInput), this.frameTotal,
       el("label", {class: "inline"}, "Speed", this.speedSelect), this.loopButton, this.selectionNote,
       el("span", {class: "ws-grow"}),
-      el("span", {class: "note ws-timeline-hint"}, "Drag to select · wheel to zoom"));
+      el("span", {class: "note ws-timeline-hint"}, "Drag to scrub · right-drag to select · wheel to zoom"));
     this.timelineHost = el("div", {class: "ws-timeline"});
     this.bottom = el("div", {class: "ws-bottom"}, this.transport, this.timelineHost);
     this.node = el("div", {class: "ws-main", hidden: true}, this.left, this.center, this.bottom);
@@ -298,7 +311,7 @@ export class WorkspaceView {
       el("button", {class: "ws-back", title: "All recordings", onclick: () => this.leaveTo(() => this.onHome())}, "‹ Recordings"),
       el("strong", {class: "ws-title", title: status.recording}, status.recording_id),
       el("span", {class: "ws-dot"}, "·"),
-      el("span", {class: "ws-models", title: [status.models.mask?.ref, status.models.body?.ref].filter(Boolean).join(" + ") || null}, modelLabel(status.models)),
+      el("span", {class: "ws-models", title: [status.models.mask?.ref, status.models.body?.ref].filter(Boolean).join(" + ") || null}, modelLabel(status.models, status.mask_source)),
       progressNode ? el("span", {class: "ws-dot"}, "·") : null, progressNode,
     ];
     const busy = ["queued", "analysing"].includes(status.state);
@@ -333,7 +346,7 @@ export class WorkspaceView {
     }
     if (!status.setup) { this.ctx.toast("This recording does not belong to a setup; add it to one on the Recordings screen.", "error"); return; }
     const chosen = await openAnalyseDialog(this.ctx, {
-      title: `${first ? "Analyse" : "Re-analyse"} ${status.recording_id}`, setup: status.setup.ref, models, runOn,
+      title: `${first ? "Analyse" : "Re-analyse"} ${status.recording_id}`, setup: status.setup.ref, models, maskSource: status.mask_source, runOn,
       submitLabel: first ? "Analyse" : "Re-analyse", dev: this.ctx.dev,
       warning: first ? null : "Re-analysing replaces every pose, including your fixes. Mask edits are kept.",
     });
@@ -538,9 +551,9 @@ export class WorkspaceView {
     if (!status) { node.replaceChildren(); return; }
     const heading = (text, extra = null) => el("div", {class: "ws-panel-head"}, el("h3", {}, text), extra);
     if (["queued", "analysing"].includes(status.state)) {
-      const [text, , progress] = describeStatus(status);
-      node.replaceChildren(heading("Issues"), el("div", {class: "ws-analysing"}, el("p", {}, text),
-        el("progress", {max: 1, value: progress ?? 0}), el("p", {class: "note"}, "Issues appear when the analysis finishes. You can close the app meanwhile.")));
+      const [text] = describeStatus(status);
+      node.replaceChildren(heading("Analysis"), el("div", {class: "ws-analysing"}, el("p", {}, text), stageList(status.analysis),
+        el("p", {class: "note"}, "Issues appear when the analysis finishes. You can close the app meanwhile.")));
       return;
     }
     if (!status.analysed) {
@@ -977,7 +990,7 @@ export class WorkspaceView {
       ["O", "Looks OK: mark the issue reviewed, go to the next"], ["F", "Flip head/tail on the issue or selection"], ["Shift+F", "Flip this frame"],
       ["R", "Refit"], ["E", "Edit mask"], ["L", "Relabel"], ["Enter / Esc", "Keep / Discard a preview; Save / Cancel an edit"],
       ["W  B", "Worm / Background brush"], ["[  ]", "Smaller / larger brush"], ["N", "Network proposal (while editing)"], ["Ctrl+Z", "Undo a stroke"],
-      ["1 2 3 4", "Mask, Midline, Outline, A-P field"], ["Esc", "Clear the selection"], ["Wheel / drag", "Zoom / select on the timeline; zoom / pan the frame (Shift-drag)"],
+      ["1 2 3 4", "Mask, Midline, Outline, A-P field"], ["0", "Fit the frame to the view"], ["Esc", "Clear the selection"], ["Timeline", "Drag scrubs, right-drag selects a range, wheel zooms"], ["Frame", "Wheel zooms, right- or Shift-drag pans"],
     ];
     const dialog = el("dialog", {class: "ws-dialog ws-help"},
       el("h2", {}, "Keyboard shortcuts"),
@@ -1021,6 +1034,7 @@ export class WorkspaceView {
       case "End": this.seek(this.target ? this.target.last : this.rows - 1); return handled();
       case "Escape": if (this.target) { this.select(null); return handled(); } return;
       case "?": this.help(); return handled();
+      case "0": this.canvas.fit(); return handled();
       default: break;
     }
     const layer = LAYERS.find((l) => l.key === key);

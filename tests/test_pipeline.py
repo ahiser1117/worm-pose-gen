@@ -41,6 +41,7 @@ from worm_pose_gen.pipeline import (
     TrackParams,
     build_fit_config,
     config_from_dict,
+    fit_setup,
     independent_copies,
     new_arrays,
     read_summary,
@@ -50,7 +51,10 @@ from worm_pose_gen.pipeline import (
     segment_frames,
     stage_command,
 )
+from worm_pose_gen.recording_prior import RecordingPrior
 from worm_pose_gen.workspace import Workspace
+
+from tests.slow import slow
 
 
 HEIGHT, WIDTH, FRAMES = 160, 220, 6
@@ -169,6 +173,18 @@ class ParamTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown BatchFitConfig field"):
             build_fit_config(FitParams(overrides={"no_such": 1}))
 
+    def test_the_network_and_a_prior_fix_the_length(self) -> None:
+        coefficients = BatchFitConfig().width_coefficients
+        prior = RecordingPrior(
+            length_px=700.0, log_length_sigma=0.05, width_px=24.0, log_width_sigma=0.05,
+            width_shape=(0.0,) * coefficients, width_shape_sigma=(0.1,) * coefficients, frames_used=12, frames_candidates=12, selection={},
+        )
+        fixed = fit_setup(FitParams(body_net="net.ckpt"), prior).config
+        self.assertEqual((fixed.length_fixed, fixed.length_prior_px), (True, 700.0))
+        self.assertFalse(fit_setup(FitParams(), prior).config.length_fixed)
+        self.assertFalse(fit_setup(FitParams(body_net="net.ckpt"), None).config.length_fixed)
+        self.assertTrue(config_from_dict(json.loads(json.dumps(asdict(fixed)))).length_fixed)
+
     def test_stage_command_round_trips_the_parameters(self) -> None:
         params = {"preset": "fast", "overrides": {"stage_steps": [1, 2]}, "threshold": 0.4}
         command = stage_command(Path("/tmp/ws"), "fit", params)
@@ -219,6 +235,7 @@ class StageTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.directory.cleanup()
 
+    @slow
     def test_stages_in_order(self) -> None:
         self._segment()
         self._fit()
@@ -452,6 +469,7 @@ class StageTests(unittest.TestCase):
 class BodyFieldStageTests(unittest.TestCase):
     """The stages of a workspace fit with the body-field network (a stub that knows the bodies): its evidence reaches every fit."""
 
+    @slow
     def test_evidence_reaches_the_fit_propagate_and_track_stages(self) -> None:
         predictors: list[_StubPredictor] = []
 
@@ -472,7 +490,14 @@ class BodyFieldStageTests(unittest.TestCase):
             _write_recording(recording_path)
             workspace = Workspace.create(root / "workspaces", "fields", recording_path, 0, FRAMES - 1)
             run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
-            run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
+            fit_starts: list = []
+
+            def fit_recording(masks, starts, **kwargs):
+                fit_starts.append(starts)
+                return fit_masks(masks, starts, **kwargs)
+
+            with mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=fit_recording):
+                run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
             self.assertEqual(config_from_dict(read_summary(workspace)["fit_config"]).field_ap_weight, FIELD_AP_WEIGHT)
             state = workspace.load_state()
             # Every fit is scored against the evidence, which also decides the orientation: heads first.
@@ -480,6 +505,13 @@ class BodyFieldStageTests(unittest.TestCase):
             np.testing.assert_array_equal(state["field_energy_independent"], state["field_energy"])
             for row in range(FRAMES):
                 self.assertLess(float(np.linalg.norm(state["centerline_xy"][row, 0] - _body_curve(row)[0])), 6.0)
+            # Both ends are in view on every frame, so each standard start is fit once, head first, and no orientation gap is measured.
+            self.assertTrue(np.isnan(state["orientation_gap"]).all())
+            self.assertEqual(len(fit_starts), 1)
+            for frame_starts in fit_starts[0]:
+                names = [s.name.removesuffix("_reversed") for s in frame_starts]
+                self.assertEqual(len(names), len(set(names)))
+                self.assertIn("network_trace", names)
             run_stage(workspace, "ambiguity", {}, device="cpu")
             # A pose two body widths off its mask seeds a stretch around row 3 (as in HypothesisArrayTests).
             state = workspace.load_state()
@@ -517,6 +549,50 @@ class BodyFieldStageTests(unittest.TestCase):
             refit = np.nonzero(workspace.load_state()["length_refit"])[0]
             self.assertTrue(set(refit.tolist()).isdisjoint({2, 3, 4}))
             self.assertTrue((workspace.load_state()["field_energy"][refit] > 0).all())
+
+    def test_masks_from_the_body_net(self) -> None:
+        predictors: list[_StubPredictor] = []
+
+        def field_predictor(checkpoint, frames, device):
+            self.assertEqual(checkpoint, "stub.ckpt")
+            predictors.append(_StubPredictor(frames))
+            return predictors[-1]
+
+        # A segmenter checkpoint that does not exist: loading it would fail, so the masks must be the network's.
+        params = {**SEGMENT_PARAMS, "checkpoint": "missing.ckpt", "mask_source": "body_net", "body_net": "stub.ckpt"}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pipeline, "field_predictor", side_effect=field_predictor):
+            root = Path(directory)
+            recording_path = root / "rec.h5"
+            bodies = _write_recording(recording_path)
+            workspace = Workspace.create(root / "workspaces", "net-masks", recording_path, 0, FRAMES - 1)
+            result = run_stage(workspace, "segment", params, device="cpu")
+            self.assertEqual(result["frames_with_worm"], FRAMES)
+            self.assertEqual(sorted(f for request in predictors[-1].requested for f in request), list(range(FRAMES)))
+            for row in range(FRAMES):
+                np.testing.assert_array_equal(workspace.get_mask(row), bodies[row])
+            summary = read_summary(workspace)
+            self.assertEqual((summary["mask_source"], summary["checkpoint"]["path"]), ("body_net", "stub.ckpt"))
+            # The region algorithms segment rows the way the workspace was segmented.
+            from worm_pose_gen.algorithms import _segment_params, segment_rows
+
+            recorded = _segment_params(workspace)
+            self.assertEqual((recorded.mask_source, recorded.body_net), ("body_net", "stub.ckpt"))
+            np.testing.assert_array_equal(segment_rows(workspace, [2], torch.device("cpu"))[2], bodies[2])
+            # The prior's bootstrap takes the same masks; the network is required and the source must be known.
+            frames = Frames(recording_path, flat_field=False)
+            try:
+                model = pipeline.load_mask_model(PriorParams.from_dict(params), frames, torch.device("cpu"))
+                self.assertIsInstance(model, pipeline.BodyNetMasks)
+                masks, _, timing = segment_frames(frames, model, [1, 4], PriorParams.from_dict(params), torch.device("cpu"))
+                np.testing.assert_array_equal(masks[1], bodies[4])
+                self.assertEqual(len(model.last), 2)
+                self.assertEqual((timing["read"], timing["flat_field"]), (0.0, 0.0))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="body_net"), frames, torch.device("cpu"))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="network"), frames, torch.device("cpu"))
+            finally:
+                frames.close()
 
 
 class IndependentCopyTests(unittest.TestCase):
@@ -633,6 +709,7 @@ class HypothesisArrayTests(unittest.TestCase):
         self.assertEqual(blanked["hypotheses_crop"][1, 0].tolist(), [1, 2, 3, 4])
         self.assertFalse(blanked["hypotheses_points_in_fov"][2].any())
 
+    @slow
     def test_propagate_stores_the_candidates_fields_and_a_placed_candidate_survives(self) -> None:
         # A forced stretch around row 3 makes the pass produce real candidates on the synthetic recording.
         from worm_pose_gen import edits

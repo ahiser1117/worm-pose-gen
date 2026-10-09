@@ -19,32 +19,69 @@ comparable: the score is the mean uncertainty per worm pixel.  A frame
 without a predicted worm scores its entropy over :data:`MIN_AREA`, so a
 worm the model barely sees still ranks high.
 
+**Types.**  Each candidate is also sorted into the kinds of image it shows
+(:func:`frame_types`, from the same prediction), any of:
+
+- ``contact``: the body touches or crosses itself: the model's overlap
+  output marks at least :data:`MIN_TYPE_PX` worm pixels (a body-field
+  model), or the predicted worm encloses a hole of that size (a loop; the
+  only sign a plain segmenter gives);
+- ``edge``: the predicted worm reaches the image border (a body partly off
+  camera);
+- ``pieces``: the predicted worm is in two or more pieces of at least
+  :data:`MIN_TYPE_PX` pixels (debris, a second animal, a broken mask);
+- ``empty``: less than :data:`MIN_AREA` predicted worm pixels;
+- ``clear``: none of the above: one whole body in view, apart from itself.
+
+A search can be limited to some types: then only candidates of any of them
+are picked, each window offers :data:`FILTERED_CANDIDATES_PER_WINDOW`
+candidates (rarer types need more looks), and a window with no candidate
+of those types gives its frame to the least sure leftover matches of the
+recording's other windows.  A recording with fewer matches than its share
+gives fewer frames.  Every picked frame records its ``types``, so a queue
+can be filtered by them afterwards.
+
 Without a model (a setup with no default mask model yet) every candidate
 scores the same and the window's middle candidate is picked: the frames
-are simply spread out.  Frames already labeled in the dataset being saved
-to are never candidates.
+are simply spread out, and there are no types to limit them to.  Frames
+already labeled in the dataset being saved to are never candidates.
 
 ``python -m worm_pose_gen.frame_search --spec <json>`` runs the search as a
-job and reports the picked frames as its result.
+job and reports the picked frames as its result.  With a model, the job
+then makes sure each recording has a body-size estimate in the pipeline's
+prior cache (:func:`pipeline.resolve_prior`: a bootstrap over frames spread
+through the recording, as Analyse's ``prior`` stage does), so the Labeling
+page can extend a trace off camera on a recording nobody has labeled or
+analysed yet; the result's ``lengths`` gives each recording's (``null``
+when no whole body was found).
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import ndimage
+
+from .library.inference import Outputs
 
 
 # Candidate frames looked at in each window.
 CANDIDATES_PER_WINDOW = 6
-# The smallest worm area (pixels) an uncertainty is divided by.
+# ... when the search is limited to some types.
+FILTERED_CANDIDATES_PER_WINDOW = 18
+# The smallest worm area (pixels) an uncertainty is divided by; less predicted worm is an ``empty`` frame.
 MIN_AREA = 200.0
+# The fewest pixels of overlap, of an enclosed hole, or of a piece that make a type.
+MIN_TYPE_PX = 30
+TYPES = ("contact", "edge", "pieces", "empty", "clear")
 
-Predict = Callable[[Sequence[int]], list[NDArray[np.float32]]]
+Predict = Callable[[Sequence[int]], list[Outputs]]
 
 
 def uncertainty(probability: NDArray[np.floating]) -> float:
@@ -53,6 +90,25 @@ def uncertainty(probability: NDArray[np.floating]) -> float:
     p = np.clip(np.asarray(probability, dtype=np.float64), 1e-6, 1 - 1e-6)
     entropy = -(p * np.log2(p) + (1 - p) * np.log2(1 - p))
     return float(entropy.sum() / max(float((p >= 0.5).sum()), MIN_AREA))
+
+
+def frame_types(outputs: Outputs) -> list[str]:
+    """The kinds of image a prediction shows, in :data:`TYPES` order; see the module docstring."""
+
+    worm = np.asarray(outputs.mask) >= 0.5
+    if worm.sum() < MIN_AREA:
+        return ["empty"]
+    found = []
+    overlap = 0 if outputs.overlap is None else int(((np.asarray(outputs.overlap) >= 0.5) & worm).sum())
+    hole = int((ndimage.binary_fill_holes(worm) & ~worm).sum())
+    if max(overlap, hole) >= MIN_TYPE_PX:
+        found.append("contact")
+    if worm[0].any() or worm[-1].any() or worm[:, 0].any() or worm[:, -1].any():
+        found.append("edge")
+    labels, count = ndimage.label(worm, structure=np.ones((3, 3), bool))
+    if count > 1 and int((np.bincount(labels.ravel())[1:] >= MIN_TYPE_PX).sum()) > 1:
+        found.append("pieces")
+    return found or ["clear"]
 
 
 def share(total: int, lengths: Sequence[int]) -> list[int]:
@@ -93,40 +149,53 @@ def candidates(first: int, end: int, excluded: set[int], per_window: int = CANDI
 
 
 def pick(frame_count: int, count: int, predict: Predict | None, excluded: set[int] = frozenset(),
-         per_window: int = CANDIDATES_PER_WINDOW, progress: Callable[[float], None] | None = None) -> list[dict[str, Any]]:
+         per_window: int = CANDIDATES_PER_WINDOW, progress: Callable[[float], None] | None = None,
+         types: Sequence[str] = ()) -> list[dict[str, Any]]:
     """The frames picked from one recording: one per window, the least sure candidate (``predict=None``: the middle one).
 
-    Returns ``[{"frame", "uncertainty"}]`` in frame order (``uncertainty``
-    is ``None`` without a model).
+    With ``types``, only candidates of any of them; a window without one
+    gives its frame to the least sure leftover matches of the other windows.
+    Returns ``[{"frame", "uncertainty", "types"}]`` in frame order
+    (``uncertainty`` and ``types`` are ``None`` without a model).
     """
 
     spans = windows(frame_count, count)
     groups = [candidates(a, b, set(excluded), per_window) for a, b in spans]
     if predict is None:
-        return [{"frame": group[len(group) // 2], "uncertainty": None} for group in groups if group]
-    picked = []
+        return [{"frame": group[len(group) // 2], "uncertainty": None, "types": None} for group in groups if group]
+    wanted = set(types)
+    picked, leftover = [], []
     for k, group in enumerate(groups):
-        if not group:
-            continue
-        scores = [uncertainty(p) for p in predict(group)]
-        best = int(np.argmax(scores))
-        picked.append({"frame": group[best], "uncertainty": round(scores[best], 5)})
+        if group:
+            scored = [{"frame": frame, "uncertainty": round(uncertainty(out.mask), 5), "types": frame_types(out)}
+                      for frame, out in zip(group, predict(group))]
+            matches = sorted((s for s in scored if not wanted or wanted & set(s["types"])), key=lambda s: -s["uncertainty"])
+            picked.extend(matches[:1])
+            leftover.extend(matches[1:])
         if progress is not None:
             progress((k + 1) / len(groups))
-    return picked
+    leftover.sort(key=lambda s: -s["uncertainty"])
+    picked.extend(leftover[: max(0, count - len(picked))])
+    return sorted(picked, key=lambda s: s["frame"])
 
 
 def find_frames(
     recordings: Sequence[dict[str, Any]], total: int, open_predict: Callable[[dict[str, Any]], tuple[Predict | None, Callable[[], None]]],
-    *, per_window: int = CANDIDATES_PER_WINDOW, progress: Callable[[float, str], None] | None = None,
+    *, types: Sequence[str] = (), per_window: int | None = None, progress: Callable[[float, str], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Frames from several recordings (``[{"path", "id", "frames", "exclude": [...]}]``), ``total`` in all.
+    """Frames from several recordings (``[{"path", "id", "frames", "exclude": [...]}]``), ``total`` in all, of any of ``types`` (all by default).
 
     ``open_predict(recording)`` gives a prediction function over its frame
     indices (or ``None`` without a model) and a function closing what it
-    opened.  Returns ``[{"path", "recording", "frame", "uncertainty"}]``,
+    opened.  Returns ``[{"path", "recording", "frame", "uncertainty", "types"}]``,
     recording by recording.
     """
+
+    unknown = sorted(set(types) - set(TYPES))
+    if unknown:
+        raise ValueError(f"unknown frame types {unknown}; choose from {list(TYPES)}")
+    if per_window is None:
+        per_window = FILTERED_CANDIDATES_PER_WINDOW if types else CANDIDATES_PER_WINDOW
 
     counts = share(total, [int(r["frames"]) - len(r.get("exclude") or ()) for r in recordings])
     entries: list[dict[str, Any]] = []
@@ -139,7 +208,9 @@ def find_frames(
             report(0.0)
         predict, close = open_predict(recording)
         try:
-            picked = pick(int(recording["frames"]), count, predict, set(recording.get("exclude") or ()), per_window, report)
+            if types and predict is None:
+                raise ValueError("limiting the search to frame types needs a model")
+            picked = pick(int(recording["frames"]), count, predict, set(recording.get("exclude") or ()), per_window, report, types)
         finally:
             close()
         entries.extend({"path": recording["path"], "recording": name, **p} for p in picked)
@@ -147,9 +218,11 @@ def find_frames(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """The job: ``--spec`` is ``{"recordings": [{"path", "id", "frames", "exclude"}], "frames": N, "model": ref | null,
-    "libraries": {"lab", "personal"}, "video": {"dataset_path", "flat_field"}, "fps": setup fps, "dataset_root": path}``."""
+    """The job: ``--spec`` is ``{"recordings": [{"path", "id", "frames", "exclude"}], "frames": N, "types": [type, ...] (optional), "model": ref | null,
+    "libraries": {"lab", "personal"}, "video": {"dataset_path", "flat_field"}, "fps": setup fps, "dataset_root": path,
+    "prior_cache": path (optional; the pipeline's default cache)}``."""
 
+    from . import library
     from .jobs import report_progress
     from .library import Libraries
     from .library.inference import load_model
@@ -160,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
     spec = json.loads(args.spec)
-    model = None
+    model = libraries = None
     if spec.get("model"):
         report_progress(0.0, f"loading {spec['model']}")
         roots = spec["libraries"]
@@ -174,22 +247,59 @@ def main(argv: Sequence[str] | None = None) -> int:
         frames = Frames(Path(recording["path"]), dataset_root=spec.get("dataset_root"), flat_field=bool(video.get("flat_field", True)),
                         dataset=str(video.get("dataset_path") or "/img_nir"))
 
-        def predict(indices: Sequence[int]) -> list[NDArray[np.float32]]:
+        def predict(indices: Sequence[int]) -> list[Outputs]:
             # Each frame with the neighbours its lags need, read as one slab.
             lag = model.max_lag
             out = []
             for index in indices:
                 first, last = max(0, index - lag), min(frames.total - 1, index + lag)
                 stack, _, _ = frames.corrected(list(range(first, last + 1)))
-                out.append(model.predict_sequence(stack, None, [index - first])[0].mask)
+                out.append(model.predict_sequence(stack, None, [index - first])[0])
             return out
 
         return predict, frames.close
 
-    entries = find_frames(spec["recordings"], int(spec["frames"]), open_predict,
-                          progress=lambda fraction, message: report_progress(0.02 + 0.97 * fraction, message))
-    report_progress(1.0, f"found {len(entries)} frames", result={"entries": entries})
+    entries = find_frames(spec["recordings"], int(spec["frames"]), open_predict, types=spec.get("types") or (),
+                          progress=lambda fraction, message: report_progress(0.02 + (0.67 if model else 0.97) * fraction, message))
+    lengths = {}
+    if model is not None:
+        lengths = estimate_lengths(spec, str(library.weights_path(libraries, spec["model"])), args.device,
+                                   progress=lambda fraction, message: report_progress(0.7 + 0.29 * fraction, message))
+    report_progress(1.0, f"found {len(entries)} frames", result={"entries": entries, "lengths": lengths})
     return 0
+
+
+def estimate_lengths(
+    spec: dict[str, Any], checkpoint: str, device: str | None, *, progress: Callable[[float, str], None] | None = None,
+) -> dict[str, float | None]:
+    """Each recording's body length from the prior cache, bootstrapping the ones it lacks with the segmenter ``checkpoint``."""
+
+    import torch
+
+    from .pipeline import FitParams, Frames, PriorParams, build_fit_config, cached_prior, resolve_prior
+
+    video = spec.get("video") or {}
+    params = PriorParams(checkpoint=checkpoint, dataset_root=str(spec.get("dataset_root")), flat_field=bool(video.get("flat_field", True)))
+    if spec.get("prior_cache"):
+        params = replace(params, prior_cache=str(spec["prior_cache"]))
+    config = build_fit_config(FitParams())
+    resolved = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    lengths: dict[str, float | None] = {}
+    for k, recording in enumerate(spec["recordings"]):
+        if progress is not None:
+            progress(k / len(spec["recordings"]), f"estimating the body length of {recording['id']}")
+        prior = cached_prior(recording["path"], params.prior_cache)
+        if prior is None:
+            frames = Frames(Path(recording["path"]), dataset_root=params.dataset_root, flat_field=params.flat_field,
+                            dataset=str(video.get("dataset_path") or "/img_nir"))
+            try:
+                prior, _, _ = resolve_prior(frames, params, config, resolved)
+            except ValueError:  # no whole body in the sampled frames
+                prior = None
+            finally:
+                frames.close()
+        lengths[recording["id"]] = None if prior is None else prior.length_px
+    return lengths
 
 
 if __name__ == "__main__":

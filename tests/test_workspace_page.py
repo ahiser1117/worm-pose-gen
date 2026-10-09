@@ -22,19 +22,23 @@ from fastapi.testclient import TestClient
 
 from worm_pose_gen import edits, fixes, library, pipeline
 from worm_pose_gen.app import AppConfig, analysis, create_app
+from worm_pose_gen.jobs import JobRecord, JobSpec
 from worm_pose_gen.library import Libraries
 from worm_pose_gen.workspace import list_workspaces
 
+from tests.slow import slow
 from tests.test_fixes import posed_workspace
 from tests.test_fixes_api import _cpu_fix_command
 from tests.test_pipeline import FIT_PARAMS, FRAMES, SEGMENT_PARAMS, _write_recording
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 CPU_PARAMS = {**SEGMENT_PARAMS, **FIT_PARAMS, "min_score": 9, "jump_seeds": False, "beam": 2}
+# The real parameters, before the class patches them to the CPU ones.
+ORIGINAL_ANALYSIS_PARAMS = analysis.analysis_params
 
 
-def cpu_analysis_params(app, setup, models) -> dict:
-    return {**CPU_PARAMS, "models_seen": {role: None if m is None else m["ref"] for role, m in models.items()}}
+def cpu_analysis_params(app, setup, models, mask_source="segmenter") -> dict:
+    return {**CPU_PARAMS, "models_seen": {role: None if m is None else m["ref"] for role, m in models.items()}, "mask_source_seen": mask_source}
 
 
 def cpu_analysis_command(workspace_path, stages, params) -> list[str]:
@@ -97,6 +101,7 @@ class WorkspacePageTests(unittest.TestCase):
             time.sleep(0.2)
         self.fail(f"job {job_id} did not finish")
 
+    @slow
     def test_analyse_a_recording_end_to_end(self) -> None:
         home = self.call("GET", "/api/home")
         self.assertEqual(home["setup"]["ref"], "lab:nir")
@@ -116,6 +121,7 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertEqual((job["spec"]["kind"], job["spec"]["params"]["stages"]), ("analyse", list(pipeline.DEFAULT_STAGES)))
         self.assertNotIn("export", job["spec"]["params"]["stages"])
         self.assertEqual(job["spec"]["params"]["params"]["models_seen"], {"mask": "lab:seg", "body": "lab:body"})
+        self.assertEqual(job["spec"]["params"]["params"]["mask_source_seen"], "segmenter")
         self.assertIn(started["status"]["state"], ("queued", "analysing"))
         # One analysis at a time per workspace.
         self.call("POST", "/api/analyse", {"path": str(self.recording)}, 409)
@@ -123,12 +129,15 @@ class WorkspacePageTests(unittest.TestCase):
         record = self.wait_for_job(job["id"])
         self.assertEqual(record["state"], "done", record.get("error"))
         self.assertEqual(record["message"], "analysis: done")
+        done = self.call("GET", f"/api/workspaces/{name}/status")["analysis"]["stages"]
+        self.assertEqual([(s["stage"], s["state"]) for s in done], [(stage, "done") for stage in pipeline.DEFAULT_STAGES])
 
         info = self.call("GET", f"/api/workspaces/{name}")
         self.assertEqual(info["frames"], [0, FRAMES - 1])
         self.assertEqual(info["settings"]["setup"], "lab:nir")
         self.assertEqual(info["settings"]["models"], {"mask": "lab:seg", "body": "lab:body"})
         self.assertEqual(info["settings"]["checkpoint"], str(self.libraries.lab / "models" / "seg" / "weights.ckpt"))
+        self.assertEqual(info["settings"]["mask_source"], "segmenter")
         self.assertTrue(info["summary"]["fitted"] > 0)
         self.assertFalse((self.root / "workspaces" / name / "exports").exists())
 
@@ -136,6 +145,7 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertEqual((status["state"], status["issues"], status["analysed"]), ("analysed", None, True))
         self.assertEqual(status["models"]["mask"]["name"], "seg-284")
         self.assertEqual(status["models"]["body"]["name"], "body-lags3")
+        self.assertEqual(status["mask_source"], "segmenter")
         self.assertEqual((status["setup"]["pixel_size_um"], status["setup"]["fps"]), (2.5, 20.0))
         self.assertEqual(status["analysis"]["state"], "done")
 
@@ -164,6 +174,42 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertEqual(self.wait_for_job(again["job"]["id"])["state"], "done")
         self.assertEqual(self.call("GET", f"/api/workspaces/{name}")["settings"]["models"], {"mask": "lab:seg", "body": None})
         self.call("POST", "/api/analyse", {"path": str(self.recording), "stages": ["export"]}, 400)
+
+        # Masks from the body model: it is required, and the workspace records that no mask model was used.
+        self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "body_net", "stages": ["ambiguity"]}, 400)
+        self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "network", "models": {"body": "lab:body"}}, 400)
+        net = self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "body_net", "models": {"body": "lab:body"}, "stages": ["ambiguity"]})
+        self.assertEqual(net["job"]["spec"]["params"]["params"]["models_seen"], {"mask": None, "body": "lab:body"})
+        self.assertEqual(net["job"]["spec"]["params"]["params"]["mask_source_seen"], "body_net")
+        self.assertEqual(self.wait_for_job(net["job"]["id"])["state"], "done")
+        settings = self.call("GET", f"/api/workspaces/{name}")["settings"]
+        self.assertEqual((settings["mask_source"], settings["models"], settings["checkpoint"]), ("body_net", {"mask": None, "body": "lab:body"}, None))
+        self.assertEqual(self.call("GET", f"/api/workspaces/{name}/status")["mask_source"], "body_net")
+
+    def test_analysis_params_of_each_mask_source(self) -> None:
+        setup = library.get_setup(self.libraries, "lab:nir")
+        app = self.client.app.state.app_state
+        segmenter = analysis.resolve_models(self.libraries, setup, {"body": "lab:body"})
+        body = analysis.resolve_models(self.libraries, setup, {"mask": "lab:seg", "body": "lab:body"}, "body_net")
+        self.assertEqual((segmenter["mask"]["ref"], body["mask"]), ("lab:seg", None))
+        params = ORIGINAL_ANALYSIS_PARAMS(app, setup, body, "body_net")
+        self.assertEqual((params["mask_source"], params["checkpoint"]), ("body_net", None))
+        self.assertEqual(params["body_net"], str(self.libraries.lab / "models" / "body" / "weights.ckpt"))
+        self.assertEqual(ORIGINAL_ANALYSIS_PARAMS(app, setup, segmenter)["mask_source"], "segmenter")
+
+    def test_stage_progress(self) -> None:
+        def record(state: str, progress: float, message: str) -> JobRecord:
+            spec = JobSpec(kind=analysis.ANALYSE_JOB_KIND, params={"stages": ["segment", "prior", "fit", "track"]})
+            return JobRecord(id="1", spec=spec, state=state, progress=progress, message=message)
+
+        def stages(job: JobRecord) -> list[tuple[str, float]]:
+            return [(s["state"], round(s["progress"], 3)) for s in analysis.stage_progress(job)]
+
+        self.assertEqual(stages(record("running", 0.625, "fit: frame 3")), [("done", 1.0), ("done", 1.0), ("running", 0.5), ("waiting", 0.0)])
+        self.assertEqual(stages(record("failed", 0.3, "prior: estimating")), [("done", 1.0), ("failed", 0.2), ("waiting", 0.0), ("waiting", 0.0)])
+        # Before the job reports a stage (queued, waiting for SLURM) the overall progress is all there is.
+        self.assertEqual(stages(record("queued", 0.0, "submitted to SLURM as job 7")), [("waiting", 0.0)] * 4)
+        self.assertEqual(stages(record("done", 1.0, "analysis: done")), [("done", 1.0)] * 4)
 
     def test_kymograph_encoding(self) -> None:
         # A circle of radius r has curvature 1/r; times its length 2*pi*r that is 2*pi everywhere.

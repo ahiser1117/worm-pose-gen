@@ -22,6 +22,10 @@ A recording belongs to the setup it is registered to in the personal
 the extension (``2023-06-23-01``): the lab's acquisition names files by date
 and index, so the stem is unique within a setup and survives the file being
 mirrored to another store.
+
+A video added by hand in another container (``.avi``) is converted once to
+an HDF5 recording ``videos/<id>.h5`` in the personal library, with the
+frames in the setup's dataset, and that file is what gets registered.
 """
 
 from __future__ import annotations
@@ -34,12 +38,14 @@ from typing import Any
 from .roots import (
     Libraries, append_jsonl, check_id, locked, make_ref, parse_ref, read_json, read_jsonl, write_json,
 )
+from ..videos import convert_video, is_video
 from ..workspace import utc_now
 
 
 SETUPS_DIR = "setups"
 DEFAULTS_LOG = "defaults_log.jsonl"
 RECORDINGS_FILE = "recordings.json"
+VIDEOS_DIR = "videos"
 # What a model must output to fill each default role.
 ROLE_OUTPUTS = {"mask": ("mask",), "body": ("ap", "head", "tail")}
 DEFAULT_VIDEO = {"dataset_path": "/img_nir", "flat_field": True}
@@ -201,12 +207,20 @@ def registered_recordings(libraries: Libraries) -> dict[str, dict[str, Any]]:
 
 
 def register_recording(libraries: Libraries, path: str | Path, setup_ref: str) -> dict[str, Any]:
-    """Assign a recording outside every setup's roots (or move it to another setup) in the personal library."""
+    """Assign a recording outside every setup's roots (or move it to another setup) in the personal library.
 
-    get_setup(libraries, setup_ref)
+    A video (``.avi``) is converted first, unless its converted recording exists already.
+    """
+
+    setup = get_setup(libraries, setup_ref)
     resolved = str(Path(path).expanduser().resolve())
     if not Path(resolved).is_file():
         raise FileNotFoundError(f"{resolved} is not a file")
+    if is_video(resolved):
+        converted = libraries.personal / VIDEOS_DIR / f"{recording_id(resolved)}.h5"
+        if not converted.is_file():
+            convert_video(Path(resolved), converted, str(setup.video["dataset_path"]))
+        resolved = str(converted.resolve())
     with locked(libraries.personal):
         registry = registered_recordings(libraries)
         registry[resolved] = {"setup": setup_ref, "registered_at": utc_now()}

@@ -8,7 +8,7 @@
 .lb-left .lb-fill { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .lb-left select + .row, .lb-left select { margin-top: 6px; }
 .lb-nav { justify-content: space-between; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
-.lb-nav button { flex: 1; }
+.lb-nav button { flex: 1; white-space: nowrap; padding: 5px 6px; font-size: 12px; }
 .lb-grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-tight { margin: 4px 0; flex-wrap: nowrap; }
 .lb-tight select { min-width: 0; }
@@ -29,6 +29,11 @@
 .lb-sort { margin-bottom: 4px; }
 .lb-check { display: flex; gap: 8px; padding: 3px 0; color: var(--text); }
 .lb-recordings { max-height: 40vh; overflow-y: auto; }
+.lb-types { display: grid; grid-template-columns: 1fr 1fr; column-gap: 8px; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; margin: 6px 0; }
+.lb-types .note { grid-column: 1 / -1; }
+.lb-types legend { padding: 0 4px; }
+.lb-types[disabled] { opacity: 0.5; }
+.lb-filters select { width: 100%; }
 
 .lb-main { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .lb-empty { margin: auto; }
@@ -40,6 +45,9 @@
 .lb-layers button, .lb-toolbar > button, .lb-context button { padding: 3px 9px; }
 .lb-opacity input { width: 90px; }
 .lb-canvas { position: relative; min-height: 0; }
+.lb-proposing { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; align-items: center; padding: 4px 10px; border-radius: 8px; font-size: 12px;
+  color: var(--info); background: rgba(22, 29, 35, 0.86); border: 1px solid var(--border); pointer-events: none; }
+.lb-proposing[hidden] { display: none; }
 .lb-group { display: inline-flex; align-items: center; gap: 6px; }
 .lb-group input[type="range"] { width: 180px; }
 .lb-group.seg button { border-radius: 0; }
@@ -57,6 +65,7 @@
 .lb-body-note { min-height: 3em; margin: 0 0 4px; }
 .lb-trace { border: 1px solid var(--warn); border-radius: var(--radius); padding: 6px 8px; margin: 6px 0; }
 .lb-trace p { margin: 0 0 4px; }
+.lb-extend { color: var(--text); margin: 2px 0 4px; }
 .lb-maskonly { margin-top: 8px; color: var(--text); }
 .lb-save-row .row { flex-wrap: nowrap; }
 .lb-save-row .lb-save { flex: 2 1 auto; padding: 8px 10px; }

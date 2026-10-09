@@ -71,6 +71,13 @@ class ListRecordingsTests(RecordingsFixture):
         found = find_recordings([self.data, self.root / "missing"])
         self.assertEqual([p.name for p in found], ["2023-03-30-01.h5", "2024-01-31-02.h5", "2024-05-28-02.h5"])
 
+    def test_a_root_that_links_to_another_lists_each_recording_once(self) -> None:
+        link = self.root / "link"
+        link.symlink_to(self.data)
+        found = find_recordings([link, self.data, self.rec_a])
+        self.assertEqual(found, find_recordings([self.data]))
+        self.assertEqual(len(found), 3)
+
     def test_readable_recordings_report_shape_and_garbage_reports_error(self) -> None:
         infos = self.listing()
         by_name = {info.name: info for info in infos}
@@ -185,14 +192,15 @@ class ThumbnailTests(RecordingsFixture):
                     handle.create_dataset("/x", data=np.zeros((3, 32, 40), dtype=np.uint8))
             (root / "a" / ".hidden").mkdir()
             (root / "a" / "notes.txt").write_text("x")
+            (root / "a" / "movie.AVI").write_bytes(b"")
             (root / "a" / "sub").mkdir()
             listing = list_directory(root / "a")
             self.assertEqual(listing["parent"], str(root.resolve()))
-            self.assertEqual([(e["name"], e["kind"]) for e in listing["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("other.h5", "h5"), ("two.h5", "h5")])
+            self.assertEqual([(e["name"], e["kind"]) for e in listing["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("movie.AVI", "video"), ("other.h5", "h5"), ("two.h5", "h5")])
             self.assertEqual(listing["entries"][1]["size_bytes"], conventional.stat().st_size)
             self.assertIsNone(list_directory(Path("/"))["parent"])
             everything = list_directory(root / "a", all_files=True)
-            self.assertEqual([(e["name"], e["kind"]) for e in everything["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("notes.txt", "file"), ("other.h5", "h5"), ("two.h5", "h5")])
+            self.assertEqual([(e["name"], e["kind"]) for e in everything["entries"]], [("sub", "dir"), ("conv.h5", "h5"), ("movie.AVI", "video"), ("notes.txt", "file"), ("other.h5", "h5"), ("two.h5", "h5")])
             with self.assertRaises(FileNotFoundError):
                 list_directory(root / "missing")
             with self.assertRaises(NotADirectoryError):

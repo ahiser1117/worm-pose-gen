@@ -304,12 +304,14 @@ def chain_fit(
 
 
 # A traced midline: the clicked points, head first, become the start and a
-# per-point pull of the fit (:func:`trace_fit`).
+# per-point pull of the fit, and its first and last clicks the body's ends
+# (:func:`trace_fit`).  Asked to, a trace ending within TRACE_BORDER_PX of the
+# border or past it continues off camera (:func:`extend_trace`).
 TRACE_BORDER_PX = 8.0
 TRACE_SIGMA_WIDTHS = 0.5
 TRACE_POSE_WEIGHT = 0.02
-TRACE_HEAD_WEIGHT = 0.2
-TRACE_HEAD_SIGMA_PX = 6.0
+TRACE_END_WEIGHT = 0.2
+TRACE_END_SIGMA_PX = 6.0
 # Non-interpenetration for trace fits (``MaskFitConfig.separation_*``): on 25
 # traced records, weight 1 at full separation cut the median overlap from 263
 # to 99 px (mean 438 to 116) for 0.002 median IoU; weight 5 cost up to 0.06.
@@ -318,18 +320,15 @@ TRACE_SEPARATION_FRACTION = 1.0
 
 
 def extend_trace(trace_xy: NDArray[np.generic], image_shape: tuple[int, int], length_px: float | None) -> FloatArray:
-    """The trace, continued straight off camera to ``length_px`` when its tail end is at the image border.
+    """The trace, continued straight to ``length_px`` when its last point is within ``TRACE_BORDER_PX`` of the border or past it.
 
-    The fit pulls each of its points toward the same-numbered point of the
-    resampled trace, so a trace that stops where the body leaves the camera
-    would squeeze the whole body into the visible part.  The continuation
-    lies off camera, where the fit ignores the pull, and only fixes how the
-    points are spread along the body.
+    For a body whose tail is far off camera: the person traces to where the
+    body leaves the view (or a little past it) and the recording's typical
+    length sets how far it goes on.  Unchanged without a length, or when the
+    trace is already that long.
     """
 
     points = np.asarray(trace_xy, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
-        raise ValueError("a trace needs at least two (x, y) points")
     height, width = image_shape
     end = points[-1]
     at_border = min(end[0], end[1], width - 1 - end[0], height - 1 - end[1]) <= TRACE_BORDER_PX
@@ -345,27 +344,38 @@ def trace_fit(
     mask: NDArray[np.bool_],
     trace_xy: NDArray[np.generic],
     *,
-    length_px: float | None,
     config: BatchFitConfig,
     template: NDArray[np.generic],
     device: torch.device,
     as_drawn: bool = False,
+    extend_to_px: float | None = None,
 ) -> tuple[FloatArray, FloatArray, float]:
     """Centerline, width profile, and mask IoU of the body along a traced midline.
 
-    The trace (head first) is extended off camera to ``length_px`` when it
-    ends at the border (:func:`extend_trace`).  By default the tube starts on
-    the trace and is fit to ``mask`` while each point is pulled toward the
-    trace at half a body width and the head toward the first click, so the
-    fit keeps the traced route through a crossing and finds the body's edges
-    and width itself.  The length bounds do not apply, since the trace sets
-    the length.  ``as_drawn`` keeps the trace as the midline, with a
-    template width scaled to the mask.
+    The trace (head first) is the body from end to end: its first click is
+    the head and its last the tail, in view or off camera, so a trace that
+    stops at the border ends the body there (the targets then treat it as
+    cut off by the camera, :func:`mark_exits`).  With ``extend_to_px`` (the
+    recording's typical body length, when the person asked for it) a trace
+    ending at or past the border continues off camera to that length
+    (:func:`extend_trace`); the continuation is a guess, so the tail is then
+    free and only the length and the spread of points along the body follow
+    from it.  By default the tube starts
+    on the trace and is fit to ``mask`` while each point is pulled toward
+    the trace at half a body width and both ends toward their clicks, so the
+    fit keeps the traced route through a crossing, puts the ends where the
+    person did, and finds the body's edges and width itself.  The length
+    bounds do not apply, since the trace sets the length.  ``as_drawn``
+    keeps the trace as the midline, with a template width scaled to the mask.
     """
 
-    path = extend_trace(trace_xy, mask.shape, length_px)
-    start = init_from_centerline(path, mask, name="trace", config=config)
-    reference = resample_centerline(path, config.n_points)
+    points = np.asarray(trace_xy, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
+        raise ValueError("a trace needs at least two (x, y) points")
+    clicked = len(points)
+    points = extend_trace(points, mask.shape, extend_to_px)
+    start = init_from_centerline(points, mask, name="trace", config=config)
+    reference = resample_centerline(points, config.n_points)
     if as_drawn:
         profile = template * start.width_px
         tube = render_tube(reference, profile, *mask.shape, device=device)
@@ -376,14 +386,15 @@ def trace_fit(
         separation_fraction=TRACE_SEPARATION_FRACTION, temporal_prior_weight=TRACE_POSE_WEIGHT,
         temporal_prior_sigma_px=max(1.0, TRACE_SIGMA_WIDTHS * start.width_px),
     )
-
-    head = HeadConstraint(
-        tracking_xy=np.asarray(trace_xy[0], dtype=np.float64), tracking_weight=TRACE_HEAD_WEIGHT,
-        previous_weight=0.0, sigma_px=TRACE_HEAD_SIGMA_PX,
+    height, width = mask.shape
+    head_in_view = bool(0 <= points[0, 0] <= width - 1 and 0 <= points[0, 1] <= height - 1)
+    ends = HeadConstraint(
+        tracking_xy=points[0], tail_xy=points[-1] if len(points) == clicked else None, tracking_weight=TRACE_END_WEIGHT,
+        previous_weight=0.0, sigma_px=TRACE_END_SIGMA_PX, keep_in_frame=head_in_view,
     )
     result = fit_masks(
         [mask], [[start]], width_template=template, config=traced_config, device=device,
-        references=[reference], head_constraints=[head],
+        references=[reference], head_constraints=[ends],
     )[0]
     return result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"])
 
@@ -506,10 +517,10 @@ def mark_exits(meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArra
 
 def _traced_body(
     meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], trace_xy: NDArray[np.generic],
-    *, as_drawn: bool, length_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
+    *, as_drawn: bool, extend_to_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
 ) -> Any:
     centerline, profile, iou = trace_fit(
-        mask, trace_xy, length_px=length_px, config=config, template=template, device=device, as_drawn=as_drawn,
+        mask, trace_xy, config=config, template=template, device=device, as_drawn=as_drawn, extend_to_px=extend_to_px,
     )
     meta.update(
         fit_method="trace_as_drawn" if as_drawn else "traced", orientation="manual",
@@ -529,21 +540,22 @@ def fit_targets(
     device: torch.device,
     length_px: Callable[[], float | None],
     independent: MaskFitResult | None = None,
-    trace: tuple[NDArray[np.generic], bool] | None = None,
+    trace: tuple[NDArray[np.generic], bool, float | None] | None = None,
     head_xy: NDArray[np.generic] | None = None,
     segmenter: SegmentationModule | None = None,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray], Any]:
     """The body-field targets of one labeled frame from its hand mask, context frames and nose landmarks.
 
     The body is, in order: the refit along a traced midline (``trace``: the
-    points, head first, and whether to keep them as drawn); else the
+    points, head first, whether to keep them as drawn, and the body length
+    to extend them off camera to or ``None``, :func:`trace_fit`); else the
     independent fit (``independent``, fitted here when not given) or, for a
     tangled frame when a ``segmenter`` is given, the chain fit when it is
     better.  An untraced body's head is the end nearest ``head_xy`` (a
     person's choice: orientation ``manual``), else the acquisition nose
     (``nose``, ``nose_nearby``), else the thinner end is the tail
     (``taper``).  ``length_px`` gives the recording's typical body length,
-    asked for only when a trace or a camera exit needs it.
+    which :func:`mark_exits` reads for a body the camera cuts off.
 
     Returns the meta (build fields only, no store keys), the target arrays
     (no context), and the rendered targets, or ``None`` for a label without
@@ -560,10 +572,13 @@ def fit_targets(
         arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
         meta["nose_offset"] = offset
     if trace is not None:
+        points, as_drawn, extend_to_px = trace
         targets = _traced_body(
-            meta, arrays, mask, trace[0], as_drawn=trace[1], length_px=length_px(),
-            config=config, template=template, device=device,
+            meta, arrays, mask, points, as_drawn=as_drawn, extend_to_px=extend_to_px, config=config, template=template, device=device,
         )
+        # A trace that stops where the body leaves the view is cut off by the camera like any fit.
+        if mark_exits(meta, arrays, mask, length_px()):
+            targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
         meta["has_body"] = True
         return meta, arrays, targets
     result = independent if independent is not None else fit_masks(
@@ -650,7 +665,7 @@ def build(
             if path.exists():
                 previous, previous_meta = load(path, ("trace_xy",))
                 if "trace_xy" in previous and previous_meta.get("fit_method") in TRACE_METHODS:
-                    traces[record.sample_id] = (previous["trace_xy"], previous_meta["fit_method"] == "trace_as_drawn")
+                    traces[record.sample_id] = (previous["trace_xy"], previous_meta["fit_method"] == "trace_as_drawn", None)
         bodies = [p for p in pending if p[2].any() and p[0].sample_id not in traces]
         results = fit_masks(
             [p[2] for p in bodies],

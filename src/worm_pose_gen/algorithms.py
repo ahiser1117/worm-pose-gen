@@ -16,7 +16,8 @@ refit that comes back worse than the current track can be discarded.
 The algorithms share the batched mask fitter and candidate storage:
 
 - ``independent_multistart``: every row fit from the standard starts of its
-  mask (both orientations when a prior exists), every start a candidate.
+  mask (both orientations when a prior or the network exists) and the
+  network's trace, every start a candidate.
 - ``chain_forward`` / ``chain_backward``: one chain from an anchor through the
   region with prediction, temporal prior and beam (``propagation.propagate``
   with one direction).
@@ -31,6 +32,16 @@ The algorithms share the batched mask fitter and candidate storage:
   first-order motion prior (``body_smoother``), untrusted frames bridged.
 - ``mirror``: the current poses and their reversals, no fitting: an
   orientation fix over a region.
+
+When the workspace was fit with the body-field network (its summary's
+``fit_params.body_net``), every algorithm uses the network as the propagate
+stage does: each fit is scored against the region's evidence
+(``batch_fit.fit_masks(fields=...)``), the network's trace is one more start
+wherever an algorithm builds starts, and every candidate's energy, the
+smoother's and the stored poses' too, includes its evidence energy, a
+mirrored option paying the mirror's own.  The smoother's joint energy does
+not take the evidence: as A-P and end terms it did not help on the sequence
+set (``docs/BODY_FIELDS.md``).
 
 Anchors need not be adjacent to the region: the algorithms run on a *local*
 copy of the arrays in which the anchors sit right next to the region, so the
@@ -54,7 +65,7 @@ from numpy.typing import NDArray
 import torch
 
 from .ambiguity import pose_jump_px
-from .batch_fit import PRESETS, BatchFitConfig, fit_masks
+from .batch_fit import PRESETS, BatchFitConfig, BodyFieldEvidence, field_energies, fit_masks
 from .body_smoother import SmoothingProblem, initial_chain, motion_scales, smooth_chains
 from .fixed_body import calibrate_body, chain_targets, trusted_rows, whole_body_rows
 from .latent import cubic_bspline_basis, decode_centerline, encode_centerline
@@ -65,7 +76,8 @@ from .observation import soft_dice_energy
 from .pipeline import (
     SegmentParams,
     SOURCE_CODES,
-    load_segmentation_model,
+    body_field_inputs,
+    load_mask_model,
     read_summary,
     segment_frames,
     workspace_arrays,
@@ -73,6 +85,7 @@ from .pipeline import (
     workspace_image_shape,
     workspace_lock,
     workspace_masks_of,
+    workspace_predictions,
     workspace_setup,
 )
 from .propagation import (
@@ -190,6 +203,10 @@ class RegionContext:
     path (``None`` = no anchor on that side).  ``masks`` holds the cleaned
     masks of the region rows and the anchors (rows without a usable mask are
     absent).  ``state`` is the workspace's state at build time.
+    ``evidence`` maps a row of ``masks`` to the body-field network's
+    evidence and ``network_starts`` a region row to the network's trace start
+    (``pipeline.body_field_inputs``); both are empty when the workspace was
+    not fit with the network.
     """
 
     workspace: Any
@@ -205,6 +222,8 @@ class RegionContext:
     state: dict[str, np.ndarray] = field(default_factory=dict)
     image_shape: tuple[int, int] | None = None
     mask_revisions: dict[str, str] = field(default_factory=dict)
+    evidence: dict[int, BodyFieldEvidence] = field(default_factory=dict)
+    network_starts: dict[int, Initialization] = field(default_factory=dict)
 
     @property
     def rows(self) -> list[int]:
@@ -232,16 +251,30 @@ class RegionContext:
 
         return [r for r in self.rows if r in self.masks]
 
+    def fields_of(self, rows: Sequence[int]) -> list[BodyFieldEvidence | None] | None:
+        """The ``fit_masks(fields=...)`` of these rows; ``None`` without a network."""
+
+        return [self.evidence.get(int(r)) for r in rows] if self.evidence else None
+
+    def with_trace(self, row: int, starts: list[Initialization]) -> list[Initialization]:
+        """``starts`` plus the network's trace start of ``row`` when there is one."""
+
+        trace = self.network_starts.get(int(row))
+        return starts if trace is None else starts + [trace]
+
 
 @dataclass
 class CandidatePose:
     """One candidate pose of a row: everything ``pipeline.store_result`` writes, plus where it came from.
 
     ``energy`` is the comparable energy (``propagation.comparable_energy``:
-    overlap plus the fit configuration's priors), ``soft_dice`` the overlap
-    energy alone.  ``source`` is an algorithm-specific label (``forward``,
-    ``backward``, ``independent``, ``current``, ``mirrored``), ``start`` the
-    start that won inside the candidate's fit.
+    overlap plus the fit configuration's priors and the body-field evidence
+    energy), ``soft_dice`` the overlap energy alone.  ``source`` is an
+    algorithm-specific label (``forward``, ``backward``, ``independent``,
+    ``current``, ``mirrored``), ``start`` the start that won inside the
+    candidate's fit.  ``field_energy`` is the evidence part of ``energy`` and
+    ``mirror_field_energy`` the evidence energy of the body traversed from
+    the other end (``None`` without evidence; ``score_evidence``).
     """
 
     centerline_xy: np.ndarray
@@ -257,6 +290,8 @@ class CandidatePose:
     iou: float
     source: str
     start: str = ""
+    field_energy: float = 0.0
+    mirror_field_energy: float | None = None
 
     @classmethod
     def from_result(cls, result: MaskFitResult, config: BatchFitConfig, source: str, start: str | None = None, energy: float | None = None) -> "CandidatePose":
@@ -275,6 +310,7 @@ class CandidatePose:
             iou=float(best.get("final_iou", float("nan"))),
             source=str(source),
             start=str(result.initializations[result.best_index].name if start is None else start),
+            field_energy=float(best.get("final_field_energy", 0.0)),
         )
 
     @classmethod
@@ -304,9 +340,13 @@ class CandidatePose:
         )
 
     def mirrored(self, coefficients: int, source: str | None = None) -> "CandidatePose":
-        """The same body traversed from the other end (``mask_fit.reverse_result`` semantics)."""
+        """The same body traversed from the other end (``mask_fit.reverse_result`` semantics), paying the mirror's evidence energy."""
 
         curve = self.centerline_xy[::-1].copy()
+        evidence = {} if self.mirror_field_energy is None else {
+            "energy": self.energy - self.field_energy + self.mirror_field_energy,
+            "field_energy": self.mirror_field_energy, "mirror_field_energy": self.field_energy,
+        }
         return replace(
             self,
             centerline_xy=curve,
@@ -314,6 +354,7 @@ class CandidatePose:
             width_shape=self.width_shape[::-1].copy(),
             width_profile=self.width_profile[::-1].copy(),
             source=self.source if source is None else source,
+            **evidence,
         )
 
     def to_pose(self) -> dict[str, Any]:
@@ -334,12 +375,35 @@ def _as_candidate(pose: CandidatePose, index: int) -> Candidate:
     result = MaskFitResult(
         best_index=0,
         initializations=[Initialization(pose.start or pose.source, pose.latent, pose.width_px, pose.width_shape)],
-        records=[{"name": pose.start, "final_energy": pose.energy, "final_iou": pose.iou, "final_soft_dice_energy": pose.soft_dice}],
+        records=[{
+            "name": pose.start, "final_energy": pose.energy, "final_iou": pose.iou, "final_soft_dice_energy": pose.soft_dice,
+            "final_field_energy": pose.field_energy,
+        }],
         latent=pose.latent, width_px=pose.width_px, width_profile=pose.width_profile, centerline_xy=pose.centerline_xy,
         crop=CropWindow(x0, x1, y0, y1, 0, 0), rendered_hard_mask=np.zeros((0, 0), dtype=bool), energy_history=np.zeros(0),
         points_in_fov=pose.points_in_fov, body_length_px=pose.body_length_px, width_shape=pose.width_shape,
     )
-    return Candidate(pose.source, result, pose.energy, None, pose.start, float("nan"), beam=index)
+    return Candidate(pose.source, result, pose.energy, None, pose.start, float("nan"), beam=index, mirror_field_energy=pose.mirror_field_energy)
+
+
+def score_evidence(ctx: RegionContext, candidates: dict[int, list[CandidatePose]]) -> None:
+    """Score every candidate of a row with evidence, and its mirror, against that evidence (``batch_fit.field_energies``), in place.
+
+    A fit already carries its evidence energy; a stored or placed pose (the
+    current poses, the smoother's, a keyframe) gets it here, so every
+    candidate of a frame competes on the same footing, and the mirror of each
+    pays its own evidence energy in the path (``propagation.Candidate.energy``).
+    """
+
+    scored = [(row, pose) for row, poses in candidates.items() if row in ctx.evidence for pose in poses]
+    if not scored:
+        return
+    curves = [c for _, pose in scored for c in (pose.centerline_xy, pose.centerline_xy[::-1])]
+    values = field_energies(curves, [ctx.evidence[row] for row, _ in scored for _ in range(2)], ctx.config)
+    for k, (_, pose) in enumerate(scored):
+        own, mirror = float(values[2 * k]), float(values[2 * k + 1])
+        pose.energy = pose.energy - pose.field_energy + own
+        pose.field_energy, pose.mirror_field_energy = own, mirror
 
 
 @dataclass
@@ -528,6 +592,8 @@ class _Local:
     masks: dict[int, MaskArray]
     rows: list[int]  # local index -> workspace row
     stretch: tuple[int, int]  # local rows of the region
+    evidence: dict[int, BodyFieldEvidence]
+    network_starts: dict[int, Initialization]
 
     def to_local(self, row: int) -> int:
         return self.rows.index(int(row))
@@ -546,8 +612,10 @@ def _local_view(ctx: RegionContext) -> _Local:
     index = np.asarray(rows, dtype=np.int64)
     arrays = {k: v[index] for k, v in ctx.state.items() if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == n}
     masks = {i: ctx.masks[r] for i, r in enumerate(rows) if r in ctx.masks}
+    evidence = {i: ctx.evidence[r] for i, r in enumerate(rows) if r in ctx.evidence}
+    network_starts = {i: ctx.network_starts[r] for i, r in enumerate(rows) if r in ctx.network_starts}
     a = len(before)
-    return _Local(arrays, masks, rows, (a, a + len(ctx.rows) - 1))
+    return _Local(arrays, masks, rows, (a, a + len(ctx.rows) - 1), evidence, network_starts)
 
 
 def _path_config(params: dict[str, Any], **overrides: Any) -> PropagationConfig:
@@ -583,6 +651,7 @@ def _choose_path(ctx: RegionContext, candidates: dict[int, list[CandidatePose]],
 def _assemble(ctx: RegionContext, algorithm: str, params: dict[str, Any], candidates: dict[int, list[CandidatePose]], propagation: PropagationConfig) -> CandidateSet:
     """The set with its path and metrics, ready to be saved."""
 
+    score_evidence(ctx, candidates)
     path = _choose_path(ctx, candidates, propagation)
     frames = np.asarray(ctx.state["frame_index"], dtype=np.int64)
     candidate_set = CandidateSet(
@@ -688,7 +757,8 @@ class IndependentMultistart(_RegionAlgorithm):
     label = "Independent multi-start"
     description = (
         "Every frame of the region fit from the standard starts of its mask (skeleton and moment arcs; both orientations when a "
-        "recording prior exists), each start kept as a candidate. The path then picks one per frame with the anchors."
+        "recording prior or the body-field network exists) and the network's trace, each start kept as a candidate. The path then "
+        "picks one per frame with the anchors."
     )
     parameters = [_PRESET, *_PATH_PARAMS]
 
@@ -703,14 +773,18 @@ class IndependentMultistart(_RegionAlgorithm):
             starts = standard_initializations(ctx.masks[row], config=config)
             if shape is not None:
                 starts = [replace(s, width_shape=shape) for s in starts]
-            if ctx.prior is not None:
+            # With the network's evidence, as in the fit stage, the evidence decides which end is the head.
+            if ctx.prior is not None or ctx.evidence:
                 starts = starts + [reverse_initialization(s, config=config) for s in starts]
-            jobs.extend((row, s) for s in starts)
+            jobs.extend((row, s) for s in ctx.with_trace(row, starts))
         candidates: dict[int, list[CandidatePose]] = {r: [] for r in rows}
         chunk_size = max(1, int(config.max_rows))
         for k in range(0, len(jobs), chunk_size):
             chunk = jobs[k : k + chunk_size]
-            results = fit_masks([ctx.masks[r] for r, _ in chunk], [[s] for _, s in chunk], width_template=ctx.width_template, config=config, device=ctx.device)
+            results = fit_masks(
+                [ctx.masks[r] for r, _ in chunk], [[s] for _, s in chunk], width_template=ctx.width_template, config=config, device=ctx.device,
+                fields=ctx.fields_of([r for r, _ in chunk]),
+            )
             for (row, start), result in zip(chunk, results, strict=True):
                 candidates[row].append(CandidatePose.from_result(result, ctx.config, "independent", start.name))
             _report(progress, 0.05 + 0.85 * (k + len(chunk)) / max(len(jobs), 1), f"{self.id}: fit {k + len(chunk)}/{len(jobs)} starts")
@@ -727,7 +801,7 @@ def _propagate_region(
     _report(progress, 0.05, f"{label}: propagating over {len(ctx.rows)} frames")
     raw, info = propagate(
         local.arrays, [local.stretch], local.masks, config=ctx.config, device=ctx.device, width_template=ctx.width_template,
-        propagation=propagation, warm_config=warm_config,
+        propagation=propagation, warm_config=warm_config, evidence=local.evidence, network_starts=local.network_starts,
     )
     candidates: dict[int, list[CandidatePose]] = {}
     for local_row, options in raw.items():
@@ -744,8 +818,8 @@ def _fit_missing(ctx: RegionContext, candidates: dict[int, list[CandidatePose]],
     for row in rows:
         if candidates.get(row):
             continue
-        starts = standard_initializations(ctx.masks[row], config=ctx.config)
-        result = fit_masks([ctx.masks[row]], [starts], width_template=ctx.width_template, config=ctx.config, device=ctx.device)[0]
+        starts = ctx.with_trace(row, standard_initializations(ctx.masks[row], config=ctx.config))
+        result = fit_masks([ctx.masks[row]], [starts], width_template=ctx.width_template, config=ctx.config, device=ctx.device, fields=ctx.fields_of([row]))[0]
         candidates[row] = [CandidatePose.from_result(result, ctx.config, "independent", "mask_refit")]
 
 
@@ -827,8 +901,10 @@ class SlowRefit(_RegionAlgorithm):
         for k in range(0, len(rows), chunk_size):
             chunk = rows[k : k + chunk_size]
             starts = [[warm_initialization(ctx.state["latent"][r], float(ctx.state["width_px"][r]), ctx.state["width_shape"][r], "slow_refit")]
-                      if bool(ctx.state["fitted"][r]) else standard_initializations(ctx.masks[r], config=config) for r in chunk]
-            results = fit_masks([ctx.masks[r] for r in chunk], starts, width_template=ctx.width_template, config=config, device=ctx.device)
+                      if bool(ctx.state["fitted"][r]) else ctx.with_trace(r, standard_initializations(ctx.masks[r], config=config)) for r in chunk]
+            results = fit_masks(
+                [ctx.masks[r] for r in chunk], starts, width_template=ctx.width_template, config=config, device=ctx.device, fields=ctx.fields_of(chunk),
+            )
             for row, result in zip(chunk, results, strict=True):
                 candidates[row].append(CandidatePose.from_result(result, ctx.config, "independent", "slow_refit"))
             _report(progress, 0.05 + 0.85 * (k + len(chunk)) / max(len(rows), 1), f"{self.id}: refit {k + len(chunk)}/{len(rows)} frames")
@@ -913,6 +989,8 @@ class TrackedHead(_RegionAlgorithm):
                     if ctx.prior is not None:
                         start = replace(start, width_shape=np.asarray(ctx.prior.width_shape, dtype=np.float64))
                     starts.append(start)
+            if row in ctx.network_starts:
+                starts.append(oriented_start(ctx.network_starts[row], target))
             gap = 1 if previous_row is None else max(1, int(frames[row] - frames[previous_row]))
             sigma = max(1.0, 0.5 * (previous.width_px if previous is not None else config.default_width_px))
             fit_config = replace(config, temporal_prior_weight=params["previous_pose_weight"], temporal_prior_sigma_px=sigma)
@@ -926,6 +1004,7 @@ class TrackedHead(_RegionAlgorithm):
                     sigma_px=params["head_sigma_px"], max_step_px=None if reference is None else params["max_head_step_px"] * gap,
                     keep_in_frame=params["keep_head_in_frame"],
                 )],
+                fields=ctx.fields_of([row]),
             )[0]
             pose = CandidatePose.from_result(result, ctx.config, "forward", energy=float(result.records[result.best_index]["final_energy"]))
             if reference is not None:
@@ -1132,7 +1211,7 @@ def _resolve_device(device: torch.device | str | None) -> torch.device:
 
 
 def _segment_params(workspace: Any) -> SegmentParams:
-    """The segment stage's settings as the workspace recorded them (checkpoint, threshold, cleanup); the defaults otherwise."""
+    """The segment stage's settings as the workspace recorded them (mask source, checkpoint, threshold, cleanup); the defaults otherwise."""
 
     summary = read_summary(workspace)
     settings = getattr(workspace.info, "settings", None) or {}
@@ -1144,6 +1223,10 @@ def _segment_params(workspace: Any) -> SegmentParams:
         values["checkpoint"] = str(fingerprint["path"])
     elif isinstance(fingerprint, str) and fingerprint != "unset":
         values["checkpoint"] = fingerprint
+    if (settings.get("mask_source") or summary.get("mask_source")) == "body_net":
+        # The summary's checkpoint is then the body-field network's.
+        values["mask_source"] = "body_net"
+        values["body_net"] = settings.get("body_net") or (summary.get("checkpoint") or {}).get("path")
     if "threshold" in summary:
         values["threshold"] = float(summary["threshold"])
     cleanup = summary.get("mask_cleanup") or settings.get("mask_cleanup") or {}
@@ -1169,7 +1252,7 @@ def segment_rows(workspace: Any, rows: Sequence[int], device: torch.device, para
     params = params or _segment_params(workspace)
     frames = workspace_frames(workspace, params)
     try:
-        model = load_segmentation_model(params.checkpoint, device)
+        model = load_mask_model(params, frames, device)
         out: dict[int, MaskArray] = {}
         for k in range(0, len(rows), max(1, int(params.slab))):
             chunk = rows[k : k + max(1, int(params.slab))]
@@ -1214,6 +1297,7 @@ def build_context(
     *,
     segment_missing: bool = True,
     fill_holes: str = "workspace",
+    trace_starts: bool = True,
 ) -> RegionContext:
     """The ``RegionContext`` of rows ``first..last`` with these anchors.
 
@@ -1223,7 +1307,10 @@ def build_context(
     Explicit hole filling affects this run only. Off resegments unedited rows
     because stored masks may already contain filled pixels; manual masks stay
     authoritative. On fills narrow holes but never includes ignored pixels.
-    Anchors must be fitted rows outside the region.
+    Anchors must be fitted rows outside the region.  When the workspace was
+    fit with the body-field network, every row with a mask is predicted and
+    gets its evidence, and with ``trace_starts`` every region row its trace
+    start (``pipeline.body_field_inputs``).
     """
 
     fill_holes = _FILL_HOLES.coerce(fill_holes)
@@ -1287,10 +1374,12 @@ def build_context(
             if mask is not None and int(np.asarray(mask).sum()) >= max(1, min_pixels):
                 masks[row] = mask
         mask_revisions = {str(row): workspace.mask_revision(row) for row in wanted}
+    with workspace_predictions(workspace, _segment_params(workspace), resolved) as predictions_of:
+        evidence, network_starts = body_field_inputs(predictions_of, masks, setup, range(first, last + 1) if trace_starts else ())
     return RegionContext(
         workspace=workspace, first=first, last=last, anchor_before=anchor_before, anchor_after=anchor_after, masks=masks,
         config=setup.config, prior=setup.prior, width_template=setup.template, device=resolved, state=state, image_shape=workspace_image_shape(workspace),
-        mask_revisions=mask_revisions,
+        mask_revisions=mask_revisions, evidence=evidence, network_starts=network_starts,
     )
 
 
@@ -1342,7 +1431,10 @@ def run_algorithm(
     algorithm.check_anchors(anchor_before, anchor_after)  # type: ignore[attr-defined]
     preparation = "resegmenting unedited masks without hole filling" if resolved.get("fill_holes") == "off" else "loading region masks"
     _report(progress, 0.0, f"{algorithm.id}: {preparation}")
-    ctx = build_context(workspace, first, last, anchor_before, anchor_after, device, fill_holes=resolved.get("fill_holes", "workspace"))
+    ctx = build_context(
+        workspace, first, last, anchor_before, anchor_after, device, fill_holes=resolved.get("fill_holes", "workspace"),
+        trace_starts=algorithm.id not in NO_FITTING,
+    )
     before = region_metrics(ctx.state, ctx.rows, ctx.image_shape)
     started = time.perf_counter()
     candidate_set = algorithm.run(ctx, resolved, progress)
@@ -1454,6 +1546,7 @@ def stitch(
         raw, _ = propagate(
             local, gaps, {r - first: m for r, m in ctx.masks.items() if first <= r <= last}, config=ctx.config, device=ctx.device,
             width_template=ctx.width_template, propagation=propagation, warm_config=warm,
+            evidence={r - first: e for r, e in ctx.evidence.items()}, network_starts={r - first: s for r, s in ctx.network_starts.items()},
             progress=None if progress is None else (lambda p, m: _report(progress, 0.05 + 0.85 * p, f"stitch: {m}")),
         )
         for local_row, options in raw.items():
@@ -1461,6 +1554,7 @@ def stitch(
             candidates[local_row + first] = [CandidatePose.from_result(c.result, ctx.config, c.source, c.start_name, c.total_energy) for c in ordered]
         gap_rows = [r for a, b in gaps for r in range(a + first, b + first + 1)]
         _fit_missing(ctx, candidates, [r for r in gap_rows if r in ctx.masks])
+        score_evidence(ctx, {r: candidates[r] for r in gap_rows if candidates.get(r)})
         _report(progress, 0.92, "stitch: selecting the path through every gap")
         offered = {r - first: [_as_candidate(p, j) for j, p in enumerate(candidates[r])] for r in gap_rows if candidates.get(r)}
         chosen = select_path(offered, local, gaps, ctx.config, propagation, ctx.image_shape)

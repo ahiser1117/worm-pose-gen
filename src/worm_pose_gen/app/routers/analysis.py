@@ -8,7 +8,7 @@
   ``{workspace, job, status}``.  The job is placed like any other
   (``routers/jobs.place``); a workspace with a job queued or running is busy
   (409).
-- ``GET /api/workspaces/{name}/status``: models, analysis progress, state
+- ``GET /api/workspaces/{name}/status``: models, analysis progress (overall and per stage), state
   and issue counts, without loading the arrays.
 - ``POST /api/workspaces/{name}/opened``: remember when the workspace was
   last opened (the Recordings screen shows it).

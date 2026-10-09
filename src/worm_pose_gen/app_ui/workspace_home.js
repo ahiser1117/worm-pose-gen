@@ -1,15 +1,20 @@
 // The Recordings screen (docs/APP_SIMPLIFICATION.md, section 2): the chosen
-// setup's recordings in one table with their status, and one action per
-// row, Analyse or Open. Analyse uses the setup's default models (Change
-// picks others for this session) on the whole recording, where Run on says.
-// Add recording registers a file to a setup through the library. The table
-// rescans whenever the screen opens and polls while an analysis runs.
+// setup's recordings with their status, and one action per row, Analyse or
+// Open. Two tables, each recording in one: those analysed or analysing,
+// most recently opened first, then those not analysed yet. Analyse uses the setup's default
+// models (Change picks others for this session) on the whole recording,
+// where Run on says, and opens its workspace to follow the analysis. Add
+// recording registers a file to a setup through the library. The tables
+// rescan whenever the screen opens and poll while an analysis runs; a poll
+// rebuilds only the rows that changed, so the scroll position stays.
 
 import {api, el, post, query} from "./api.js";
 import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
 
 const POLL_MS = 3000;
 const SETUP_KEY = "workspace.setup";
+// The states of the "Analysed and analysing" table: every state an analysis leads to.
+const RECENT_STATES = new Set(["queued", "analysing", "failed", "analysed", "issues", "reviewed", "exported"]);
 
 function remembered(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 function remember(key, value) { try { localStorage.setItem(key, value); } catch { /* storage blocked */ } }
@@ -44,7 +49,7 @@ export function describeStatus(status) {
   }
 }
 
-const STAGE_WORDS = {segment: "masks", prior: "body size", fit: "fitting", ambiguity: "checking", propagate: "tracking", track: "lengths", fixed_body: "fixed body"};
+export const STAGE_WORDS = {segment: "masks", prior: "body size", fit: "fitting", ambiguity: "checking", propagate: "tracking", track: "lengths", fixed_body: "fixed body"};
 export function stageOf(job) {
   const stage = String(job?.message || "").split(":")[0];
   return `${STAGE_WORDS[stage] || "starting"} ${Math.round((job?.progress || 0) * 100)}%`;
@@ -56,6 +61,7 @@ export class RecordingsScreen {
     this.onOpen = onOpen;
     this.data = null;
     this.models = null; // the models chosen for this session per setup: {setup, mask, body}
+    this.maskSource = "segmenter"; // where the masks come from: "segmenter" (the mask model) or "body_net"
     this.filter = "";
     this.timer = null;
     this.node = el("div", {class: "ws-home", hidden: true});
@@ -86,7 +92,7 @@ export class RecordingsScreen {
       else { this.renderError(error); return; }
     }
     if (this.data.setup && this.models?.setup !== this.data.setup.ref) await this.defaultModels();
-    this.render();
+    if (this.tables && this.renderedSetup === this.data.setup?.ref) this.renderRows(); else this.render();
     const busy = this.data.recordings.some((r) => ["queued", "analysing"].includes(r.status?.state));
     if (busy && !this.node.hidden) this.timer = setTimeout(() => this.refresh(), POLL_MS);
   }
@@ -97,6 +103,7 @@ export class RecordingsScreen {
     try { known = await modelCards(setup.ref); } catch { /* names fall back to refs */ }
     const model = (ref) => (ref ? {ref, name: known.get(ref)?.name || ref} : null);
     this.models = {setup: setup.ref, mask: model(defaults.mask), body: model(defaults.body)};
+    this.maskSource = "segmenter";
   }
 
   renderError(error) {
@@ -105,7 +112,8 @@ export class RecordingsScreen {
   }
 
   render() {
-    const {setups, setup, recordings} = this.data;
+    const {setups, setup} = this.data;
+    this.tables = null; this.renderedSetup = setup?.ref ?? null; this.rows = new Map(); this.thumbs = new Map();
     if (!setup) {
       const libraries = this.ctx.config?.libraries || {};
       this.node.replaceChildren(el("div", {class: "empty ws-empty"},
@@ -122,7 +130,7 @@ export class RecordingsScreen {
     const toolbar = el("div", {class: "ws-home-bar"},
       setupControl, facts ? el("span", {class: "note"}, facts) : null,
       el("span", {class: "ws-sep"}),
-      el("span", {class: "ws-analyse-with"}, "Analyse with ", el("strong", {}, modelLabel(this.models)), " ",
+      el("span", {class: "ws-analyse-with"}, "Analyse with ", el("strong", {}, modelLabel(this.models, this.maskSource)), " ",
         el("button", {class: "link", onclick: () => this.changeModels()}, "Change")),
       this.runOn?.control() ?? null,
       el("span", {class: "ws-grow"}),
@@ -130,30 +138,63 @@ export class RecordingsScreen {
       el("button", {onclick: () => this.addRecording()}, "Add recording…"),
     );
     if (this.runOn && !this.runOn.canRun) toolbar.append(el("p", {class: "note error ws-home-reason"}, `Analysis is unavailable: ${this.runOn.reason}`));
-    this.tbody = el("tbody");
-    const table = el("table", {class: "data ws-recordings"},
+    const table = (tbody) => el("div", {class: "ws-table-wrap"}, el("table", {class: "data ws-recordings"},
       el("thead", {}, el("tr", {}, el("th", {class: "ws-thumb-cell"}), el("th", {}, "Recording"), el("th", {class: "num"}, "Length"),
         el("th", {}, "Status"), el("th", {}, "Last opened"), el("th", {class: "ws-action-cell"}))),
-      this.tbody);
-    this.node.replaceChildren(toolbar, el("div", {class: "ws-table-wrap"}, table));
+      tbody));
+    const recent = el("tbody"), rest = el("tbody");
+    this.recentSection = el("section", {class: "ws-section"}, el("h2", {class: "ws-section-title"}, "Analysed and analysing"), table(recent));
+    this.restSection = el("section", {class: "ws-section"}, el("h2", {class: "ws-section-title"}, "Not analysed"), table(rest));
+    this.tables = {recent, rest};
+    this.node.replaceChildren(toolbar, el("div", {class: "ws-lists"}, this.recentSection, this.restSection));
     this.renderRows();
-    if (!recordings.length) this.tbody.append(el("tr", {}, el("td", {colspan: 6, class: "empty"}, "No recordings in this setup yet. Add one with Add recording.")));
   }
 
   renderRows() {
-    if (!this.tbody) return;
-    const fps = this.data.setup.fps, needle = this.filter.trim().toLowerCase();
-    const rows = this.data.recordings.filter((r) => !needle || r.id.toLowerCase().includes(needle));
-    this.tbody.replaceChildren(...rows.map((row) => this.row(row, fps)));
+    if (!this.tables) return;
+    const needle = this.filter.trim().toLowerCase(), all = this.data.recordings;
+    const matches = (r) => !needle || r.id.toLowerCase().includes(needle);
+    const analysed = all.filter((r) => RECENT_STATES.has(r.status?.state)), rest = all.filter((r) => !RECENT_STATES.has(r.status?.state));
+    analysed.sort((a, b) => (b.status.last_opened || "").localeCompare(a.status.last_opened || ""));
+    // A table shows only when it has recordings (the second one also when the setup has none, to say so).
+    this.recentSection.hidden = !analysed.length;
+    this.restSection.hidden = !rest.length && !!all.length;
+    this.fill("recent", analysed.filter(matches), "No analysed recording matches the filter.");
+    this.fill("rest", rest.filter(matches), all.length ? "No recording matches the filter." : "No recordings in this setup yet. Add one with Add recording.");
   }
 
-  row(recording, fps) {
+  // Put the rows in a table, reusing the row of a recording whose data has not changed since the last poll.
+  fill(table, recordings, emptyText) {
+    const fps = this.data.setup.fps, tbody = this.tables[table], seen = new Set();
+    const nodes = recordings.map((recording) => {
+      const key = `${table}:${recording.id}`, stamp = JSON.stringify(recording), cached = this.rows.get(key);
+      seen.add(key);
+      if (cached?.stamp === stamp) return cached.node;
+      const node = this.row(recording, fps, key);
+      this.rows.set(key, {stamp, node});
+      return node;
+    });
+    for (const key of this.rows.keys()) if (key.startsWith(`${table}:`) && !seen.has(key)) this.rows.delete(key);
+    if (!nodes.length) nodes.push(el("tr", {}, el("td", {colspan: 6, class: "empty"}, emptyText)));
+    const current = [...tbody.children];
+    if (current.length !== nodes.length || current.some((node, k) => node !== nodes[k])) tbody.replaceChildren(...nodes);
+  }
+
+  // A row's thumbnail is kept across rebuilds of the row, so a poll does not reload it.
+  thumbnail(key, recording) {
+    if (!recording.readable) return el("span", {class: "ws-thumb"});
+    const src = `/api/recordings/thumbnail${query({path: recording.path, frame: Math.floor((recording.frames || 1) / 2), scale: 0.12})}`;
+    const cached = this.thumbs.get(key);
+    if (cached?.dataset.src === src) return cached;
+    const image = el("img", {class: "ws-thumb", loading: "lazy", alt: "", src, dataset: {src}});
+    this.thumbs.set(key, image);
+    return image;
+  }
+
+  row(recording, fps, key) {
     const status = recording.status;
     const [text, kind, progress] = recording.readable ? describeStatus(status) : ["Cannot be read", "error", null];
-    const middle = Math.floor((recording.frames || 1) / 2);
-    const thumb = recording.readable
-      ? el("img", {class: "ws-thumb", loading: "lazy", alt: "", src: `/api/recordings/thumbnail${query({path: recording.path, frame: middle, scale: 0.12})}`})
-      : el("span", {class: "ws-thumb"});
+    const thumb = this.thumbnail(key, recording);
     const statusCell = el("td", {class: "ws-status"}, el("span", {class: `badge ${kind}`, title: status?.analysis?.error || recording.error || null}, text));
     if (progress !== null) statusCell.append(el("progress", {max: 1, value: progress}));
     const analysed = status && !["not_analysed", "failed"].includes(status.state);
@@ -175,9 +216,9 @@ export class RecordingsScreen {
   async analyse(recording, button, extra = {}) {
     button.disabled = true;
     try {
-      const answer = await post("/api/analyse", {path: recording.path, models: {mask: this.models.mask?.ref ?? null, body: this.models.body?.ref ?? null}, ...this.runOn.payload(), ...this.devOptions, ...extra});
+      const answer = await post("/api/analyse", {path: recording.path, models: {mask: this.models.mask?.ref ?? null, body: this.models.body?.ref ?? null}, mask_source: this.maskSource, ...this.runOn.payload(), ...this.devOptions, ...extra});
       this.ctx.toast(`Analysing ${recording.id}`, "ok");
-      if (answer) await this.refresh();
+      this.onOpen(answer.workspace);
     } catch (error) {
       this.ctx.toast(error.message, "error");
       button.disabled = false;
@@ -186,10 +227,11 @@ export class RecordingsScreen {
 
   async changeModels() {
     const chosen = await openAnalyseDialog(this.ctx, {
-      title: "Analyse with", setup: this.data.setup.ref, models: this.models, submitLabel: "Use these models", dev: this.ctx.dev, newWorkspace: null,
+      title: "Analyse with", setup: this.data.setup.ref, models: this.models, maskSource: this.maskSource, submitLabel: "Use these models", dev: this.ctx.dev, newWorkspace: null,
     });
     if (!chosen) return;
     this.models = {setup: this.data.setup.ref, mask: chosen.mask, body: chosen.body};
+    this.maskSource = chosen.mask_source;
     this.devOptions = chosen.stages ? {stages: chosen.stages, ...(chosen.gpu !== undefined ? {gpu: chosen.gpu} : {})} : null;
     this.render();
   }
@@ -204,12 +246,13 @@ export class RecordingsScreen {
   }
 }
 
-// Add recording: a path box with a browser of directories and HDF5 files, and the setup it belongs to.
+// Add recording: a path box with a browser of directories, HDF5 files and videos, and the setup it belongs to.
+// The server converts a video (.avi) to an HDF5 recording before registering it, which takes a while.
 function openAddRecording(ctx, setups, current) {
   return new Promise((resolve) => {
     let result = null, listing = null;
     const dialog = el("dialog", {class: "ws-dialog ws-add"});
-    const path = el("input", {type: "text", placeholder: "/path/to/recording.h5", "aria-label": "Recording path"});
+    const path = el("input", {type: "text", placeholder: "/path/to/recording.h5 or .avi", "aria-label": "Recording path"});
     const list = el("div", {class: "list ws-browse"});
     const crumbs = el("div", {class: "note ws-browse-at"});
     const error = el("p", {class: "note error", hidden: true});
@@ -221,27 +264,28 @@ function openAddRecording(ctx, setups, current) {
       } catch (failure) { error.textContent = failure.message; error.hidden = false; return; }
       error.hidden = true;
       crumbs.textContent = listing.path;
-      const entries = listing.entries.filter((entry) => entry.kind === "dir" || entry.kind === "h5");
+      const entries = listing.entries.filter((entry) => ["dir", "h5", "video"].includes(entry.kind));
       list.replaceChildren(
         ...(listing.parent ? [el("div", {class: "item", onclick: () => browse(listing.parent)}, "↑ ..")] : []),
         ...entries.map((entry) => el("div", {class: "item", onclick: () => {
           if (entry.kind === "dir") browse(entry.path);
           else { path.value = entry.path; add.disabled = false; }
-        }}, entry.kind === "dir" ? `▸ ${entry.name}` : entry.name, entry.kind === "h5" && entry.size_bytes ? el("span", {class: "note"}, ` ${(entry.size_bytes / 1e9).toFixed(1)} GB`) : null)),
+        }}, entry.kind === "dir" ? `▸ ${entry.name}` : entry.name, entry.kind !== "dir" && entry.size_bytes ? el("span", {class: "note"}, ` ${(entry.size_bytes / 1e9).toFixed(1)} GB`) : null)),
       );
     };
     path.addEventListener("input", () => { add.disabled = !path.value.trim(); });
     path.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       const value = path.value.trim();
-      if (/\.(h5|hdf5)$/i.test(value)) add.click(); else if (value) browse(value);
+      if (/\.(h5|hdf5|avi)$/i.test(value)) add.click(); else if (value) browse(value);
     });
     add.addEventListener("click", async () => {
       add.disabled = true;
+      if (/\.avi$/i.test(path.value.trim())) add.textContent = "Converting…";
       try {
         result = await post("/api/library/recordings", {path: path.value.trim(), setup: setup.value});
         dialog.close();
-      } catch (failure) { error.textContent = failure.message; error.hidden = false; add.disabled = false; }
+      } catch (failure) { error.textContent = failure.message; error.hidden = false; add.disabled = false; add.textContent = "Add"; }
     });
     dialog.append(
       el("h2", {}, "Add a recording"),

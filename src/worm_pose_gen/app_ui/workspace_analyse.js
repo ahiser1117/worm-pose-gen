@@ -1,7 +1,9 @@
 // Analyse: which models and where the job runs (docs/APP_SIMPLIFICATION.md,
 // sections 2 and 4). The Recordings screen analyses with the setup's
 // default models in one click; "Change" (there, and "Change model" in a
-// workspace's header) opens the dialog below. Run on is one choice built
+// workspace's header) opens the dialog below. With a body model the dialog
+// also asks where the masks come from: the mask model (the default) or the
+// body model's own mask output, which then needs no mask model. Run on is one choice built
 // from GET /api/compute: hidden when only one place can run jobs, and
 // Analyse is disabled with the reason when none can. Developers also get
 // the stage checklist, the GPU and, for a new workspace, a frame range.
@@ -75,23 +77,34 @@ export async function modelCards(setup) {
   return cards.get(setup);
 }
 
-export function modelLabel(models) {
+export function modelLabel(models, maskSource = "segmenter") {
+  if (maskSource === "body_net" && models.body) return `${models.body.name} (masks and body)`;
   const names = [models.mask?.name, models.body?.name].filter(Boolean);
   return names.length ? names.join(" + ") : "no model";
 }
 
-// The dialog: resolves {models: {mask, body} (refs), stages?, gpu?, first?, last?, step?} or null.
-//   options: {title, setup, models: {mask: {ref, name}, body}, runOn (RunOn | null),
-//             submitLabel, warning, dev, newWorkspace (frames count for the range fields)}
+// The dialog: resolves {models: {mask, body} (refs), mask_source, stages?, gpu?, first?, last?, step?} or null.
+//   options: {title, setup, models: {mask: {ref, name}, body}, maskSource ("segmenter" | "body_net"),
+//             runOn (RunOn | null), submitLabel, warning, dev, newWorkspace (frames count for the range fields)}
 export function openAnalyseDialog(ctx, options) {
   const {title, setup, runOn = null, submitLabel = "Done", warning = null, dev = false, newWorkspace = null} = options;
   const chosen = {mask: options.models.mask ? {...options.models.mask} : null, body: options.models.body ? {...options.models.body} : null};
+  let maskSource = options.maskSource === "body_net" ? "body_net" : "segmenter";
   return new Promise((resolve) => {
     let result = null;
     const dialog = el("dialog", {class: "ws-dialog ws-analyse"});
+    // Masks from: a choice only while there is a body model to take them from.
+    const source = el("select", {"aria-label": "Masks from", onchange: () => { maskSource = source.value; }},
+      el("option", {value: "segmenter"}, "Mask model"), el("option", {value: "body_net"}, "Body model"));
+    const sourceRow = el("div", {class: "ws-form-row ws-mask-source"}, el("span", {class: "ws-form-label"}, "Masks from"), source);
+    const renderSource = () => {
+      if (!chosen.body) maskSource = "segmenter";
+      source.value = maskSource;
+      sourceRow.hidden = !chosen.body;
+    };
     const modelRow = (role, label) => {
       const name = el("span", {class: "ws-model-name"});
-      const render = () => { name.textContent = chosen[role]?.name || (role === "body" ? "none (orientation from the body taper only)" : "none"); };
+      const render = () => { name.textContent = chosen[role]?.name || (role === "body" ? "none (orientation from the body taper only)" : "none"); renderSource(); };
       render();
       const change = el("button", {type: "button", onclick: async () => {
         const ref = await openModelPicker(ctx, {setup, role, current: chosen[role]?.ref ?? null});
@@ -103,13 +116,13 @@ export function openAnalyseDialog(ctx, options) {
       const none = role === "body" ? el("button", {type: "button", class: "link", onclick: () => { chosen.body = null; render(); }}, "None") : null;
       return el("div", {class: "ws-form-row"}, el("span", {class: "ws-form-label"}, label), name, change, none);
     };
-    const rows = [modelRow("mask", "Mask model"), modelRow("body", "Body model")];
+    const rows = [modelRow("mask", "Mask model"), modelRow("body", "Body model"), sourceRow];
     const runControl = runOn?.control();
     if (runControl) rows.push(el("div", {class: "ws-form-row"}, runControl));
     let devFields = null;
     if (dev) devFields = devOptions(runOn, newWorkspace);
     const submit = el("button", {class: "primary", type: "button", disabled: runOn && !runOn.canRun, title: runOn && !runOn.canRun ? runOn.reason : null, onclick: () => {
-      result = {models: {mask: chosen.mask?.ref ?? null, body: chosen.body?.ref ?? null}, mask: chosen.mask, body: chosen.body, ...(devFields?.values() || {})};
+      result = {models: {mask: chosen.mask?.ref ?? null, body: chosen.body?.ref ?? null}, mask: chosen.mask, body: chosen.body, mask_source: maskSource, ...(devFields?.values() || {})};
       dialog.close();
     }}, submitLabel);
     dialog.append(

@@ -1,6 +1,7 @@
 // The Workspace page end to end on a synthetic CPU app (tests/browser/workspace_fixture.py):
 // Recordings -> Analyse -> issues (and the left panel's layout with many of them) -> Looks OK ->
-// Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> Export.
+// Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> timeline scrub and
+// right-drag selection -> Export.
 // Run from the repository root: node tests/browser/workspace.cjs
 // Environment: PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE (and LD_LIBRARY_PATH for its libraries) when
 // not installed in the default places; PYTHON (default .venv/bin/python); WS_SHOTS, a directory
@@ -59,17 +60,40 @@ const WS = '2026-03-14-01';
     assert.match(await page.locator('.ws-analyse-with').textContent(), /nir-hand284 \+ nir-body-lags3/);
     assert.equal(await page.locator('.ws-run-on').count(), 0, 'one place to run jobs: no Run on choice');
     await shot('01-recordings');
+    // With a body model, Change offers the masks from it; the mask model stays the default.
+    const masksFrom = async (value, label) => {
+      await page.locator('.ws-analyse-with button:has-text("Change")').click();
+      const source = page.locator('dialog.ws-analyse select[aria-label="Masks from"]');
+      assert.ok(await source.isVisible(), 'a body model offers its masks');
+      await source.selectOption(value);
+      await page.locator('dialog.ws-analyse button:has-text("Use these models")').click();
+      await page.waitForFunction((text) => document.querySelector('.ws-analyse-with strong')?.textContent === text, label);
+    };
+    await masksFrom('body_net', 'nir-body-lags3 (masks and body)');
+    await masksFrom('segmenter', 'nir-hand284 + nir-body-lags3');
 
-    // Analyse runs every default stage as one job; the row turns into Open.
-    const row = page.locator(`tr[data-recording="${WS}"]`);
-    await row.locator('button:has-text("Analyse")').click();
-    await page.waitForSelector(`tr[data-recording="${WS}"] .badge.info`);
+    // Nothing analysed yet: no "Analysed and analysing" table.
+    assert.equal(await page.locator('.ws-section:not([hidden]) tr[data-recording]').count(), 2);
+    // Analyse runs every default stage as one job and opens the workspace, with one bar per stage.
+    await page.locator(`tr[data-recording="${WS}"] button:has-text("Analyse")`).click();
+    await page.waitForFunction(() => location.hash === '#workspace/2026-03-14-01');
+    await page.waitForSelector('.ws-analysing .ws-stage progress');
     const job = (await get('/api/jobs')).find((j) => j.spec.kind === 'analyse');
     assert.deepEqual(job.spec.params.stages, ['segment', 'prior', 'fit', 'ambiguity', 'propagate', 'track']);
-    await shot('02-analysing');
-    await row.locator('button:has-text("Open")').click();
-    await page.waitForSelector('.ws-analysing progress');
+    assert.equal(await page.locator('.ws-stage').count(), 6);
     assert.match(await page.locator('#header-context').textContent(), /2026-03-14-01.*nir-hand284/);
+    await shot('02-analysing');
+    // Back on Recordings while it runs: it heads the "Analysed and analysing" table, and the polls keep the scroll.
+    await page.locator('.ws-back').click();
+    await page.waitForSelector(`.ws-section:first-child tr[data-recording="${WS}"] .badge.info`);
+    assert.equal(await page.locator('.ws-section:first-child tr[data-recording]').count(), 1);
+    assert.equal(await page.locator(`tr[data-recording="${WS}"]`).count(), 1, 'each recording is listed once');
+    await page.evaluate(() => { const lists = document.querySelector('.ws-lists'); lists.style.maxHeight = '120px'; lists.scrollTop = 60; });
+    await sleep(3500);
+    assert.equal(await page.evaluate(() => document.querySelector('.ws-lists').scrollTop), 60, 'a poll must not reset the scroll');
+    await page.evaluate(() => { document.querySelector('.ws-lists').style.maxHeight = ''; });
+    await page.locator(`.ws-section:first-child tr[data-recording="${WS}"] button:has-text("Open")`).click();
+    await page.waitForSelector('.ws-analysing progress');
     await waitFor(async () => (await get(`/api/jobs/${job.id}`)).state !== 'running' && (await get(`/api/jobs/${job.id}`)).state !== 'queued', 'the analysis');
     assert.equal((await get(`/api/jobs/${job.id}`)).state, 'done', logs);
     await page.waitForSelector('.ws-issue', {timeout: 30000});
@@ -189,6 +213,50 @@ const WS = '2026-03-14-01';
     assert.equal(page.url(), `${base}/#workspace/${WS}`);
     await page.locator('.ws-preview button:has-text("Discard")').click();
     await page.waitForSelector('.ws-fix-grid');
+
+    // The frame fits the view only through the Fit button or 0, not a double-click.
+    const frameBox = await page.locator('.ws-canvas canvas').boundingBox();
+    const centre = [frameBox.x + frameBox.width / 2, frameBox.y + frameBox.height / 2];
+    const picture = () => sleep(300).then(() => page.evaluate(() => {
+      const c = document.querySelector('.ws-canvas canvas'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let hash = 0;
+      for (let i = 0; i < d.length; i += 97) hash = (hash * 31 + d[i]) >>> 0;
+      return hash;
+    }));
+    await sleep(1000);
+    const fitted = await picture();
+    await page.mouse.move(...centre);
+    await page.mouse.wheel(0, -400);
+    const zoomed = await picture();
+    assert.notEqual(zoomed, fitted);
+    await page.mouse.dblclick(...centre);
+    assert.equal(await picture(), zoomed, 'a double-click does not fit the frame');
+    await page.keyboard.press('0');
+    assert.equal(await picture(), fitted, '0 fits the frame');
+    await page.mouse.wheel(0, -400);
+    await page.locator('.ws-fit').click();
+    assert.equal(await picture(), fitted, 'the Fit button fits the frame');
+
+    // The timeline: a left drag scrubs the frame as it goes, a right drag selects a range (Esc clears it).
+    await page.keyboard.press('Escape');
+    const timeline = await page.locator('.ws-timeline-canvas').boundingBox(), ty = timeline.y + 40;
+    const along = (fraction) => timeline.x + timeline.width * fraction;
+    await page.mouse.dblclick(along(0.05), ty);  // the whole recording in view
+    await page.mouse.move(along(0.1), ty);
+    await page.mouse.down();
+    await page.mouse.move(along(0.6), ty, {steps: 8});
+    await page.waitForFunction(() => Math.abs(Number(document.querySelector('.ws-frame-input').value) - 24) <= 1);
+    await page.mouse.up();
+    assert.equal((await page.locator('.ws-selection').textContent()).trim(), '', 'a left drag selects nothing');
+    const scrubbed = await page.locator('.ws-frame-input').inputValue();
+    await page.mouse.move(along(0.2), ty);
+    await page.mouse.down({button: 'right'});
+    await page.mouse.move(along(0.5), ty, {steps: 8});
+    await page.mouse.up({button: 'right'});
+    assert.match(await page.locator('.ws-selection').textContent(), /Selected 8–20/);
+    assert.equal(await page.locator('.ws-frame-input').inputValue(), scrubbed, 'a right drag does not seek');
+    await page.keyboard.press('Escape');
+    assert.equal((await page.locator('.ws-selection').textContent()).trim(), '');
 
     // Export: unreviewed issues are named, the setup's pixel size and rate go along, the link downloads.
     await page.locator('#header-actions button:has-text("Export")').click();

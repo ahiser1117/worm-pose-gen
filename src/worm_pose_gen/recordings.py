@@ -35,11 +35,13 @@ from PIL import Image
 
 from .flat_field import FlatField, apply_flat_field, estimate_flat_field
 from .segmentation_dataset import DEFAULT_DATASET_ROOT
+from .videos import VIDEO_SUFFIXES
 
 
 DATASET_PATH = "/img_nir"
 CACHE_VERSION = 1
 FLAT_FIELD_SAMPLE_COUNT = 64
+HDF5_SUFFIXES = (".h5", ".hdf5")
 
 
 @dataclass
@@ -62,12 +64,12 @@ class RecordingInfo:
         return asdict(self)
 
 
-def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5"), all_files: bool = False) -> dict[str, Any]:
-    """Directories and HDF5 files directly under ``path``, for the file explorer.
+def list_directory(path: Path, *, all_files: bool = False) -> dict[str, Any]:
+    """Directories, HDF5 files (kind "h5") and convertible videos (kind "video") directly under ``path``, for the file explorer.
 
     Hidden entries are skipped; unreadable subdirectories are listed but
-    flagged.  With ``all_files`` every regular file is listed (kind "file"
-    unless its suffix is an HDF5 one), for videos stored under other names.
+    flagged.  With ``all_files`` every other regular file is listed too
+    (kind "file"), for videos stored under other names.
     """
 
     directory = Path(path).expanduser()
@@ -87,14 +89,20 @@ def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5"), 
         try:
             if child.is_dir():
                 entries.append({"name": child.name, "path": str(child), "kind": "dir", "size_bytes": None, "modified_at": _iso_utc(child.stat().st_mtime), "readable": os.access(child, os.R_OK | os.X_OK)})
-            elif child.is_file() and (all_files or child.suffix.lower() in suffixes):
+            elif child.is_file():
+                kind = _file_kind(child.suffix.lower()) or ("file" if all_files else None)
+                if kind is None:
+                    continue
                 stat = child.stat()
-                kind = "h5" if child.suffix.lower() in suffixes else "file"
                 entries.append({"name": child.name, "path": str(child), "kind": kind, "size_bytes": int(stat.st_size), "modified_at": _iso_utc(stat.st_mtime), "readable": os.access(child, os.R_OK)})
         except OSError:
             continue
     parent = None if directory.parent == directory else str(directory.parent)
-    return {"path": str(directory), "parent": parent, "entries": entries, "all_files": all_files, "suffixes": list(suffixes)}
+    return {"path": str(directory), "parent": parent, "entries": entries, "all_files": all_files, "suffixes": [*HDF5_SUFFIXES, *VIDEO_SUFFIXES]}
+
+
+def _file_kind(suffix: str) -> str | None:
+    return "h5" if suffix in HDF5_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else None
 
 
 def _iso_utc(timestamp: float) -> str:
@@ -179,18 +187,21 @@ class RecordingIndex:
 
 
 def find_recordings(roots: Iterable[Path], pattern: str = "*.h5") -> list[Path]:
-    """Every file matching ``pattern`` under the roots that exist, sorted by name then path."""
+    """Every file matching ``pattern`` under the roots that exist, resolved, sorted by name then path.
+
+    Resolving makes a file reached through two roots (one a symlink to the other) one recording.
+    """
 
     found: set[Path] = set()
     for root in roots:
         root = Path(root)
         if root.is_file():
             if root.match(pattern):
-                found.add(root)
+                found.add(root.resolve())
             continue
         if not root.is_dir():
             continue
-        found.update(p for p in root.rglob(pattern) if p.is_file())
+        found.update(p.resolve() for p in root.rglob(pattern) if p.is_file())
     return sorted(found, key=lambda p: (p.stem, str(p)))
 
 

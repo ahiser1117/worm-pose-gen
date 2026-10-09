@@ -5,11 +5,13 @@
 //   view.setImage(bitmap);                     // ImageBitmap, <img>, <canvas> or ImageData
 //   view.setLayer("mask", (g, v) => {...});    // drawn in image coordinates, in insertion order
 //   view.setLayerVisible("mask", false);
-//   view.onPointer = (event) => {...};         // left button: {type: "down"|"move"|"up", x, y, event}
+//   view.onPointer = (event) => {...};         // {type: "down"|"move"|"up"|"rightclick", x, y, event}
 //   view.fit();
 //
 // Left drag goes to onPointer (painting, tracing, clicking); right, middle or
-// Shift drag pans; the wheel zooms about the cursor; double-click fits.
+// Shift drag pans, and a right click that did not pan goes to onPointer as
+// "rightclick"; the wheel zooms about the cursor. Only the page fits the
+// frame to the view (its Fit button and the 0 key call fit()).
 // Layer draw functions get the 2D context already transformed to image
 // pixels and the view, so a line of width 1 / v.scale is one screen pixel.
 
@@ -112,12 +114,11 @@ export class FrameCanvas {
   _bind() {
     const canvas = this.canvas;
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-    canvas.addEventListener("dblclick", () => this.fit());
     canvas.addEventListener("pointerdown", (event) => {
       canvas.focus();
       canvas.setPointerCapture(event.pointerId);
       if (event.button === 1 || event.button === 2 || event.shiftKey) {
-        this._pan = {x: event.clientX, y: event.clientY, tx: this.view.tx, ty: this.view.ty};
+        this._pan = {x: event.clientX, y: event.clientY, tx: this.view.tx, ty: this.view.ty, button: event.button, shift: event.shiftKey};
         return;
       }
       if (event.button === 0) this._emit("down", event);
@@ -132,7 +133,13 @@ export class FrameCanvas {
       this._emit("move", event);
     });
     const end = (event) => {
-      if (this._pan) { this._pan = null; this.onViewChange?.(this.view); return; }
+      if (this._pan) {
+        const pan = this._pan, click = Math.hypot(event.clientX - pan.x, event.clientY - pan.y) < 4;
+        this._pan = null;
+        if (click && pan.button === 2 && !pan.shift && event.type === "pointerup") this._emit("rightclick", event);
+        else this.onViewChange?.(this.view);
+        return;
+      }
       this._emit("up", event);
     };
     canvas.addEventListener("pointerup", end);

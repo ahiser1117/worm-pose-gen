@@ -265,8 +265,7 @@ class WorkspaceView:
         raw, image = self.source.corrected(frame)
         base = self.workspace.get_mask(row)
         if base is None:
-            checkpoint = run.summary.get("selected_checkpoint") or (run.summary.get("checkpoint") or {}).get("path")
-            probability, _ = segmenters.probability(checkpoint, image)
+            probability, _ = segmenters.probability(run.segmentation_checkpoint, image)
             if probability is not None:
                 raw_mask = probability >= run.threshold
                 base = run._cleaned(raw_mask, device)[2] if raw_mask.any() else raw_mask

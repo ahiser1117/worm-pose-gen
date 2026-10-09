@@ -3,7 +3,8 @@
 
 Frames are read from the HDF5 recording in slabs, flat-fielded with the
 per-recording correction the labeling app uses, pushed through the promoted
-segmenter, cleaned (probability at or above ``--threshold``; then, unless
+segmenter (or, with ``--mask-source body_net``, the ``--body-net`` network's
+mask output), cleaned (probability at or above ``--threshold``; then, unless
 ``--no-fill-holes`` / ``--no-largest-component`` / ``--raw-mask`` say
 otherwise, narrow holes filled and the largest component kept), and then
 fit in GPU batches with
@@ -59,14 +60,17 @@ import time
 from typing import Any
 
 import numpy as np
+import torch
 
 from worm_pose_gen.ambiguity import compute_ambiguity
 from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig
 from worm_pose_gen.pipeline import (
     field_predictor,
+    BodyNetMasks,
     DEFAULT_CHECKPOINT,
     DEFAULT_PRIOR_CACHE,
     EXTERNAL_ROOT,
+    MASK_SOURCES,
     PROJECT_ROOT,
     START_SETS,
     TIMING_STAGES as STAGES,
@@ -80,7 +84,8 @@ from worm_pose_gen.pipeline import (
     fit_setup,
     fit_statistics,
     independent_copies,
-    load_segmentation_model,
+    load_mask_model,
+    mask_checkpoint,
     new_arrays,
     propagation_pass,
     resolve_prior,
@@ -89,7 +94,6 @@ from worm_pose_gen.pipeline import (
     track_length_pass,
 )
 from worm_pose_gen.pose_run import (
-    clean_mask,
     draw_residual,
     render_tube,
     residual_caption,
@@ -109,6 +113,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--recording", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument(
+        "--mask-source", default="segmenter", choices=MASK_SOURCES,
+        help="masks from the segmenter (--checkpoint) or from the --body-net network's mask output, cleaned the same way",
+    )
     parser.add_argument("--start", type=int, default=0, help="first frame index")
     parser.add_argument("--frames", type=int, default=1200, help="number of frames to cover (1200 = one minute at 20 fps)")
     parser.add_argument("--step", type=int, default=1, help="fit every k-th frame of the covered range")
@@ -202,7 +210,8 @@ def segment_params(args: argparse.Namespace) -> SegmentParams:
     """Segmentation switches from the command line (``--raw-mask`` turns both cleanup steps off)."""
 
     return SegmentParams(
-        checkpoint=str(args.checkpoint), threshold=args.threshold, hole_radius=args.hole_radius,
+        mask_source=args.mask_source, checkpoint=str(args.checkpoint), body_net=None if args.body_net is None else str(args.body_net),
+        threshold=args.threshold, hole_radius=args.hole_radius,
         fill_holes=bool(args.fill_holes) and not args.raw_mask, largest_only=bool(args.largest_component) and not args.raw_mask,
         min_worm_pixels=args.min_worm_pixels, batch_size=args.batch_size, slab=args.slab, dataset_root=str(args.dataset_root),
     )
@@ -213,7 +222,7 @@ def prior_params(args: argparse.Namespace, segmentation: SegmentParams) -> Prior
         prior=args.prior, prior_file=None if args.prior_file is None else str(args.prior_file), prior_cache=str(args.prior_cache),
         use_cache=not args.no_prior_cache, rebootstrap=args.rebootstrap, bootstrap_frames=args.bootstrap_frames,
         bootstrap_target=args.bootstrap_target, bootstrap_preset=args.bootstrap_preset,
-        checkpoint=segmentation.checkpoint, threshold=segmentation.threshold, hole_radius=segmentation.hole_radius,
+        mask_source=segmentation.mask_source, checkpoint=segmentation.checkpoint, body_net=segmentation.body_net, threshold=segmentation.threshold, hole_radius=segmentation.hole_radius,
         fill_holes=segmentation.fill_holes, largest_only=segmentation.largest_only, min_worm_pixels=segmentation.min_worm_pixels,
         batch_size=segmentation.batch_size, dataset_root=segmentation.dataset_root,
     )
@@ -315,13 +324,15 @@ def main() -> int:
     args = parse_args()
     if args.step < 1 or args.slab < 1:
         raise SystemExit("--step and --slab must be positive")
+    if args.mask_source == "body_net" and args.body_net is None:
+        raise SystemExit("--mask-source body_net needs --body-net")
     started = utc_now()
     segmentation = segment_params(args)
     fitting = fit_params(args)
-    model = load_segmentation_model(args.checkpoint, args.device)
-    device = model.device
+    device = torch.device(args.device if args.device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
     frames = Frames(args.recording, dataset_root=args.dataset_root)
     frames.field()
+    model = load_mask_model(segmentation, frames, device)
 
     total = frames.total
     start = max(0, args.start)
@@ -352,7 +363,8 @@ def main() -> int:
     # Independent fits, slab by slab: segment, clean, start, fit, store.
     mask_cache = _PackedMaskCache()
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
-    predictor = None if args.body_net is None else field_predictor(args.body_net, frames, device)
+    # A network that made the masks made the fit's predictions with them: they are reused, not predicted again.
+    predictor = None if args.body_net is None or isinstance(model, BodyNetMasks) else field_predictor(args.body_net, frames, device)
     try:
         for slab_start in range(0, n, args.slab):
             slab = indices[slab_start : slab_start + args.slab]
@@ -361,7 +373,8 @@ def main() -> int:
             masks, stats, seg_timing = segment_frames(frames, model, slab, segmentation, device)
             fit_masks_here: list[np.ndarray] = []
             fit_rows: list[int] = []
-            for row, mask, frame_stats in zip(slab_rows, masks, stats, strict=True):
+            fit_predictions: list[Any] = []
+            for k, (row, mask, frame_stats) in enumerate(zip(slab_rows, masks, stats, strict=True)):
                 mask_cache.put(row, mask, frame_stats["worm_pixels"])
                 store_mask_stats(arrays, row, frame_stats)
                 if frame_stats["worm_pixels"] == 0:
@@ -371,7 +384,9 @@ def main() -> int:
                 else:
                     fit_masks_here.append(mask)
                     fit_rows.append(row)
-            predictions = None
+                    if isinstance(model, BodyNetMasks):
+                        fit_predictions.append(model.last[k])
+            predictions = fit_predictions or None
             if predictor is not None and fit_rows:
                 t_fields = time.perf_counter()
                 predictions = predictor.predict([indices[row] for row in fit_rows])
@@ -396,7 +411,8 @@ def main() -> int:
         return _segment_cached_rows(rows, frames, model, arrays["frame_index"], segmentation, device, mask_cache)
 
     # The body-field network scores the propagation and track refits too, as it scored the independent fits.
-    predictions_of = None if predictor is None else (lambda rows: predictor.predict([indices[row] for row in rows]))
+    fields = model.predictor if isinstance(model, BodyNetMasks) else predictor
+    predictions_of = None if fields is None else (lambda rows: fields.predict([indices[row] for row in rows]))
 
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
     # independent pose itself is kept so the developer layers can show what
@@ -439,8 +455,7 @@ def main() -> int:
     for row in residual_rows(arrays, args.residual_frames, requested):
         frame_index = int(arrays["frame_index"][row])
         frame = frames.corrected([frame_index])[0][0]
-        probability = model.predict_probability_batch(frame[None], batch_size=1)[0]
-        mask, _ = clean_mask(probability, args.threshold, args.hole_radius, device, fill_holes=segmentation.fill_holes, largest_only=segmentation.largest_only)
+        mask = segment_frames(frames, model, [frame_index], segmentation, device)[0][0]
         tube = render_tube(
             arrays["centerline_xy"][row], arrays["width_profile"][row], *frame.shape, window=tuple(arrays["crop"][row]), device=device
         )
@@ -459,7 +474,8 @@ def main() -> int:
         "frames": [start, stop - 1],
         "step": args.step,
         "frame_count": n,
-        "checkpoint": checkpoint_fingerprint(args.checkpoint),
+        "mask_source": args.mask_source,
+        "checkpoint": checkpoint_fingerprint(mask_checkpoint(segmentation)),
         "git": git_revision(PROJECT_ROOT),
         "device": str(device),
         "threshold": args.threshold,

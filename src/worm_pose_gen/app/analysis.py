@@ -4,10 +4,12 @@ A recording belongs to a setup (:func:`library.setup_for_recording`), and
 the setup names the default model of each role (``mask``: the segmenter
 whose masks the pipeline fits; ``body``: the body-field network that scores
 the fits and gives the A-P field).  **Analyse** takes those models, or the
-ones the user picked instead, resolves each reference to its weights, makes
+ones the user picked instead, and where the masks come from (``mask_source``:
+the mask model, the default, or the body model's own mask output, which then
+needs no mask model), resolves each reference to its weights, makes
 the recording's workspace if it has none (always the whole recording; a
-developer may give a range), records the setup and the model references in
-the workspace settings (the header and the export read them back), and
+developer may give a range), records the setup, the model references and
+the mask source in the workspace settings (the header and the export read them back), and
 submits one job of kind ``analyse`` that runs the default stages in one
 process (``pipeline.stages_command``), so its progress spans the whole
 analysis and it survives the browser closing.  Analysing again replaces the
@@ -48,8 +50,8 @@ from .inspection import cached_issue_summary
 from .state import AppState, NotFound
 
 ANALYSE_JOB_KIND = "analyse"
-# The model kind that can fill each role today: masks still come from the
-# segmenter until a body-field net matches it (section 4, decision 1).
+# The model kind that can fill each role.  Masks come from the segmenter
+# unless the analysis asks for the body model's (``pipeline.MASK_SOURCES``).
 ROLE_KINDS = {"mask": "segmenter", "body": "body_net"}
 LAST_OPENED_FILE = "last_opened.json"
 KYMOGRAPH_RANGE = 15.0
@@ -59,18 +61,26 @@ KYMOGRAPH_RANGE = 15.0
 # Models and the analysis job
 
 
-def resolve_models(libraries: library.Libraries, setup: library.Setup, requested: dict[str, Any] | None = None) -> dict[str, dict[str, Any] | None]:
+def resolve_models(
+    libraries: library.Libraries, setup: library.Setup, requested: dict[str, Any] | None = None, mask_source: str = "segmenter",
+) -> dict[str, dict[str, Any] | None]:
     """The model of each role, ``{ref, name, weights}`` or ``None``: a role named in ``requested`` takes that reference (``None``: no model), else the setup's default.
 
-    A mask model is required (a body model is not: without one the fit
-    orients by the body's taper); a model of the wrong kind or without the
-    role's outputs is refused.
+    With masks from the segmenter a mask model is required (a body model is
+    not: without one the fit orients by the body's taper).  With masks from
+    the body model (``mask_source="body_net"``) the body model is required,
+    needs a mask output, and there is no mask model.  A model of the
+    wrong kind or without the role's outputs is refused.
     """
 
+    if mask_source not in pipeline.MASK_SOURCES:
+        raise ValueError(f"unknown mask source {mask_source!r}; expected one of {pipeline.MASK_SOURCES}")
     requested = dict(requested or {})
     unknown = sorted(set(requested) - set(ROLE_KINDS))
     if unknown:
         raise ValueError(f"unknown model roles {unknown}; expected {sorted(ROLE_KINDS)}")
+    if mask_source == "body_net":
+        requested["mask"] = None
     models: dict[str, dict[str, Any] | None] = {}
     for role, kind in ROLE_KINDS.items():
         ref = requested[role] if role in requested else setup.defaults.get(role)
@@ -80,21 +90,26 @@ def resolve_models(libraries: library.Libraries, setup: library.Setup, requested
         card = library.get_card(libraries, str(ref))
         if card.kind != kind:
             raise ValueError(f"{ref} is a {card.kind} model; the {role} model must be a {kind}")
-        missing = [output for output in ROLE_OUTPUTS[role] if output not in card.outputs]
+        # Masks from the body model need its mask output too.
+        wanted = ROLE_OUTPUTS[role] + (("mask",) if role == "body" and mask_source == "body_net" else ())
+        missing = [output for output in wanted if output not in card.outputs]
         if missing:
             raise ValueError(f"{ref} cannot be the {role} model: it has no {', '.join(missing)} output")
         models[role] = {"ref": card.ref, "name": card.name, "weights": str(library.weights_path(libraries, card.ref))}
-    if models["mask"] is None:
+    if mask_source == "body_net" and models["body"] is None:
+        raise ValueError("masks from the body model need a body model; choose one")
+    if mask_source == "segmenter" and models["mask"] is None:
         raise ValueError(f"no mask model: setup {setup.ref} has no default one; choose one")
     return models
 
 
-def analysis_params(app: AppState, setup: library.Setup, models: dict[str, dict[str, Any] | None]) -> dict[str, Any]:
-    """The parameters every stage of an analysis reads (``run_all``'s ``'*'``): the models' weights and the setup's video settings."""
+def analysis_params(app: AppState, setup: library.Setup, models: dict[str, dict[str, Any] | None], mask_source: str = "segmenter") -> dict[str, Any]:
+    """The parameters every stage of an analysis reads (``run_all``'s ``'*'``): the mask source, the models' weights and the setup's video settings."""
 
-    body = models.get("body")
+    mask, body = models.get("mask"), models.get("body")
     return {
-        "checkpoint": models["mask"]["weights"],  # type: ignore[index]
+        "mask_source": mask_source,
+        "checkpoint": None if mask is None else mask["weights"],
         "body_net": None if body is None else body["weights"],
         "dataset_root": str(app.config.dataset_root),
         "flat_field": bool(setup.video.get("flat_field", True)),
@@ -122,7 +137,9 @@ def active_jobs(app: AppState, name: str) -> list[JobRecord]:
 def analysis_job(app: AppState, payload: dict[str, Any]) -> tuple[str, JobSpec, list[str]]:
     """Analyse the recording at ``payload["path"]``: its workspace (made when missing), settings and the job; returns ``(workspace, spec, argv)``.
 
-    ``models`` (``{role: ref}``) replaces the setup's defaults; ``stages``,
+    ``models`` (``{role: ref}``) replaces the setup's defaults and
+    ``mask_source`` (``segmenter``, the default, or ``body_net``) says where
+    the masks come from; ``stages``,
     and for a new workspace ``first``, ``last`` and ``step``, are the
     developer's.  A workspace with a queued or running job is busy.
     """
@@ -133,7 +150,8 @@ def analysis_job(app: AppState, payload: dict[str, Any]) -> tuple[str, JobSpec, 
     if setup_ref is None:
         raise ValueError(f"{recording} does not belong to a setup; add it to one first")
     setup = library.get_setup(libraries, setup_ref)
-    models = resolve_models(libraries, setup, payload.get("models"))
+    mask_source = str(payload.get("mask_source") or "segmenter")
+    models = resolve_models(libraries, setup, payload.get("models"), mask_source)
     stages = _stages(payload)
     name = app.workspace_of_recording(recording)
     if name is None:
@@ -146,15 +164,16 @@ def analysis_job(app: AppState, payload: dict[str, Any]) -> tuple[str, JobSpec, 
     settings.update({
         "setup": setup_ref,
         "models": {role: None if model is None else model["ref"] for role, model in models.items()},
-        "checkpoint": models["mask"]["weights"],  # type: ignore[index]
+        "mask_source": mask_source,
+        "checkpoint": None if models["mask"] is None else models["mask"]["weights"],
         "body_net": None if models["body"] is None else models["body"]["weights"],
     })
     with pipeline.workspace_lock(workspace, timeout=0):
         workspace.save_info()
     app.view(name).invalidate()
-    params = analysis_params(app, setup, models)
+    params = analysis_params(app, setup, models, mask_source)
     spec = JobSpec(
-        kind=ANALYSE_JOB_KIND, params={"stages": stages, "params": params, "setup": setup_ref, "models": settings["models"]},
+        kind=ANALYSE_JOB_KIND, params={"stages": stages, "params": params, "setup": setup_ref, "models": settings["models"], "mask_source": mask_source},
         workspace=name, frames=[int(v) for v in workspace.info.frames], label=f"Analyse {recording.stem}",
     )
     return name, spec, analysis_command(workspace.path, stages, params)
@@ -186,14 +205,46 @@ def workspace_body_net(workspace: Any) -> Path | None:
     return Path(path) if path and Path(path).is_file() else None
 
 
+def stage_progress(record: JobRecord) -> list[dict[str, Any]]:
+    """Each stage of an analysis job, ``{stage, progress, state}`` (``waiting``, ``running``, ``done``, or the job's ``failed`` or ``cancelled``), from its overall progress.
+
+    ``pipeline.run_all`` reports ``(k + fraction) / n`` with the running
+    stage named before the message's colon, so the stages before it are
+    done and its own fraction is what is left over.
+    """
+
+    stages = list(record.spec.params.get("stages") or [])
+    if not stages:
+        return []
+    n, current = len(stages), record.message.split(":")[0]
+    if record.state == "done":
+        return [{"stage": stage, "progress": 1.0, "state": "done"} for stage in stages]
+    k = stages.index(current) if current in stages else None
+    out = []
+    for i, stage in enumerate(stages):
+        if k is None:
+            fraction = min(max(record.progress * n - i, 0.0), 1.0)
+            state = "done" if fraction >= 1.0 else "waiting"
+        elif i != k:
+            fraction, state = (1.0, "done") if i < k else (0.0, "waiting")
+        else:
+            fraction = min(max(record.progress * n - k, 0.0), 1.0)
+            state = record.state if record.state in FINISHED_STATES else "running"
+        out.append({"stage": stage, "progress": fraction, "state": state})
+    return out
+
+
 def _job(record: JobRecord | None) -> dict[str, Any] | None:
     if record is None:
         return None
-    return {
+    job = {
         "id": record.id, "kind": record.spec.kind, "label": record.spec.label, "state": record.state, "progress": record.progress,
         "message": record.message, "error": record.error, "run_on": record.spec.run_on, "slurm_state": record.slurm_state,
         "finished_at": record.finished_at,
     }
+    if record.spec.kind == ANALYSE_JOB_KIND:
+        job["stages"] = stage_progress(record)
+    return job
 
 
 def last_opened(app: AppState) -> dict[str, str]:
@@ -251,6 +302,7 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
         "frames": [int(v) for v in workspace.info.frames], "step": int(workspace.info.step), "frame_count": workspace.n,
         "image_shape": workspace.info.image_shape, "setup": setup,
         "models": _model_names(libraries, settings.get("models") or {}),
+        "mask_source": settings.get("mask_source", "segmenter"),
         "has_body_model": workspace_body_net(workspace) is not None,
         "state": state, "analysed": analysed, "issues": issues,
         "analysis": _job(analysis), "active_jobs": [_job(r) for r in active],
