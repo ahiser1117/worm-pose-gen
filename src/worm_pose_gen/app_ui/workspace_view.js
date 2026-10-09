@@ -12,12 +12,14 @@
 //
 // Frames load light (image and pose) while playing or stepping and in full
 // (mask and every layer) once the cursor rests. Server endpoints are under
-// /api/workspaces/<name>: status, issues, fixes, kymograph, frame, mask.
+// /api/workspaces/<name>: status, issues, fixes, kymograph, frame, mask,
+// network-fields (the body model's A-P field, and its raw output channels for
+// the Model outputs menu: one optional layer per channel, unthresholded).
 
 import {api, el, post, query} from "./api.js";
 import {FrameCanvas, drawMidline, maskCanvas} from "./frame_canvas.js";
 import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
-import {AP_LUT, KYMOGRAPH_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage} from "./workspace_draw.js";
+import {AP_LUT, KYMOGRAPH_LUT, RAW_AP_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage, probabilityLut} from "./workspace_draw.js";
 import {STAGE_WORDS, describeStatus} from "./workspace_home.js";
 import {MaskEditor} from "./workspace_mask.js";
 import {Timeline} from "./workspace_timeline.js";
@@ -31,6 +33,15 @@ const LAYERS = [
   {id: "outline", label: "Outline", key: "3", title: "Body outline"},
   {id: "ap", label: "A-P field", key: "4", title: "Head-to-tail field of the body model"},
 ];
+// The body model's output channels (body_net.OUTPUTS), each an optional raw layer.
+const OUTPUTS = [
+  {id: "mask", label: "Mask", lut: probabilityLut([80, 220, 255])},
+  {id: "ap", label: "A-P field", lut: RAW_AP_LUT},
+  {id: "head", label: "Head", lut: probabilityLut([87, 214, 141])},
+  {id: "tail", label: "Tail", lut: probabilityLut([255, 93, 93])},
+  {id: "overlap", label: "Overlap", lut: probabilityLut([255, 79, 163])},
+];
+const FIELDS_CACHE = 32;
 const STATE_WORDS = {unreviewed: "to review", reviewed: "looks OK", fixed: "fixed"};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -55,6 +66,7 @@ export class WorkspaceView {
     this.onHome = onHome;
     this.name = null;
     this.layers = {mask: true, midline: true, outline: false, ap: false};
+    this.outputs = new Set();  // the raw output channels shown
     this.speed = 1;
     this.loop = false;
     this._build(section);
@@ -75,7 +87,10 @@ export class WorkspaceView {
       type: "button", class: "ws-layer", dataset: {layer: layer.id}, title: `${layer.title || layer.label} (${layer.key})`,
       onclick: () => this.toggleLayer(layer.id),
     }, layer.label));
+    this.outputsMenu = el("details", {class: "ws-menu ws-outputs", hidden: true},
+      el("summary", {title: "The body model's raw output channels, unthresholded"}, "Model outputs"), el("div", {class: "ws-menu-body"}));
     this.toolbar = el("div", {class: "ws-toolbar"}, el("div", {class: "ws-layers", role: "group", "aria-label": "Layers"}, this.layerButtons),
+      this.outputsMenu,
       el("button", {type: "button", class: "ws-fit", title: "Fit the frame to the view (0)", onclick: () => this.canvas.fit()}, "Fit"));
     this.canvasHost = el("div", {class: "ws-canvas"});
     this.legend = el("div", {class: "ws-legend", hidden: true});
@@ -125,7 +140,10 @@ export class WorkspaceView {
   _layers() {
     const view = this.canvas;
     view.setLayer("mask", (g) => { if (this.maskOverlay && !this.mask?.active) g.drawImage(this.maskOverlay, 0, 0); });
-    view.setLayer("ap", (g) => { if (this.apCanvas) g.drawImage(this.apCanvas, 0, 0); });
+    view.setLayer("ap", (g) => { if (this.fields) g.drawImage(this.fields.ap, 0, 0); });
+    view.setLayer("outputs", (g) => {
+      for (const output of OUTPUTS) if (this.outputs.has(output.id) && this.fields?.outputs) g.drawImage(this.fields.outputs[output.id], 0, 0);
+    });
     view.setLayer("dev", (g, v) => this.dev?.drawLayers(g, v));
     view.setLayer("outline", (g, v) => { const pose = this.current?.pose; if (pose) drawOutline(g, v, pose.centerline_xy, pose.width_profile); });
     view.setLayer("midline", (g, v) => { if (this.current?.pose && !this.previewFrame()) drawMidline(g, v, this.current.pose.centerline_xy); });
@@ -168,7 +186,7 @@ export class WorkspaceView {
     this.base = `/api/workspaces/${encodeURIComponent(name)}`;
     this.status = null; this.issues = null; this.issuesError = null; this.fixes = []; this.target = null; this.selectedIssue = null;
     this.mode = "idle"; this.pending = null; this.preview = null; this.keyframes = null;
-    this.row = 0; this.current = null; this.maskOverlay = null; this.apCanvas = null; this.apCache = new Map();
+    this.row = 0; this.current = null; this.maskOverlay = null; this.fields = null; this.fieldsCache = new Map();
     this.generation = 0; this.kymographStamp = null;
     this.mask = new MaskEditor(name);
     this.timeline.set("issues", []); this.timeline.set("kymograph", null); this.timeline.set("selection", null);
@@ -292,7 +310,7 @@ export class WorkspaceView {
   async changed(response = null) {
     if (response?.fixes) { this.fixes = response.fixes; this.renderFixes(); }
     await Promise.all([this.loadIssues(), response?.fixes ? null : this.loadFixes(), this.loadKymograph()]);
-    this.apCache.clear();
+    this.fieldsCache.clear();
     await this.loadFrame(this.row, "full");
     this.renderFix();
   }
@@ -407,28 +425,45 @@ export class WorkspaceView {
       if (token !== this.generation) return;
       this.maskOverlay = mask ? maskCanvas(mask.data, mask.width, mask.height, [58, 160, 255], 0.38) : null;
       this.dev?.frameLoaded(payload);
-      if (this.layers.ap && this.status.has_body_model) this.loadAp(frame, token);
+      if (this.wantsFields()) this.loadFields(frame, token);
     } else {
       this.maskOverlay = null;
-      if (!this.apCache.has(frame)) this.apCanvas = null;
     }
-    if (this.apCache.has(frame)) this.apCanvas = this.apCache.get(frame);
+    this.fields = this.fieldsCache.get(frame) || null;
+    this.renderOutputsMenu();
     this.canvas.setImage(image);
     this.renderStatusLine();
     this.renderPreviewNumbers();
   }
 
-  async loadAp(frame, token) {
-    if (this.apCache.has(frame)) { this.apCanvas = this.apCache.get(frame); this.canvas.redraw(); return; }
+  // Whether a rested frame needs the body model's fields: the A-P layer, a raw output or the developer's crossings is on.
+  wantsFields() {
+    return !!this.status?.has_body_model && (this.layers.ap || this.outputs.size > 0 || !!this.dev?.on.has("overlap"));
+  }
+
+  // The body model's fields of `frame` as canvases ({ap, outputs: {channel: canvas} | null, peaks}), with the raw outputs when one is shown.
+  async loadFields(frame, token) {
+    const withOutputs = this.outputs.size > 0, cached = this.fieldsCache.get(frame);
+    const show = (entry) => {
+      if (token !== this.generation) return;
+      this.fields = entry;
+      this.canvas.redraw();
+      this.renderOutputsMenu();
+    };
+    if (cached && (cached.outputs || !withOutputs)) { show(cached); return; }
     try {
-      const fields = await api(`${this.base}/network-fields${query({frame})}`);
-      const canvas = colorize(await decodeGray(fields.ap), AP_LUT);
-      if (this.apCache.size > 32) this.apCache.delete(this.apCache.keys().next().value);
-      this.apCache.set(frame, canvas);
+      const fields = await api(`${this.base}/network-fields${query({frame, outputs: withOutputs ? 1 : null})}`);
+      const entry = {ap: colorize(await decodeGray(fields.ap), AP_LUT), outputs: null, peaks: fields.peaks || null};
+      if (withOutputs) {
+        entry.outputs = Object.fromEntries(await Promise.all(OUTPUTS.map(async (output) => [output.id, colorize(await decodeGray(fields.outputs[output.id]), output.lut)])));
+      }
+      this.fieldsCache.delete(frame);
+      if (this.fieldsCache.size >= FIELDS_CACHE) this.fieldsCache.delete(this.fieldsCache.keys().next().value);
+      this.fieldsCache.set(frame, entry);
       this.dev?.fieldsLoaded(frame, fields);
-      if (token === this.generation) { this.apCanvas = canvas; this.canvas.redraw(); }
+      show(entry);
     } catch (error) {
-      if (token === this.generation) this.ctx.toast(`A-P field: ${error.message}`, "error");
+      if (token === this.generation) this.ctx.toast(`Body model: ${error.message}`, "error");
     }
   }
 
@@ -442,7 +477,23 @@ export class WorkspaceView {
     this.layers[id] = !this.layers[id];
     this.canvas.setLayerVisible(id, this.layers[id]);
     this.renderLayers();
-    if (id === "ap" && this.layers.ap) this.loadAp(this.frameOf(this.row), this.generation);
+    if (id === "ap" && this.layers.ap) this.loadFields(this.frameOf(this.row), this.generation);
+  }
+
+  toggleOutput(id, on) {
+    if (on) this.outputs.add(id); else this.outputs.delete(id);
+    if (on) this.loadFields(this.frameOf(this.row), this.generation);
+    this.canvas.redraw();
+    this.renderOutputsMenu();
+  }
+
+  // The Model outputs menu: a box per channel, with the channel's peak on this frame once loaded.
+  renderOutputsMenu() {
+    const body = this.outputsMenu.querySelector(".ws-menu-body"), peaks = this.fields?.outputs ? this.fields.peaks : null;
+    body.replaceChildren(el("span", {class: "note"}, "Raw, unthresholded: stronger colour is a higher value"),
+      ...OUTPUTS.map((output) => el("label", {class: "inline", dataset: {output: output.id}},
+        el("input", {type: "checkbox", checked: this.outputs.has(output.id), onchange: (event) => this.toggleOutput(output.id, event.target.checked)}),
+        output.label, peaks ? el("span", {class: "note ws-peak"}, `peak ${peaks[output.id].toFixed(2)}`) : null)));
   }
 
   renderLayers() {
@@ -451,6 +502,7 @@ export class WorkspaceView {
       button.setAttribute("aria-pressed", String(this.layers[id]));
       button.hidden = id === "ap" && !this.status?.has_body_model;
     }
+    this.outputsMenu.hidden = !this.status?.has_body_model;
   }
 
   // ------------------------------------------------------------ playback

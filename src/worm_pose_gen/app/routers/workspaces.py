@@ -33,9 +33,9 @@ def frame(name: str, frame: int, detail: str = "full", raw: str | None = None, a
 
 
 @router.get("/{name}/network-fields")
-def network_fields(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """The body-field network's A-P field, crossings and head/tail on one frame (``app/network_fields.py``)."""
-    return app.network_fields.frame(name, frame)
+def network_fields(name: str, frame: int, outputs: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The body-field network's A-P field, crossings and head/tail on one frame, with ``outputs=1`` every raw output channel (``app/network_fields.py``)."""
+    return app.network_fields.frame(name, frame, outputs=query_flag(outputs))
 
 
 def _with_urls(name: str, export: dict[str, Any]) -> dict[str, Any]:

@@ -13,8 +13,12 @@ head and tail as the fitter would score them (:func:`body_proposal.field_evidenc
 against the workspace's current mask for the row, or the predicted mask when
 the row has none): ``None`` when the heatmap peak is below ``END_THRESHOLD``,
 farther than ``END_MASK_PX`` from the mask, or within ``END_BORDER_PX`` of the
-image edge.  Inference runs one frame at a time; results are kept in a
-bounded LRU keyed by workspace, row, mask revision and model.
+image edge.  With ``outputs`` it also carries every output channel raw, as
+the network gives it (``outputs``: ``{channel: PNG of round(255 * value)}``
+over the whole frame, unthresholded and unmasked; ``peaks``: each channel's
+maximum), for the page's model-output layers.  Inference runs one frame at a
+time; results (raw channels included) are kept in a bounded LRU keyed by
+workspace, row, mask revision and model.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ import numpy as np
 from .images import data_url
 from ..pipeline import SegmentParams, workspace_dataset, workspace_frames
 
-# Cached predictions; each holds two full-frame PNGs (a few hundred kB).
+# Cached predictions; each holds seven full-frame PNGs (around a megabyte).
 CACHE_ENTRIES = 64
 # Recordings kept open for prediction (flat field loaded once each).
 OPEN_RECORDINGS = 4
@@ -37,6 +41,7 @@ OPEN_RECORDINGS = 4
 def encode_prediction(prediction: Any, mask: np.ndarray | None) -> dict[str, Any]:
     """The page's layers of one ``FieldPrediction``; ``mask`` is the workspace's current mask of the row, if any."""
 
+    from ..body_net import OUTPUTS
     from ..body_proposal import END_THRESHOLD, OVERLAP_THRESHOLD, field_evidence
 
     body = prediction.mask > 0.5
@@ -52,7 +57,15 @@ def encode_prediction(prediction: Any, mask: np.ndarray | None) -> dict[str, Any
         "head_xy": point(evidence.head_xy), "tail_xy": point(evidence.tail_xy),
         "head_peak": float(prediction.head.max()), "tail_peak": float(prediction.tail.max()),
         "end_threshold": END_THRESHOLD, "mask_source": "workspace" if reference is mask else "predicted",
+        "outputs": {name: data_url(raw_png(getattr(prediction, name))) for name in OUTPUTS},
+        "peaks": {name: float(getattr(prediction, name).max()) for name in OUTPUTS},
     }
+
+
+def raw_png(values: np.ndarray) -> np.ndarray:
+    """An output channel in [0, 1] as 8-bit gray, ``round(255 * value)``."""
+
+    return np.round(255 * np.clip(values, 0, 1)).astype(np.uint8)
 
 
 class NetworkFields:
@@ -90,8 +103,8 @@ class NetworkFields:
                 self._frames.popitem(last=False)[1].close()
         return frames
 
-    def frame(self, name: str, frame: int) -> dict[str, Any]:
-        """The encoded prediction of workspace ``name``'s ``frame`` (``cached`` says whether it was computed before)."""
+    def frame(self, name: str, frame: int, *, outputs: bool = False) -> dict[str, Any]:
+        """The encoded prediction of workspace ``name``'s ``frame`` (``cached`` says whether it was computed before); ``outputs`` adds the raw channels."""
 
         from ..body_proposal import RecordingFieldPredictor
 
@@ -118,8 +131,13 @@ class NetworkFields:
                         self._cache[key] = hit
                         while len(self._cache) > self.entries:
                             self._cache.popitem(last=False)
-                    return {**hit, "frame": int(frame), "row": row, "cached": False}
-        return {**hit, "frame": int(frame), "row": row, "cached": True}
+                    return self._answer(hit, frame, row, cached=False, outputs=outputs)
+        return self._answer(hit, frame, row, cached=True, outputs=outputs)
+
+    @staticmethod
+    def _answer(hit: dict[str, Any], frame: int, row: int, *, cached: bool, outputs: bool) -> dict[str, Any]:
+        raw = () if outputs else ("outputs", "peaks")
+        return {**{k: v for k, v in hit.items() if k not in raw}, "frame": int(frame), "row": row, "cached": cached}
 
     def close(self) -> None:
         with self._lock:

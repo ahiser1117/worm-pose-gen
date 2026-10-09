@@ -74,7 +74,7 @@ export class DevTools {
     const box = (id, label) => el("label", {class: "inline"}, el("input", {type: "checkbox", checked: this.on.has(id), onchange: (event) => {
       if (event.target.checked) this.on.add(id); else this.on.delete(id);
       this.view.canvas.redraw();
-      if (event.target.checked && id === "overlap") this.view.loadAp(this.view.frameOf(this.view.row), this.view.generation);
+      if (event.target.checked && id === "overlap") this.view.loadFields(this.view.frameOf(this.view.row), this.view.generation);
     }}), label);
     body.replaceChildren(...RASTERS.map(([id, label]) => box(id, label)), box("independent", "Independent fit midline"), box("overlap", "Network crossings"));
   }

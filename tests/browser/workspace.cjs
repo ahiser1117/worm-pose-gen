@@ -1,7 +1,7 @@
 // The Workspace page end to end on a synthetic CPU app (tests/browser/workspace_fixture.py):
 // Recordings -> Analyse -> issues (and the left panel's layout with many of them) -> Looks OK ->
-// Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> timeline scrub and
-// right-drag selection -> Export.
+// Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> Model outputs (raw layers) ->
+// timeline scrub and right-drag selection -> Export.
 // Run from the repository root: node tests/browser/workspace.cjs
 // Environment: PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE (and LD_LIBRARY_PATH for its libraries) when
 // not installed in the default places; PYTHON (default .venv/bin/python); WS_SHOTS, a directory
@@ -236,6 +236,23 @@ const WS = '2026-03-14-01';
     await page.mouse.wheel(0, -400);
     await page.locator('.ws-fit').click();
     assert.equal(await picture(), fitted, 'the Fit button fits the frame');
+
+    // Model outputs: a raw layer per output channel of the body model, asked for with outputs=1, with each channel's peak.
+    const outputsMenu = page.locator('.ws-outputs');
+    assert.ok(await outputsMenu.isVisible(), 'the workspace has a body model');
+    await outputsMenu.locator('summary').click();
+    assert.deepEqual(await outputsMenu.locator('label').evaluateAll((labels) => labels.map((l) => l.dataset.output)), ['mask', 'ap', 'head', 'tail', 'overlap']);
+    const raw = page.waitForResponse((response) => response.url().includes('/network-fields') && response.url().includes('outputs=1'));
+    await outputsMenu.locator('label[data-output="mask"] input').check();
+    assert.deepEqual(Object.keys((await (await raw).json()).outputs).sort(), ['ap', 'head', 'mask', 'overlap', 'tail']);
+    await outputsMenu.locator('label[data-output="tail"] .ws-peak').waitFor();
+    assert.match(await outputsMenu.locator('label[data-output="mask"]').textContent(), /peak 1\.00/);
+    assert.match(await outputsMenu.locator('label[data-output="tail"]').textContent(), /peak 0\.00/);
+    assert.notEqual(await picture(), fitted, 'the raw mask is drawn');
+    await shot('07b-model-outputs');
+    await outputsMenu.locator('label[data-output="mask"] input').uncheck();
+    assert.equal(await picture(), fitted, 'and gone when unchecked');
+    await outputsMenu.locator('summary').click();
 
     // The timeline: a left drag scrubs the frame as it goes, a right drag selects a range (Esc clears it).
     await page.keyboard.press('Escape');

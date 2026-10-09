@@ -126,6 +126,23 @@ class NetworkFieldsApiTests(unittest.TestCase):
         self.assertEqual(len(app.state.app_state.network_fields._cache), 2)
         self.assertIn("is not in workspace", self.get(client, 99, 400)["error"])
 
+    def test_raw_outputs_on_request(self):
+        _, client = self.client(self.checkpoint)
+        with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=RecordingStub(prediction(head_peak=0.5))):
+            plain = self.get(client, 1)
+            response = client.get("/api/workspaces/demo/network-fields", params={"frame": 1, "outputs": 1})
+        self.assertNotIn("outputs", plain)
+        raw = response.json()
+        self.assertTrue(raw["cached"], "the raw channels come from the cached prediction")
+        self.assertEqual(sorted(raw["outputs"]), ["ap", "head", "mask", "overlap", "tail"])
+        outputs = {name: decode(url) for name, url in raw["outputs"].items()}
+        # Unthresholded and unmasked: the A-P field is there off the body, the overlap is not cut from the mask.
+        self.assertAlmostEqual(outputs["ap"][5, 50] / 255, 50 / (W - 1), delta=0.01)
+        self.assertEqual((outputs["mask"][32, 50], outputs["mask"][5, 50], outputs["overlap"][32, 42]), (255, 0, 255))
+        self.assertAlmostEqual(outputs["head"][32, 30] / 255, 0.5, delta=0.01)
+        self.assertAlmostEqual(raw["peaks"]["head"], 0.5, places=3)
+        self.assertAlmostEqual(raw["peaks"]["mask"], 1.0, places=3)
+
     def test_a_weak_head_peak_is_no_head(self):
         _, client = self.client(self.checkpoint)
         with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=RecordingStub(prediction(head_peak=0.2))):

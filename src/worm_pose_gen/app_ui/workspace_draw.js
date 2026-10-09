@@ -1,5 +1,6 @@
 // Drawing helpers of the Workspace page: decoding the server's PNG layers,
-// the colour maps of the kymograph and the A-P field, and the body outline
+// the colour maps of the kymograph, the A-P field and the body model's raw
+// outputs, and the body outline
 // drawn from a pose (centerline + width profile) rather than a raster, so it
 // stays sharp at any zoom and is there even while frames play.
 
@@ -66,8 +67,23 @@ function apLut() {
   return lut;
 }
 
+// A raw model output through the A-P colours: every value drawn, 0 (head) included.
+function rawApLut() {
+  const lut = apLut();
+  lut.set(lut.subarray(4, 8), 0);
+  return lut;
+}
+
+// A raw probability channel as one colour whose opacity is the value.
+export function probabilityLut([r, g, b]) {
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let v = 0; v < 256; v++) lut.set([r, g, b, Math.round(v * 0.9)], v * 4);
+  return lut;
+}
+
 export const KYMOGRAPH_LUT = divergingLut();
 export const AP_LUT = apLut();
+export const RAW_AP_LUT = rawApLut();
 
 // A canvas of a decoded gray image through a lookup table of 256 RGBA entries.
 export function colorize({width, height, data}, lut) {
