@@ -2,10 +2,12 @@
 
 Every request names the setup and the entry: ``{"setup", "entry":
 {"recording", "frame", "path"?}, "queue"?}``.  Labels are saved into the
-setup's label collection.
+setup's label collection.  ``"models": {"mask"?, "body"?}`` chooses the
+models of the open, network and proposal requests in place of the setup's
+defaults.
 
 - ``POST /api/labeling/open``: the frame, its mask and where it came
-  from, the label (if any) with its body and targets, the models.
+  from, the label (if any) with its body and targets, the models used and the defaults.
 - ``POST /api/labeling/context``: the context frames t-16..t+16.
 - ``POST /api/labeling/network``: the mask model's worm probability.
 - ``POST /api/labeling/refine`` ``{mask, width, height, method}``:

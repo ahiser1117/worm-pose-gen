@@ -361,6 +361,37 @@ class LabelingApiTests(LabelingApiBase):
         self.assertEqual((reopened["body"]["trace_xy"], reopened["body"]["trace_extend"], reopened["body"]["trace_length_px"]), (trace, True, 640.0))
         self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(6, path=False)}, 404)
 
+    def test_a_request_chooses_its_mask_and_body_models(self):
+        weights = self.root / "stand-in.ckpt"
+        weights.write_bytes(b"stand-in")
+        inputs = library.make_inputs([], fps=20.0, pixel_size_um=1.0)
+        cards = {"seg-a": ("segmenter", ["mask"]), "seg-b": ("segmenter", ["mask"]),
+                 "fields": ("body_net", ["mask", "ap", "head", "tail", "overlap"])}
+        for name, (kind, outputs) in cards.items():
+            library.write_model(self.libraries.personal, name, {"name": name, "kind": kind, "setup": "mine:rig", "outputs": outputs,
+                                                                "inputs": inputs}, weights)
+        library.set_default(self.libraries, "mine:rig", "mask", "mine:seg-a", reason="test")
+        used = []
+
+        def model(setup, ref):
+            used.append(ref)
+            return mock.Mock(predict=lambda context, valid: Outputs(mask=np.full(context.shape[1:], 0.9, np.float32)))
+
+        self.state.labeling.model = model
+        request = {"setup": "mine:rig", "entry": self.entry(5)}
+        opened = self.call("POST", "/api/labeling/open", request)
+        self.assertEqual((opened["models"], opened["defaults"], used), ({"mask": "mine:seg-a", "body": None},) * 2 + (["mine:seg-a"],))
+        chosen = {**request, "models": {"mask": "mine:seg-b", "body": "mine:fields"}}
+        opened = self.call("POST", "/api/labeling/open", chosen)
+        self.assertEqual((opened["models"], opened["defaults"]["mask"], opened["mask_source"]),
+                         ({"mask": "mine:seg-b", "body": "mine:fields"}, "mine:seg-a", "network"))
+        self.assertEqual(self.call("POST", "/api/labeling/network", chosen)["model"], "mine:seg-b")
+        self.assertEqual(used[-2:], ["mine:seg-b", "mine:seg-b"])
+        # A body model must be a body-field net; an unknown model is refused.
+        refused = self.client.post("/api/labeling/proposal", json={**request, "models": {"body": "mine:seg-a"}, "mask": mask_url(self.masks[5])})
+        self.assertIn("not a body-field model", refused.json()["error"])
+        self.call("POST", "/api/labeling/network", {**request, "models": {"mask": "mine:gone"}}, 400)
+
     def test_a_labeling_manifest_becomes_a_queue(self):
         from worm_pose_gen.app.queues import manifest_queue
 

@@ -20,10 +20,12 @@ the save.  The mask the frame opens with is the label's; for a frame of a
 Relabel queue the workspace's mask; otherwise the default mask model's
 proposal at a threshold of 0.5 (empty without a model).
 
-**Models.** The setup's default ``mask`` model gives the Network proposal
-and the ``body`` model (a body-field net) the body proposal: a trace through
-its predicted A-P field (:func:`body_proposal.propose_trace`) fit like a hand
-trace (:func:`body_fields.trace_fit`).  Library models are loaded once on
+**Models.** The ``mask`` model gives the Network proposal and the ``body``
+model (a body-field net) the body proposal: a trace through its predicted
+A-P field (:func:`body_proposal.propose_trace`) fit like a hand trace
+(:func:`body_fields.trace_fit`).  Each is the request's choice
+(``"models": {"mask"?, "body"?}``, any library model with the role's
+outputs) or else the setup's default.  Library models are loaded once on
 the app's device (:mod:`library.inference`); fits run one at a time.
 
 **Saving** writes a new label revision (:meth:`library.Collection.save`) with
@@ -234,8 +236,30 @@ class Labeling:
             body = None
         return {"mask": defaults.get("mask"), "body": body}
 
-    def probability(self, setup_ref: str, inputs: dict[str, Any]) -> np.ndarray | None:
-        ref = self.defaults(setup_ref)["mask"]
+    def models(self, setup_ref: str, payload: dict[str, Any]) -> dict[str, str | None]:
+        """The models a request uses: its ``models`` choice per role, else the setup's default."""
+
+        chosen = payload.get("models") or {}
+        if not isinstance(chosen, dict):
+            raise ValueError("'models' must map 'mask' and 'body' to model refs")
+        models = self.defaults(setup_ref)
+        for role in ("mask", "body"):
+            ref = chosen.get(role)
+            if not ref:
+                continue
+            ref = str(ref)
+            try:
+                card = library.get_card(self.libraries, ref)
+            except LookupError as error:
+                raise ValueError(f"unknown model {ref}") from error
+            if role == "mask" and "mask" not in card.outputs:
+                raise ValueError(f"{ref} cannot give the mask: it has no mask output")
+            if role == "body" and card.kind != "body_net":
+                raise ValueError(f"{ref} cannot propose the body: it is not a body-field model")
+            models[role] = ref
+        return models
+
+    def probability(self, setup_ref: str, inputs: dict[str, Any], ref: str | None) -> np.ndarray | None:
         if ref is None:
             return None
         with self.fit_lock:
@@ -245,6 +269,7 @@ class Labeling:
         """Everything the page shows for an entry; see the module docstring for where the mask comes from."""
 
         setup, entry, record, inputs = self._resolve(payload)
+        models = self.models(setup, payload)
         image = inputs["image"]
         shape = image.shape
         probability = None
@@ -260,7 +285,7 @@ class Labeling:
         else:
             mask, source = self._workspace_mask(payload.get("queue"), entry, shape)
             if mask is None:
-                probability = self.probability(setup, inputs)
+                probability = self.probability(setup, inputs, models["mask"])
                 mask, source = ((probability >= 0.5).astype(np.uint8), "network") if probability is not None else (np.zeros(shape, np.uint8), "empty")
         own_revision = library.Collection(self.libraries, setup).own_revision(entry["recording"], entry["frame"])
         centre = len(inputs["context"]) // 2
@@ -272,7 +297,7 @@ class Labeling:
             "label": None if record is None else label_row(self.app, record), "expected_revision": own_revision,
             "body": body, "targets": targets,
             "nose_xy": _point(inputs["nose_xy"][centre]) if bool(inputs["nose_valid"][centre]) else None,
-            "max_lag": centre, "context_valid": np.asarray(inputs["context_valid"]).tolist(), "models": self.defaults(setup),
+            "max_lag": centre, "context_valid": np.asarray(inputs["context_valid"]).tolist(), "models": models, "defaults": self.defaults(setup),
         }
 
     def _workspace_mask(self, queue_id: Any, entry: dict[str, Any], shape: tuple[int, ...]) -> tuple[np.ndarray | None, str]:
@@ -299,13 +324,14 @@ class Labeling:
                 "frames": [data_url(frame) for frame in inputs["context"]]}
 
     def network(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """The default mask model's worm probability (PNG, 0..255); the page thresholds it itself."""
+        """The mask model's worm probability (PNG, 0..255); the page thresholds it itself."""
 
         setup, *_, inputs = self._resolve(payload)
-        probability = self.probability(setup, inputs)
+        ref = self.models(setup, payload)["mask"]
+        probability = self.probability(setup, inputs, ref)
         if probability is None:
-            raise ValueError(f"{setup} has no default mask model yet; use Threshold, or choose a model on the Training page")
-        return {"probability": data_url(probability_to_png(probability)), "model": self.defaults(setup)["mask"]}
+            raise ValueError(f"{setup} has no default mask model yet; use Threshold, or choose a model")
+        return {"probability": data_url(probability_to_png(probability)), "model": ref}
 
     def refine(self, payload: dict[str, Any]) -> dict[str, Any]:
         method = str(payload.get("method") or "")
@@ -370,7 +396,7 @@ class Labeling:
         from ..body_proposal import propose_trace
 
         setup, _, _, inputs = self._resolve(payload)
-        ref = self.defaults(setup)["body"]
+        ref = self.models(setup, payload)["body"]
         if ref is None:
             return {"status": "unavailable", "reason": "this setup has no body-field model"}
         mask = decode_mask(payload.get("mask"), inputs["image"].shape) == 1

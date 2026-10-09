@@ -30,12 +30,17 @@
 //           Play at 10 fps) or Difference (frame[t+lag] - frame[t-lag],
 //           contrast set automatically).
 //
+// models  the mask model (Network) and the body model (the proposal) are the
+//           setup's defaults until Change picks another (the model picker);
+//           the choice holds for the setup's frames while the page is open.
+//
 // Layers: Mask (opacity slider, M toggles), A-P field (the body's, else the
 // proposal's), Midline + head/tail (with the acquisition nose), Proposal;
 // with --dev also the overlap, the tube outline and the stored trace.
 
 import {el, post} from "./api.js";
 import {FrameCanvas, drawMidline} from "./frame_canvas.js";
+import {openModelPicker} from "./model_picker.js";
 import {
   BACKGROUND, WORM, apOverlay, applyProposal, decodeMask, differenceCanvas, encodeMask, grayCanvas, grayOf, loadImage,
   maskOverlay, reversedAp, sameMask, stroke, thresholded,
@@ -73,6 +78,7 @@ export class FrameEditor {
     this.onChange = onChange || (() => {});
     this.frame = null;          // the open payload of the current frame
     this.request = null;
+    this.choices = {};          // per setup: the models chosen on this page, {mask?, body?}
     this.busy = 0;
     this.brush = WORM;
     this.size = 12;
@@ -153,8 +159,17 @@ export class FrameEditor {
     ].map(([label, method, title]) => button(label, () => this.refine(method), {title})));
     this.undoButton = button(keyed("Undo", "Z"), () => this.undo(), {title: "Undo (Z)"});
     this.revertButton = button("Revert", () => this.revert(), {title: "Back to the mask the frame opened with"});
+    const modelRow = (role) => {
+      const name = node("span", {class: "lb-model-name"});
+      const reset = button("Default", () => this.setModel(role, null), {class: "link", title: "Back to the setup's default model"});
+      this.modelRows[role] = {name, reset};
+      return node("div", {class: "row lb-model"}, node("span", {class: "note"}, "Model"), name,
+        button("Change", () => this.chooseModel(role), {class: "link", title: `Choose the ${role} model`}), reset);
+    };
+    this.modelRows = {};
     const maskSection = node("section", {class: "section"},
       node("h3", {}, "1 · Mask"),
+      modelRow("mask"),
       node("div", {class: "row"}, this.brushButtons[WORM], this.brushButtons[BACKGROUND]),
       node("div", {class: "row lb-slider"}, node("span", {class: "note"}, "Size"), this.sizeInput, this.sizeValue),
       node("div", {class: "row"}, this.proposalButtons.network, this.proposalButtons.threshold),
@@ -192,6 +207,7 @@ export class FrameEditor {
     );
     const bodySection = node("section", {class: "section"},
       node("h3", {}, "2 · Body"),
+      modelRow("body"),
       this.bodyNote,
       this.bodyControls,
       node("label", {class: "inline lb-maskonly", title: "The body is unclear: this label trains the mask only"}, this.maskOnly, "Mask only (body unclear)"),
@@ -294,9 +310,9 @@ export class FrameEditor {
   async load(request) {
     const generation = ++this.generation;
     this.stopPlay();
-    this.request = request;
+    this.request = {...request, models: {...this.choices[request.setup]}};
     this._status("Opening the frame…");
-    const frame = await post("/api/labeling/open", request);
+    const frame = await post("/api/labeling/open", this.request);
     const [image, raw, gray, mask] = await Promise.all([loadImage(frame.image), loadImage(frame.image_raw), grayOf(frame.image), decodeMask(frame.mask)]);
     if (generation !== this.generation) return false;
     this.frame = frame;
@@ -374,8 +390,13 @@ export class FrameEditor {
     this.statusLine.textContent = this._describe();
     for (const [value, b] of Object.entries(this.brushButtons)) b.setAttribute("aria-pressed", String(Number(value) === this.brush));
     for (const [name, b] of Object.entries(this.proposalButtons)) b.setAttribute("aria-pressed", String(this.previewSource === name));
+    for (const [role, row] of Object.entries(this.modelRows)) {
+      const ref = this.frame.models[role], isDefault = ref === this.frame.defaults[role];
+      row.name.textContent = ref ? `${ref}${isDefault ? " (default)" : ""}` : "none";
+      row.reset.hidden = isDefault;
+    }
     this.proposalButtons.network.disabled = !this.frame.models.mask;
-    this.proposalButtons.network.title = this.frame.models.mask ? `The model's mask: ${this.frame.models.mask} (N)` : "This setup has no mask model yet";
+    this.proposalButtons.network.title = this.frame.models.mask ? `The model's mask: ${this.frame.models.mask} (N)` : "No mask model: choose one with Change";
     this.previewRow.hidden = !this.previewMask;
     this.undoButton.disabled = !this.history.length;
     this.revertButton.disabled = sameMask(this.mask, this.openedMask);
@@ -420,7 +441,7 @@ export class FrameEditor {
     else if (body.kind === "head") text = "Body: head end chosen.";
     else if (body.fit) text = "Body: fitted automatically; saving accepts it.";
     else text = "Body: automatic.";
-    if (!this.frame.models.body) return `${text} No body model for this setup.`;
+    if (!this.frame.models.body) return `${text} No body model: choose one with Change.`;
     if (p?.status === "loading") return `${text} Proposal: computing…`;
     if (p?.status === "ready") return `${text} Proposal ${p.edited ? "edited" : "ready"} (fit IoU ${p.fit_iou.toFixed(3)})${p.stale ? ", for an earlier mask" : ""}.`;
     if (p?.status === "no_trace") return `${text} The model found no body to propose.`;
@@ -525,11 +546,14 @@ export class FrameEditor {
   async preview(source) {
     if (!this.frame || this.trace) return;
     if (source === "network" && !this.probability) {
-      if (!this.frame.models.mask) { this.ctx.toast("This setup has no mask model yet; try Threshold.", "error"); return; }
+      if (!this.frame.models.mask) { this.ctx.toast("No mask model: choose one with Change, or try Threshold.", "error"); return; }
       this.busy++; this._status("Running the model…"); this._syncControls();
+      const frame = this.frame, model = frame.models.mask;
       try {
         const answer = await post("/api/labeling/network", this.request);
-        this.probability = await grayOf(answer.probability);
+        const probability = await grayOf(answer.probability);
+        if (frame !== this.frame || model !== frame.models.mask) return;
+        this.probability = probability;
         this._status("");
       } catch (error) {
         this._status(error.message, "error");
@@ -538,6 +562,38 @@ export class FrameEditor {
     }
     this.previewSource = source;
     this._updatePreview();
+  }
+
+  // ------------------------------------------------------------------ models
+
+  async chooseModel(role) {
+    if (!this.frame) return;
+    const ref = await openModelPicker(this.ctx, {setup: this.request.setup, role, current: this.frame.models[role]});
+    if (ref) this.setModel(role, ref);
+  }
+
+  // Use `ref` for `role` from now on (null: the setup's default); what the old model gave is dropped and recomputed if shown.
+  setModel(role, ref) {
+    if (!this.frame) return;
+    const setup = this.request.setup, choice = {...this.choices[setup]};
+    if (ref && ref !== this.frame.defaults[role]) choice[role] = ref; else delete choice[role];
+    this.choices[setup] = choice;
+    this.request = {...this.request, models: {...choice}};
+    const used = choice[role] || this.frame.defaults[role];
+    if (used === this.frame.models[role]) { this._syncControls(); return; }
+    this.frame.models[role] = used;
+    if (role === "mask") {
+      this.probability = null;
+      if (this.previewSource === "network") {
+        this.cancelPreview();
+        if (used) this.preview("network");
+      }
+    } else {
+      this.proposal = null;
+      this.view.redraw();
+      if (used && this.autoPropose && !this.trace) this.requestProposal();
+    }
+    this._syncControls();
   }
 
   _updatePreview() {
@@ -596,17 +652,18 @@ export class FrameEditor {
 
   async requestProposal() {
     if (!this.frame?.models.body) return null;
-    const generation = this.generation, mask = this.mask.slice();
+    const generation = this.generation, model = this.frame.models.body, mask = this.mask.slice();
+    const replaced = () => generation !== this.generation || model !== this.frame?.models.body;
     this.proposal = {status: "loading"};
     this._syncControls();
     try {
       const answer = await post("/api/labeling/proposal", {...this.request, mask: encodeMask(mask, this.width, this.height)});
-      if (generation !== this.generation) return null;
+      if (replaced()) return null;
       if (answer.status === "ready") answer.apValues = await grayOf(answer.ap);
       answer.stale = !sameMask(mask, this.mask);
       this.proposal = answer;
     } catch (error) {
-      if (generation !== this.generation) return null;
+      if (replaced()) return null;
       this.proposal = {status: "error", error: error.message};
     }
     this._syncControls();

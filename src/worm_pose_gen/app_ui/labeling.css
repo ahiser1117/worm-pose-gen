@@ -75,3 +75,5 @@
 .lb-header-select { width: auto; padding: 3px 6px; }
 .lb-help table { margin: 8px 0 12px; }
 .lb-help td:first-child { width: 150px; }
+.lb-model { flex-wrap: nowrap; }
+.lb-model-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

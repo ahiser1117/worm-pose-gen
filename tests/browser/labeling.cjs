@@ -117,6 +117,23 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await shot('labeling-editor');
     await button('Fit (0)').click();
 
+    // The models: the setup's defaults until Change picks another (the body net has a mask output too); Network then asks for it.
+    const modelRows = page.locator('.lb-model');
+    assert.match(await modelRows.nth(0).innerText(), /lab:nir-mask \(default\)/);
+    assert.match(await modelRows.nth(1).innerText(), /lab:nir-body \(default\)/);
+    assert.equal(await modelRows.nth(0).getByRole('button', {name: 'Default'}).isVisible(), false);
+    await modelRows.nth(0).getByRole('button', {name: 'Change'}).click();
+    const picker = page.locator('dialog.model-picker');
+    await picker.locator('tr[data-ref="lab:nir-body"]').getByRole('button', {name: 'Use'}).click();
+    assert.match(await modelRows.nth(0).innerText(), /lab:nir-body(?! \(default\))/);
+    const network = page.waitForRequest(request => request.url().endsWith('/api/labeling/network'));
+    await page.keyboard.press('n');
+    assert.deepEqual((await network).postDataJSON().models, {mask: 'lab:nir-body'});
+    await page.waitForSelector('.lb-right .row:has(button:text-is("Apply (A)"))', {state: 'visible'});
+    await page.keyboard.press('Escape');
+    await modelRows.nth(0).getByRole('button', {name: 'Default'}).click();
+    assert.match(await modelRows.nth(0).innerText(), /lab:nir-mask \(default\)/);
+
     // Paint worm in an empty corner: unsaved; Undo takes it back. A background stroke and a network proposal (A applies it).
     await drag([20, 20], [40, 30]);
     assert.match(await status(), /unsaved changes/);
