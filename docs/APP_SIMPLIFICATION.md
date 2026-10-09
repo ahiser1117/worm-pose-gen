@@ -329,7 +329,7 @@ Below the fixes is a **Fixes** list: what each fix changed, with Undo on each.
 | Fit view | **Keep**: the Fit button or 0 (double-click does not fit) |
 | Starts | **Remove** |
 | Original prediction / Editable mask / Opacity | **Show only while editing a mask** |
-| 35 layers, each with an opacity slider | **Redesign** as 4 toggles: Mask, Midline + head/tail, Body outline, A-P field (only if the model outputs one). With a body model, a **Model outputs** menu adds each output channel raw (implemented Oct 2026). *dev:* the full list. |
+| 35 layers, each with an opacity slider | **Redesign** as 4 toggles: Mask, Midline + head/tail, Body outline, A-P field (only if the model outputs one). A **Model outputs** menu adds each output channel of the mask and body models raw, one group per model (implemented Oct 2026). *dev:* the full list. |
 | Threshold override + Use override | **Remove** |
 | Compare run (same recording) | *dev* |
 

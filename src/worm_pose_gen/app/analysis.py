@@ -205,6 +205,16 @@ def workspace_body_net(workspace: Any) -> Path | None:
     return Path(path) if path and Path(path).is_file() else None
 
 
+def workspace_mask_net(workspace: Any) -> Path | None:
+    """The segmenter the workspace was analysed with (its settings, else its summary's), when the file exists; ``None`` when its masks came from the body model."""
+
+    summary = pipeline.read_summary(workspace)
+    if (workspace.info.settings.get("mask_source") or summary.get("mask_source")) == "body_net":
+        return None
+    path = workspace.info.settings.get("checkpoint") or (summary.get("checkpoint") or {}).get("path")
+    return Path(path) if path and Path(path).is_file() else None
+
+
 def stage_progress(record: JobRecord) -> list[dict[str, Any]]:
     """Each stage of an analysis job, ``{stage, progress, state}`` (``waiting``, ``running``, ``done``, or the job's ``failed`` or ``cancelled``), from its overall progress.
 
@@ -304,6 +314,7 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
         "models": _model_names(libraries, settings.get("models") or {}),
         "mask_source": settings.get("mask_source", "segmenter"),
         "has_body_model": workspace_body_net(workspace) is not None,
+        "has_mask_model": workspace_mask_net(workspace) is not None,
         "state": state, "analysed": analysed, "issues": issues,
         "analysis": _job(analysis), "active_jobs": [_job(r) for r in active],
         "exports": len(exports), "last_export": exports[0]["created_at"] if exports else None,

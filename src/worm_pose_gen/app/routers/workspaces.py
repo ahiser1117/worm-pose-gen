@@ -1,4 +1,4 @@
-"""A workspace's payloads: the whole workspace (developer tools), one frame, the network's fields on a frame, and exports.
+"""A workspace's payloads: the whole workspace (developer tools), one frame, the models' outputs on a frame, and exports.
 
 Analyse makes workspaces (``routers/analysis``); the fixes and the issues
 live in ``routers/fixes`` and mask edits in ``routers/masks``.  A frame's
@@ -36,6 +36,12 @@ def frame(name: str, frame: int, detail: str = "full", raw: str | None = None, a
 def network_fields(name: str, frame: int, outputs: str | None = None, app: AppState = Depends(get_state)) -> dict[str, Any]:
     """The body-field network's A-P field, crossings and head/tail on one frame, with ``outputs=1`` every raw output channel (``app/network_fields.py``)."""
     return app.network_fields.frame(name, frame, outputs=query_flag(outputs))
+
+
+@router.get("/{name}/mask-probability")
+def mask_probability(name: str, frame: int, app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The mask model's raw worm probability on one frame, for the Model outputs menu."""
+    return app.view(name).mask_probability(frame, app.segmenters)
 
 
 def _with_urls(name: str, export: dict[str, Any]) -> dict[str, Any]:

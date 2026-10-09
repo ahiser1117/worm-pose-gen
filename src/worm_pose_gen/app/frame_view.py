@@ -4,11 +4,12 @@
 hypotheses), its synthesised run summary and a lookup of the masks the fit
 was scored against, and answers per frame with
 
-- the flat-fielded image (JPEG) and, from ``--dev`` only, the network's
-  probability with the cleanup steps behind the mask (thresholded, holes
+- the flat-fielded image (JPEG) and, from ``--dev`` only, the cleanup
+  steps behind the mask from the network's probability (thresholded, holes
   filled, largest component): running the segmenter on every rested frame
   only feeds those developer layers, so an analyst's frame shows the stored
-  mask and costs no network pass;
+  mask and costs no network pass (the probability itself is the Model
+  outputs menu's, ``WorkspaceView.mask_probability``);
 - the stored final mask, the fitted tube, and the independent fit's tube
   where propagation replaced it;
 - every per-frame statistic the pipeline tracks, the ambiguity flags with
@@ -44,7 +45,7 @@ from ..mask_fit import fill_narrow_holes
 from ..pose_run import cleanup_options, render_tube, tube_area_px
 from ..recordings import RecordingSource
 from ..segmenter import load_segmenter
-from .images import jpeg_data_url, mask_data_url, probability_data_url
+from .images import jpeg_data_url, mask_data_url
 
 
 FRAME_CACHE_SIZE = 96
@@ -493,7 +494,6 @@ class LoadedRun:
                 payload["errors"].append("the workspace's segmenter checkpoint is missing; probability layers skipped")
             if probability is not None:
                 payload["checkpoint"] = checkpoint
-                payload["layers"]["probability"] = probability_data_url(probability)
                 raw_mask = probability >= self.threshold
                 stats = {"raw_worm_pixels": int(raw_mask.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
                 payload["layers"]["mask_raw"] = mask_data_url(raw_mask)

@@ -226,7 +226,6 @@ class FrameViewHelperTests(unittest.TestCase):
                 with patch.object(segmenters, "probability", return_value=(probability, str(checkpoint))) as segment:
                     developer = view.frame(0, segmenters, torch.device("cpu"), raw=False, detail="full", segment=True)
                 self.assertEqual(segment.call_count, 1)
-                self.assertTrue(developer["layers"]["probability"].startswith("data:image/png"))
                 self.assertIn("mask_raw", developer["layers"])
                 self.assertEqual(developer["mask_final_source"], "stored")  # the stored mask still wins
                 self.assertGreater(developer["mask_stats"]["raw_worm_pixels"], 0)

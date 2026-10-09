@@ -6,12 +6,11 @@
 // the timeline, the jobs drawer, and the algorithm override for Refit.
 
 import {api, el, post, query} from "./api.js";
-import {decodeGray, loadImage} from "./workspace_draw.js";
+import {decodeGray} from "./workspace_draw.js";
 import {maskCanvas, drawMidline} from "./frame_canvas.js";
 
 // Raster layers of the frame payload, drawn with these colours.
 const RASTERS = [
-  ["probability", "Network probability", null],
   ["mask_raw", "Mask: thresholded", [255, 209, 102]],
   ["mask_filled", "Mask: holes filled", [255, 140, 66]],
   ["mask_largest", "Mask: largest part", [184, 120, 255]],
@@ -85,7 +84,6 @@ export class DevTools {
     await Promise.all(RASTERS.map(async ([id, , color]) => {
       const url = payload.layers?.[id];
       if (!url) return;
-      if (!color) { this.rasters.set(id, await loadImage(url)); return; }
       const gray = await decodeGray(url);
       if (gray && payload.frame_index === frame) this.rasters.set(id, maskCanvas(gray.data, gray.width, gray.height, color, 0.4));
     }));
@@ -103,7 +101,7 @@ export class DevTools {
     for (const [id] of RASTERS) {
       const image = this.rasters.get(id);
       if (!this.on.has(id) || !image) continue;
-      if (id === "probability") { g.globalAlpha = 0.5; g.drawImage(image, 0, 0); g.globalAlpha = 1; } else g.drawImage(image, 0, 0);
+      g.drawImage(image, 0, 0);
     }
     const pose = this.view.current?.pose;
     if (this.on.has("independent") && pose?.independent) drawMidline(g, v, pose.independent.centerline_xy, {color: "#6cb4ff", head: "#6cb4ff", tail: "#6cb4ff", width: 1.5});

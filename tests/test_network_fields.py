@@ -1,4 +1,4 @@
-"""The Workspace page's body-field network layers: GET /api/workspaces/{name}/network-fields with a stub network."""
+"""The Workspace page's model-output layers: GET /api/workspaces/{name}/network-fields with a stub network, and the mask model's mask-probability."""
 
 import base64
 import io
@@ -142,6 +142,31 @@ class NetworkFieldsApiTests(unittest.TestCase):
         self.assertAlmostEqual(outputs["head"][32, 30] / 255, 0.5, delta=0.01)
         self.assertAlmostEqual(raw["peaks"]["head"], 0.5, places=3)
         self.assertAlmostEqual(raw["peaks"]["mask"], 1.0, places=3)
+
+    def test_the_mask_models_probability_and_one_model_for_both(self):
+        segmenter = self.root / "segmenter.ckpt"
+        segmenter.write_bytes(b"stub")
+        self.workspace.info.settings["checkpoint"] = str(segmenter)
+        app, client = self.client(self.checkpoint)
+        probability = np.zeros((H, W), np.float32)
+        probability[26:39, 10:86] = 0.6
+        with mock.patch.object(app.state.app_state.segmenters, "probability", return_value=(probability, str(segmenter))) as segment:
+            answer = client.get("/api/workspaces/demo/mask-probability", params={"frame": 2}).json()
+        self.assertEqual(segment.call_args.args[0], str(segmenter))
+        self.assertEqual((answer["row"], answer["model"]), (2, "segmenter.ckpt"))
+        self.assertAlmostEqual(answer["peak"], 0.6, places=5)
+        values = decode(answer["probability"])
+        self.assertEqual((values[32, 50], values[5, 50]), (153, 0))
+        status = client.get("/api/workspaces/demo/status").json()
+        self.assertEqual((status["has_mask_model"], status["has_body_model"]), (True, True))
+        # Masks from the body model: it is the only model, and there is no mask model's probability.
+        self.workspace.info.settings["mask_source"] = "body_net"
+        _, client = self.client(self.checkpoint)
+        status = client.get("/api/workspaces/demo/status").json()
+        self.assertEqual((status["has_mask_model"], status["has_body_model"]), (False, True))
+        refused = client.get("/api/workspaces/demo/mask-probability", params={"frame": 2})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("has no mask model", refused.json()["error"])
 
     def test_a_weak_head_peak_is_no_head(self):
         _, client = self.client(self.checkpoint)

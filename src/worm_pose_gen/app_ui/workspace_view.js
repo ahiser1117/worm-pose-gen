@@ -13,8 +13,10 @@
 // Frames load light (image and pose) while playing or stepping and in full
 // (mask and every layer) once the cursor rests. Server endpoints are under
 // /api/workspaces/<name>: status, issues, fixes, kymograph, frame, mask,
-// network-fields (the body model's A-P field, and its raw output channels for
-// the Model outputs menu: one optional layer per channel, unthresholded).
+// network-fields (the body model's A-P field and its raw output channels) and
+// mask-probability (the mask model's). The Model outputs menu offers one
+// optional layer per channel, unthresholded, grouped by model; when the body
+// model also gave the masks there is no mask model and one group.
 
 import {api, el, post, query} from "./api.js";
 import {FrameCanvas, drawMidline, maskCanvas} from "./frame_canvas.js";
@@ -33,7 +35,8 @@ const LAYERS = [
   {id: "outline", label: "Outline", key: "3", title: "Body outline"},
   {id: "ap", label: "A-P field", key: "4", title: "Head-to-tail field of the body model"},
 ];
-// The body model's output channels (body_net.OUTPUTS), each an optional raw layer.
+// The mask model's one channel and the body model's (body_net.OUTPUTS), each an optional raw layer.
+const PROBABILITY = {id: "probability", label: "Probability", lut: probabilityLut([255, 209, 102])};
 const OUTPUTS = [
   {id: "mask", label: "Mask", lut: probabilityLut([80, 220, 255])},
   {id: "ap", label: "A-P field", lut: RAW_AP_LUT},
@@ -88,7 +91,7 @@ export class WorkspaceView {
       onclick: () => this.toggleLayer(layer.id),
     }, layer.label));
     this.outputsMenu = el("details", {class: "ws-menu ws-outputs", hidden: true},
-      el("summary", {title: "The body model's raw output channels, unthresholded"}, "Model outputs"), el("div", {class: "ws-menu-body"}));
+      el("summary", {title: "The models' raw output channels, unthresholded"}, "Model outputs"), el("div", {class: "ws-menu-body"}));
     this.toolbar = el("div", {class: "ws-toolbar"}, el("div", {class: "ws-layers", role: "group", "aria-label": "Layers"}, this.layerButtons),
       this.outputsMenu,
       el("button", {type: "button", class: "ws-fit", title: "Fit the frame to the view (0)", onclick: () => this.canvas.fit()}, "Fit"));
@@ -142,6 +145,7 @@ export class WorkspaceView {
     view.setLayer("mask", (g) => { if (this.maskOverlay && !this.mask?.active) g.drawImage(this.maskOverlay, 0, 0); });
     view.setLayer("ap", (g) => { if (this.fields) g.drawImage(this.fields.ap, 0, 0); });
     view.setLayer("outputs", (g) => {
+      if (this.outputs.has(PROBABILITY.id) && this.probability) g.drawImage(this.probability.canvas, 0, 0);
       for (const output of OUTPUTS) if (this.outputs.has(output.id) && this.fields?.outputs) g.drawImage(this.fields.outputs[output.id], 0, 0);
     });
     view.setLayer("dev", (g, v) => this.dev?.drawLayers(g, v));
@@ -187,6 +191,7 @@ export class WorkspaceView {
     this.status = null; this.issues = null; this.issuesError = null; this.fixes = []; this.target = null; this.selectedIssue = null;
     this.mode = "idle"; this.pending = null; this.preview = null; this.keyframes = null;
     this.row = 0; this.current = null; this.maskOverlay = null; this.fields = null; this.fieldsCache = new Map();
+    this.probability = null; this.probabilityCache = new Map();
     this.generation = 0; this.kymographStamp = null;
     this.mask = new MaskEditor(name);
     this.timeline.set("issues", []); this.timeline.set("kymograph", null); this.timeline.set("selection", null);
@@ -311,6 +316,7 @@ export class WorkspaceView {
     if (response?.fixes) { this.fixes = response.fixes; this.renderFixes(); }
     await Promise.all([this.loadIssues(), response?.fixes ? null : this.loadFixes(), this.loadKymograph()]);
     this.fieldsCache.clear();
+    this.probabilityCache.clear();
     await this.loadFrame(this.row, "full");
     this.renderFix();
   }
@@ -426,10 +432,12 @@ export class WorkspaceView {
       this.maskOverlay = mask ? maskCanvas(mask.data, mask.width, mask.height, [58, 160, 255], 0.38) : null;
       this.dev?.frameLoaded(payload);
       if (this.wantsFields()) this.loadFields(frame, token);
+      if (this.status.has_mask_model && this.outputs.has(PROBABILITY.id)) this.loadProbability(frame, token);
     } else {
       this.maskOverlay = null;
     }
     this.fields = this.fieldsCache.get(frame) || null;
+    this.probability = this.probabilityCache.get(frame) || null;
     this.renderOutputsMenu();
     this.canvas.setImage(image);
     this.renderStatusLine();
@@ -438,12 +446,14 @@ export class WorkspaceView {
 
   // Whether a rested frame needs the body model's fields: the A-P layer, a raw output or the developer's crossings is on.
   wantsFields() {
-    return !!this.status?.has_body_model && (this.layers.ap || this.outputs.size > 0 || !!this.dev?.on.has("overlap"));
+    return !!this.status?.has_body_model && (this.layers.ap || this.bodyOutputsShown() || !!this.dev?.on.has("overlap"));
   }
+
+  bodyOutputsShown() { return OUTPUTS.some((output) => this.outputs.has(output.id)); }
 
   // The body model's fields of `frame` as canvases ({ap, outputs: {channel: canvas} | null, peaks}), with the raw outputs when one is shown.
   async loadFields(frame, token) {
-    const withOutputs = this.outputs.size > 0, cached = this.fieldsCache.get(frame);
+    const withOutputs = this.bodyOutputsShown(), cached = this.fieldsCache.get(frame);
     const show = (entry) => {
       if (token !== this.generation) return;
       this.fields = entry;
@@ -480,20 +490,50 @@ export class WorkspaceView {
     if (id === "ap" && this.layers.ap) this.loadFields(this.frameOf(this.row), this.generation);
   }
 
-  toggleOutput(id, on) {
-    if (on) this.outputs.add(id); else this.outputs.delete(id);
-    if (on) this.loadFields(this.frameOf(this.row), this.generation);
+  // The mask model's probability of `frame` as {canvas, peak}.
+  async loadProbability(frame, token) {
+    let entry = this.probabilityCache.get(frame);
+    if (!entry) {
+      try {
+        const answer = await api(`${this.base}/mask-probability${query({frame})}`);
+        entry = {canvas: colorize(await decodeGray(answer.probability), PROBABILITY.lut), peak: answer.peak};
+      } catch (error) {
+        if (token === this.generation) this.ctx.toast(`Mask model: ${error.message}`, "error");
+        return;
+      }
+      if (this.probabilityCache.size >= FIELDS_CACHE) this.probabilityCache.delete(this.probabilityCache.keys().next().value);
+      this.probabilityCache.set(frame, entry);
+    }
+    if (token !== this.generation) return;
+    this.probability = entry;
     this.canvas.redraw();
     this.renderOutputsMenu();
   }
 
-  // The Model outputs menu: a box per channel, with the channel's peak on this frame once loaded.
+  toggleOutput(id, on) {
+    if (on) this.outputs.add(id); else this.outputs.delete(id);
+    if (on && id === PROBABILITY.id) this.loadProbability(this.frameOf(this.row), this.generation);
+    else if (on) this.loadFields(this.frameOf(this.row), this.generation);
+    this.canvas.redraw();
+    this.renderOutputsMenu();
+  }
+
+  // The Model outputs menu: a group per model the workspace was analysed with (one when the body model gave the masks too),
+  // a box per channel with the channel's peak on this frame once loaded.
   renderOutputsMenu() {
-    const body = this.outputsMenu.querySelector(".ws-menu-body"), peaks = this.fields?.outputs ? this.fields.peaks : null;
-    body.replaceChildren(el("span", {class: "note"}, "Raw, unthresholded: stronger colour is a higher value"),
-      ...OUTPUTS.map((output) => el("label", {class: "inline", dataset: {output: output.id}},
-        el("input", {type: "checkbox", checked: this.outputs.has(output.id), onchange: (event) => this.toggleOutput(output.id, event.target.checked)}),
-        output.label, peaks ? el("span", {class: "note ws-peak"}, `peak ${peaks[output.id].toFixed(2)}`) : null)));
+    const status = this.status, body = this.outputsMenu.querySelector(".ws-menu-body");
+    const box = (output, peak) => el("label", {class: "inline", dataset: {output: output.id}},
+      el("input", {type: "checkbox", checked: this.outputs.has(output.id), onchange: (event) => this.toggleOutput(output.id, event.target.checked)}),
+      output.label, peak === undefined ? null : el("span", {class: "note ws-peak"}, `peak ${peak.toFixed(2)}`));
+    const name = (role) => status?.models?.[role]?.name || role;
+    const groups = [];
+    if (status?.has_mask_model) groups.push(el("div", {class: "ws-outputs-group", dataset: {model: "mask"}}, el("h4", {}, `Mask model · ${name("mask")}`), box(PROBABILITY, this.probability?.peak)));
+    if (status?.has_body_model) {
+      const peaks = this.fields?.outputs ? this.fields.peaks : {};
+      const role = status.mask_source === "body_net" ? "masks and body" : "body";
+      groups.push(el("div", {class: "ws-outputs-group", dataset: {model: "body"}}, el("h4", {}, `Body model · ${name("body")} (${role})`), OUTPUTS.map((output) => box(output, peaks[output.id]))));
+    }
+    body.replaceChildren(el("span", {class: "note"}, "Raw, unthresholded: stronger colour is a higher value"), ...groups);
   }
 
   renderLayers() {
@@ -502,7 +542,8 @@ export class WorkspaceView {
       button.setAttribute("aria-pressed", String(this.layers[id]));
       button.hidden = id === "ap" && !this.status?.has_body_model;
     }
-    this.outputsMenu.hidden = !this.status?.has_body_model;
+    this.outputsMenu.hidden = !this.status?.has_body_model && !this.status?.has_mask_model;
+    this.renderOutputsMenu();
   }
 
   // ------------------------------------------------------------ playback

@@ -26,7 +26,7 @@ from ..pipeline import config_from_dict, read_summary, workspace_arrays
 from ..recordings import RecordingSource
 from ..workspace import Workspace
 from .frame_view import LoadedRun, Segmenters
-from .images import data_url, mask_to_png_values
+from .images import data_url, mask_to_png_values, probability_data_url
 
 STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "recording_prior.json", "edits.jsonl", "fixed_body.npz")
 STAMPED_DIRS = ("masks", "overrides/masks")
@@ -256,6 +256,23 @@ class WorkspaceView:
             payload["layers"]["mask_final"] = data_url(np.where(override == 1, 255, 0).astype(np.uint8))
             payload["mask_final_source"] = "override"
         return payload
+
+    def mask_probability(self, frame: int, segmenters: Segmenters) -> dict[str, Any]:
+        """The mask model's raw worm probability on ``frame`` (PNG of ``round(255 * p)``, unthresholded) and its peak."""
+
+        from .analysis import workspace_mask_net
+
+        run = self.run
+        row = run.row_of(frame)
+        path = workspace_mask_net(self.workspace)
+        if path is None:
+            raise ValueError(f"workspace {self.name} has no mask model")
+        if self.source is None:
+            raise ValueError(f"recording not readable: {self.source_error}")
+        _, image = self.source.corrected(frame)
+        probability, _ = segmenters.probability(str(path), image)
+        return {"frame": int(frame), "row": row, "width": int(image.shape[1]), "height": int(image.shape[0]),
+                "probability": probability_data_url(probability), "peak": float(probability.max()), "model": path.name}
 
     def mask_payload(self, frame: int, segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
         run = self.run

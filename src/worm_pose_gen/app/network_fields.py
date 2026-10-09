@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 
-from .images import data_url
+from .images import data_url, probability_data_url
 from ..pipeline import SegmentParams, workspace_dataset, workspace_frames
 
 # Cached predictions; each holds seven full-frame PNGs (around a megabyte).
@@ -57,15 +57,9 @@ def encode_prediction(prediction: Any, mask: np.ndarray | None) -> dict[str, Any
         "head_xy": point(evidence.head_xy), "tail_xy": point(evidence.tail_xy),
         "head_peak": float(prediction.head.max()), "tail_peak": float(prediction.tail.max()),
         "end_threshold": END_THRESHOLD, "mask_source": "workspace" if reference is mask else "predicted",
-        "outputs": {name: data_url(raw_png(getattr(prediction, name))) for name in OUTPUTS},
+        "outputs": {name: probability_data_url(getattr(prediction, name)) for name in OUTPUTS},
         "peaks": {name: float(getattr(prediction, name).max()) for name in OUTPUTS},
     }
-
-
-def raw_png(values: np.ndarray) -> np.ndarray:
-    """An output channel in [0, 1] as 8-bit gray, ``round(255 * value)``."""
-
-    return np.round(255 * np.clip(values, 0, 1)).astype(np.uint8)
 
 
 class NetworkFields:

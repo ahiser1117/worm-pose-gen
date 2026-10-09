@@ -311,10 +311,11 @@ The header switches between three pages. The addresses are
   - below the fixes, the **Fixes** list, with Undo on each fix;
   - in the middle, the frame with four layers (keys 1–4): Mask, Midline
     (head a square, tail a circle), Outline, and the A-P field when the
-    workspace's body model has one; with a body model, **Model outputs**
-    adds an optional layer per output channel (mask, A-P, head, tail,
-    overlap) drawn raw, unthresholded and unmasked, with each channel's
-    peak on the frame;
+    workspace's body model has one; **Model outputs** adds an optional
+    layer per output channel of the workspace's models, drawn raw
+    (unthresholded, unmasked) with each channel's peak on the frame: the
+    mask model's probability, and the body model's mask, A-P, head, tail
+    and overlap (one group when the body model also gave the masks);
   - at the bottom, transport, the issue track and the curvature kymograph
     (a left drag scrubs, a right drag selects a range for a fix);
   - **Export** in the header, which writes one documented table per

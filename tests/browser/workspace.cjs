@@ -237,11 +237,23 @@ const WS = '2026-03-14-01';
     await page.locator('.ws-fit').click();
     assert.equal(await picture(), fitted, 'the Fit button fits the frame');
 
-    // Model outputs: a raw layer per output channel of the body model, asked for with outputs=1, with each channel's peak.
+    // Model outputs: a group per model, a raw layer per output channel with its peak on the frame. The mask model's
+    // probability comes from mask-probability; the body model's channels from network-fields with outputs=1.
     const outputsMenu = page.locator('.ws-outputs');
-    assert.ok(await outputsMenu.isVisible(), 'the workspace has a body model');
+    const channels = () => outputsMenu.locator('label').evaluateAll((labels) => labels.map((l) => l.dataset.output));
+    assert.ok(await outputsMenu.isVisible(), 'the workspace has models');
     await outputsMenu.locator('summary').click();
-    assert.deepEqual(await outputsMenu.locator('label').evaluateAll((labels) => labels.map((l) => l.dataset.output)), ['mask', 'ap', 'head', 'tail', 'overlap']);
+    assert.deepEqual(await outputsMenu.locator('.ws-outputs-group').evaluateAll((groups) => groups.map((g) => g.dataset.model)), ['mask', 'body']);
+    assert.match(await outputsMenu.locator('[data-model="mask"] h4').textContent(), /Mask model · nir-hand284/);
+    assert.match(await outputsMenu.locator('[data-model="body"] h4').textContent(), /Body model · nir-body-lags3 \(body\)/);
+    assert.deepEqual(await channels(), ['probability', 'mask', 'ap', 'head', 'tail', 'overlap']);
+    const probability = page.waitForResponse((response) => response.url().includes('/mask-probability'));
+    await outputsMenu.locator('label[data-output="probability"] input').check();
+    assert.equal((await probability).status(), 200);
+    await outputsMenu.locator('label[data-output="probability"] .ws-peak').waitFor();
+    assert.notEqual(await picture(), fitted, 'the raw probability is drawn');
+    await outputsMenu.locator('label[data-output="probability"] input').uncheck();
+    assert.equal(await picture(), fitted, 'and gone when unchecked');
     const raw = page.waitForResponse((response) => response.url().includes('/network-fields') && response.url().includes('outputs=1'));
     await outputsMenu.locator('label[data-output="mask"] input').check();
     assert.deepEqual(Object.keys((await (await raw).json()).outputs).sort(), ['ap', 'head', 'mask', 'overlap', 'tail']);
@@ -252,7 +264,21 @@ const WS = '2026-03-14-01';
     await shot('07b-model-outputs');
     await outputsMenu.locator('label[data-output="mask"] input').uncheck();
     assert.equal(await picture(), fitted, 'and gone when unchecked');
+    // With masks from the body model there is no mask model: one group, the body model's, for masks and body.
+    const statusRoute = `**/api/workspaces/${WS}/status`;
+    await page.route(statusRoute, async (route) => {
+      const status = await (await route.fetch()).json();
+      await route.fulfill({json: {...status, mask_source: 'body_net', has_mask_model: false, models: {...status.models, mask: null}}});
+    });
+    await page.reload();
+    await page.waitForSelector('.ws-issue');
     await outputsMenu.locator('summary').click();
+    assert.deepEqual(await outputsMenu.locator('.ws-outputs-group').evaluateAll((groups) => groups.map((g) => g.dataset.model)), ['body']);
+    assert.match(await outputsMenu.locator('[data-model="body"] h4').textContent(), /nir-body-lags3 \(masks and body\)/);
+    assert.deepEqual(await channels(), ['mask', 'ap', 'head', 'tail', 'overlap']);
+    await page.unroute(statusRoute);
+    await page.reload();
+    await page.waitForSelector('.ws-issue');
 
     // The timeline: a left drag scrubs the frame as it goes, a right drag selects a range (Esc clears it).
     await page.keyboard.press('Escape');
