@@ -119,13 +119,9 @@ class FixedBodyTests(unittest.TestCase):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 self.build(**params)
 
-    def test_app_job_and_full_light_pose_payloads_refresh_after_edits(self):
-        config = AppConfig(workspaces_root=self.root / "workspaces", recording_roots=(self.root,),
-                           poses_root=self.root / "runs", dataset_root=self.root / "cache", checkpoint=None,
-                           notes=self.root / "notes.json", prior_cache=None, gpus=(), device="cpu", job_interval=.05)
+    def test_app_job_and_full_and_light_frames_refresh_after_edits(self):
+        config = AppConfig(workspaces_root=self.root / "workspaces", dataset_root=self.root / "cache", gpus=(), device="cpu", job_interval=.05)
         with TestClient(create_app(config)) as client:
-            stages = client.get("/api/stages").json()
-            self.assertIn("fixed_body", [s["name"] for s in stages])
             response = client.post("/api/jobs", json={"kind": "stage", "stage": "fixed_body", "workspace": "body"})
             self.assertEqual(response.status_code, 200, response.text)
             job_id = response.json()["id"]
@@ -136,7 +132,7 @@ class FixedBodyTests(unittest.TestCase):
                     break
                 time.sleep(.1)
             self.assertEqual(job["state"], "done", str(job))
-            for endpoint in ("/api/frame?run=body&frame=4&detail=light", "/api/frame?run=body&frame=4", "/api/pose?run=body&frame=4"):
+            for endpoint in ("/api/workspaces/body/frame?frame=4&detail=light", "/api/workspaces/body/frame?frame=4"):
                 response = client.get(endpoint)
                 self.assertEqual(response.status_code, 200, response.text)
                 body = response.json()["fixed_body"]
@@ -146,7 +142,7 @@ class FixedBodyTests(unittest.TestCase):
             arrays = self.workspace.load_state()
             arrays["centerline_xy"][0] = arrays["centerline_xy"][0, ::-1]
             self.workspace.save_state(arrays)
-            body = client.get("/api/frame?run=body&frame=4&detail=light").json()["fixed_body"]
+            body = client.get("/api/workspaces/body/frame?frame=4&detail=light").json()["fixed_body"]
             self.assertTrue(body["stale"])
             self.assertNotIn("centerline_xy", body)
 

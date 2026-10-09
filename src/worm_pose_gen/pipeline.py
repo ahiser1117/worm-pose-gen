@@ -27,15 +27,21 @@ Stages and what they read and write:
   ``chain_backward``, ``independent_refit``).
 - ``track``: the track-length pass over clipped and deviating frames
   (``track_length_refit``).
-- ``export``: one Parquet row per frame under ``exports/``.
+- ``export``: workspace -> ``exports/<recording>_<time>/``, the per-frame table
+  and ``export.json`` (``worm_pose_gen.export_table``).  Not a default stage:
+  an analysis (``DEFAULT_STAGES``) stops at ``track``, and the app exports
+  only when the user asks.
 
 Each stage's parameters are a dataclass whose defaults match the script's
 flags; ``from_dict`` ignores unknown keys, so one parameter dict can drive
-every stage.  Besides the stages, the command line runs one region algorithm
-of ``worm_pose_gen.algorithms`` (``--region-run``, argv from
-``region_command``), which writes a candidate set rather than the state.  With ``checkpoint=None`` the segmenter is replaced by a
-threshold on dark pixels (below 128), which keeps the stages testable on a
-synthetic recording without the network.
+every stage.  The command line runs one stage (``--stage``) or several in
+pipeline order in one process (``--stages``, the app's Analyse job, whose
+progress spans them all).  With ``checkpoint=None`` the segmenter is
+replaced by a threshold on dark pixels (below 128), which keeps the stages testable on a
+synthetic recording without the network.  With ``mask_source="body_net"``
+the segment stage and the prior's bootstrap take the mask output of the
+body-field network (``body_net``) instead of the segmenter, cleaned the same
+way (:class:`BodyNetMasks`).
 """
 
 from __future__ import annotations
@@ -45,8 +51,10 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields, replace
+from datetime import datetime
 import fcntl
 import json
+import sys
 import math
 import os
 from pathlib import Path
@@ -60,12 +68,13 @@ import torch
 
 from .ambiguity import FLAG_NAMES, compute_ambiguity, summarize_ambiguity
 from .batch_fit import PRESETS, BatchFitConfig, fit_masks
-from .label_app import DATASET_PATH, RecordingSource
+from .recordings import DATASET_PATH, RecordingSource
 from .mask_fit import (
     Initialization,
     MaskFitResult,
     default_width_template,
     extend_start_to_length,
+    head_first,
     max_bend_widths,
     orient_tail_last,
     orientation_pair,
@@ -88,19 +97,21 @@ from .propagation import (
     warm_schedule,
 )
 from .recording_prior import RecordingPrior, bootstrap_prior_from_masks
-from .run_records import checkpoint_fingerprint, timestamp_slug, utc_now
+from .run_records import checkpoint_fingerprint, git_revision, utc_now
 from .segmentation_dataset import DEFAULT_DATASET_ROOT
 from .workspace import MASK_CHUNK_ROWS, pack_mask
 
 
 STAGES = ("segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_body", "export")
-DEFAULT_STAGES = tuple(stage for stage in STAGES if stage != "fixed_body")
+DEFAULT_STAGES = tuple(stage for stage in STAGES if stage not in ("fixed_body", "export"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "segmenter" / "best.ckpt"
 EXTERNAL_ROOT = Path(os.environ.get("WORM_POSE_EXTERNAL_ROOT", "/temp_data4/alex/external_artifacts"))
 DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
 HOLE_FILL_RADIUS_PX = 8
 MIN_WORM_PIXELS = 500
+# Where the segment stage's masks come from: the segmenter (``checkpoint``) or the body-field network's mask output (``body_net``).
+MASK_SOURCES = ("segmenter", "body_net")
 TIMING_STAGES = ("read", "flat_field", "network", "cleanup", "fields", "init", "fit", "video")
 START_SETS: dict[str, tuple[str, ...] | None] = {
     "skeleton": ("skeleton_longest_path",),
@@ -118,9 +129,13 @@ TRACK_ALGORITHM = "track_length_refit"
 # Provenance of poses a propagation pass put in place of the independent fit.
 PROPAGATION_ALGORITHMS = tuple(CANDIDATE_ALGORITHMS.values())
 # Every provenance algorithm the stages themselves write.  A fitted row whose
-# algorithm is anything else (a manual pick or flip, an accepted region run)
+# algorithm is anything else (a flip, a kept fix, a mask edit)
 # was put there on purpose: a propagate pass keeps it and works around it.
 PIPELINE_ALGORITHMS = frozenset((*SOURCE_ALGORITHMS.values(), *PROPAGATION_ALGORITHMS, TRACK_ALGORITHM, ""))
+# Jobs whose poses the user installed whatever their algorithm: a kept fix
+# (``worm_pose_gen.fixes``), and in workspaces made before the fixes an
+# accepted candidate set of the region runs they replaced.
+PLACED_JOB_PREFIXES = ("candidates:", "fix:")
 SUMMARY_FILE = "summary.json"
 WORKSPACE_LOCK_FILE = ".lock"
 # The per-frame arrays ``store_result`` writes, and the name each is kept
@@ -181,7 +196,9 @@ class _Params:
 
 @dataclass
 class SegmentParams(_Params):
+    mask_source: str = _help("'segmenter' (the checkpoint) or 'body_net' (the body-field network's mask output)", default="segmenter")
     checkpoint: str | None = _help("segmenter checkpoint; None thresholds pixels darker than 128 instead (tests)", default=str(DEFAULT_CHECKPOINT))
+    body_net: str | None = _help("body-field network checkpoint, the mask model when mask_source is 'body_net'", default=None)
     threshold: float = _help("probability at or above which a pixel is worm", default=0.5)
     hole_radius: int = _help("largest hole width to fill, in pixels", default=HOLE_FILL_RADIUS_PX)
     fill_holes: bool = _help("fill narrow holes in the mask", default=True)
@@ -204,7 +221,9 @@ class PriorParams(_Params):
     bootstrap_target: int = _help("whole-worm fits wanted; the sample is enlarged up to 4x to reach it", default=12)
     bootstrap_preset: str = _help("fitting schedule of the bootstrap pass", default="balanced")
     # Segmentation of the bootstrap frames (the same switches as the segment stage).
+    mask_source: str = _help("'segmenter' or 'body_net', as in the segment stage", default="segmenter")
     checkpoint: str | None = _help("segmenter checkpoint for the bootstrap frames", default=str(DEFAULT_CHECKPOINT))
+    body_net: str | None = _help("body-field network checkpoint when mask_source is 'body_net'", default=None)
     threshold: float = _help("probability threshold", default=0.5)
     hole_radius: int = _help("largest hole width to fill", default=HOLE_FILL_RADIUS_PX)
     fill_holes: bool = _help("fill narrow holes", default=True)
@@ -285,7 +304,9 @@ class FixedBodyParams(_Params):
 
 @dataclass
 class ExportParams(_Params):
-    name: str | None = _help("file stem under exports/ (default: the UTC time)", default=None)
+    pixel_size_um: float | None = _help("µm per image pixel (the setup's); lengths stay in pixels without it", default=None)
+    fps: float | None = _help("frame rate, for time when the recording has no camera timestamps (the setup's)", default=None)
+    setup: str | None = _help("the setup the recording belongs to, recorded in export.json", default=None)
 
 
 STAGE_PARAMS: dict[str, type[_Params]] = {
@@ -298,23 +319,6 @@ STAGE_PARAMS: dict[str, type[_Params]] = {
     "fixed_body": FixedBodyParams,
     "export": ExportParams,
 }
-
-
-def _type_name(annotation: Any) -> str:
-    text = str(annotation).replace("typing.", "")
-    text = text.split(" | None")[0] if text.endswith("| None") else text
-    return "dict" if text.startswith("dict") else text
-
-
-def stage_schema(stage: str) -> list[dict[str, Any]]:
-    """Parameter descriptions (name, type, default, help) of one stage, for forms and the API."""
-
-    cls = STAGE_PARAMS[stage]
-    defaults = cls()
-    return [
-        {"name": f.name, "type": _type_name(f.type), "default": getattr(defaults, f.name), "help": f.metadata.get("help", "")}
-        for f in dataclass_fields(cls)
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -418,13 +422,49 @@ def load_segmentation_model(checkpoint: str | Path | None, device: torch.device 
     return load_segmenter(Path(checkpoint), device)
 
 
+class BodyNetMasks:
+    """The body-field network as the mask model: each frame's mask probability predicted from its flat-fielded neighbours.
+
+    ``last`` holds the predictions of the frames :func:`segment_frames` most
+    recently segmented, in their order, so a caller that fits the same frames
+    next can use them as the fit's evidence instead of predicting again.
+    """
+
+    def __init__(self, predictor: Any, device: torch.device) -> None:
+        self.predictor = predictor
+        self.device = device
+        self.last: list[Any] = []
+
+    def predict(self, indices: Sequence[int]) -> NDArray[np.float32]:
+        self.last = self.predictor.predict(indices)
+        return np.stack([prediction.mask for prediction in self.last])
+
+
+def load_mask_model(params: SegmentParams | PriorParams, frames: Frames, device: torch.device) -> SegmentationModel | BodyNetMasks:
+    """The model whose masks the stage cleans: the segmenter, or the body-field network for ``mask_source="body_net"``."""
+
+    if params.mask_source not in MASK_SOURCES:
+        raise ValueError(f"unknown mask_source {params.mask_source!r}; expected one of {MASK_SOURCES}")
+    if params.mask_source == "body_net":
+        if not params.body_net:
+            raise ValueError("mask_source 'body_net' needs a body_net checkpoint")
+        return BodyNetMasks(field_predictor(params.body_net, frames, device), device)
+    return load_segmentation_model(params.checkpoint, device)
+
+
+def mask_checkpoint(params: SegmentParams | PriorParams) -> str | None:
+    """The checkpoint of the model whose masks the stage cleans."""
+
+    return params.body_net if params.mask_source == "body_net" else params.checkpoint
+
+
 def cleanup_kwargs(params: SegmentParams | PriorParams) -> dict[str, bool]:
     return {"fill_holes": bool(params.fill_holes), "largest_only": bool(params.largest_only)}
 
 
 def segment_frames(
     frames: Frames,
-    model: SegmentationModel,
+    model: SegmentationModel | BodyNetMasks,
     indices: Sequence[int],
     params: SegmentParams | PriorParams,
     device: torch.device,
@@ -432,12 +472,19 @@ def segment_frames(
     """Read, flat-field, segment and clean these frames; returns masks, statistics and stage seconds.
 
     The statistics are ``clean_mask``'s plus ``mask_on_border``; an empty
-    frame still gets a (false) mask so callers can index by position.
+    frame still gets a (false) mask so callers can index by position.  The
+    body-field network reads its frames and their neighbours itself, so its
+    reading counts as ``network`` time.
     """
 
-    corrected, read_seconds, field_seconds = frames.corrected(indices)
-    t2 = time.perf_counter()
-    probability = model.predict_probability_batch(corrected, batch_size=params.batch_size)
+    if isinstance(model, BodyNetMasks):
+        read_seconds = field_seconds = 0.0
+        t2 = time.perf_counter()
+        probability = model.predict(indices)
+    else:
+        corrected, read_seconds, field_seconds = frames.corrected(indices)
+        t2 = time.perf_counter()
+        probability = model.predict_probability_batch(corrected, batch_size=params.batch_size)
     if device.type == "cuda":
         torch.cuda.synchronize()
     t3 = time.perf_counter()
@@ -519,6 +566,10 @@ def fit_setup(params: FitParams, prior: RecordingPrior | None) -> FitSetup:
     config = build_fit_config(params)
     if prior is not None:
         config = prior.apply(config, shape_weight=params.prior_shape_weight)
+        if params.body_net:
+            # The network's head anchors the trace start, and the body laid
+            # from it keeps the prior's length (see body_proposal.trace_start).
+            config = replace(config, length_fixed=True)
     if params.starts is not None:
         start_set = params.starts
     elif prior is not None:
@@ -675,15 +726,16 @@ PREDICTION_SLAB = 64
 
 
 def network_trace_start(prediction: Any, mask: MaskArray, setup: FitSetup) -> Initialization | None:
-    """The network's trace start for a frame (``body_proposal.trace_start``), with the prior's length and width profile."""
+    """The network's trace start for a frame (``body_proposal.trace_start``), with the prior's length and width."""
 
     # Imported here: body_proposal reaches back into this module through body_fields.
     from .body_proposal import trace_start
 
-    trace = trace_start(prediction, mask, config=setup.config, length_px=setup.start_length)
-    if trace is not None and setup.start_shape is not None:
-        trace = replace(trace, width_shape=np.asarray(setup.start_shape, dtype=np.float64))
-    return trace
+    prior = setup.prior
+    return trace_start(
+        prediction, mask, config=setup.config, length_px=setup.start_length,
+        width_px=prior.width_px if prior is not None else None, width_shape=setup.start_shape,
+    )
 
 
 def body_field_inputs(
@@ -732,7 +784,9 @@ def fit_frames(
     fit against the network's A-P field and ends (the config's ``field_*``
     weights), add the network's proposed trace as a start, and fit every
     start in both orientations, so the evidence rather than the taper
-    decides which end is the head.
+    decides which end is the head.  Where the evidence holds both ends, each
+    start is fit once, head first by them (``mask_fit.head_first``), and the
+    frame's ``orientation_gap`` stays NaN.
     """
 
     skipped = skipped if skipped is not None else defaultdict(int)
@@ -748,6 +802,7 @@ def fit_frames(
     else:
         starts = [initializations_for(m, config, names, setup.start_shape, setup.start_length) for m in masks]
     fields: list[Any] | None = None
+    oriented: set[int] = set()
     if predictions is not None:
         # Imported here: body_proposal reaches back into this module through body_fields.
         from .body_proposal import field_evidence
@@ -756,7 +811,13 @@ def fit_frames(
         for k, (prediction, mask) in enumerate(zip(predictions, masks, strict=True)):
             base = [s for s in starts[k] if not s.name.endswith("_reversed")]
             trace = network_trace_start(prediction, mask, setup)
-            starts[k] = [s for start in base for s in orientation_pair(start, config=config)] + ([trace] if trace is not None else [])
+            head, tail = fields[k].head_xy, fields[k].tail_xy
+            if head is not None and tail is not None:
+                oriented.add(rows[k])
+                base = [head_first(start, head, tail, config=config) for start in base]
+            else:
+                base = [s for start in base for s in orientation_pair(start, config=config)]
+            starts[k] = base + ([trace] if trace is not None else [])
     keep = [k for k, s in enumerate(starts) if s]
     skipped["no_starts"] += len(starts) - len(keep)
     masks = [masks[k] for k in keep]
@@ -790,7 +851,7 @@ def fit_frames(
         if setup.orient_after_fit and fields is None:
             result, flipped = orient_tail_last(result, config=config)
             arrays["reversed"][row] = flipped
-        else:
+        elif row not in oriented:
             arrays["orientation_gap"][row] = orientation_gap(result)
         store_result(arrays, row, result)
     return {"init": t5 - t4, "fit": t6 - t5}
@@ -821,7 +882,7 @@ def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarra
 
     replaced = np.isin(np.asarray(algorithm).astype(str), PROPAGATION_ALGORITHMS) & np.asarray(arrays["fitted"], dtype=bool)
     if job is not None:
-        replaced &= ~np.char.startswith(np.asarray(job).astype(str), "candidates:")
+        replaced &= ~placed_job(job)
     if "mask_stale" in arrays:
         replaced &= ~np.asarray(arrays["mask_stale"], dtype=bool)
     if "latent_independent" in arrays:
@@ -844,7 +905,7 @@ def restore_independent_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarra
 
 def bootstrap_prior(
     frames: Frames,
-    model: SegmentationModel,
+    model: SegmentationModel | BodyNetMasks,
     params: PriorParams,
     config: BatchFitConfig,
     device: torch.device,
@@ -905,7 +966,19 @@ def bootstrap_prior(
 def prior_cache_path(params: PriorParams, recording: Path, width_coefficients: int) -> Path | None:
     if not params.use_cache:
         return None
-    return Path(params.prior_cache) / f"{Path(recording).stem}_k{width_coefficients}.json"
+    # A prior bootstrapped from the body-field network's masks is cached apart from the segmenter's.
+    source = "" if params.mask_source == "segmenter" else f"_{params.mask_source}"
+    return Path(params.prior_cache) / f"{Path(recording).stem}_k{width_coefficients}{source}.json"
+
+
+def cached_prior(recording: str | Path, cache: str | Path = DEFAULT_PRIOR_CACHE) -> RecordingPrior | None:
+    """The recording's body-size prior from the prior cache (written by any analysis or Find frames job), or ``None``.
+
+    ``recording`` is its path or id (the cache is keyed by the file's stem).
+    """
+
+    path = prior_cache_path(PriorParams(prior_cache=str(cache)), Path(recording), build_fit_config(FitParams()).width_coefficients)
+    return RecordingPrior.load(path) if path is not None and path.exists() else None
 
 
 def resolve_prior(
@@ -914,12 +987,12 @@ def resolve_prior(
     config: BatchFitConfig,
     device: torch.device,
     *,
-    model: SegmentationModel | None = None,
+    model: SegmentationModel | BodyNetMasks | None = None,
     progress: Progress | None = None,
 ) -> tuple[RecordingPrior | None, str | None, dict[str, Any] | None]:
     """The prior from the given file, the cache, or a bootstrap; returns (prior, source, bootstrap info).
 
-    ``model`` is loaded from ``params.checkpoint`` only when a bootstrap is
+    ``model`` is loaded (:func:`load_mask_model`) only when a bootstrap is
     actually needed.  A bootstrapped prior is written to the cache.
     """
 
@@ -932,7 +1005,7 @@ def resolve_prior(
         return RecordingPrior.load(cache_path), f"cache {cache_path}", None
     t = time.perf_counter()
     if model is None:
-        model = load_segmentation_model(params.checkpoint, device)
+        model = load_mask_model(params, frames, device)
     prior, info = bootstrap_prior(frames, model, params, config, device, progress=progress)
     info["seconds"] = time.perf_counter() - t
     if cache_path is not None:
@@ -1070,7 +1143,7 @@ def propagation_pass(
     Requires the ambiguity arrays (``ambiguity_score``, ``score_independent``)
     and the independent copies.  The chosen poses replace the stored ones,
     ``source`` records where each came from, and the ambiguity is recomputed.
-    Rows flagged in ``fixed`` (manual edits, accepted region runs) are never
+    Rows flagged in ``fixed`` (manual edits, kept fixes) are never
     refit: the stretches are cut around them (``split_stretches``) so they
     anchor the chains instead.  With ``predictions_of`` (the body-field
     network, as in the fit) every fit of the pass is scored against the
@@ -1356,21 +1429,16 @@ def _device(device: torch.device | str | None) -> torch.device:
 
 
 def read_summary(workspace: Any) -> dict[str, Any]:
-    """The workspace's synthesised run summary (``summary.json``), falling back to an imported run's."""
+    """The workspace's synthesised run summary (``summary.json``; empty before the first stage)."""
 
-    for name in (SUMMARY_FILE, "imported_summary.json"):
-        path = Path(workspace.path) / name
-        if path.exists():
-            return json.loads(path.read_text())
-    return {}
+    path = Path(workspace.path) / SUMMARY_FILE
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def update_summary(workspace: Any, updates: dict[str, Any]) -> dict[str, Any]:
     """Merge ``updates`` into the workspace's ``summary.json`` (written atomically)."""
 
     path = Path(workspace.path) / SUMMARY_FILE
-    # Seeded from ``read_summary`` so the first stage on an imported workspace
-    # carries the imported run's fit configuration forward.
     summary = dict(read_summary(workspace))
     summary.update(updates)
     summary["finished_at"] = utc_now()
@@ -1541,7 +1609,7 @@ class _PendingMasks:
 def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
     frames = workspace_frames(workspace, params)
     try:
-        model = load_segmentation_model(params.checkpoint, device)
+        model = load_mask_model(params, frames, device)
         arrays = workspace.load_state()
         n = workspace.n
         base = new_arrays(workspace.frame_index, BatchFitConfig())
@@ -1582,7 +1650,8 @@ def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, 
                 "frames": [int(workspace.frame_index[0]), int(workspace.frame_index[-1])] if n else None,
                 "step": int(workspace.info.step),
                 "frame_count": n,
-                "checkpoint": checkpoint_fingerprint(params.checkpoint),
+                "mask_source": params.mask_source,
+                "checkpoint": checkpoint_fingerprint(mask_checkpoint(params)),
                 "threshold": params.threshold,
                 "mask_cleanup": {
                     "fill_holes": params.fill_holes, "fill_holes_radius_px": params.hole_radius,
@@ -1774,11 +1843,18 @@ def run_ambiguity(workspace: Any, params: AmbiguityParams, *, device: torch.devi
 
 
 def placed_rows(arrays: dict[str, np.ndarray], algorithm: np.ndarray, job: np.ndarray | None = None) -> NDArray[np.bool_]:
-    """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): manual picks and flips, accepted region runs."""
+    """Fitted rows whose provenance is not a stage's (``PIPELINE_ALGORITHMS``): flips and kept fixes."""
 
     names = np.asarray(algorithm).astype(str)
-    accepted = np.zeros(len(names), dtype=bool) if job is None else np.char.startswith(np.asarray(job).astype(str), "candidates:")
+    accepted = np.zeros(len(names), dtype=bool) if job is None else placed_job(job)
     return np.asarray(arrays["fitted"], dtype=bool) & (accepted | ~np.isin(names, tuple(PIPELINE_ALGORITHMS)))
+
+
+def placed_job(job: np.ndarray) -> NDArray[np.bool_]:
+    """Per row, whether its provenance job is one whose poses the user installed (``PLACED_JOB_PREFIXES``)."""
+
+    jobs = np.asarray(job).astype(str)
+    return np.logical_or.reduce([np.char.startswith(jobs, prefix) for prefix in PLACED_JOB_PREFIXES])
 
 
 def keep_hypotheses(fresh: dict[str, np.ndarray], old: dict[str, np.ndarray], rows: Sequence[int]) -> None:
@@ -1818,7 +1894,7 @@ def run_propagate(
     arrays = workspace_arrays(workspace, setup.config)
     if "iou_independent" not in arrays:
         independent_copies(arrays)
-    # Rows the user placed (picks, flips, accepted region runs) stay as they
+    # Rows the user placed (flips, kept fixes) stay as they
     # are and anchor the chains around them; their hypotheses survive too.
     provenance = workspace.load_provenance()
     fixed = placed_rows(arrays, provenance["algorithm"], provenance["job"])
@@ -1881,89 +1957,67 @@ def run_track(
     return info
 
 
-def _curvature(curve: np.ndarray) -> float:
-    """Mean absolute turning angle per unit length along a centerline (1/px)."""
+def human_status(workspace: Any, provenance: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Per row: whether a person fixed the pose, and whether a person's review of it still holds.
 
-    step = np.diff(curve, axis=0)
-    segment = np.linalg.norm(step, axis=1)
-    if len(segment) < 2 or not np.isfinite(segment).all():
-        return float("nan")
-    angle = np.arctan2(step[:, 1], step[:, 0])
-    turn = np.abs(np.angle(np.exp(1j * np.diff(angle))))
-    return float(np.mean(turn / np.maximum(0.5 * (segment[1:] + segment[:-1]), 1e-6)))
+    A pose is fixed when its provenance is not one of the stages' own
+    algorithms (a flip, a kept fix, a mask edit) or its
+    mask is the user's override.  Reviews are the rows of
+    ``human_review.json`` (``app/inspection.py``); every row there was
+    current when the file was written (``reviewed_at``), so a review holds
+    while neither the row's provenance nor a logged edit naming the row
+    (an undo included) is from a later second.
+    """
 
-
-def export_table(arrays: dict[str, np.ndarray], provenance: dict[str, np.ndarray] | None = None) -> "pyarrow.Table":
-    """One row per frame: pose, statistics, flags, provenance and kinematics, as a pyarrow table."""
-
-    import pyarrow as pa
-
-    n = len(arrays["frame_index"])
-    fitted = np.asarray(arrays["fitted"], dtype=bool)
-    curves = np.asarray(arrays["centerline_xy"], dtype=np.float64)
-    nan = np.full(n, np.nan)
-
-    def column(name: str, default: np.ndarray) -> np.ndarray:
-        return np.asarray(arrays[name]) if name in arrays else default
-
-    def floats(values: np.ndarray) -> "pa.Array":
-        # NaN means "no value" in the arrays; Parquet readers expect null for that.
-        values = np.asarray(values, dtype=np.float64)
-        return pa.array(values, mask=np.isnan(values))
-
-    centroid = np.nanmean(curves, axis=1) if n else np.zeros((0, 2))
-    centroid[~fitted] = np.nan
-    speed = nan.copy()
-    previous: int | None = None
-    for row in range(n):
-        if not fitted[row]:
-            continue
-        if previous is not None:
-            gap = max(int(arrays["frame_index"][row]) - int(arrays["frame_index"][previous]), 1)
-            speed[row] = float(np.linalg.norm(centroid[row] - centroid[previous])) / gap
-        previous = row
-    curvature = np.asarray([_curvature(curves[row]) if fitted[row] else float("nan") for row in range(n)])
-    columns: dict[str, Any] = {
-        "frame_index": pa.array(np.asarray(arrays["frame_index"], dtype=np.int64)),
-        "fitted": pa.array(fitted),
-        "iou": floats(arrays["iou"]),
-        "tube_coverage": floats(column("tube_coverage", nan)),
-        "body_length_px": floats(arrays["body_length_px"]),
-        "width_px": floats(arrays["width_px"]),
-        "points_in_fov": pa.array(np.asarray(arrays["points_in_fov"], dtype=np.int64)),
-        "source": pa.array(column("source", np.zeros(n, dtype=np.int8)).astype(np.int8)),
-        "ambiguity_score": pa.array(column("ambiguity_score", np.zeros(n, dtype=np.int64)).astype(np.int64)),
-    }
-    for name in FLAG_NAMES:
-        columns[f"flag_{name}"] = pa.array(column(f"flag_{name}", np.zeros(n, dtype=bool)).astype(bool))
-    provenance = provenance or {}
-    columns["provenance_algorithm"] = pa.array([str(v) for v in provenance.get("algorithm", np.full(n, ""))], pa.string())
-    columns["provenance_job"] = pa.array([str(v) for v in provenance.get("job", np.full(n, ""))], pa.string())
-    columns["provenance_time"] = floats(provenance.get("time", nan))
-    columns["centerline_x"] = pa.array([row[:, 0].tolist() if fitted[i] else None for i, row in enumerate(curves)], pa.list_(pa.float64()))
-    columns["centerline_y"] = pa.array([row[:, 1].tolist() if fitted[i] else None for i, row in enumerate(curves)], pa.list_(pa.float64()))
-    profile = np.asarray(arrays["width_profile"], dtype=np.float64)
-    columns["width_profile"] = pa.array([profile[i].tolist() if fitted[i] else None for i in range(n)], pa.list_(pa.float64()))
-    columns["centroid_x"] = floats(centroid[:, 0] if n else np.zeros(0))
-    columns["centroid_y"] = floats(centroid[:, 1] if n else np.zeros(0))
-    columns["speed_px_per_frame"] = floats(speed)
-    columns["mean_abs_curvature"] = floats(curvature)
-    return pa.table(columns)
+    n = workspace.n
+    fixed = ~np.isin(np.asarray(provenance["algorithm"]).astype(str), sorted(PIPELINE_ALGORITHMS))
+    fixed[[row for row in workspace.override_rows() if 0 <= row < n]] = True
+    reviewed = np.zeros(n, dtype=bool)
+    path = Path(workspace.path) / "human_review.json"
+    record = json.loads(path.read_text()) if path.exists() else {}
+    if record.get("reviewed_at"):
+        later = datetime.fromisoformat(record["reviewed_at"]).timestamp() + 1.0
+        reviewed[[row for row in record.get("rows", []) if isinstance(row, int) and 0 <= row < n]] = True
+        changed = np.asarray(provenance["time"], dtype=np.float64) >= later
+        for edit in workspace.edits():
+            if datetime.fromisoformat(edit["time"]).timestamp() >= later:
+                changed[[row for row in (edit.get("payload") or {}).get("rows", []) if isinstance(row, int) and 0 <= row < n]] = True
+        reviewed &= ~changed
+    return fixed, reviewed
 
 
 def run_export(workspace: Any, params: ExportParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
-    import pyarrow.parquet as pq
+    """Write one export of the workspace (``worm_pose_gen.export_table``); returns its ``export.json`` and the table's ``path``.
 
-    setup = workspace_setup(workspace)
-    arrays = workspace_arrays(workspace, setup.config)
-    table = export_table(arrays, workspace.load_provenance())
-    exports = Path(workspace.path) / "exports"
-    exports.mkdir(parents=True, exist_ok=True)
-    path = exports / f"{params.name or timestamp_slug()}.parquet"
-    pq.write_table(table, path)
-    result = {"path": str(path), "rows": table.num_rows, "columns": table.column_names}
-    update_summary(workspace, {"export": result})
-    return result
+    The export only reads the workspace and writes under ``exports/``: the
+    run summary and the review records are left as they are, so exporting
+    never invalidates a review.  Under the workspace lock (``run_stage``, or
+    ``app/exporting.py``) the state, provenance, reviews and edit log it reads
+    are one consistent capture.
+    """
+
+    from . import export_table
+
+    arrays = workspace_arrays(workspace, workspace_setup(workspace).config)
+    fixed, reviewed = human_status(workspace, workspace.load_provenance())
+    flags = [np.asarray(arrays[f"flag_{name}"], dtype=bool) for name in FLAG_NAMES if f"flag_{name}" in arrays]
+    flagged = np.any(flags, axis=0) if flags else np.zeros(workspace.n, dtype=bool)
+    summary = read_summary(workspace)
+    about = {
+        "created_at": utc_now(),
+        "app_revision": git_revision(PROJECT_ROOT),
+        "workspace": workspace.info.name,
+        "setup": params.setup,
+        # What the workspace records about the models that produced it.
+        "models": {"mask": summary.get("checkpoint"), "body": (summary.get("fit_params") or {}).get("body_net")},
+    }
+    return export_table.export(
+        Path(workspace.path) / "exports",
+        recording=Path(workspace.info.recording), dataset=workspace_dataset(workspace), frames=workspace.frame_index,
+        centerline_xy=arrays["centerline_xy"], width_profile_px=arrays["width_profile"], fitted=arrays["fitted"],
+        status=export_table.frame_status(arrays["fitted"], flagged, arrays["mask_stale"], fixed, reviewed),
+        pixel_size_um=params.pixel_size_um, fps=params.fps, about=about,
+    )
 
 
 def run_stage(
@@ -2030,62 +2084,24 @@ def run_all(
 
 
 def stage_command(workspace_path: Path | str, stage: str, params: dict[str, Any] | None) -> list[str]:
-    """The argv that runs one stage as a job (relative to the repo root, where the venv lives)."""
+    """The argv that runs one stage as a job, with this interpreter (the job runs from the repo root)."""
 
     return [
-        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
+        sys.executable, "-m", "worm_pose_gen.pipeline",
         "--workspace", str(workspace_path), "--stage", stage, "--params", json.dumps(params or {}),
     ]
 
 
-REGION_SPEC_KEYS = ("algorithm", "first", "last", "params", "anchor_before", "anchor_after", "id")
+def stages_command(workspace_path: Path | str, stages: Sequence[str], params: dict[str, Any] | None) -> list[str]:
+    """The argv that runs ``stages`` in pipeline order as one job, every stage reading ``params`` (``run_all``'s ``'*'``)."""
 
-
-def region_command(workspace_path: Path | str, spec: Any) -> list[str]:
-    """The argv that runs one region algorithm as a job (``worm_pose_gen.algorithms.run_region`` through this module).
-
-    ``spec`` is the region-run dictionary ``{algorithm, first, last, params,
-    anchor_before, anchor_after, id}`` with ``first``, ``last`` and the
-    anchors as workspace ROWS (a ``JobSpec`` is accepted too: its ``params``
-    is the dictionary).  ``id`` names the candidate set; when omitted the job
-    process uses ``WORM_POSE_JOB_ID``.
-    """
-
-    values = getattr(spec, "params", spec)
-    if not isinstance(values, dict):
-        raise ValueError("a region spec is a dict (or a JobSpec whose params is one)")
-    if not values.get("algorithm"):
-        raise ValueError("a region spec needs an algorithm")
-    if values.get("first") is None or values.get("last") is None:
-        raise ValueError("a region spec needs first and last rows")
-    payload = {k: values.get(k) for k in REGION_SPEC_KEYS if values.get(k) is not None}
-    payload.setdefault("params", {})
+    unknown = [stage for stage in stages if stage not in STAGES]
+    if unknown or not stages:
+        raise ValueError(f"unknown stages {unknown or 'none given'}; expected some of {STAGES}")
     return [
-        ".venv/bin/python", "-m", "worm_pose_gen.pipeline",
-        "--workspace", str(workspace_path), "--region-run", json.dumps(_json_safe(payload)),
+        sys.executable, "-m", "worm_pose_gen.pipeline",
+        "--workspace", str(workspace_path), "--stages", ",".join(stages), "--params", json.dumps(params or {}),
     ]
-
-
-def run_region_spec(workspace: Any, spec: dict[str, Any], *, device: torch.device | str | None = None, progress: Progress | None = None) -> dict[str, Any]:
-    """Run a region spec (``region_command``'s dictionary) on the workspace; returns the job result (candidate set id and metrics)."""
-
-    from .algorithms import run_region
-
-    algorithm = str(spec["algorithm"])
-    job = str(spec.get("id") or os.environ.get("WORM_POSE_JOB_ID") or "")
-    candidate_set = run_region(
-        workspace, algorithm, int(spec["first"]), int(spec["last"]), dict(spec.get("params") or {}),
-        anchor_before=None if spec.get("anchor_before") is None else int(spec["anchor_before"]),
-        anchor_after=None if spec.get("anchor_after") is None else int(spec["anchor_after"]),
-        device=device, progress=progress, job=job,
-    )
-    return {
-        "candidate_set": candidate_set.id, "algorithm": candidate_set.algorithm, "params": candidate_set.params,
-        "rows": [candidate_set.first, candidate_set.last], "frames": list(candidate_set.frames),
-        "anchors": {"before": candidate_set.anchor_before, "after": candidate_set.anchor_after},
-        "metrics": candidate_set.metrics, "metrics_before": candidate_set.metrics_before,
-        "candidates": int(sum(len(v) for v in candidate_set.candidates.values())), "path_rows": len(candidate_set.path),
-    }
 
 
 def _report_progress(progress: float, message: str, result: dict[str, Any] | None = None) -> None:
@@ -2117,26 +2133,28 @@ def _json_safe(value: Any) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run one pipeline stage over a workspace.")
+    parser = argparse.ArgumentParser(description="Run one pipeline stage, or several in order, over a workspace.")
     parser.add_argument("--workspace", type=Path, required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stage", choices=STAGES)
-    group.add_argument("--region-run", default=None, help="JSON region spec: algorithm, first, last (rows), params, anchor_before, anchor_after, id")
+    group.add_argument("--stages", default=None, help="comma-separated stages, run in pipeline order in this process with the same --params")
     parser.add_argument("--params", default="{}", help="JSON object of stage parameters")
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
     from .workspace import Workspace
 
     workspace = Workspace.open(args.workspace)
-    if args.region_run is not None:
-        spec = json.loads(args.region_run)
-        label = str(spec.get("algorithm", "region"))
-        _report_progress(0.0, f"{label}: starting")
-        result = run_region_spec(workspace, spec, device=args.device, progress=_report_progress)
-        _report_progress(1.0, f"{label}: done", _json_safe(result))
-        print(json.dumps(_json_safe(result), indent=1))
-        return 0
     params = json.loads(args.params)
+    if args.stages is not None:
+        stages = [stage for stage in args.stages.split(",") if stage]
+        unknown = [stage for stage in stages if stage not in STAGES]
+        if unknown or not stages:
+            parser.error(f"--stages: unknown stages {unknown or 'none given'}; expected some of {STAGES}")
+        _report_progress(0.0, f"{stages[0]}: starting")
+        results = run_all(workspace, {"*": params}, stages, device=args.device, progress=_report_progress)
+        _report_progress(1.0, "analysis: done", _json_safe({"stages": list(results)}))
+        print(json.dumps(_json_safe(results), indent=1))
+        return 0
     _report_progress(0.0, f"{args.stage}: starting")
     result = run_stage(workspace, args.stage, params, device=args.device, progress=_report_progress)
     _report_progress(1.0, f"{args.stage}: done", _json_safe(result))

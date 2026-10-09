@@ -1,4 +1,10 @@
-"""Body-field records of a segmentation store: build, load, review and correct them.
+"""Body-field targets of one labeled frame (:func:`fit_targets`), and the records of the old segmentation store.
+
+The library's target cache (:mod:`library.targets`) builds each label's
+targets with :func:`fit_targets`.  The rest of this module is the old
+store's record format, which ``scripts/migrate_to_library.py`` reads the
+human body fields from and ``scripts/build_body_fields.py`` and
+``scripts/evaluate_field_fitting.py`` still build and read.
 
 For each hand-labeled frame ``<root>/body_fields/<sample_id>.npz`` holds:
 
@@ -21,13 +27,14 @@ For each hand-labeled frame ``<root>/body_fields/<sample_id>.npz`` holds:
     how the head was chosen: ``nose`` (acquisition nose landmark on this
     frame), ``nose_nearby`` (the nearest valid landmark within the context;
     ``nose_offset`` says which frame), ``taper`` (no landmark; the thinner
-    end is the tail), or ``manual`` (flipped by hand, :func:`flip`).
+    end is the tail), or ``manual`` (flipped by hand in the old Body fields
+    screen).
     ``orientation_margin`` is ``(d_tail - d_head) / diameter`` for the nose
     cases.
 
 ``meta`` is a JSON string.  Besides the build fields it may hold ``review``
 (:data:`REVIEW_STATES`; absent means ``unreviewed``) and ``reviewed_at``
-(UTC ISO), written by :func:`set_review`.  A rejected sample trains the mask
+(UTC ISO), written by the old Body fields screen.  A rejected sample trains the mask
 only.  The record is *stale* when the store's mask revision differs from
 ``meta["mask_revision"]``: the mask was edited after the targets were built,
 and :func:`build` must refit it.  Building replaces the whole record, so a
@@ -60,7 +67,7 @@ from .body_targets import render_body_targets, self_contact
 from .classical import resample_centerline
 from .head_fit import HeadConstraint
 from .head_tracking import HeadTracking, read_head_tracking
-from .label_app import RecordingSource
+from .recordings import RecordingSource
 from .mask_fit import (
     MaskFitResult, decode_centerline, default_width_template, hard_iou, init_from_centerline, orient_tail_last,
     reverse_initialization, reverse_result,
@@ -152,60 +159,6 @@ def is_current(path: Path, revision: int, max_lag: int) -> bool:
         return False
     meta = read_meta(path)
     return meta.get("mask_revision") == revision and meta.get("max_lag") == max_lag
-
-
-# --------------------------------------------------------------------------- edits
-
-
-def _edit(root: str | Path, sample_id: str, change: Callable[[dict[str, np.ndarray], dict[str, Any]], None]) -> dict[str, Any]:
-    path = field_path(root, sample_id)
-    with locked(root):
-        if not path.exists():
-            raise FileNotFoundError(f"{sample_id} has no body fields; build them first")
-        arrays, meta = load(path)
-        change(arrays, meta)
-        save(path, meta, arrays)
-    return meta
-
-
-def flip(root: str | Path, sample_id: str) -> dict[str, Any]:
-    """Swap head and tail: reverse the tube, swap the end points, ``ap -> 1 - ap``; orientation becomes ``manual``.
-
-    The review PNG, when there is one, is redrawn to match.
-    """
-
-    def change(arrays: dict[str, np.ndarray], meta: dict[str, Any]) -> None:
-        if not meta.get("has_body"):
-            raise ValueError(f"{sample_id} has no body to flip")
-        arrays["centerline_xy"] = arrays["centerline_xy"][::-1].copy()
-        arrays["width_profile"] = arrays["width_profile"][::-1].copy()
-        arrays["head_xy"], arrays["tail_xy"] = arrays["tail_xy"], arrays["head_xy"]
-        arrays["ap"] = (1 - arrays["ap"]).astype(arrays["ap"].dtype)
-        meta["orientation"] = "manual"
-        if "tail_off_camera" in meta:
-            meta["head_off_camera"], meta["tail_off_camera"] = meta["tail_off_camera"], meta["head_off_camera"]
-        if "orientation_margin" in meta:
-            meta["orientation_margin"] = -meta["orientation_margin"]
-
-    meta = _edit(root, sample_id, change)
-    review = fields_dir(root) / REVIEW_DIR / f"{sample_id}.png"
-    if review.exists():
-        arrays, _ = load(field_path(root, sample_id), ("context", "ap", "overlap", "head_xy", "tail_xy"))
-        body = np.isfinite(arrays["ap"]) | arrays["overlap"]
-        centre = arrays["context"][meta["max_lag"]]
-        review_image(centre, arrays["ap"], arrays["overlap"], arrays["head_xy"], arrays["tail_xy"], body_box(body)).save(review)
-    return meta
-
-
-def set_review(root: str | Path, sample_id: str, status: str) -> dict[str, Any]:
-    if status not in REVIEW_STATES:
-        raise ValueError(f"unknown review status {status!r}; expected one of {REVIEW_STATES}")
-
-    def change(arrays: dict[str, np.ndarray], meta: dict[str, Any]) -> None:
-        meta["review"] = status
-        meta["reviewed_at"] = utc_now()
-
-    return _edit(root, sample_id, change)
 
 
 # --------------------------------------------------------------------------- build
@@ -351,12 +304,14 @@ def chain_fit(
 
 
 # A traced midline: the clicked points, head first, become the start and a
-# per-point pull of the fit (:func:`trace_fit`).
+# per-point pull of the fit, and its first and last clicks the body's ends
+# (:func:`trace_fit`).  Asked to, a trace ending within TRACE_BORDER_PX of the
+# border or past it continues off camera (:func:`extend_trace`).
 TRACE_BORDER_PX = 8.0
 TRACE_SIGMA_WIDTHS = 0.5
 TRACE_POSE_WEIGHT = 0.02
-TRACE_HEAD_WEIGHT = 0.2
-TRACE_HEAD_SIGMA_PX = 6.0
+TRACE_END_WEIGHT = 0.2
+TRACE_END_SIGMA_PX = 6.0
 # Non-interpenetration for trace fits (``MaskFitConfig.separation_*``): on 25
 # traced records, weight 1 at full separation cut the median overlap from 263
 # to 99 px (mean 438 to 116) for 0.002 median IoU; weight 5 cost up to 0.06.
@@ -365,18 +320,15 @@ TRACE_SEPARATION_FRACTION = 1.0
 
 
 def extend_trace(trace_xy: NDArray[np.generic], image_shape: tuple[int, int], length_px: float | None) -> FloatArray:
-    """The trace, continued straight off camera to ``length_px`` when its tail end is at the image border.
+    """The trace, continued straight to ``length_px`` when its last point is within ``TRACE_BORDER_PX`` of the border or past it.
 
-    The fit pulls each of its points toward the same-numbered point of the
-    resampled trace, so a trace that stops where the body leaves the camera
-    would squeeze the whole body into the visible part.  The continuation
-    lies off camera, where the fit ignores the pull, and only fixes how the
-    points are spread along the body.
+    For a body whose tail is far off camera: the person traces to where the
+    body leaves the view (or a little past it) and the recording's typical
+    length sets how far it goes on.  Unchanged without a length, or when the
+    trace is already that long.
     """
 
     points = np.asarray(trace_xy, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
-        raise ValueError("a trace needs at least two (x, y) points")
     height, width = image_shape
     end = points[-1]
     at_border = min(end[0], end[1], width - 1 - end[0], height - 1 - end[1]) <= TRACE_BORDER_PX
@@ -392,27 +344,38 @@ def trace_fit(
     mask: NDArray[np.bool_],
     trace_xy: NDArray[np.generic],
     *,
-    length_px: float | None,
     config: BatchFitConfig,
     template: NDArray[np.generic],
     device: torch.device,
     as_drawn: bool = False,
+    extend_to_px: float | None = None,
 ) -> tuple[FloatArray, FloatArray, float]:
     """Centerline, width profile, and mask IoU of the body along a traced midline.
 
-    The trace (head first) is extended off camera to ``length_px`` when it
-    ends at the border (:func:`extend_trace`).  By default the tube starts on
-    the trace and is fit to ``mask`` while each point is pulled toward the
-    trace at half a body width and the head toward the first click, so the
-    fit keeps the traced route through a crossing and finds the body's edges
-    and width itself.  The length bounds do not apply, since the trace sets
-    the length.  ``as_drawn`` keeps the trace as the midline, with a
-    template width scaled to the mask.
+    The trace (head first) is the body from end to end: its first click is
+    the head and its last the tail, in view or off camera, so a trace that
+    stops at the border ends the body there (the targets then treat it as
+    cut off by the camera, :func:`mark_exits`).  With ``extend_to_px`` (the
+    recording's typical body length, when the person asked for it) a trace
+    ending at or past the border continues off camera to that length
+    (:func:`extend_trace`); the continuation is a guess, so the tail is then
+    free and only the length and the spread of points along the body follow
+    from it.  By default the tube starts
+    on the trace and is fit to ``mask`` while each point is pulled toward
+    the trace at half a body width and both ends toward their clicks, so the
+    fit keeps the traced route through a crossing, puts the ends where the
+    person did, and finds the body's edges and width itself.  The length
+    bounds do not apply, since the trace sets the length.  ``as_drawn``
+    keeps the trace as the midline, with a template width scaled to the mask.
     """
 
-    path = extend_trace(trace_xy, mask.shape, length_px)
-    start = init_from_centerline(path, mask, name="trace", config=config)
-    reference = resample_centerline(path, config.n_points)
+    points = np.asarray(trace_xy, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
+        raise ValueError("a trace needs at least two (x, y) points")
+    clicked = len(points)
+    points = extend_trace(points, mask.shape, extend_to_px)
+    start = init_from_centerline(points, mask, name="trace", config=config)
+    reference = resample_centerline(points, config.n_points)
     if as_drawn:
         profile = template * start.width_px
         tube = render_tube(reference, profile, *mask.shape, device=device)
@@ -423,14 +386,15 @@ def trace_fit(
         separation_fraction=TRACE_SEPARATION_FRACTION, temporal_prior_weight=TRACE_POSE_WEIGHT,
         temporal_prior_sigma_px=max(1.0, TRACE_SIGMA_WIDTHS * start.width_px),
     )
-
-    head = HeadConstraint(
-        tracking_xy=np.asarray(trace_xy[0], dtype=np.float64), tracking_weight=TRACE_HEAD_WEIGHT,
-        previous_weight=0.0, sigma_px=TRACE_HEAD_SIGMA_PX,
+    height, width = mask.shape
+    head_in_view = bool(0 <= points[0, 0] <= width - 1 and 0 <= points[0, 1] <= height - 1)
+    ends = HeadConstraint(
+        tracking_xy=points[0], tail_xy=points[-1] if len(points) == clicked else None, tracking_weight=TRACE_END_WEIGHT,
+        previous_weight=0.0, sigma_px=TRACE_END_SIGMA_PX, keep_in_frame=head_in_view,
     )
     result = fit_masks(
         [mask], [[start]], width_template=template, config=traced_config, device=device,
-        references=[reference], head_constraints=[head],
+        references=[reference], head_constraints=[ends],
     )[0]
     return result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"])
 
@@ -551,40 +515,12 @@ def mark_exits(meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArra
     return True
 
 
-def correct_exits(store: SegmentationStore, sample_id: str) -> dict[str, Any] | None:
-    """Apply :func:`mark_exits` to a stored, untraced record that does not have it yet; returns the meta when changed.
-
-    A rejected record whose targets change becomes unreviewed again with
-    ``exit_corrected`` set, since the rejection may have been for the cut-off
-    end this corrects.
-    """
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    _, label, _ = store.load(sample_id)
-    with locked(store.root):
-        arrays, meta = load(path)
-        if (not meta.get("has_body") or meta.get("fit_method") in TRACE_METHODS or "tail_off_camera" in meta
-                or is_stale(meta, record)):
-            return None
-        if not mark_exits(meta, arrays, label == 1, recording_length(store, record)):
-            save(path, meta, arrays)  # record that it was checked
-            return None
-        if review_status(meta) == "rejected":
-            meta["review"] = "unreviewed"
-            meta["exit_corrected"] = True
-        save(path, meta, arrays)
-    return meta
-
-
 def _traced_body(
     meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], trace_xy: NDArray[np.generic],
-    *, as_drawn: bool, length_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
+    *, as_drawn: bool, extend_to_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
 ) -> Any:
     centerline, profile, iou = trace_fit(
-        mask, trace_xy, length_px=length_px, config=config, template=template, device=device, as_drawn=as_drawn,
+        mask, trace_xy, config=config, template=template, device=device, as_drawn=as_drawn, extend_to_px=extend_to_px,
     )
     meta.update(
         fit_method="trace_as_drawn" if as_drawn else "traced", orientation="manual",
@@ -593,136 +529,85 @@ def _traced_body(
     return _set_body(meta, arrays, mask, centerline, profile, iou)
 
 
-def apply_trace(
-    store: SegmentationStore,
-    sample_id: str,
-    trace_xy: NDArray[np.generic],
+def fit_targets(
+    mask: NDArray[np.bool_],
+    context: NDArray[np.uint8],
+    valid: NDArray[np.bool_],
+    tracking: HeadTracking,
     *,
-    as_drawn: bool = False,
-    commit: bool = False,
-    device: Any = None,
-) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-    """Refit a sample's body along a traced midline (clicked points, head first).
+    config: BatchFitConfig,
+    template: NDArray[np.generic],
+    device: torch.device,
+    length_px: Callable[[], float | None],
+    independent: MaskFitResult | None = None,
+    trace: tuple[NDArray[np.generic], bool, float | None] | None = None,
+    head_xy: NDArray[np.generic] | None = None,
+    segmenter: SegmentationModule | None = None,
+) -> tuple[dict[str, Any], dict[str, np.ndarray], Any]:
+    """The body-field targets of one labeled frame from its hand mask, context frames and nose landmarks.
 
-    Returns the new record's meta and arrays.  With ``commit`` it replaces
-    the stored record (and its review PNG, when there is one); otherwise it
-    is a preview and nothing is written.  The trace is kept in the record
-    (``trace_xy``), so a rebuild after a mask edit refits along it.  A
-    committed trace is a reviewed correction: ``review`` becomes
-    ``accepted`` and ``auto_fit_iou`` keeps the replaced fit's overlap.
+    The body is, in order: the refit along a traced midline (``trace``: the
+    points, head first, whether to keep them as drawn, and the body length
+    to extend them off camera to or ``None``, :func:`trace_fit`); else the
+    independent fit (``independent``, fitted here when not given) or, for a
+    tangled frame when a ``segmenter`` is given, the chain fit when it is
+    better.  An untraced body's head is the end nearest ``head_xy`` (a
+    person's choice: orientation ``manual``), else the acquisition nose
+    (``nose``, ``nose_nearby``), else the thinner end is the tail
+    (``taper``).  ``length_px`` gives the recording's typical body length,
+    which :func:`mark_exits` reads for a body the camera cuts off.
+
+    Returns the meta (build fields only, no store keys), the target arrays
+    (no context), and the rendered targets, or ``None`` for a label without
+    a worm (``has_body`` false).
     """
 
-    record = store.get(sample_id)
-    if record is None:
-        raise KeyError(sample_id)
-    path = field_path(store.root, sample_id)
-    if not path.exists():
-        raise FileNotFoundError(f"{sample_id} has no body fields; build them first")
-    _, label, _ = store.load(sample_id)
-    mask = label == 1
+    meta: dict[str, Any] = {"has_body": False}
+    arrays: dict[str, np.ndarray] = {}
     if not mask.any():
-        raise ValueError(f"{sample_id} has no worm in its mask")
-    points = np.asarray(trace_xy, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2 or not np.all(np.isfinite(points)):
-        raise ValueError("a trace needs at least two finite (x, y) points")
-    arrays, meta = load(path)
-    previous_iou = meta.get("auto_fit_iou", meta.get("fit_iou"))
-    device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
-    config = fit_config()
-    targets = _traced_body(
-        meta, arrays, mask, points, as_drawn=as_drawn, length_px=recording_length(store, record),
-        config=config, template=default_width_template(config.n_points), device=device,
-    )
-    meta.update(has_body=True, mask_revision=record.revision, auto_fit_iou=previous_iou, review="accepted", reviewed_at=utc_now())
-    if commit:
-        with locked(store.root):
-            save(path, meta, arrays)
-        review_path = fields_dir(store.root) / REVIEW_DIR / f"{sample_id}.png"
-        if review_path.exists():
-            review_image(arrays["context"][meta["max_lag"]], targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(review_path)
-    return meta, arrays
-
-
-PROPOSAL_ARRAYS = ("trace_xy", "centerline_xy", "width_profile", "ap", "overlap", "head_xy", "tail_xy", "diameter_px")
-
-
-def propose(store: SegmentationStore, sample_id: str, module: Any, *, device: Any = None) -> dict[str, Any]:
-    """Store a network-proposed trace and its fit beside a record's current targets; returns the meta.
-
-    The body-field network (``module``, :func:`body_net.load_body_net`)
-    predicts the record's fields from its stored context, a trace follows
-    from them (:func:`body_proposal.propose_trace`), and it is fit like a
-    hand trace.  The result is kept as ``proposal_*`` arrays and a
-    ``proposal`` meta entry (model, fit IoU, overlap, mask revision); the
-    targets do not change until :func:`accept_proposal`.  When the
-    prediction gives no usable trace, ``proposal`` records that and holds no
-    arrays.
-    """
-
-    from .body_proposal import predict_fields, propose_trace
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    arrays, _ = load(path, ("context", "context_valid"))
-    _, label, _ = store.load(sample_id)
-    prediction = predict_fields(module, arrays["context"], arrays["context_valid"])
-    trace = propose_trace(prediction, label == 1)
-    proposal: dict[str, Any] = {
-        "model": str(getattr(module, "checkpoint_path", "")), "lags": list(module.lags),
-        "mask_revision": record.revision, "created_at": utc_now(),
-    }
-    fitted: dict[str, np.ndarray] = {}
-    if trace is None:
-        proposal["status"] = "no_trace"
-    else:
-        meta_fit, arrays_fit = apply_trace(store, sample_id, trace, device=device)
-        proposal.update(status="ready", fit_iou=meta_fit["fit_iou"], overlap_px=meta_fit["overlap_px"], points=len(trace))
-        fitted = {f"proposal_{name}": arrays_fit[name] for name in PROPOSAL_ARRAYS}
-    with locked(store.root):
-        arrays, meta = load(path)
-        arrays = {k: v for k, v in arrays.items() if not k.startswith("proposal_")}
-        arrays.update(fitted)
-        meta["proposal"] = proposal
-        save(path, meta, arrays)
-    return meta
-
-
-def accept_proposal(store: SegmentationStore, sample_id: str) -> dict[str, Any]:
-    """Make a record's stored proposal its targets, as an accepted trace with the network as its source.
-
-    No refit: the proposal's fit becomes the record's.  The proposal must
-    belong to the current mask revision.
-    """
-
-    record = store.get(sample_id)
-    path = field_path(store.root, sample_id)
-    if record is None or not path.exists():
-        raise KeyError(sample_id)
-    with locked(store.root):
-        arrays, meta = load(path)
-        proposal = meta.get("proposal") or {}
-        if proposal.get("status") != "ready":
-            raise ValueError(f"{sample_id} has no proposal to accept")
-        if proposal.get("mask_revision") != record.revision:
-            raise ValueError(f"{sample_id}: the mask changed after the proposal was made; propose again")
-        previous_iou = meta.get("auto_fit_iou", meta.get("fit_iou"))
-        for name in PROPOSAL_ARRAYS:
-            arrays[name] = arrays.pop(f"proposal_{name}")
-        meta.pop("proposal")
-        meta.update(
-            fit_method="traced", trace_source="network", orientation="manual", fit_iou=proposal["fit_iou"],
-            overlap_px=proposal["overlap_px"], auto_fit_iou=previous_iou, mask_revision=record.revision,
-            review="accepted", reviewed_at=utc_now(),
+        return meta, arrays, None
+    max_lag = len(context) // 2
+    nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
+    if nose is not None:
+        arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
+        meta["nose_offset"] = offset
+    if trace is not None:
+        points, as_drawn, extend_to_px = trace
+        targets = _traced_body(
+            meta, arrays, mask, points, as_drawn=as_drawn, extend_to_px=extend_to_px, config=config, template=template, device=device,
         )
-        save(path, meta, arrays)
-    review_path = fields_dir(store.root) / REVIEW_DIR / f"{sample_id}.png"
-    if review_path.exists():
-        _, label, _ = store.load(sample_id)
-        review_image(arrays["context"][meta["max_lag"]], arrays["ap"].astype(np.float32), arrays["overlap"],
-                     arrays["head_xy"], arrays["tail_xy"], body_box(label == 1)).save(review_path)
-    return meta
+        # A trace that stops where the body leaves the view is cut off by the camera like any fit.
+        if mark_exits(meta, arrays, mask, length_px()):
+            targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
+        meta["has_body"] = True
+        return meta, arrays, targets
+    result = independent if independent is not None else fit_masks(
+        [mask], [initializations_for(mask, config)], width_template=template, config=config, device=device,
+    )[0]
+    meta["fit_method"] = "independent"
+    independent_iou = float(result.records[result.best_index]["final_iou"])
+    tangled = independent_iou < CHAIN_IOU or self_contact(result.centerline_xy, result.width_profile)
+    if segmenter is not None and tangled:
+        chained = chain_fit(mask, context, valid, tracking, segmenter, config=config, template=template, device=device)
+        if chained is not None and chained[0].records[chained[0].best_index]["final_iou"] > independent_iou:
+            result = chained[0]
+            meta.update(fit_method="chain", chain_anchor_offset=chained[1], independent_fit_iou=independent_iou)
+    if head_xy is not None:
+        result = _nose_first(result, np.asarray(head_xy, dtype=np.float64), config)
+        meta["orientation"] = "manual"
+    elif nose is not None:
+        result = _nose_first(result, nose, config)
+        meta["orientation"] = "nose" if offset == 0 else "nose_nearby"
+    else:
+        result, _ = orient_tail_last(result, config=config)
+        meta["orientation"] = "taper"
+    targets = _set_body(
+        meta, arrays, mask, result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"]),
+    )
+    if mark_exits(meta, arrays, mask, length_px()):
+        targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
+    meta["has_body"] = True
+    return meta, arrays, targets
 
 
 def build(
@@ -738,9 +623,11 @@ def build(
     """Build the records of ``records`` (all of them; skipping current ones is the caller's choice).
 
     Frames are read and fitted per source recording, so each recording opens
-    once.  Without ``segmenter`` no chain fits are tried.  ``on_built``
-    receives each written meta.  Returns how many samples
-    took each orientation (``no_body`` for empty labels).
+    once and its independent fits run as one batch (:func:`fit_targets` does
+    the rest of each record).  Without ``segmenter`` no chain fits are tried.
+    ``on_built`` receives each written meta.  Returns how many samples took
+    each orientation (``traced`` for refits along a stored trace, ``no_body``
+    for empty labels).
     """
 
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -778,7 +665,7 @@ def build(
             if path.exists():
                 previous, previous_meta = load(path, ("trace_xy",))
                 if "trace_xy" in previous and previous_meta.get("fit_method") in TRACE_METHODS:
-                    traces[record.sample_id] = (previous["trace_xy"], previous_meta["fit_method"] == "trace_as_drawn")
+                    traces[record.sample_id] = (previous["trace_xy"], previous_meta["fit_method"] == "trace_as_drawn", None)
         bodies = [p for p in pending if p[2].any() and p[0].sample_id not in traces]
         results = fit_masks(
             [p[2] for p in bodies],
@@ -788,62 +675,28 @@ def build(
         fitted = {p[0].sample_id: r for p, r in zip(bodies, results, strict=True)}
 
         for record, image, mask, context, valid, tracking in pending:
+            trace = traces.get(record.sample_id)
+            built, arrays, targets = fit_targets(
+                mask, context, valid, tracking, config=config, template=template, device=device,
+                length_px=lambda record=record: recording_length(store, record),
+                independent=fitted.get(record.sample_id), trace=trace, segmenter=segmenter,
+            )
             meta: dict[str, Any] = {
                 "sample_id": record.sample_id, "mask_revision": record.revision, "max_lag": max_lag,
-                "fit_preset": FIT_PRESET, "has_body": record.sample_id in fitted,
+                "fit_preset": FIT_PRESET, **built,
             }
-            arrays: dict[str, np.ndarray] = {"context": context, "context_valid": valid}
-            result = fitted.get(record.sample_id)
-            if record.sample_id in traces and mask.any():
-                trace, as_drawn = traces[record.sample_id]
-                nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
-                if nose is not None:
-                    arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
-                    meta["nose_offset"] = offset
-                targets = _traced_body(
-                    meta, arrays, mask, trace, as_drawn=as_drawn, length_px=recording_length(store, record),
-                    config=config, template=template, device=device,
-                )
-                meta.update(has_body=True, review="accepted", reviewed_at=utc_now())
-                summary["traced"] += 1
-                if review:
-                    review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
-                        review_dir / f"{record.sample_id}.png"
-                    )
-            elif result is not None:
-                meta["fit_method"] = "independent"
-                independent_iou = float(result.records[result.best_index]["final_iou"])
-                tangled = independent_iou < CHAIN_IOU or self_contact(result.centerline_xy, result.width_profile)
-                if segmenter is not None and tangled:
-                    chained = chain_fit(mask, context, valid, tracking, segmenter, config=config, template=template, device=device)
-                    if chained is not None and chained[0].records[chained[0].best_index]["final_iou"] > independent_iou:
-                        result = chained[0]
-                        meta.update(fit_method="chain", chain_anchor_offset=chained[1], independent_fit_iou=independent_iou)
-                nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
-                if nose is not None:
-                    d_head = float(np.linalg.norm(result.centerline_xy[0] - nose))
-                    d_tail = float(np.linalg.norm(result.centerline_xy[-1] - nose))
-                    if d_tail < d_head:
-                        result = reverse_result(result, config=config)
-                    meta["orientation"] = "nose" if offset == 0 else "nose_nearby"
-                    meta["nose_offset"] = offset
-                    arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
-                else:
-                    result, _ = orient_tail_last(result, config=config)
-                    meta["orientation"] = "taper"
-                targets = _set_body(
-                    meta, arrays, mask, result.centerline_xy, result.width_profile,
-                    float(result.records[result.best_index]["final_iou"]),
-                )
-                if mark_exits(meta, arrays, mask, recording_length(store, record)):
-                    targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
-                summary[meta["orientation"]] += 1
-                if review:
-                    review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
-                        review_dir / f"{record.sample_id}.png"
-                    )
-            else:
+            arrays = {"context": context, "context_valid": valid, **arrays}
+            if targets is None:
                 summary["no_body"] += 1
+            elif trace is not None:
+                meta.update(review="accepted", reviewed_at=utc_now())
+                summary["traced"] += 1
+            else:
+                summary[meta["orientation"]] += 1
+            if review and targets is not None:
+                review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
+                    review_dir / f"{record.sample_id}.png"
+                )
             with locked(store.root):
                 save(field_path(store.root, record.sample_id), meta, arrays)
             if on_built is not None:

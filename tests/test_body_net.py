@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,15 +6,9 @@ import h5py
 import numpy as np
 import torch
 
-from worm_pose_gen.body_net import (
-    BodyFieldDataset,
-    BodyFieldModule,
-    collate_body_fields,
-    heatmap_focal_loss,
-)
+from worm_pose_gen.body_net import heatmap_focal_loss
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets, self_contact
-from worm_pose_gen.label_app import RecordingSource
-from worm_pose_gen.segmentation_dataset import SegmentationStore
+from worm_pose_gen.recordings import RecordingSource
 from worm_pose_gen.segmenter import INPUT_STD
 from worm_pose_gen.temporal_context import difference_channels, read_context
 
@@ -92,77 +85,7 @@ class TemporalContextTests(unittest.TestCase):
         self.assertFalse(channels[1].any())  # lag 3 reaches before the recording
 
 
-class BodyFieldDatasetTests(unittest.TestCase):
-    def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
-        self.store = SegmentationStore(self.root)
-        centerline = np.stack((np.linspace(10, 90, 50), np.full(50, 32.0)), 1)
-        self.mask = tube_mask((64, 96), centerline, 8.0)
-        image = np.where(self.mask, 60, 200).astype(np.uint8)
-        for k, split in enumerate(("train", "val", "test")):
-            record = self.store.save("rec", k, image, self.mask.astype(np.uint8), source_path="rec.h5", label_source="manual", split=split)
-            targets = render_body_targets(self.mask, centerline, np.full(50, 8.0))
-            context = np.stack([np.roll(image, shift, axis=1) for shift in range(-2, 3)])
-            fields = self.root / "body_fields"
-            fields.mkdir(exist_ok=True)
-            meta = {"mask_revision": record.revision, "max_lag": 2, "has_body": True, "fit_iou": 0.97}
-            np.savez(
-                fields / f"{record.sample_id}.npz", meta=json.dumps(meta), context=context,
-                context_valid=np.ones(5, bool), ap=targets.ap.astype(np.float16), overlap=targets.overlap,
-                head_xy=targets.head_xy, tail_xy=targets.tail_xy, diameter_px=np.float64(8.0),
-            )
-
-    def test_item_shapes_and_loss_backpropagate(self):
-        dataset = BodyFieldDataset(self.store, "train", (1, 2))
-        item = dataset[0]
-        self.assertEqual(tuple(item["image"].shape), (3, 64, 96))
-        self.assertGreater(float(item["image"][1].abs().max()), 0.0)
-        batch = collate_body_fields([item, BodyFieldDataset(self.store, "val", (1, 2))[0]])
-        module = BodyFieldModule(lags=(1, 2), pretrained=False)
-        logits = module(batch["image"])
-        self.assertEqual(tuple(logits.shape), (2, 5, 64, 96))
-        total, parts = module.loss(logits, batch["targets"])
-        total.backward()
-        self.assertTrue(torch.isfinite(total))
-        self.assertGreater(float(parts["ap_l1"]), 0.0)
-        # The heatmap prior keeps the untrained focal loss on the scale of the others.
-        self.assertLess(float(parts["head_focal"]), 20.0)
-        metrics = module.endpoint_metrics(logits.detach(), batch["targets"])
-        self.assertEqual(metrics["head_error_px"].numel(), 2)
-
-    def test_augmented_item_keeps_targets_aligned(self):
-        dataset = BodyFieldDataset(self.store, "train", (), augment=True, crop_size=48)
-        for _ in range(4):
-            item = dataset[0]
-            mask = item["targets"][0]
-            ap_valid = item["targets"][3]
-            self.assertTrue(bool((ap_valid <= mask).all()))
-            self.assertEqual(tuple(item["image"].shape), (1, 48, 48))
-
-    def test_poor_fit_trains_mask_only(self):
-        path = self.root / "body_fields" / "rec_f000000.npz"
-        with np.load(path) as archive:
-            arrays = {k: archive[k] for k in archive.files}
-        meta = json.loads(str(arrays.pop("meta")))
-        meta["fit_iou"] = 0.5
-        np.savez(path, meta=json.dumps(meta), **arrays)
-        targets = BodyFieldDataset(self.store, "train", ())[0]["targets"]
-        self.assertFalse(bool(targets[3].any()))
-        self.assertTrue(bool(torch.isnan(targets[4]).all()))
-
-    def test_review_overrides_fit_quality(self):
-        from worm_pose_gen import body_fields
-
-        body_fields.set_review(self.root, "rec_f000000", "rejected")
-        self.assertFalse(bool(BodyFieldDataset(self.store, "train", ())[0]["targets"][3].any()))
-        path = body_fields.field_path(self.root, "rec_f000000")
-        arrays, meta = body_fields.load(path)
-        meta.update(fit_iou=0.5, review="accepted")
-        body_fields.save(path, meta, arrays)
-        self.assertTrue(bool(BodyFieldDataset(self.store, "train", ())[0]["targets"][3].any()))
-
+class HeatmapLossTests(unittest.TestCase):
     def test_focal_loss_prefers_peak_at_target(self):
         target = torch.as_tensor(point_heatmap((16, 16), np.array([8.0, 8.0]), 1.5))[None]
         good = torch.full((1, 16, 16), -6.0)

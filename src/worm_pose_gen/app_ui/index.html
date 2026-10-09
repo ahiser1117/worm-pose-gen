@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Worm pose</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/workspace.css">
+<link rel="stylesheet" href="/static/labeling.css">
+<link rel="stylesheet" href="/static/training.css">
+</head>
+<body>
+<div id="app">
+  <header id="app-header">
+    <strong class="brand">Worm pose</strong>
+    <nav id="page-tabs" role="tablist" aria-label="Page">
+      <button role="tab" data-page="workspace" aria-selected="true">Workspace</button>
+      <button role="tab" data-page="labeling" aria-selected="false">Labeling</button>
+      <button role="tab" data-page="training" aria-selected="false">Training</button>
+    </nav>
+    <div id="header-context" class="header-context"></div>
+    <div id="header-actions" class="header-actions"></div>
+  </header>
+  <main id="pages">
+    <section id="page-workspace" class="page" data-page="workspace"></section>
+    <section id="page-labeling" class="page" data-page="labeling" hidden></section>
+    <section id="page-training" class="page" data-page="training" hidden></section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</div>
+<script type="module" src="/static/shell.js"></script>
+</body>
+</html>

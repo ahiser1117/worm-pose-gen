@@ -1,18 +1,19 @@
-"""Catalog of the HDF5 recordings under the configured roots.
+"""The HDF5 recordings: catalog, frame thumbnails, and frames read and flat-fielded.
 
-The app's recording browser needs, for every ``.h5`` file under the data
-roots, its frame count and image size, whether it can actually be read (some
-recordings hold chunks compressed with an HDF5 filter plugin that is not
-installed, and a few files are not HDF5 at all), whether a recording prior is
-cached for it, and which pose runs and workspaces already refer to it.
+The Recordings screen and Labeling's New queue need, for every ``.h5`` file
+of a setup (under its roots or registered to it), its frame count and image
+size and whether it can actually be read (some recordings hold chunks
+compressed with an HDF5 filter plugin that is not installed, and a few
+files are not HDF5 at all).  Opening every file to read its shape is slow
+over network storage, so the per-file facts are cached in one JSON index
+keyed by path; an entry is reused while the file's size and modification
+time are unchanged and refreshed otherwise.  Thumbnails are flat-fielded
+when the field cache holds the recording's field and are otherwise the raw
+frame.
 
-Opening every file to read its shape is slow over network storage, so the
-per-file facts are cached in one JSON index keyed by path; an entry is reused
-while the file's size and modification time are unchanged and refreshed
-otherwise.  Runs, workspaces and cached priors are cheap directory scans and
-are recomputed on every call so the catalog never lags behind them.
-Thumbnails are flat-fielded when the field cache holds the recording's field
-and are otherwise the raw frame.
+``RecordingSource`` reads one recording's frames read-only and flat-fields
+them with a per-recording correction fitted once from frames spread over
+the recording and cached on disk.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 from typing import Any, Iterable
 
 import h5py
@@ -31,15 +33,15 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
 
+from .flat_field import FlatField, apply_flat_field, estimate_flat_field
 from .segmentation_dataset import DEFAULT_DATASET_ROOT
+from .videos import VIDEO_SUFFIXES
 
 
-DEFAULT_RECORDING_ROOTS = (Path("/store1/shared/all_data_raw/prj_aversion"),)
-DEFAULT_POSES_ROOT = Path("/temp_data4/alex/external_artifacts/poses")
-DEFAULT_WORKSPACES_ROOT = Path("/temp_data4/alex/external_artifacts/workspaces")
-DEFAULT_PRIOR_CACHE = Path("/temp_data4/alex/external_artifacts/recording_priors")
 DATASET_PATH = "/img_nir"
 CACHE_VERSION = 1
+FLAT_FIELD_SAMPLE_COUNT = 64
+HDF5_SUFFIXES = (".h5", ".hdf5")
 
 
 @dataclass
@@ -55,57 +57,19 @@ class RecordingInfo:
     modified_at: str
     readable: bool
     error: str | None
-    prior_cached: bool
-    runs: list[str]
-    workspaces: list[str]
-    # The HDF5 dataset holding the frames and whether the file was added by hand
-    # (through the file explorer) rather than found under a root.
+    # The HDF5 dataset holding the frames.
     dataset: str = DATASET_PATH
-    registered: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-VIDEO_DTYPES = ("uint8", "uint16")
-
-
-def hdf5_datasets(path: Path) -> list[dict[str, Any]]:
-    """Every dataset in an HDF5 file with shape and dtype; ``video`` marks 3-D unsigned-integer ones."""
-
-    found: list[dict[str, Any]] = []
-
-    def visit(name: str, node: Any) -> None:
-        if isinstance(node, h5py.Dataset):
-            shape = tuple(int(v) for v in node.shape)
-            found.append({
-                "name": "/" + name.lstrip("/"), "shape": list(shape), "dtype": str(node.dtype),
-                "video": len(shape) == 3 and str(node.dtype) in VIDEO_DTYPES and shape[0] >= 1 and min(shape[1:]) >= 8,
-            })
-
-    with h5py.File(path, "r") as handle:
-        handle.visititems(visit)
-    # The conventional name first, then the video candidates, then the rest.
-    found.sort(key=lambda d: (d["name"] != DATASET_PATH, not d["video"], d["name"]))
-    return found
-
-
-def default_video_dataset(datasets: list[dict[str, Any]]) -> str | None:
-    """The dataset a new recording should use: ``/img_nir`` when present, else the single video candidate."""
-
-    names = {d["name"] for d in datasets}
-    if DATASET_PATH in names:
-        return DATASET_PATH
-    videos = [d["name"] for d in datasets if d["video"]]
-    return videos[0] if len(videos) == 1 else None
-
-
-def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5"), all_files: bool = False) -> dict[str, Any]:
-    """Directories and HDF5 files directly under ``path``, for the file explorer.
+def list_directory(path: Path, *, all_files: bool = False) -> dict[str, Any]:
+    """Directories, HDF5 files (kind "h5") and convertible videos (kind "video") directly under ``path``, for the file explorer.
 
     Hidden entries are skipped; unreadable subdirectories are listed but
-    flagged.  With ``all_files`` every regular file is listed (kind "file"
-    unless its suffix is an HDF5 one), for videos stored under other names.
+    flagged.  With ``all_files`` every other regular file is listed too
+    (kind "file"), for videos stored under other names.
     """
 
     directory = Path(path).expanduser()
@@ -125,53 +89,20 @@ def list_directory(path: Path, *, suffixes: tuple[str, ...] = (".h5", ".hdf5"), 
         try:
             if child.is_dir():
                 entries.append({"name": child.name, "path": str(child), "kind": "dir", "size_bytes": None, "modified_at": _iso_utc(child.stat().st_mtime), "readable": os.access(child, os.R_OK | os.X_OK)})
-            elif child.is_file() and (all_files or child.suffix.lower() in suffixes):
+            elif child.is_file():
+                kind = _file_kind(child.suffix.lower()) or ("file" if all_files else None)
+                if kind is None:
+                    continue
                 stat = child.stat()
-                kind = "h5" if child.suffix.lower() in suffixes else "file"
                 entries.append({"name": child.name, "path": str(child), "kind": kind, "size_bytes": int(stat.st_size), "modified_at": _iso_utc(stat.st_mtime), "readable": os.access(child, os.R_OK)})
         except OSError:
             continue
     parent = None if directory.parent == directory else str(directory.parent)
-    return {"path": str(directory), "parent": parent, "entries": entries, "all_files": all_files, "suffixes": list(suffixes)}
+    return {"path": str(directory), "parent": parent, "entries": entries, "all_files": all_files, "suffixes": [*HDF5_SUFFIXES, *VIDEO_SUFFIXES]}
 
 
-class RecordingRegistry:
-    """Recordings added by hand, with the dataset to read; a JSON file under the workspaces root."""
-
-    def __init__(self, path: Path | None) -> None:
-        self.path = None if path is None else Path(path)
-        self.entries: dict[str, dict[str, Any]] = {}
-        if self.path is not None and self.path.exists():
-            data = _load_json(self.path)
-            if data and isinstance(data.get("recordings"), dict):
-                self.entries = {str(k): dict(v) for k, v in data["recordings"].items()}
-
-    def add(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
-        entry = {"dataset": dataset, "added_at": _iso_utc(datetime.now(tz=timezone.utc).timestamp())}
-        self.entries[str(Path(path).expanduser().resolve())] = entry
-        self.save()
-        return entry
-
-    def remove(self, path: Path) -> bool:
-        removed = self.entries.pop(str(Path(path).expanduser().resolve()), None) is not None
-        if removed:
-            self.save()
-        return removed
-
-    def dataset_of(self, path: Path) -> str | None:
-        entry = self.entries.get(str(Path(path).expanduser().resolve()))
-        return None if entry is None else str(entry.get("dataset") or DATASET_PATH)
-
-    def paths(self) -> list[Path]:
-        return [Path(p) for p in self.entries]
-
-    def save(self) -> None:
-        if self.path is None:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile("w", dir=self.path.parent, prefix=self.path.name + ".", suffix=".tmp", delete=False) as handle:
-            json.dump({"version": 1, "recordings": self.entries}, handle, indent=1)
-        os.replace(handle.name, self.path)
+def _file_kind(suffix: str) -> str | None:
+    return "h5" if suffix in HDF5_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else None
 
 
 def _iso_utc(timestamp: float) -> str:
@@ -256,89 +187,33 @@ class RecordingIndex:
 
 
 def find_recordings(roots: Iterable[Path], pattern: str = "*.h5") -> list[Path]:
-    """Every file matching ``pattern`` under the roots that exist, sorted by name then path."""
+    """Every file matching ``pattern`` under the roots that exist, resolved, sorted by name then path.
+
+    Resolving makes a file reached through two roots (one a symlink to the other) one recording.
+    """
 
     found: set[Path] = set()
     for root in roots:
         root = Path(root)
         if root.is_file():
             if root.match(pattern):
-                found.add(root)
+                found.add(root.resolve())
             continue
         if not root.is_dir():
             continue
-        found.update(p for p in root.rglob(pattern) if p.is_file())
+        found.update(p.resolve() for p in root.rglob(pattern) if p.is_file())
     return sorted(found, key=lambda p: (p.stem, str(p)))
 
 
-def _load_json(path: Path) -> dict[str, Any] | None:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+def list_recordings(roots: Iterable[Path], *, pattern: str = "*.h5", cache: Path | None = None, dataset: str = DATASET_PATH) -> list[RecordingInfo]:
+    """Catalog the recordings under ``roots`` (directories, or recording files themselves), reusing ``cache`` for unchanged files.
 
-
-def _references(root: Path | None, manifest: str) -> dict[str, list[str]]:
-    """Directory names under ``root`` grouped by the recording their ``manifest`` names.
-
-    Keyed both by the recording's path string and by its stem so a moved
-    recording still finds its runs.
+    ``dataset`` is the HDF5 dataset holding the frames (a setup's video dataset).
     """
 
-    refs: dict[str, list[str]] = {}
-    if root is None or not Path(root).is_dir():
-        return refs
-    for child in sorted(Path(root).iterdir()):
-        data = _load_json(child / manifest) if child.is_dir() else None
-        recording = None if data is None else data.get("recording")
-        if not isinstance(recording, str) or not recording:
-            continue
-        for key in {recording, Path(recording).stem}:
-            refs.setdefault(key, []).append(child.name)
-    return refs
-
-
-def _lookup(refs: dict[str, list[str]], path: Path) -> list[str]:
-    names = list(refs.get(str(path), []))
-    names.extend(n for n in refs.get(path.stem, []) if n not in names)
-    return names
-
-
-def prior_is_cached(path: Path, prior_cache: Path | None) -> bool:
-    """A recording prior exists for the recording at any coefficient count."""
-
-    if prior_cache is None or not Path(prior_cache).is_dir():
-        return False
-    return any(Path(prior_cache).glob(f"{path.stem}_k*.json"))
-
-
-def list_recordings(
-    roots: Iterable[Path] = DEFAULT_RECORDING_ROOTS,
-    *,
-    pattern: str = "*.h5",
-    poses_root: Path | None = DEFAULT_POSES_ROOT,
-    workspaces_root: Path | None = DEFAULT_WORKSPACES_ROOT,
-    prior_cache: Path | None = DEFAULT_PRIOR_CACHE,
-    cache: Path | None = None,
-    registry: RecordingRegistry | None = None,
-) -> list[RecordingInfo]:
-    """Catalog the recordings under ``roots`` plus the registered ones, reusing ``cache`` for unchanged files."""
-
     index = RecordingIndex(cache)
-    runs = _references(poses_root, "summary.json")
-    workspaces = _references(workspaces_root, "workspace.json")
     infos = []
-    found = find_recordings(roots, pattern)
-    registered: dict[Path, str] = {}
-    if registry is not None:
-        for path in registry.paths():
-            registered[path] = registry.dataset_of(path) or DATASET_PATH
-            if path not in found:
-                found.append(path)
-    found.sort(key=lambda p: (p.stem, str(p)))
-    for path in found:
-        dataset = registered.get(path, DATASET_PATH)
+    for path in find_recordings(roots, pattern):
         try:
             entry = index.facts(path, dataset)
             stamp = _file_stamp(path)
@@ -348,20 +223,9 @@ def list_recordings(
             stamp = {"mtime_ns": 0, "size": 0}
         infos.append(
             RecordingInfo(
-                name=path.stem,
-                path=str(path),
-                frames=entry["frames"],
-                height=entry["height"],
-                width=entry["width"],
-                size_bytes=int(stamp["size"]),
-                modified_at=_iso_utc(stamp["mtime_ns"] / 1e9),
-                readable=bool(entry["readable"]),
-                error=entry["error"],
-                prior_cached=prior_is_cached(path, prior_cache),
-                runs=_lookup(runs, path),
-                workspaces=_lookup(workspaces, path),
-                dataset=dataset,
-                registered=path in registered,
+                name=path.stem, path=str(path), frames=entry["frames"], height=entry["height"], width=entry["width"],
+                size_bytes=int(stamp["size"]), modified_at=_iso_utc(stamp["mtime_ns"] / 1e9), readable=bool(entry["readable"]),
+                error=entry["error"], dataset=dataset,
             )
         )
     index.save()
@@ -389,8 +253,6 @@ def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET
     path = Path(path)
     field_cache = Path(dataset_root) / "flat_fields"
     if (field_cache / f"{path.stem}.npz").exists():
-        from .label_app import RecordingSource  # deferred: label_app imports torch
-
         source = RecordingSource(path, field_cache, dataset=dataset)
         try:
             _, corrected = source.corrected(int(frame))
@@ -414,3 +276,98 @@ def thumbnail_png(
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
+
+
+class RecordingSource:
+    """One read-only recording with a lazily fitted, disk-cached flat field."""
+
+    def __init__(self, path: Path, cache_dir: Path, dataset: str = DATASET_PATH) -> None:
+        self.path = Path(path)
+        self.name = self.path.stem
+        self.cache_dir = Path(cache_dir)
+        self.dataset_path = dataset
+        self._lock = threading.Lock()
+        self._field_lock = threading.Lock()
+        self._handle: h5py.File | None = None
+        self._field: FlatField | None = None
+        with h5py.File(self.path, "r") as handle:
+            if dataset not in handle:
+                raise KeyError(f"{self.path}: no dataset {dataset}")
+            dataset = handle[dataset]
+            if dataset.ndim != 3:
+                raise ValueError(f"{self.path}: expected a [T,H,W] dataset")
+            self.frame_count = int(dataset.shape[0])
+            self.shape = (int(dataset.shape[1]), int(dataset.shape[2]))
+
+    def _dataset(self) -> h5py.Dataset:
+        if self._handle is None:
+            self._handle = h5py.File(self.path, "r")
+        return self._handle[self.dataset_path]
+
+    def read(self, frame_index: int) -> NDArray[np.uint8]:
+        if not 0 <= frame_index < self.frame_count:
+            raise IndexError("frame index out of range")
+        with self._lock:
+            return np.asarray(self._dataset()[int(frame_index)], dtype=np.uint8)
+
+    def flat_field(self) -> FlatField:
+        # Light/full previews and label proposals can request the same field concurrently.
+        with self._field_lock:
+            return self._prepare_flat_field()
+
+    def _prepare_flat_field(self) -> FlatField:
+        if self._field is not None:
+            return self._field
+        cache = self.cache_dir / f"{self.name}.npz"
+        if cache.exists():
+            with np.load(cache) as archive:
+                self._field = FlatField(
+                    illumination=np.asarray(archive["illumination"], dtype=np.float64),
+                    dark_level=float(archive["dark_level"]),
+                    reference_level=float(archive["reference_level"]),
+                    gain=np.asarray(archive["gain"], dtype=np.float64),
+                )
+            return self._field
+        indices = np.linspace(0, self.frame_count - 1, min(FLAT_FIELD_SAMPLE_COUNT, self.frame_count), dtype=np.int64)
+        frames = []
+        with self._lock:
+            dataset = self._dataset()
+            for i in indices:
+                try:
+                    frames.append(np.asarray(dataset[int(i)], dtype=np.uint8))
+                except OSError:
+                    # Some recordings hold chunks compressed with an HDF5 filter plugin that is not installed.
+                    continue
+        if len(frames) < min(8, len(indices)):
+            raise OSError(f"only {len(frames)} of {len(indices)} calibration frames of {self.name} are readable")
+        calibration = np.stack(frames)
+        field = estimate_flat_field(
+            calibration, temporal_quantile=0.8, spatial_radius=31, smoothing_passes=2, min_gain=0.5, max_gain=2.5
+        )
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Every writer owns its temporary file, including separate server/job processes.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.cache_dir, prefix=f"{cache.name}.", suffix=".partial", delete=False) as handle:
+                temporary = Path(handle.name)
+                np.savez_compressed(
+                    handle, illumination=field.illumination, dark_level=field.dark_level,
+                    reference_level=field.reference_level, gain=field.gain,
+                )
+            temporary.replace(cache)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        self._field = field
+        return field
+
+    def corrected(self, frame_index: int) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
+        raw = self.read(frame_index)
+        corrected = apply_flat_field(raw, self.flat_field(), clip=(0.0, 255.0))
+        return raw, np.clip(np.rint(corrected), 0, 255).astype(np.uint8)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None

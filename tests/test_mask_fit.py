@@ -17,10 +17,14 @@ from worm_pose_gen.mask_fit import (
     init_from_centerline,
     init_from_moments,
     init_from_skeleton,
+    lay_centerline,
+    lay_start_to_length,
     measure_width_template,
     render_tube_segments,
     standard_initializations,
 )
+
+from tests.slow import slow
 
 
 def _synthetic_case(seed: int = 0, height: int = 160, width: int = 220):
@@ -155,6 +159,7 @@ class MaskFitTests(unittest.TestCase):
         mask[20:22, 20:24] = True
         self.assertIsNone(init_from_skeleton(mask, config=SMALL))
 
+    @slow
     def test_fit_recovers_synthetic_pose_from_crude_starts(self) -> None:
         latent, curve, template, mask = _synthetic_case(seed=1)
         starts = standard_initializations(mask, config=SMALL)
@@ -219,6 +224,74 @@ class MaskFitTests(unittest.TestCase):
                 device="cpu",
             )
 
+
+
+class LayToLengthTests(unittest.TestCase):
+    """A body laid from its first point (a head) at a fixed length: cut, continued along the mask, or off camera."""
+
+    @staticmethod
+    def hook(height: int = 200, width: int = 300):
+        """A 20 px wide body: 200 px along y=100 from x=40, then 100 px down at x=240 (300 px long)."""
+
+        mask = np.zeros((height, width), dtype=bool)
+        mask[90:111, 40:250] = True
+        mask[90:200, 230:251] = True
+        midline = np.concatenate((np.stack((np.linspace(40, 240, 81), np.full(81, 100.0)), 1)[:-1], np.stack((np.full(41, 240.0), np.linspace(100, 200, 41)), 1)))
+        return mask, midline
+
+    @staticmethod
+    def length(points: np.ndarray) -> float:
+        return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+
+    def test_a_longer_body_is_cut_at_the_length_from_its_first_point(self) -> None:
+        mask, midline = self.hook()
+        laid = lay_centerline(midline, mask, 150.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 150.0, places=6)
+        np.testing.assert_array_equal(laid[0], midline[0])
+        np.testing.assert_allclose(laid[-1], [190.0, 100.0], atol=1e-6)
+
+    def test_a_shorter_body_continues_along_the_mask_around_its_bend(self) -> None:
+        mask, midline = self.hook(height=260)
+        # The first 180 px stop short of the bend; the rest of the 280 px follows the mask down, not straight on.
+        laid = lay_centerline(midline[:73], mask, 280.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 280.0, delta=1.0)
+        np.testing.assert_array_equal(laid[0], midline[0])
+        self.assertLess(abs(laid[-1, 0] - 240.0), 8.0)
+        self.assertGreater(laid[-1, 1], 160.0)
+        rows, cols = np.round(laid[:, 1]).astype(int), np.round(laid[:, 0]).astype(int)
+        self.assertTrue(mask[rows, cols].all())
+
+    def test_a_body_past_its_mask_goes_straight_on(self) -> None:
+        mask, midline = self.hook(height=260)
+        # 60 px more than the mask holds: the walk reaches the tip (y=199) and leaves the mask straight down.
+        laid = lay_centerline(midline, mask, 360.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 360.0, delta=1.0)
+        self.assertLess(abs(laid[-1, 0] - 240.0), 8.0)
+        self.assertGreater(laid[-1, 1], 240.0)
+
+    def test_a_body_leaving_the_image_continues_off_camera(self) -> None:
+        mask, midline = self.hook()
+        # The mask runs down to the bottom edge (y=199); a body stopping 30 px above it continues out through it.
+        laid = lay_centerline(midline[:-12], mask, 400.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 400.0, delta=1.0)
+        self.assertGreater(laid[-1, 1], 250.0)
+
+    def test_a_start_keeps_its_first_point_and_gets_exactly_the_length(self) -> None:
+        mask, midline = self.hook(height=260)
+        start = init_from_centerline(midline[:73], mask, width_px=20.0)
+        laid = lay_start_to_length(start, mask, 280.0)
+        curve = decode_centerline(laid.latent)
+        self.assertEqual(laid.latent[17], 280.0)
+        np.testing.assert_allclose(curve[0], decode_centerline(start.latent)[0], atol=1e-6)
+        self.assertEqual((laid.name, laid.width_px), (start.name, start.width_px))
+        self.assertIs(lay_start_to_length(laid, mask, 280.5), laid)
+
+    def test_a_fixed_length_is_not_fit(self) -> None:
+        latent, _, _, mask = _synthetic_case()
+        config = MaskFitConfig(stage_downsample=(2,), stage_steps=(40,), stage_lr_scale=(1.0,), crop_padding=16, length_fixed=True)
+        start = init_from_centerline(decode_centerline(np.concatenate((latent[:17], [130.0], latent[18:]))), mask, width_px=12.0)
+        result = fit_mask(mask, [start], config=config, device="cpu")
+        self.assertAlmostEqual(result.body_length_px, float(start.latent[17]), delta=1e-3 * float(start.latent[17]))
 
 
 class SeparationPenaltyTests(unittest.TestCase):

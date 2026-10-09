@@ -89,6 +89,11 @@ class MaskFitConfig:
     # deviation cost 0.01, about the energy gap between a good and a poor fit.
     length_prior_px: float | None = None
     length_prior_log_sigma: float = 0.05
+    # Hold the length of every start fixed instead (``batch_fit.fit_masks``
+    # first lays every start to ``length_prior_px``,
+    # ``lay_start_to_length``).  The fit stage sets it with a prior and the
+    # body-field network: a body does not change its length between frames.
+    length_fixed: bool = False
     width_prior_px: float | None = None
     width_prior_log_sigma: float = 0.05
     prior_weight: float = 0.0025
@@ -122,12 +127,13 @@ class MaskFitConfig:
     separation_fraction: float = 0.9
     separation_arc_widths: float = 2.0
     # Body-field evidence (``batch_fit.fit_masks(fields=...)``): every midline
-    # point should sit where the body-field network's A-P field equals the
-    # point's own position along the body (in units of ``field_ap_sigma``),
-    # and the ends at the network's head and tail (in units of
-    # ``field_end_sigma_px``).  At a contact the A-P field changes across the
-    # contact line, so a pose routed onto the wrong limb pays for it even
-    # where the overlap with the mask is the same.  Zero weights disable it.
+    # point of the front half should sit where the body-field network's A-P
+    # field equals the point's own position along the body (in units of
+    # ``field_ap_sigma``), and the first point at the network's head (in
+    # units of ``field_end_sigma_px``).  At a contact the A-P field changes
+    # across the contact line, so a pose routed onto the wrong limb pays for
+    # it even where the overlap with the mask is the same.  Zero weights
+    # disable it.
     field_ap_weight: float = 0.0
     field_ap_sigma: float = 0.05
     field_end_weight: float = 0.0
@@ -255,14 +261,20 @@ def init_from_centerline(
     mask: NDArray[np.generic],
     *,
     name: str = "centerline",
+    width_px: float | None = None,
     config: MaskFitConfig = MaskFitConfig(),
 ) -> Initialization:
-    """Encode an existing centerline (any point count) as a starting state."""
+    """Encode an existing centerline (any point count) as a starting state.
+
+    The width is measured across the mask along the centerline's normals
+    unless ``width_px`` (a known width, such as the recording prior's) is given.
+    """
 
     points = resample_centerline(np.asarray(centerline_xy, dtype=np.float64), config.n_points)
     latent = encode_centerline(points, config.coefficients)
-    width = _measured_width_px(np.asarray(mask, dtype=bool), points, config.default_width_px)
-    return Initialization(name, latent, width)
+    if width_px is None:
+        width_px = _measured_width_px(np.asarray(mask, dtype=bool), points, config.default_width_px)
+    return Initialization(name, latent, float(width_px))
 
 
 def init_from_skeleton(
@@ -365,6 +377,40 @@ def reverse_initialization(
     return Initialization(f"{start.name}_reversed", latent, start.width_px, shape)
 
 
+def _border_pixels(mask: BoolArray) -> NDArray[np.float64]:
+    """(x, y) of the mask pixels on the image border (two pixels deep): where the body leaves the camera."""
+
+    edge = np.zeros_like(mask)
+    edge[:2] = edge[-2:] = True
+    edge[:, :2] = edge[:, -2:] = True
+    yy, xx = np.nonzero(mask & edge)
+    return np.column_stack((xx, yy)).astype(np.float64)
+
+
+def _off_camera(
+    end: NDArray[np.float64], inner: NDArray[np.float64], border_xy: NDArray[np.float64], extra: float, border_margin: float,
+) -> list[NDArray[np.float64]]:
+    """Points continuing a body ``extra`` px past ``end`` toward where it leaves the camera.
+
+    Head for the border pixels nearest this end, then keep going straight; a
+    skeleton's last segment inside a wide exit blob is not a reliable
+    direction.
+    """
+
+    distance = np.linalg.norm(border_xy - end, axis=1)
+    exit_xy = border_xy[distance <= distance.min() + 0.5 * border_margin].mean(0)
+    to_exit = exit_xy - end
+    reach = float(np.linalg.norm(to_exit))
+    if reach < 2.0:
+        direction = end - inner
+        direction /= max(float(np.linalg.norm(direction)), 1e-6)
+        return [(end + direction * extra)[None, :]]
+    direction = to_exit / reach
+    if reach >= extra:
+        return [(end + direction * extra)[None, :]]
+    return [exit_xy[None, :], (exit_xy + direction * (extra - reach))[None, :]]
+
+
 def extend_start_to_length(
     start: Initialization,
     mask: NDArray[np.generic],
@@ -387,18 +433,13 @@ def extend_start_to_length(
 
     binary = np.asarray(mask, dtype=bool)
     curve = decode_centerline(start.latent, config.coefficients)
-    height, width = binary.shape[:2]
     length = float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum())
     missing = float(target_length_px) - length
     if missing <= 1.0:
         return start
-    edge = np.zeros_like(binary)
-    edge[:2] = edge[-2:] = True
-    edge[:, :2] = edge[:, -2:] = True
-    yy, xx = np.nonzero(binary & edge)
-    if not len(yy):
+    border_xy = _border_pixels(binary)
+    if not len(border_xy):
         return start
-    border_xy = np.column_stack((xx, yy)).astype(np.float64)
 
     def at_border(point: NDArray[np.float64]) -> bool:
         return bool(np.linalg.norm(border_xy - point, axis=1).min() <= border_margin)
@@ -415,31 +456,143 @@ def extend_start_to_length(
     if not any(ends):
         return start
     share = missing / sum(ends)
-
-    def continuation(end: NDArray[np.float64], inner: NDArray[np.float64]) -> list[NDArray[np.float64]]:
-        # Head for the border pixels nearest this end (where the body leaves
-        # the camera), then keep going straight; a skeleton's last segment
-        # inside a wide exit blob is not a reliable direction.
-        distance = np.linalg.norm(border_xy - end, axis=1)
-        exit_xy = border_xy[distance <= distance.min() + 0.5 * border_margin].mean(0)
-        to_exit = exit_xy - end
-        reach = float(np.linalg.norm(to_exit))
-        if reach < 2.0:
-            direction = end - inner
-            direction /= max(float(np.linalg.norm(direction)), 1e-6)
-            return [(end + direction * share)[None, :]]
-        direction = to_exit / reach
-        if reach >= share:
-            return [(end + direction * share)[None, :]]
-        return [exit_xy[None, :], (exit_xy + direction * (share - reach))[None, :]]
-
     pieces = [curve]
     if ends[0]:
-        pieces = continuation(curve[0], curve[1])[::-1] + pieces
+        pieces = _off_camera(curve[0], curve[1], border_xy, share, border_margin)[::-1] + pieces
     if ends[1]:
-        pieces = pieces + continuation(curve[-1], curve[-2])
+        pieces = pieces + _off_camera(curve[-1], curve[-2], border_xy, share, border_margin)
     extended = resample_centerline(np.vstack(pieces), config.n_points)
     return replace(start, latent=encode_centerline(extended, config.coefficients))
+
+
+def _along_mask(points: FloatArray, mask: BoolArray, extra: float, width_px: float) -> FloatArray:
+    """Points continuing the polyline ``points`` by ``extra`` px, along the mask's midline while it lasts.
+
+    Each step of a quarter width turns at most 60 degrees, toward the
+    deepest mask out to one width ahead (by distance to the mask edge, with
+    a small cost per radian of turn), and never comes within half a width of
+    the body laid so far (but its last one and a half widths): the walk
+    follows the body's ridge to its end instead of running back along it.
+    Where no step is on the mask, it goes straight; after one and a half
+    widths off the mask (a contracted body's tip, a crossing it cannot pass)
+    or once off camera it goes straight for the rest.
+    """
+
+    height, width = mask.shape
+    # The walk stays within ``extra`` of the end and looks one width ahead.
+    reach = int(np.ceil(extra + 2.0 * width_px))
+    x, y = int(round(points[-1, 0])), int(round(points[-1, 1]))
+    window = (slice(max(y - reach, 0), max(min(y + reach + 1, height), 0)), slice(max(x - reach, 0), max(min(x + reach + 1, width), 0)))
+    depth = np.zeros(mask.shape, dtype=np.float64)
+    if mask[window].size:
+        depth[window] = ndimage.distance_transform_edt(mask[window])
+    step = max(width_px / 4.0, 2.0)
+    turns = np.deg2rad(np.arange(-60.0, 61.0, 10.0))
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))))
+    # The heading of the last two widths: a trace's last band points can step back and forth.
+    back = np.array([np.interp(arc[-1] - 2.0 * width_px, arc, points[:, axis]) for axis in (0, 1)])
+    heading = points[-1] - back
+    heading /= max(float(np.linalg.norm(heading)), 1e-6)
+    # The body so far at about one point per step, so the clearance test sees all of it.
+    laid = list(resample_centerline(points, max(int(arc[-1] / step) + 1, 5))[:-1]) + [points[-1]]
+    given = len(laid)
+    walked = off_mask = 0.0
+    while extra - walked > 1e-6:
+        size = min(step, extra - walked)
+        here = laid[-1]
+        if off_mask >= 1.5 * width_px or not (0 <= here[0] < width and 0 <= here[1] < height):
+            laid.append(here + heading * (extra - walked))
+            break
+        directions = np.stack((
+            heading[0] * np.cos(turns) - heading[1] * np.sin(turns), heading[0] * np.sin(turns) + heading[1] * np.cos(turns),
+        ), 1)
+        candidates = here + size * directions
+        # Depth along each direction out to one width ahead: one step alone cannot see a bend coming.
+        ahead = here + step * np.arange(1, 5)[:, None, None] * directions[None]
+        col, row = np.round(ahead[..., 0]).astype(int), np.round(ahead[..., 1]).astype(int)
+        inside = (col >= 0) & (col < width) & (row >= 0) & (row < height)
+        sampled = np.zeros(ahead.shape[:2])
+        sampled[inside] = depth[row[inside], col[inside]]
+        on = np.where(sampled[0] > 0, sampled.mean(0), 0.0)
+        history = np.asarray(laid)
+        along = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(history, axis=0), axis=1))))
+        earlier = history[along < along[-1] - 1.5 * width_px]
+        if len(earlier):
+            clear = np.linalg.norm(candidates[:, None, :] - earlier[None, :, :], axis=-1).min(1) >= 0.5 * width_px
+        else:
+            clear = np.ones(len(candidates), dtype=bool)
+        valid = (on > 0) & clear
+        if valid.any():
+            score = np.where(valid, on - 0.15 * width_px * np.abs(turns), -np.inf)
+            heading = directions[int(np.argmax(score))]
+            off_mask = 0.0
+        else:
+            off_mask += size
+        laid.append(here + heading * size)
+        walked += size
+    return np.asarray(laid[given:])
+
+
+def lay_centerline(
+    points: NDArray[np.generic], mask: NDArray[np.generic], length_px: float, width_px: float, *, border_margin: float = 80.0,
+) -> FloatArray:
+    """The polyline ``points`` from its first point, exactly ``length_px`` long along it.
+
+    A longer one is cut where its arc length reaches ``length_px`` (the rest
+    of it is not body); a shorter one continues past its last point: off
+    camera as in :func:`extend_start_to_length` where that end lies within
+    ``border_margin`` pixels of mask pixels on the image border, else along
+    the mask's midline (:func:`_along_mask`).  The first point never moves,
+    and the shape is never scaled.
+    """
+
+    curve = np.asarray(points, dtype=np.float64)
+    target = float(length_px)
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(curve, axis=0), axis=1))))
+    if arc[-1] >= target:
+        stop = int(np.searchsorted(arc, target))
+        fraction = (target - arc[stop - 1]) / max(arc[stop] - arc[stop - 1], 1e-9)
+        return np.vstack((curve[:stop], curve[stop - 1] + fraction * (curve[stop] - curve[stop - 1])))
+    extra = target - float(arc[-1])
+    binary = np.asarray(mask, dtype=bool)
+    border_xy = _border_pixels(binary)
+    if len(border_xy) and float(np.linalg.norm(border_xy - curve[-1], axis=1).min()) <= border_margin:
+        inner = curve[int(np.clip(np.searchsorted(arc, arc[-1] - 10.0), 0, len(curve) - 1))]
+        return np.vstack([curve, *_off_camera(curve[-1], inner, border_xy, extra, border_margin)])
+    return np.vstack((curve, _along_mask(curve, binary, extra, width_px)))
+
+
+def lay_start_to_length(
+    start: Initialization,
+    mask: NDArray[np.generic],
+    length_px: float,
+    *,
+    config: MaskFitConfig = MaskFitConfig(),
+) -> Initialization:
+    """The start laid from its first point to exactly ``length_px`` (:func:`lay_centerline`)."""
+
+    k = config.coefficients
+    target = float(length_px)
+    if abs(float(start.latent[k + 1]) - target) <= 1.0:
+        return start
+    curve = decode_centerline(start.latent, k)
+    body = lay_centerline(curve, mask, target, start.width_px)
+    laid = replace(start, latent=encode_centerline(resample_centerline(body, config.n_points), k))
+    return at_length(laid, target, curve[0], config=config)
+
+
+def at_length(start: Initialization, length_px: float, first_xy: NDArray[np.generic], *, config: MaskFitConfig = MaskFitConfig()) -> Initialization:
+    """The start's shape at exactly ``length_px`` with its first point at ``first_xy``.
+
+    For the few pixels a laid centerline loses to the latent's smoothing
+    when it is encoded, not for changing a body's length.
+    """
+
+    k = config.coefficients
+    latent = np.array(start.latent, dtype=np.float64)
+    latent[k + 1] = float(length_px)
+    latent[k + 2 :] += np.asarray(first_xy, dtype=np.float64) - decode_centerline(latent, k)[0]
+    return replace(start, latent=latent)
 
 
 def redirect_start_through_exit(
@@ -510,6 +663,18 @@ def orientation_pair(start: Initialization, *, config: MaskFitConfig = MaskFitCo
 
     reversed_start = reverse_initialization(start, config=config)
     return [start, replace(reversed_start, width_shape=start.width_shape)]
+
+
+def head_first(
+    start: Initialization, head_xy: NDArray[np.generic], tail_xy: NDArray[np.generic], *, config: MaskFitConfig = MaskFitConfig()
+) -> Initialization:
+    """The orientation of ``start`` (of :func:`orientation_pair`) whose first and last points lie nearer ``head_xy`` and ``tail_xy``."""
+
+    curve = decode_centerline(start.latent, config.coefficients)
+    head, tail = np.asarray(head_xy, dtype=np.float64), np.asarray(tail_xy, dtype=np.float64)
+    forward = np.linalg.norm(curve[0] - head) + np.linalg.norm(curve[-1] - tail)
+    backward = np.linalg.norm(curve[0] - tail) + np.linalg.norm(curve[-1] - head)
+    return start if forward <= backward else orientation_pair(start, config=config)[1]
 
 
 def taper_asymmetry(width_profile: NDArray[np.generic], fraction: float = 0.3) -> float:
@@ -678,7 +843,7 @@ class _MaskFitState(nn.Module):
         k = config.coefficients
         self.shape = nn.Parameter(latents[:, :k].clone())
         self.rotation = nn.Parameter(latents[:, k].clone())
-        self.log_length = nn.Parameter(latents[:, k + 1].clamp_min(1.0).log())
+        self.log_length = nn.Parameter(latents[:, k + 1].clamp_min(1.0).log(), requires_grad=not config.length_fixed)
         self.centroid = nn.Parameter(latents[:, k + 2 :].clone())
         self.log_width = nn.Parameter(widths.clamp_min(1.0).log())
         kw = config.width_coefficients
@@ -744,10 +909,11 @@ class _MaskFitState(nn.Module):
         groups = [
             {"params": [self.centroid], "lr": c.translation_lr},
             {"params": [self.rotation], "lr": c.rotation_lr},
-            {"params": [self.log_length], "lr": c.log_length_lr},
             {"params": [self.shape], "lr": c.shape_lr},
             {"params": [self.log_width], "lr": c.log_width_lr},
         ]
+        if not c.length_fixed:
+            groups.append({"params": [self.log_length], "lr": c.log_length_lr})
         if self.width_shape.shape[1]:
             groups.append({"params": [self.width_shape], "lr": c.width_shape_lr})
         return torch.optim.Adam(groups, fused=capturable or None, capturable=capturable)
@@ -907,7 +1073,7 @@ def bend_penalty(centerline: Tensor, length: Tensor, width: Tensor, config: Mask
 
 
 def separation_penalty(
-    centerline: Tensor, diameter: Tensor, config: MaskFitConfig, reference: Tensor | None = None,
+    centerline: Tensor, diameter: Tensor, config: MaskFitConfig, reference: Tensor | None = None, reach: int | None = None,
 ) -> Tensor:
     """Penalty for parts of the body far apart along it sitting inside each other, per row.
 
@@ -919,7 +1085,9 @@ def separation_penalty(
     With ``reference`` (``[B, N, 2]``), pairs that the reference places
     within half that distance of each other are a deliberate crossing, and
     they and every pair within one median diameter of them along both runs
-    pay nothing.
+    pay nothing.  That neighbourhood spans ``reach`` points each way;
+    without it the reach comes from the pose itself (a median diameter in
+    median point spacings), which reads it back to the host.
     """
 
     if config.separation_weight <= 0:
@@ -934,12 +1102,21 @@ def separation_penalty(
         crossed = (reference[:, :, None, :] - reference[:, None, :, :]).norm(dim=-1) < 0.5 * needed
         # A crossing exempts its neighbourhood too: pairs within one body width
         # along both runs, which approach each other just before and after it.
-        reach = int(torch.ceil((scale / step.median(dim=1).values.clamp_min(1e-6)).max()).item())
+        if reach is None:
+            reach = crossing_reach(centerline, diameter)
         if reach > 0:
             crossed = F.max_pool2d(crossed[:, None].to(centerline.dtype), 2 * reach + 1, stride=1, padding=reach)[:, 0] > 0
         far = far & ~crossed
     shortfall = ((needed - distance) / scale[:, None, None]).clamp_min(0.0) * far
     return config.separation_weight * shortfall.square().sum((1, 2)) / centerline.shape[1]
+
+
+def crossing_reach(centerline: Tensor, diameter: Tensor) -> int:
+    """Points along the body in one median diameter, the most of any row (:func:`separation_penalty`)."""
+
+    step = (centerline[:, 1:] - centerline[:, :-1]).norm(dim=-1)
+    scale = diameter.median(dim=1).values.clamp_min(1e-6)
+    return int(torch.ceil((scale / step.median(dim=1).values.clamp_min(1e-6)).max()).item())
 
 
 def max_bend_widths(centerline_xy: NDArray[np.generic], width_px: float) -> float:

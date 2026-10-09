@@ -1,4 +1,4 @@
-"""Head-specific priors and feasible head positions for the batched fitter."""
+"""Head (and traced-tail) priors and feasible head positions for the batched fitter."""
 
 from __future__ import annotations
 
@@ -17,10 +17,13 @@ class HeadConstraint:
 
     The step limit is already scaled to the elapsed source frames by the
     caller. A missing tracking observation contributes no tracking penalty.
+    ``tail_xy`` is a target for the last point, pulled with the tracking
+    weight and sigma (a hand trace's last click); it is never projected.
     """
 
     tracking_xy: np.ndarray | None = None
     previous_xy: np.ndarray | None = None
+    tail_xy: np.ndarray | None = None
     tracking_weight: float = 0.15
     previous_weight: float = 0.5
     sigma_px: float = 10.0
@@ -33,7 +36,7 @@ class HeadPriors:
 
     def __init__(self, constraints: Sequence[HeadConstraint | None], camera_size: Tensor):
         device, dtype = camera_size.device, camera_size.dtype
-        tracking, previous, tracking_scale, previous_scale, radii, inside = [], [], [], [], [], []
+        tracking, previous, tail, tracking_scale, previous_scale, tail_scale, radii, inside = [], [], [], [], [], [], [], []
         for constraint in constraints:
             c = constraint or HeadConstraint(tracking_weight=0, previous_weight=0, keep_in_frame=False)
             for name, value in (("sigma_px", c.sigma_px), ("tracking_weight", c.tracking_weight), ("previous_weight", c.previous_weight)):
@@ -41,21 +44,24 @@ class HeadPriors:
                     raise ValueError(f"head {name} must be finite and {'positive' if name == 'sigma_px' else 'non-negative'}")
             if c.max_step_px is not None and (not math.isfinite(c.max_step_px) or c.max_step_px < 0 or c.previous_xy is None):
                 raise ValueError("head max_step_px requires a previous head and a finite non-negative distance")
-            for name, point, output in (("tracking_xy", c.tracking_xy, tracking), ("previous_xy", c.previous_xy, previous)):
+            for name, point, output in (("tracking_xy", c.tracking_xy, tracking), ("previous_xy", c.previous_xy, previous), ("tail_xy", c.tail_xy, tail)):
                 xy = np.zeros(2) if point is None else np.asarray(point, dtype=np.float32)
                 if xy.shape != (2,) or not np.isfinite(xy).all():
                     raise ValueError(f"head {name} must be a finite XY point")
                 output.append(xy)
             tracking_scale.append(0 if c.tracking_xy is None else c.tracking_weight / c.sigma_px**2)
             previous_scale.append(0 if c.previous_xy is None else c.previous_weight / c.sigma_px**2)
+            tail_scale.append(0 if c.tail_xy is None else c.tracking_weight / c.sigma_px**2)
             radii.append(float("inf") if c.max_step_px is None else c.max_step_px)
             inside.append(c.keep_in_frame)
         def tensor(values):
             return torch.as_tensor(np.asarray(values), dtype=dtype, device=device)
         self.tracking = tensor(tracking)
         self.previous = tensor(previous)
+        self.tail = tensor(tail)
         self.tracking_scale = tensor(tracking_scale)
         self.previous_scale = tensor(previous_scale)
+        self.tail_scale = tensor(tail_scale)
         self.radius = tensor(radii)
         self.inside = torch.as_tensor(inside, dtype=torch.bool, device=device)
         self.upper = camera_size - 1
@@ -64,9 +70,10 @@ class HeadPriors:
         if bool(impossible.any()):
             raise ValueError("previous head is too far outside the image for the head movement limit; choose an in-frame anchor or increase the limit")
 
-    def energy(self, head: Tensor) -> Tensor:
+    def energy(self, head: Tensor, tail: Tensor) -> Tensor:
         return ((head - self.tracking).square().sum(1) * self.tracking_scale
-                + (head - self.previous).square().sum(1) * self.previous_scale)
+                + (head - self.previous).square().sum(1) * self.previous_scale
+                + (tail - self.tail).square().sum(1) * self.tail_scale)
 
     def project(self, head: Tensor) -> Tensor:
         """A point in the camera/step-disk intersection, including edge anchors.

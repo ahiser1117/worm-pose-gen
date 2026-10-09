@@ -1,4 +1,4 @@
-"""The workspace viewer's body-field network layers: GET /api/workspaces/{name}/network-fields with a stub network."""
+"""The Workspace page's model-output layers: GET /api/workspaces/{name}/network-fields with a stub network, and the mask model's mask-probability."""
 
 import base64
 import io
@@ -69,9 +69,12 @@ class NetworkFieldsApiTests(unittest.TestCase):
         self.workspace = Workspace.create(self.root / "workspaces", "demo", self.recording, 0, FRAMES - 1, 1)
 
     def client(self, body_net):
-        config = AppConfig(workspaces_root=self.root / "workspaces", recording_roots=(self.root,), poses_root=self.root / "poses",
-                           corpus_root=self.root / "corpus", dataset_root=self.root / "cache", checkpoint=None, body_net=body_net,
-                           prior_cache=None, notes=self.root / "notes.json", device="cpu", gpus=())
+        """The app, with ``body_net`` as the body model the workspace was analysed with (``None``: none)."""
+
+        self.workspace.info.settings["body_net"] = None if body_net is None else str(body_net)
+        self.workspace.save_info()
+        config = AppConfig(workspaces_root=self.root / "workspaces", dataset_root=self.root / "cache", device="cpu", gpus=(),
+                           lab_library=self.root / "lab", library=self.root / "mine")
         app = create_app(config)
         client = TestClient(app, raise_server_exceptions=False)
         self.addCleanup(client.close)
@@ -85,9 +88,9 @@ class NetworkFieldsApiTests(unittest.TestCase):
 
     def test_without_a_network_the_route_says_so(self):
         _, client = self.client(None)
-        self.assertIn("--body-net", self.get(client, 1, 400)["error"])
+        self.assertIn("without a body-field model", self.get(client, 1, 400)["error"])
         _, client = self.client(self.root / "absent.ckpt")
-        self.assertIn("--body-net", self.get(client, 1, 400)["error"])
+        self.assertIn("without a body-field model", self.get(client, 1, 400)["error"])
 
     def test_encoding_ends_and_cache(self):
         app, client = self.client(self.checkpoint)
@@ -122,6 +125,48 @@ class NetworkFieldsApiTests(unittest.TestCase):
             self.get(client, frame)
         self.assertEqual(len(app.state.app_state.network_fields._cache), 2)
         self.assertIn("is not in workspace", self.get(client, 99, 400)["error"])
+
+    def test_raw_outputs_on_request(self):
+        _, client = self.client(self.checkpoint)
+        with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=RecordingStub(prediction(head_peak=0.5))):
+            plain = self.get(client, 1)
+            response = client.get("/api/workspaces/demo/network-fields", params={"frame": 1, "outputs": 1})
+        self.assertNotIn("outputs", plain)
+        raw = response.json()
+        self.assertTrue(raw["cached"], "the raw channels come from the cached prediction")
+        self.assertEqual(sorted(raw["outputs"]), ["ap", "head", "mask", "overlap", "tail"])
+        outputs = {name: decode(url) for name, url in raw["outputs"].items()}
+        # Unthresholded and unmasked: the A-P field is there off the body, the overlap is not cut from the mask.
+        self.assertAlmostEqual(outputs["ap"][5, 50] / 255, 50 / (W - 1), delta=0.01)
+        self.assertEqual((outputs["mask"][32, 50], outputs["mask"][5, 50], outputs["overlap"][32, 42]), (255, 0, 255))
+        self.assertAlmostEqual(outputs["head"][32, 30] / 255, 0.5, delta=0.01)
+        self.assertAlmostEqual(raw["peaks"]["head"], 0.5, places=3)
+        self.assertAlmostEqual(raw["peaks"]["mask"], 1.0, places=3)
+
+    def test_the_mask_models_probability_and_one_model_for_both(self):
+        segmenter = self.root / "segmenter.ckpt"
+        segmenter.write_bytes(b"stub")
+        self.workspace.info.settings["checkpoint"] = str(segmenter)
+        app, client = self.client(self.checkpoint)
+        probability = np.zeros((H, W), np.float32)
+        probability[26:39, 10:86] = 0.6
+        with mock.patch.object(app.state.app_state.segmenters, "probability", return_value=(probability, str(segmenter))) as segment:
+            answer = client.get("/api/workspaces/demo/mask-probability", params={"frame": 2}).json()
+        self.assertEqual(segment.call_args.args[0], str(segmenter))
+        self.assertEqual((answer["row"], answer["model"]), (2, "segmenter.ckpt"))
+        self.assertAlmostEqual(answer["peak"], 0.6, places=5)
+        values = decode(answer["probability"])
+        self.assertEqual((values[32, 50], values[5, 50]), (153, 0))
+        status = client.get("/api/workspaces/demo/status").json()
+        self.assertEqual((status["has_mask_model"], status["has_body_model"]), (True, True))
+        # Masks from the body model: it is the only model, and there is no mask model's probability.
+        self.workspace.info.settings["mask_source"] = "body_net"
+        _, client = self.client(self.checkpoint)
+        status = client.get("/api/workspaces/demo/status").json()
+        self.assertEqual((status["has_mask_model"], status["has_body_model"]), (False, True))
+        refused = client.get("/api/workspaces/demo/mask-probability", params={"frame": 2})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("has no mask model", refused.json()["error"])
 
     def test_a_weak_head_peak_is_no_head(self):
         _, client = self.client(self.checkpoint)

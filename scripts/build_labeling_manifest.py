@@ -13,7 +13,7 @@ the easy cases of every animal.
 Recordings are assigned a split policy: ``auto`` (the store's balanced
 per-frame assignment, as before) or one of ``train``, ``val``, ``test`` for
 recordings whose animal should appear in that split only.  The manifest is
-read by ``worm_pose_gen.label_app --queue``.
+opened as a Labeling queue by ``worm-pose-app --queue <manifest>``.
 
 Example:
 

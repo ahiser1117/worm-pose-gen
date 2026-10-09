@@ -1,8 +1,9 @@
 # Head-tracked temporal fitting
 
-Choose **Head-tracked temporal fit** in the Run panel's regional algorithm
-dropdown. Run the selected range, compare the resulting candidate set, and
-accept it when satisfied. Running the method does not replace current poses.
+Choose `tracked_head` in the Workspace page's Refit override (the app
+started with `--dev`), then Refit the selected issue or range: the preview
+shows the result before and after, and **Keep** installs it. Running the
+method does not replace current poses.
 
 The method is intended for coils and self-intersections where overlap alone
 lets the head jump onto a different body branch. It fits frames in order,
@@ -28,14 +29,15 @@ previously saved poses are not refitted automatically.
 | Keep head inside frame | On | Constrains the head to the camera rectangle. The rest of the body may leave the camera. |
 | Hole filling | Off | Resegment unedited frames without hole filling; workspace masks and narrow-hole filling remain available. |
 
-Hover over a control for its explanation, default, and bounds. Descriptions
-also remain available to screen readers without occupying panel space.
+The Refit override takes these as a JSON object of parameter values
+(`max_head_step_px`, ...); `GET /api/algorithms` lists each parameter with
+its explanation, default and bounds.
 
 The head penalties are squared XY distances divided by the head distance
 scale squared, multiplied by their respective weights. The whole-pose prior
 uses half the previous body width as its distance scale. Increasing these
 weights favors continuity and can reduce overlap when the worm moves quickly;
-compare candidate sets before accepting a new setting.
+compare the previews before keeping a new setting.
 
 Movement is measured in zero-based image pixels. A workspace sampled every
 five source frames allows five times the per-frame displacement. Skipped

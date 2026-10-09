@@ -15,7 +15,7 @@ and the trace starts it (:func:`trace_start`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 import numpy as np
@@ -25,7 +25,9 @@ import torch
 
 from .batch_fit import BodyFieldEvidence
 from .body_net import OUTPUTS, BodyFieldModule
-from .mask_fit import Initialization, MaskFitConfig, extend_start_to_length, init_from_centerline
+from .mask_fit import (
+    Initialization, MaskFitConfig, at_length, extend_start_to_length, init_from_centerline, lay_centerline,
+)
 from .segmenter import INPUT_MEAN, INPUT_STD
 
 
@@ -170,7 +172,16 @@ def _box(mask: NDArray[np.bool_]) -> tuple[slice, slice] | None:
     return slice(max(int(rows[0]) - 1, 0), int(rows[-1]) + 2), slice(max(int(cols[0]) - 1, 0), int(cols[-1]) + 2)
 
 
-def propose_trace(prediction: FieldPrediction, mask: NDArray[np.bool_], *, levels: int = TRACE_LEVELS) -> FloatArray | None:
+def _scored(point: FloatArray | None, shape: tuple[int, ...]) -> FloatArray | None:
+    """``point`` unless it lies within ``END_BORDER_PX`` of the image edge."""
+
+    height, width = shape[:2]
+    return None if point is None or min(point[0], point[1], width - 1 - point[0], height - 1 - point[1]) <= END_BORDER_PX else point
+
+
+def propose_trace(
+    prediction: FieldPrediction, mask: NDArray[np.bool_], *, levels: int = TRACE_LEVELS, tail: bool = True,
+) -> FloatArray | None:
     """Head-first trace points over ``mask`` from a prediction; ``None`` when it gives fewer than three.
 
     Each A-P band contributes one point from one connected patch of mask
@@ -184,14 +195,16 @@ def propose_trace(prediction: FieldPrediction, mask: NDArray[np.bool_], *, level
     dropped (except the tail, which replaces its neighbour).  An end whose heatmap stays below ``END_THRESHOLD`` is left
     out, so a trace whose body leaves the camera stops at the last band
     (which :func:`trace_start` continues off camera); so is an end whose
-    peak lies more than ``END_MASK_PX`` off the mask.
+    peak lies more than ``END_MASK_PX`` off the mask.  Without ``tail`` the
+    trace stops at the last band either way.
     """
 
     body = np.asarray(mask, dtype=bool)
     box = _box(body)
     if box is None:
         return None
-    head, tail = _end(prediction.head, body), _end(prediction.tail, body)
+    head = _end(prediction.head, body)
+    tail = _end(prediction.tail, body) if tail else None
     # Everything below works on the mask's box; ``origin`` is its corner in the image.
     origin = np.array([box[1].start, box[0].start])
     body = body[box]
@@ -254,30 +267,61 @@ def field_evidence(prediction: FieldPrediction, mask: NDArray[np.bool_]) -> Body
     box = _box(body)
     if box is not None:
         ap[box] = np.where(body[box] & (prediction.overlap[box] < OVERLAP_THRESHOLD), prediction.ap[box], np.nan)
-    height, width = body.shape
-
-    def scored(point: FloatArray | None) -> FloatArray | None:
-        return None if point is None or min(point[0], point[1], width - 1 - point[0], height - 1 - point[1]) <= END_BORDER_PX else point
-
-    return BodyFieldEvidence(ap=ap, head_xy=scored(_end(prediction.head, body)), tail_xy=scored(_end(prediction.tail, body)))
+    return BodyFieldEvidence(
+        ap=ap, head_xy=_scored(_end(prediction.head, body), body.shape), tail_xy=_scored(_end(prediction.tail, body), body.shape),
+    )
 
 
 def trace_start(
-    prediction: FieldPrediction, mask: NDArray[np.bool_], *, config: MaskFitConfig, length_px: float | None = None,
+    prediction: FieldPrediction,
+    mask: NDArray[np.bool_],
+    *,
+    config: MaskFitConfig,
+    length_px: float | None = None,
+    width_px: float | None = None,
+    width_shape: NDArray[np.float64] | None = None,
 ) -> Initialization | None:
     """A head-first starting pose along the proposed trace (``None`` without one).
 
-    A trace that stops where the body leaves the camera is lengthened off
-    camera to ``length_px`` as the standard starts are
-    (:func:`mask_fit.extend_start_to_length`: an end within 80 px of mask
-    pixels on the border).  The last band point of a clipped body lies a
-    median 23 px from the edge (90th percentile 60 px, on edge_0528), so a
-    test of that point alone left most such traces short, and their fits
-    squeezed the whole body into view.
+    With ``length_px`` (the recording prior's length) and the head in view
+    (passing the end rules of :func:`field_evidence`), the body is laid from
+    the head along the trace's bands, without the predicted tail, at exactly
+    that length (:func:`mask_fit.lay_centerline`): a trace zigzagging
+    between the turns of a spiral is cut there, a short one continues past
+    its last band point along the mask, or off camera where the body leaves
+    the image.  The
+    tail's position is an outcome: people place it inconsistently when they
+    trace labels, so the network's tail is not a reliable end.
+
+    Without the head, the trace runs from its first band (or the head) to
+    the tail and is lengthened off camera to ``length_px`` as the standard
+    starts are (:func:`mask_fit.extend_start_to_length`: an end within 80 px
+    of mask pixels on the border).  The last band point of a clipped body
+    lies a median 23 px from the edge (90th percentile 60 px, on edge_0528),
+    so a test of that point alone left most such traces short, and their
+    fits squeezed the whole body into view.
+
+    ``width_px`` and ``width_shape`` (the recording prior's) take the place
+    of the width measured across the mask along the trace.
     """
 
-    trace = propose_trace(prediction, mask)
+    body = np.asarray(mask, dtype=bool)
+    anchored = length_px is not None and _scored(_end(prediction.head, body), body.shape) is not None
+    trace = propose_trace(prediction, body, tail=not anchored)
     if trace is None:
         return None
-    start = init_from_centerline(trace, mask, name="network_trace", config=config)
-    return start if length_px is None else extend_start_to_length(start, mask, length_px, config=config)
+    if anchored:
+        # A last band point behind the one before (A-P noise where the field
+        # flattens toward the tail) would turn the continuation back.
+        while len(trace) > 3 and float(np.dot(trace[-1] - trace[-2], trace[-2] - trace[-3])) < 0:
+            trace = trace[:-1]
+        # Laid as a polyline, before the latent's smoothing can bend its end.
+        trace = lay_centerline(trace, body, length_px, width_px or 2.0 * float(ndimage.distance_transform_edt(body).max()))
+    start = init_from_centerline(trace, body, name="network_trace", width_px=width_px, config=config)
+    if width_shape is not None:
+        start = replace(start, width_shape=np.asarray(width_shape, dtype=np.float64))
+    if length_px is None:
+        return start
+    if anchored:
+        return at_length(start, length_px, trace[0], config=config)
+    return extend_start_to_length(start, body, length_px, config=config)

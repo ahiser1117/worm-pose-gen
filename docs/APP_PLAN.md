@@ -8,6 +8,17 @@ every capability of the front end is available headless through the same
 API for use inside larger pipelines. Each phase ends with something usable;
 the "Status" section at the bottom is updated as phases land.
 
+**The browser UI of this plan is superseded** by
+[`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md) (implemented 2026-10-07 on
+branch `app-simplification`): three pages (Workspace, Labeling, Training)
+over a lab and a personal library, with the fixes Flip, Refit, Edit mask and
+Relabel in place of hypothesis picks, candidate sets, region runs and the
+outcome log. That redesign also removed the read-only runs and their import,
+the stdlib viewer, review notes, snapshots, the user corpus and the
+standalone labeler. The principles, the workspace, the stages as jobs and
+the algorithm registry below still hold; the UI parts of sections 3 and 9
+are kept as history.
+
 ## 1. Users and setting
 
 - One user at a time. The server runs on the user's own machine (today a
@@ -49,32 +60,32 @@ the "Status" section at the bottom is updated as phases land.
 
 ## 3. Architecture
 
+The modules today (after the simplification; the plan's original map is in
+the git history):
+
 ```
 worm_pose_gen.app            FastAPI application (uvicorn), serves the UI and the API
-  routers/recordings         browse HDF5 roots, recording metadata, thumbnails
-  routers/workspaces         create, list, open, snapshot, export
-  routers/frames             layers, statistics, hypotheses (the viewer's endpoints today)
-  routers/jobs               submit, list, status, log, cancel
-  routers/algorithms         registry and parameter schemas, region proposals, candidate sets
-                             (list, inspect, accept, discard), the outcome log
-  routers/edits              hypothesis pick, orientation flip, undo, the edit log, the segment of a frame
-  routers/masks              reversible label overrides, mask previews and revisions
-  routers/corpus             labels into the user's segmentation store, fine-tune job (Phase 4)
-  regions                    frames <-> rows for the region endpoints, region job specs, accept responses
-worm_pose_gen.workspace      on-disk workspace: arrays, masks, provenance, edit log, jobs
-worm_pose_gen.edits          the interventions: pick, flip, accept path, set pose, undo; before-snapshots
-worm_pose_gen.jobs           runner with backends: local GPUs (now), Slurm (later)
-worm_pose_gen.algorithms     registry and the existing methods wrapped as region algorithms; candidate sets
-worm_pose_gen.corpus         user labels, immutable revisions, split pledges, training snapshots
-worm_pose_gen.training       fine-tune worker, checkpoint catalog and job specification
-worm_pose_gen.client         Python client over the API; `worm-pose` command line
-worm_pose_gen.pose_viewer_ui the browser UI (grows from the viewer)
+  routers/analysis           the Recordings screen, Analyse, workspace status, the kymograph
+  routers/workspaces         a workspace's payload, frames, network fields, exports
+  routers/fixes              issues, Looks OK, Flip, Refit, keyframes, stitch, previews, the fixes list, undo
+  routers/masks              Edit mask: reversible mask overrides
+  routers/labeling, queues   the Labeling page and its queues
+  routers/library, training  the libraries; the model picker, training and evaluation jobs
+  routers/jobs               submit, list, status, log, cancel, retry; where jobs can run
+  routers/algorithms         the registry (the developer's Refit override)
+  routers/recordings         thumbnails and the file explorer
+worm_pose_gen.app_ui         the browser UI: one module set per page
+worm_pose_gen.workspace      on-disk workspace: arrays, masks, provenance, edit log
+worm_pose_gen.edits          the interventions: place poses, flip, edit a mask, undo; before-snapshots
+worm_pose_gen.fixes          issues, refit plans, keyframes, previews, keep, the fixes list
+worm_pose_gen.jobs           runner with backends: local GPUs, SLURM
+worm_pose_gen.algorithms     registry and the existing methods wrapped as region algorithms
+worm_pose_gen.library        setups, datasets, labels, benchmarks, model cards, body targets
+worm_pose_gen.model_training, model_eval   training and evaluation on library datasets
 ```
 
-The stdlib server of the viewer is replaced by FastAPI; the endpoints keep
-their shapes so the UI carries over. Static assets stay in the package.
-
-Phase 1 has `routers/viewer` (the viewer's endpoints, `/api/state`, `/run`,
+History: the stdlib server of the viewer was replaced by FastAPI; the
+endpoints kept their shapes so the UI carried over. Phase 1 had `routers/viewer` (the viewer's endpoints, `/api/state`, `/run`,
 `/frame`, `/pose`, `/starts`, notes), `routers/recordings`,
 `routers/workspaces`, `routers/jobs` (jobs and the stage schemas) and
 `routers/static`. Phase 2 adds `routers/edits` (`GET/POST
@@ -87,53 +98,45 @@ through `POST /api/jobs`. Requests and responses speak frames; rows appear
 beside them in responses. Edits and accepts answer 409 while a job writes
 the workspace (`pipeline.WorkspaceBusy`). Phase 4 adds `routers/masks` and
 `routers/corpus`, with `kind: fine_tune` jobs through the existing queue.
-The client arrives in Phase 5. The stdlib viewer (`worm-pose-viewer`) is kept for
-read-only runs and serves the same UI with the editing controls disabled.
+The stdlib viewer (`worm-pose-viewer`) was kept for read-only runs until the
+simplification removed it with every endpoint of this paragraph except the
+jobs, the masks and `GET /api/algorithms`.
 
 ## 4. Workspace
 
-One workspace per recording range, replacing the write-once run directory
-(existing runs import as read-only baselines):
+One workspace per recording range (the app keeps one per recording, always
+the whole recording), replacing the write-once run directory:
 
 ```
 <workspaces>/<name>/
-  workspace.json         recording path, frame range (first, last, step), settings, imported run
+  workspace.json         recording path, frame range (first, last, step), settings (setup, models)
   state.npz              current per-frame arrays (the poses.npz layout)
   hypotheses.npz         candidates per frame (hypotheses_*, path_*, prediction_*)
   provenance.npz         per frame: algorithm id, job or edit id, unix time
   masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk, a few KB per frame
-                         (the segment stage writes them; a region run stores the masks
+                         (the segment stage writes them; a refit stores the masks
                          it had to segment on the fly)
   overrides/masks/       sparse full uint8 labels: 0 background, 1 worm, 255 ignore
                         (NNNNNNN.npz per row; effective geometry mask is labels == 1)
   recording_prior.json   the prior the fit stage uses (bootstrapped, cached or given)
-  summary.json           a run-shaped summary kept up to date by the stages, so the
-                         viewer's loaders read a workspace like a run
-  imported_summary.json  the summary.json of an imported run (fallback for the above)
+  summary.json           a run-shaped summary kept up to date by the stages
   edits.jsonl            append-only log of every intervention with its inputs; an undo
                          is itself an entry naming the edit it undoes
   edits/<id>.npz         the before-snapshot of every array slice edit <id> changed
                          (state, hypotheses and provenance rows), what undo restores
-  candidates/<id>.npz    a region run's candidate set: per-row candidates, the chosen path,
-    + <id>.json          metrics before and after, accept state; <id> is the job id
-  snapshots/<time>_<label>/  copies of state, hypotheses and provenance on demand
-  exports/<time>.parquet     Parquet exports
+  fixes/<id>.npz + .json a Refit or Relabel preview waiting for Keep or Discard
+  human_review.json      the rows marked Looks OK, with their fingerprints
+  exports/<recording>_<time>/   the per-recording table and export.json
   .lock                  flock held by the stage process that is writing the workspace;
                          edits take it too and give up after two seconds (WorkspaceBusy)
 <workspaces>/jobs/       job records shared by all workspaces: <id>.json, <id>.log,
                          <id>.progress.json and the id counter (ids are never reused)
-<workspaces>/algorithm_outcomes.jsonl  one line per region run (region, anchors, algorithm,
-                         parameters, metrics before and after), then accepted / unaccepted lines
-<workspaces>/recordings_index.json   the recording browser's per-file cache
-<workspaces>/recordings_registry.json  HDF5 files added by hand, with their dataset name
-<workspaces>/corpus/        user segmentation store (configurable --corpus-root)
-  samples/, index.json, splits.json   live labels and persistent split pledges
-  revisions/<sample>/<revision>.npz + .json  immutable saved-label revisions
-<workspaces>/checkpoints/   configurable --checkpoints-root
-  runs/<id>/dataset/        frozen corpus bytes and revision/hash manifest
-  runs/<id>/init.ckpt       frozen initialization; packaged checkpoint unchanged
-  runs/<id>/run.json, metrics.csv, best.ckpt, last.ckpt
+<workspaces>/queues/     the Labeling queues
+<workspaces>/recordings_index.json   the recording catalog's per-file cache
 ```
+
+Labels, datasets and models live in the libraries
+([`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md), section 1).
 
 Rows are positions in `range(first, last + 1, step)`; every per-frame
 array has one entry per row. Every file is written through a temporary
@@ -160,12 +163,12 @@ the workspace; stages can be rerun independently:
 
 `fit_recording.py` becomes the composition of these stages and keeps
 working from the command line. Since Phase 3 the propagate stage treats
-rows placed by hand or by an accepted region run (`manual:*` and the region
-algorithms' provenance) as fixed: the stretches are cut around them and the
-chains anchor on them, so a rerun of the stage does not undo an
-intervention. A region run is the eighth kind of job (`python -m
-worm_pose_gen.pipeline --workspace ... --region-run '<spec json>'`,
-`pipeline.region_command`); it writes a candidate set, never the state.
+rows placed by hand or by a kept fix (`manual:*` and the region algorithms'
+provenance) as fixed: the stretches are cut around them and the chains
+anchor on them, so a rerun of the stage does not undo an intervention.
+Analyse runs the default stages in one process (`--stages`). A Refit or a
+stitch is a fix job (`python -m worm_pose_gen.fixes --workspace ... --run
+'<spec json>'`); it writes a preview, never the state.
 
 ## 6. Algorithm registry
 
@@ -194,13 +197,11 @@ orientation flips, seconds). Registered: `independent_multistart`,
 `slow_refit`, `tracked_head`, `fixed_body_smoother` (the fixed body's joint
 temporal smoother, `body_smoother`) and `mirror`; the track-length refit is
 still only a stage.
-`run_region` saves the set under `candidates/` and appends its outcome to
-`<workspaces root>/algorithm_outcomes.jsonl`; `accept_candidates` installs
-the path through one `accept_path` edit (candidates into the rows'
-hypotheses, provenance `<algorithm>` / `candidates:<id>`), marks the set
-accepted (whole or on part of its rows) and appends an `accepted` line; an
-undo of the accept appends `unaccepted`. `outcomes()` folds those lines, so
-the defaults question can be answered from the log.
+`run_algorithm` returns the set without writing anything; the Refit fix
+saves its path as a preview (`fixes/`), and Keep installs it through one
+`set_pose` edit with provenance `<algorithm>` / `fix:<preview id>`. The
+stored candidate sets, their accept flow and the outcome log of Phase 3 were
+removed with the simplification.
 
 ## 7. Phases
 
@@ -265,6 +266,7 @@ job backend; whole-recording runs; packaging with the bundled checkpoint.
 | 2 | done (2026-09-09) | picks, flips, undo, provenance strip and jumps landed; open: whole-state rewrite per edit, no redo, no browser test in `tests/` |
 | 3 | done (2026-09-09) | registry, region jobs, candidate sets, comparison, accept, outcome log landed; open: beam_path takes minutes on a 240-row coil, no warning when a set equals the current track |
 | 4 | done (2026-09-09) | reversible brush overrides, stale-result guards, corpus revisions, frozen-input fine-tune jobs and checkpoint selection; legacy manifest queue retained for compatibility |
+| simplification | done (2026-10-07) | the UI and much of Phases 2--4 replaced by [`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md); SLURM backend (Phase 6) landed with it |
 | 5 | not started | |
 | 6 | not started | |
 
@@ -401,23 +403,7 @@ refit, accepted its candidate and verified that undo restored the stale pose.
 The training smoke uses synthetic labels to validate the workflow; model quality
 on new lab data still requires held-out evaluation.
 
-The task-tabs redesign uses Inspect → Paint → Rerun → Review, with separate
-Import/Open, Labels and Training screens and shared Jobs/History drawers. Paint
-restores proposal/combine/refine tools, all five labeling traversal modes, visited
-history, manifests and Save + next. Its controls stay expanded; navigation guards
-preserve drafts and dual saves retry only unfinished destinations. A single
-shortcut registry prevents overlapping actions and keeps draft undo separate
-from saved edit history. See `UI_TASK_TABS_PLAN.md` for the implementation contract.
-
-Paint later became its own screen, independent of workspaces (2026-10-05).
-It opens on a chooser of label groups: labeling manifests
-(`docs/labeling_*/manifest.json` or any path), recording sections (a range sent
-from Inspect with **Label range in Paint**, persisted in
-`<workspaces>/label_sections.json`) and saved labels (from Labels or Body
-fields). A group opens on its first unlabeled entry with position and
-progress; Previous/Next walk it in order and saves carry the group's split
-pledges (`/api/labeling/groups`, `group_id` on frame and save). The workspace
-task that corrects the masks fitting reads is now **Masks**; it no longer
-traverses frames or opens corpus labels. The traversal modes of the old
-workspace Paint (sequential, random, network-uncertain, browse) and
-`/api/labeling/next` and `/api/labeling/manifests` were removed.
+The task-tabs redesign (Inspect → Paint → Rerun → Review, then a Paint
+screen independent of workspaces) followed in September and early October
+2026; both were replaced by the three pages of
+[`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md).

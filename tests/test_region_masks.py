@@ -83,17 +83,16 @@ class RegionMaskTests(unittest.TestCase):
             captured.update(mask=ctx.masks[1], params=params)
             return algorithms.CandidateSet(algorithm.id, params, 1, 1, None, None, [1], {}, [], {})
         with patch.object(algorithm, "run", side_effect=fit):
-            result = algorithms.run_region(self.workspace, algorithm.id, 1, 1, {"fill_holes": "on"}, device="cpu")
+            result = algorithms.run_algorithm(self.workspace, algorithm.id, 1, 1, {"fill_holes": "on"}, device="cpu")
         self.assertTrue(captured["mask"][19, 19])
         self.assertEqual(captured["params"]["fill_holes"], "on")
-        self.assertEqual(algorithms.load_candidate_set(self.workspace, result.id).params["fill_holes"], "on")
-        self.assertEqual(algorithms.outcomes(self.workspace.path.parent)[0]["params"]["fill_holes"], "on")
+        self.assertEqual(result.params["fill_holes"], "on")
         np.testing.assert_array_equal(self.workspace.get_mask(1), self.raw)
 
     def test_registry_exposes_option_only_for_fitting(self):
         for entry in algorithms.list_algorithms():
             params = {p["name"]: p for p in entry["parameters"]}
-            if entry["id"] == "mirror":
+            if entry["id"] in algorithms.NO_FITTING:
                 self.assertNotIn("fill_holes", params)
             else:
                 self.assertEqual(params["fill_holes"]["choices"], ["workspace", "on", "off"])

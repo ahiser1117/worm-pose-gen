@@ -1,0 +1,341 @@
+"""What the Workspace page shows of a frame (``app/frame_view.py``, ``app/workspace_view.py``), and the synthetic fitted workspace other tests build on.
+
+``_write_workspace`` makes a workspace holding the arrays and run summary the
+pipeline stages write for six straight frames of a synthetic recording; the
+last frame is a propagated, coil-like frame with a low overlap and step 6c
+hypotheses.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import h5py
+import numpy as np
+import torch
+
+from worm_pose_gen.ambiguity import FLAG_NAMES
+from worm_pose_gen.app.frame_view import Segmenters, classify_frame, prior_width_profile, signed_curvature
+from worm_pose_gen.app.workspace_view import WorkspaceView
+from worm_pose_gen.latent import decode_centerline
+from worm_pose_gen.mask_fit import default_width_template
+from worm_pose_gen.recordings import RecordingSource
+from worm_pose_gen.workspace import Workspace, split_arrays
+
+
+HEIGHT, WIDTH, FRAMES = 96, 128, 6
+
+
+def _write_recording(path: Path) -> None:
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:HEIGHT, :WIDTH]
+    stack = np.empty((FRAMES, HEIGHT, WIDTH), dtype=np.uint8)
+    for index in range(FRAMES):
+        body = np.abs(yy - (48 + 10 * np.sin(xx / 20 + index))) < 6
+        body &= (xx > 12) & (xx < 116)
+        image = 190.0 - 80 * body + rng.normal(0, 3, (HEIGHT, WIDTH))
+        stack[index] = np.clip(image, 0, 255).astype(np.uint8)
+    with h5py.File(path, "w") as handle:
+        handle.create_dataset("/img_nir", data=stack)
+
+
+# The provenance the fixture gives its fitted rows: the fit stage's, by ``source``.
+FIT_JOB = "stage:fit"
+SOURCE_ALGORITHMS = {0: "independent_fit", 1: "chain_forward", 2: "chain_backward"}
+
+
+def _write_workspace(root: Path, name: str, recording: Path, *, first: int = 0, count: int = FRAMES, independent: bool = True) -> Workspace:
+    """A workspace on ``recording`` frames ``first`` onward with the arrays and summary the stages write (see the module docstring)."""
+
+    n_points = 100
+    frame_index = np.arange(first, first + count)
+    latent = np.concatenate((np.zeros(16), [0.0, 100.0], [WIDTH / 2, HEIGHT / 2]))
+    curve = decode_centerline(latent)
+    template = default_width_template(n_points)
+    arrays: dict[str, np.ndarray] = {
+        "frame_index": frame_index,
+        "fitted": np.ones(count, dtype=bool),
+        "latent": np.tile(latent, (count, 1)),
+        "width_px": np.full(count, 10.0),
+        "centerline_xy": np.tile(curve, (count, 1, 1)),
+        "width_profile": np.tile(10.0 * template, (count, 1)),
+        "width_shape": np.zeros((count, 6)),
+        "taper_asymmetry": np.full(count, -0.1),
+        "reversed": np.zeros(count, dtype=bool),
+        "orientation_gap": np.full(count, 0.01),
+        "iou": np.linspace(0.95, 0.85, count),
+        "energy": np.full(count, 0.1),
+        "total_energy": np.full(count, 0.11),
+        "source": np.zeros(count, dtype=np.int8),
+        "mask_on_border": np.zeros(count, dtype=bool),
+        "points_in_fov": np.full(count, n_points),
+        "body_length_px": np.full(count, 100.0),
+        "crop": np.tile([0, WIDTH, 0, HEIGHT], (count, 1)),
+        "worm_pixels": np.full(count, 900),
+        "raw_worm_pixels": np.full(count, 880),
+        "pixels_filled": np.full(count, 20),
+        "components": np.ones(count, dtype=np.int64),
+        "pixels_outside_largest": np.zeros(count, dtype=np.int64),
+        "n_starts": np.full(count, 2),
+        "width_template": template,
+        "area_ratio": np.full(count, 1.0),
+        "self_contact_px": np.full(count, 50.0),
+        "pose_jump_px": np.full(count, 1.0),
+        "length_deviation": np.zeros(count),
+        "ambiguity_score": np.zeros(count, dtype=np.int64),
+        "iou_independent": np.linspace(0.95, 0.85, count),
+        "score_independent": np.zeros(count, dtype=np.int64),
+        "best_start": np.array(["skeleton_longest_path"] * count),
+        "tube_coverage": np.full(count, 0.97),
+        "max_bend_widths": np.full(count, 0.8),
+        "track_length_px": np.full(count, 100.0),
+        "length_refit": np.zeros(count, dtype=bool),
+    }
+    for flag in FLAG_NAMES:
+        arrays[f"flag_{flag}"] = np.zeros(count, dtype=bool)
+    # Last frame: a propagated coil-like frame with a low overlap.
+    arrays["flag_low_iou"][-1] = True
+    arrays["flag_self_contact"][-1] = True
+    arrays["ambiguity_score"][-1] = 2
+    arrays["source"][-1] = 1
+    arrays["best_start"][-1] = "warm_forward"
+    if independent:
+        # Step 6c hypotheses on the last frame: an independent refit and a forward chain state; the path took the chain.
+        H = 3
+        arrays["hypotheses_centerline_xy"] = np.full((count, H, n_points, 2), np.nan)
+        arrays["hypotheses_energy"] = np.full((count, H), np.nan)
+        arrays["hypotheses_iou"] = np.full((count, H), np.nan)
+        arrays["hypotheses_source"] = np.full((count, H), "", dtype="<U12")
+        arrays["hypotheses_start"] = np.full((count, H), "", dtype="<U32")
+        arrays["hypotheses_beam"] = np.full((count, H), -1, dtype=np.int8)
+        arrays["hypotheses_count"] = np.zeros(count, dtype=np.int64)
+        arrays["path_index"] = np.full(count, -1)
+        arrays["path_mirrored"] = np.zeros(count, dtype=bool)
+        arrays["path_override"] = np.zeros(count, dtype=bool)
+        arrays["path_energy_gap"] = np.full(count, np.nan)
+        arrays["path_cost"] = np.full(count, np.nan)
+        arrays["prediction_xy"] = np.full((count, n_points, 2), np.nan)
+        arrays["prediction_distance_px"] = np.full(count, np.nan)
+        arrays["hypotheses_centerline_xy"][-1, 0] = curve + (0.0, 3.0)
+        arrays["hypotheses_centerline_xy"][-1, 1] = curve
+        arrays["hypotheses_energy"][-1, :2] = [0.08, 0.09]
+        arrays["hypotheses_iou"][-1, :2] = [0.80, 0.85]
+        arrays["hypotheses_source"][-1, :2] = ["independent", "forward"]
+        arrays["hypotheses_start"][-1, :2] = ["independent_refit", "predicted_forward"]
+        arrays["hypotheses_beam"][-1, :2] = [0, 0]
+        arrays["hypotheses_count"][-1] = 2
+        arrays["path_index"][-1] = 1
+        arrays["path_override"][-1] = True
+        arrays["path_energy_gap"][-1] = 0.01
+        arrays["path_cost"][-1] = 12.5
+        arrays["prediction_xy"][-1] = curve + (1.0, 0.0)
+        arrays["prediction_distance_px"][-1] = 1.0
+        arrays["centerline_xy_independent"] = arrays["centerline_xy"].copy()
+        arrays["centerline_xy_independent"][-1, :, 1] += 8.0
+        arrays["width_profile_independent"] = arrays["width_profile"].copy()
+        arrays["body_length_independent"] = arrays["body_length_px"].copy()
+    summary = {
+        "started_at": f"2026-09-06T1{first}:00:00+00:00",
+        "recording": str(recording),
+        "frames": [int(frame_index[0]), int(frame_index[-1])],
+        "step": 1,
+        "frame_count": count,
+        "frames_fitted": count,
+        "checkpoint": {"path": str(Path(root) / "missing.ckpt"), "sha256": "abcdef0123456789"},
+        "git": {"commit": "0123456789abcdef", "dirty": False},
+        "threshold": 0.5,
+        "mask_cleanup": {"fill_holes": True, "fill_holes_radius_px": 8, "largest_component": True, "min_worm_pixels": 500},
+        "fit_config": {"coefficients": 16, "n_points": n_points, "width_coefficients": 6, "stage_downsample": [4, 1]},
+        "preset": "fast",
+        "prior": {"length_px": 100.0, "log_length_sigma": 0.05, "width_px": 10.0, "log_width_sigma": 0.05, "width_shape": [0.1, 0.0, 0.0, 0.0, 0.0, -0.1], "width_shape_sigma": [0.05] * 6, "frames_used": 3, "frames_candidates": 4, "selection": {}},
+        "iou": {"median": 0.9, "p10": 0.86, "min": 0.85, "fraction_at_least_0.8": 1.0, "fraction_at_least_0.9": 0.5},
+        "body_length_px": {"median": 100.0, "p10": 100.0, "p90": 100.0, "at_upper_bound": None, "beyond_2_sigma_of_prior": 0},
+        "ambiguity": {"thresholds": {"low_iou": 0.9, "holes_px": 200}, "flag_counts": {name: 0 for name in FLAG_NAMES}, "frames_with_score_at_least_1": 1, "frames_with_score_at_least_2": 1},
+        "propagation": {"stretches": [[count - 3, count - 1]], "frames_in_stretches": 3, "frames_replaced": 1, "replaced_by_source": {"forward": 1, "backward": 0}, "stretch_iou_median_before": 0.5, "stretch_iou_median_after": 0.85},
+    }
+    workspace = Workspace.create(root, name, recording, int(frame_index[0]), int(frame_index[-1]))
+    state, hypotheses = split_arrays(arrays)
+    workspace.save_state(state)
+    if hypotheses:
+        workspace.save_hypotheses(hypotheses)
+    for code, algorithm in SOURCE_ALGORITHMS.items():
+        rows = np.nonzero(arrays["source"] == code)[0]
+        if len(rows):
+            workspace.set_provenance(rows, algorithm, FIT_JOB, 1.0e9)
+    (workspace.path / "summary.json").write_text(json.dumps(summary))
+    return workspace
+
+
+def _view(workspace: Workspace, root: Path) -> tuple[WorkspaceView, RecordingSource]:
+    source = RecordingSource(workspace.recording, root / "fields")
+    return WorkspaceView(workspace, source, None), source
+
+
+class FrameViewHelperTests(unittest.TestCase):
+    def test_light_frames_skip_expensive_layers_even_after_full_cache_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "recording.h5"
+            _write_recording(recording)
+            view, source = _view(_write_workspace(root / "workspaces", "demo", recording), root)
+            segmenters = Segmenters(torch.device("cpu"))
+            try:
+                for warm_cache in (False, True):
+                    with self.subTest(warm_cache=warm_cache):
+                        if warm_cache:
+                            full = view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=False, detail="full")
+                            self.assertIn("tube", full["layers"])
+                            self.assertIn("tube_independent", full["layers"])
+                        with patch("worm_pose_gen.app.frame_view.render_tube", side_effect=AssertionError("tube rendering during motion")), patch.object(segmenters, "probability", side_effect=AssertionError("segmentation during motion")):
+                            light = view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=True, detail="light", segment=True)
+                        self.assertEqual(light["detail"], "light")
+                        self.assertEqual(list(light["layers"]), ["image"])
+                        self.assertEqual(light["errors"], [])
+                        self.assertTrue(light["image_raw"].startswith("data:image/jpeg"))
+                        self.assertIn("centerline_xy", light["pose"])
+                        self.assertIn("independent", light["pose"])
+                self.assertIn("tube", view.frame(FRAMES - 1, segmenters, torch.device("cpu"), raw=False, detail="full")["layers"])
+            finally:
+                source.close()
+
+    def test_the_segmenter_runs_only_for_the_developer_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "recording.h5"
+            _write_recording(recording)
+            workspace = _write_workspace(root / "workspaces", "demo", recording)
+            workspace.set_masks([0], [np.ones((HEIGHT, WIDTH), dtype=bool)])
+            view, source = _view(workspace, root)
+            segmenters = Segmenters(torch.device("cpu"))
+            checkpoint = root / "segmenter.ckpt"
+            checkpoint.write_bytes(b"")
+            settings = json.loads((workspace.path / "summary.json").read_text())
+            settings["checkpoint"] = {"path": str(checkpoint)}
+            (workspace.path / "summary.json").write_text(json.dumps(settings))
+            probability = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
+            probability[40:56, 20:100] = 0.9
+            try:
+                with patch.object(segmenters, "probability", side_effect=AssertionError("segmentation for an analyst")):
+                    analyst = view.frame(0, segmenters, torch.device("cpu"), raw=False, detail="full")
+                self.assertNotIn("probability", analyst["layers"])
+                self.assertEqual(analyst["mask_final_source"], "stored")
+                with patch.object(segmenters, "probability", return_value=(probability, str(checkpoint))) as segment:
+                    developer = view.frame(0, segmenters, torch.device("cpu"), raw=False, detail="full", segment=True)
+                self.assertEqual(segment.call_count, 1)
+                self.assertIn("mask_raw", developer["layers"])
+                self.assertEqual(developer["mask_final_source"], "stored")  # the stored mask still wins
+                self.assertGreater(developer["mask_stats"]["raw_worm_pixels"], 0)
+            finally:
+                source.close()
+
+    def test_classification_separates_coils_edges_and_failures(self) -> None:
+        clean = classify_frame(True, {}, 0, points_in_fov=100, n_points=100, mask_on_border=False)
+        self.assertEqual(clean["kind"], "clean")
+        self.assertEqual(clean["tags"], [])
+        coil = classify_frame(True, {"self_contact": True, "holes": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, source=2)
+        self.assertEqual(coil["kind"], "ambiguous")
+        self.assertIn("coil / self-contact", coil["tags"])
+        self.assertIn("propagated backward", coil["tags"])
+        self.assertNotIn("fit failure suspected", coil["tags"])
+        edge = classify_frame(True, {}, 1, points_in_fov=80, n_points=100, mask_on_border=True)
+        self.assertEqual(edge["kind"], "watch")
+        self.assertEqual(edge["tags"], ["body at camera edge"])
+        failure = classify_frame(True, {"low_iou": True, "pose_jump": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False)
+        self.assertEqual(failure["label"], "ambiguous: fit failure suspected")
+        self.assertEqual(classify_frame(False, {}, 0, points_in_fov=0, n_points=100, mask_on_border=False)["kind"], "unfitted")
+        # The plate streak of 2024-06-18-12 merges with the body: one component, mask 1.5 times the tube, tube on mask.
+        streak = classify_frame(True, {"low_iou": True, "area_excess": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.54, coverage=0.87, area_ratio=1.5)
+        self.assertEqual(streak["tags"], ["fit failure suspected", "mask has extra body (segmentation)"])
+        separate = classify_frame(True, {"low_iou": True, "fragments": True}, 2, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.6, coverage=0.95, components=2, pixels_outside_largest=12000, area_ratio=1.0)
+        self.assertEqual(separate["tags"], ["fragmented mask", "fit failure suspected", "mask has extra body (segmentation)"])
+        short = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.88, coverage=0.97, area_ratio=0.95)
+        self.assertEqual(short["tags"], ["fit failure suspected", "tube on mask, mask not covered"])
+        poor = classify_frame(True, {"low_iou": True}, 1, points_in_fov=100, n_points=100, mask_on_border=False, iou=0.5, coverage=0.6)
+        self.assertEqual(poor["tags"], ["fit failure suspected"])
+
+    def test_curvature_of_a_circle_is_its_inverse_radius(self) -> None:
+        angle = np.linspace(0, np.pi, 100)
+        circle = np.stack((50 * np.cos(angle), 50 * np.sin(angle)), axis=1)
+        curvature = signed_curvature(circle)
+        np.testing.assert_allclose(curvature[5:-5], 1 / 50, rtol=0.02)
+        self.assertTrue(np.all(signed_curvature(np.stack((np.arange(100.0), np.zeros(100)), axis=1)) == 0))
+
+    def test_prior_width_profile_applies_mean_centred_log_correction(self) -> None:
+        template = default_width_template(100)
+        symmetric = prior_width_profile(10.0, template, None)
+        np.testing.assert_allclose(symmetric, 10.0 * template)
+        shaped = prior_width_profile(10.0, template, [0.2, 0.0, 0.0, 0.0, 0.0, -0.2])
+        self.assertGreater(shaped[10], symmetric[10])
+        self.assertLess(shaped[-10], symmetric[-10])
+        np.testing.assert_allclose(np.mean(np.log(shaped / (10.0 * template))), 0.0, atol=1e-9)
+
+
+class WorkspacePayloadTests(unittest.TestCase):
+    def test_series_frames_and_poses_of_a_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "rec-a.h5"
+            _write_recording(recording)
+            view, source = _view(_write_workspace(root / "workspaces", "demo", recording), root)
+            segmenters, cpu = Segmenters(torch.device("cpu")), torch.device("cpu")
+            try:
+                payload = view.payload()
+                self.assertTrue(payload["recording_readable"])
+                self.assertEqual(payload["image_shape"], [HEIGHT, WIDTH])
+                self.assertTrue(payload["has_independent_pose"])
+                self.assertEqual(payload["provenance"]["job"][0], "stage:fit")
+                series = payload["series"]
+                self.assertEqual(series["frame_index"], list(range(FRAMES)))
+                self.assertEqual(series["classification"], ["clean"] * (FRAMES - 1) + ["ambiguous"])
+                self.assertEqual(series["flags"]["low_iou"], [0] * (FRAMES - 1) + [1])
+                self.assertEqual(len(series["tube_area_px"]), FRAMES)
+                self.assertEqual(series["path_override"][-1], 1)
+                self.assertEqual(series["tube_coverage"][-1], 0.97)
+                self.assertEqual(payload["stretches"], [[FRAMES - 3, FRAMES - 1]])
+
+                frame = view.frame(FRAMES - 1, segmenters, cpu, raw=True, detail="full")
+                self.assertEqual((frame["height"], frame["width"]), (HEIGHT, WIDTH))
+                self.assertTrue(frame["layers"]["image"].startswith("data:image/jpeg"))
+                self.assertTrue(frame["image_raw"].startswith("data:image/jpeg"))
+                self.assertTrue(frame["layers"]["tube"].startswith("data:image/png"))
+                self.assertTrue(frame["layers"]["tube_independent"].startswith("data:image/png"))
+                self.assertNotIn("probability", frame["layers"])
+                self.assertEqual(frame["errors"], [])
+                self.assertEqual(frame["provenance"]["algorithm"], "chain_forward")
+                stats = frame["stats"]
+                self.assertEqual(stats["source_name"], "forward")
+                self.assertEqual(stats["classification"]["kind"], "ambiguous")
+                self.assertIn("coil / self-contact", stats["classification"]["tags"])
+                self.assertIn("path overrode lowest energy", stats["classification"]["tags"])
+                self.assertEqual(stats["stretch"]["rows"], [FRAMES - 3, FRAMES - 1])
+                fired = {f["name"] for f in stats["flags"] if f["fired"]}
+                self.assertEqual(fired, {"low_iou", "self_contact"})
+                low = next(f for f in stats["flags"] if f["name"] == "low_iou")
+                self.assertEqual((low["threshold"], low["test"]), (0.9, "<"))
+                self.assertEqual(stats["length_vs_prior_sigmas"], 0.0)
+                self.assertEqual(stats["max_bend_widths"], 0.8)
+                pose = frame["pose"]
+                self.assertEqual(len(pose["centerline_xy"]), 100)
+                self.assertEqual(len(pose["curvature"]), 100)
+                self.assertEqual(len(pose["width_prior_profile"]), 100)
+                self.assertAlmostEqual(pose["independent"]["centerline_xy"][0][1] - pose["centerline_xy"][0][1], 8.0, places=1)
+                self.assertNotIn("hypotheses", pose)
+
+                light = view.frame(2, segmenters, cpu, raw=False, detail="light")
+                self.assertEqual(light["detail"], "light")
+                self.assertEqual(sorted(light["layers"]), ["image"])
+                self.assertEqual(light["stats"]["frame_index"], 2)
+                with self.assertRaisesRegex(ValueError, "detail"):
+                    view.frame(2, segmenters, cpu, raw=False, detail="medium")
+                with self.assertRaisesRegex(ValueError, "not in this workspace"):
+                    view.frame(99, segmenters, cpu, raw=False, detail="full")
+            finally:
+                source.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

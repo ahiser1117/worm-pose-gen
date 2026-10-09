@@ -10,10 +10,18 @@ the regression check).  Every sample is fit to its hand mask four ways:
               afterwards by the body's taper, as the pipeline does without a
               recording prior
 ``trace``     the same plus the network-proposed trace as a start
-``fields``    every start in both orientations, scored against the network's
-              A-P field and end points (``MaskFitConfig.field_*``); the fit
-              decides the orientation
-``both``      ``fields`` plus the trace start
+``fields``    the standard starts as the pipeline's fit stage builds them
+              with the network: head first by the predicted ends where both
+              are in view (``mask_fit.head_first``), else both orientations;
+              scored against the network's A-P field and end points
+              (``MaskFitConfig.field_*``)
+``both``      ``fields`` plus the trace start, head first (the pipeline)
+
+The trace start is laid from the head at the length of the sample's
+recording (``body_fields.recording_length``, standing in for the recording
+prior), and the ``fields`` and ``both`` fits keep that length, as the fit
+stage does with a prior and the network; samples without one are fit with
+a free length.
 
 Per sample: the mean distance in body widths from each visible point of the
 ground-truth midline to the fitted midline (blind to length and orientation,
@@ -42,7 +50,7 @@ from worm_pose_gen.body_net import load_body_net
 from worm_pose_gen.body_proposal import FIELD_AP_WEIGHT, FIELD_END_WEIGHT, field_evidence, predict_fields, trace_start
 from worm_pose_gen.body_targets import render_body_targets
 from worm_pose_gen.classical import resample_centerline
-from worm_pose_gen.mask_fit import default_width_template, orient_tail_last, orientation_pair, reverse_initialization
+from worm_pose_gen.mask_fit import default_width_template, head_first, orient_tail_last, orientation_pair
 from worm_pose_gen.pipeline import initializations_for
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, SegmentationStore
 
@@ -118,36 +126,48 @@ def main() -> int:
     masks = [mask for _, _, mask, _ in cases]
     predictions = [predict_fields(module, arrays["context"], arrays["context_valid"]) for *_, arrays in cases]
     evidence = [field_evidence(p, m) for p, m in zip(predictions, masks)]
-    traces = [
-        trace_start(p, m, config=config, length_px=body_fields.recording_length(store, record))
-        for p, m, (record, *_) in zip(predictions, masks, cases)
-    ]
+    lengths = [body_fields.recording_length(store, record) for record, *_ in cases]
+    traces = [trace_start(p, m, config=config, length_px=length) for p, m, length in zip(predictions, masks, lengths)]
     standard = []
     for mask in masks:
         starts = initializations_for(mask, config)
         skeleton = next((s for s in starts if s.name == "skeleton_longest_path"), None)
         standard.append(starts + ([orientation_pair(skeleton, config=config)[1]] if skeleton is not None else []))
 
-    def both_ways(starts):
-        return [s for start in starts for s in (start, reverse_initialization(start, config=config))]
+    def with_evidence(starts, frame_evidence):
+        """The standard starts as ``pipeline.fit_frames`` builds them with the network."""
+
+        base = [s for s in starts if not s.name.endswith("_reversed")]
+        if frame_evidence.head_xy is not None and frame_evidence.tail_xy is not None:
+            return [head_first(s, frame_evidence.head_xy, frame_evidence.tail_xy, config=config) for s in base]
+        return [s for start in base for s in orientation_pair(start, config=config)]
 
     rows = []
     for variant in args.variants:
         with_trace = variant in ("trace", "both")
-        starts = [s + ([t] if with_trace and t is not None else []) for s, t in zip(standard, traces)]
         uses_fields = variant in ("fields", "both")
+        base = [with_evidence(s, e) for s, e in zip(standard, evidence)] if uses_fields else standard
+        starts = [s + ([t] if with_trace and t is not None else []) for s, t in zip(base, traces)]
         if uses_fields:
-            starts = [both_ways(s) for s in starts]
-        results = fit_masks(
-            masks, starts, width_template=template, config=field_config if uses_fields else config, device=device,
-            fields=evidence if uses_fields else None,
-        )
+            # One fit per recording length, held fixed (free where a sample has none).
+            results = [None] * len(cases)
+            for length in set(lengths):
+                group = [k for k, other in enumerate(lengths) if other == length]
+                group_config = field_config if length is None else replace(field_config, length_prior_px=length, length_fixed=True)
+                fitted = fit_masks(
+                    [masks[k] for k in group], [starts[k] for k in group], width_template=template, config=group_config,
+                    device=device, fields=[evidence[k] for k in group],
+                )
+                for k, result in zip(group, fitted, strict=True):
+                    results[k] = result
+        else:
+            results = fit_masks(masks, starts, width_template=template, config=config, device=device)
         for (record, group, mask, arrays), result in zip(cases, results):
             if not uses_fields:
                 result, _ = orient_tail_last(result, config=config)
             iou = float(result.records[result.best_index]["final_iou"])
             row = {"variant": variant, "group": group, "sample_id": record.sample_id, "split": record.split,
-                   "winner": str(result.initializations[result.best_index].name)}
+                   "winner": str(result.initializations[result.best_index].name), "starts": len(result.initializations)}
             row.update(score(result.centerline_xy, result.width_profile, iou, mask, arrays))
             rows.append(row)
         print(f"{variant}: fitted {len(results)} samples", flush=True)
@@ -171,6 +191,7 @@ def main() -> int:
                 "head_correct": float(np.mean([r["head_correct"] for r in sel])),
                 "iou_median": float(np.median([r["iou"] for r in sel])),
                 "trace_won": int(sum(r["winner"].startswith("network_trace") for r in sel)),
+                "starts_mean": float(np.mean([r["starts"] for r in sel])),
             }
             summary[f"{group}/{variant}"] = entry
             print(f"{group:9s} {variant:9s} {entry['n']:3d} {entry['distance_median']:8.2f} {entry['within_half_width']:4d}/{entry['n']:<3d}"

@@ -19,6 +19,7 @@ from worm_pose_gen.mask_fit import (
 )
 from worm_pose_gen.batch_fit import PRESETS
 
+from tests.slow import slow
 from tests.test_batch_fit import body_evidence
 from worm_pose_gen.propagation import (
     Candidate,
@@ -206,6 +207,7 @@ class PropagationTests(unittest.TestCase):
         self.assertEqual(out["frames_with_prediction"], 2)
         self.assertAlmostEqual(out["prediction_distance_px_p50_p90_max"][0], 5.0)
 
+    @slow
     def test_propagation_recovers_frames_a_cold_start_misses(self) -> None:
         curves, masks, latents = _sequence()
         n = len(masks)
@@ -288,6 +290,7 @@ class PropagationTests(unittest.TestCase):
             self.assertLess(pose_distance_px(oriented, anchor, None), pose_distance_px(oriented[::-1], anchor, None))
             self.assertTrue(np.isfinite(choice.cost))
 
+    @slow
     def test_evidence_reaches_every_fit_and_every_energy(self) -> None:
         curves, masks, latents = _sequence(7)
         n = len(masks)

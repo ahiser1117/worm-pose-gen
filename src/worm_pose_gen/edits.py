@@ -1,15 +1,14 @@
-"""Manual interventions on a workspace: pick a hypothesis, flip an orientation, undo.
+"""Manual interventions on a workspace: place poses, flip an orientation, edit a mask, undo.
 
-Phase 2 of ``docs/APP_PLAN.md``: the pipeline stores candidates per frame
-(``hypotheses_*`` arrays, ``pipeline.HYPOTHESIS_ARRAYS``) and one path
-through them; the user corrects a frame by choosing another candidate, as it
-is or mirrored, or by reversing the orientation of a frame or of the whole
-propagation stretch around it.  Every edit here
+The Workspace page's fixes (``worm_pose_gen.fixes``) change a workspace only
+through these edits: a kept Refit or Relabel stitch places its poses
+(``set_poses``), Flip reverses the orientation of rows (``flip_orientation``),
+and Edit mask saves an override mask (``set_mask``).  Every edit here
 
 - writes the new pose into the state arrays exactly as ``pipeline.store_result``
   would (plus ``taper_asymmetry``, ``reversed`` and ``orientation_gap``),
-- records provenance for the rows (``manual:pick``, ``manual:flip``, or the
-  algorithm and job a caller such as a Phase 3 region run passes in),
+- records provenance for the rows (``manual:flip``, ``manual:mask``, or the
+  algorithm and job a caller such as a kept fix passes in),
 - recomputes the ambiguity signals of the rows and their neighbours (a pose
   jump is a property of a pair of frames),
 - saves a before-snapshot of every array slice it changed to
@@ -17,14 +16,13 @@ propagation stretch around it.  Every edit here
   referencing it, so ``undo`` restores the slices and marks the edit undone
   in a new log entry (redo is out of scope).
 
-Older workspaces store only the candidates' centerlines and scores; a pick
-there rebuilds the pose from the centerline (latent re-encoded, the current
-row's widths and crop carried over).  Edits take the workspace lock the
-stages hold (``pipeline.workspace_lock``) so a stage and an edit never write
-the same arrays at once; an edit does not wait for a running stage, it raises
-``pipeline.WorkspaceBusy`` after ``LOCK_TIMEOUT`` seconds (the browser's
-request would otherwise hang for the stage's duration and then apply the
-user's intention to arrays the stage rewrote).
+Edits take the workspace lock the stages hold (``pipeline.workspace_lock``)
+so a stage and an edit never write the same arrays at once; an edit does not
+wait for a running stage, it raises ``pipeline.WorkspaceBusy`` after
+``LOCK_TIMEOUT`` seconds (the browser's request would otherwise hang for the
+stage's duration and then apply the user's intention to arrays the stage
+rewrote).  ``pose_from_hypothesis`` turns a stored hypothesis into the pose
+fields an edit writes, for the pipeline's own passes.
 """
 
 from __future__ import annotations
@@ -46,7 +44,6 @@ from .pipeline import (
     SOURCE_CODES,
     INDEPENDENT_COPIES,
     effective_mask_statistics,
-    read_summary,
     workspace_arrays,
     workspace_image_shape,
     workspace_lock,
@@ -54,11 +51,10 @@ from .pipeline import (
 )
 
 
-EDIT_KINDS = ("pick_hypothesis", "flip_orientation", "accept_path", "set_pose", "set_mask", "clear_mask", "undo")
-PICK_ALGORITHM = "manual:pick"
+EDIT_KINDS = ("flip_orientation", "set_pose", "set_mask", "clear_mask", "undo")
 FLIP_ALGORITHM = "manual:flip"
 EDITS_DIR = "edits"
-# The pose fields ``pose_from_hypothesis`` returns and ``set_pose`` accepts.
+# The pose fields ``pose_from_hypothesis`` returns and ``set_poses`` accepts.
 POSE_FIELDS = (
     "latent", "width_px", "width_shape", "width_profile", "centerline_xy", "body_length_px", "points_in_fov", "crop",
     "iou", "energy", "total_energy", "source", "best_start",
@@ -159,90 +155,6 @@ def _window(rows: Sequence[int], n: int) -> list[int]:
     for row in rows:
         window.update(r for r in (row - 1, row, row + 1) if 0 <= r < n)
     return sorted(window)
-
-
-# ---------------------------------------------------------------------------
-# Segments
-
-
-def _stretches(workspace: Any, state: dict[str, np.ndarray]) -> list[tuple[int, int]]:
-    """The propagation stretches of a workspace (``stretches_of`` with its summary)."""
-
-    return stretches_of(state, read_summary(workspace))
-
-
-def stretches_of(state: dict[str, np.ndarray], summary: dict[str, Any]) -> list[tuple[int, int]]:
-    """The propagation stretches: from the summary when it has them, else the runs of non-zero ``source`` in the state."""
-
-    stored = (summary.get("propagation") or {}).get("stretches") or []
-    stretches = [(int(a), int(b)) for a, b in stored]
-    if stretches:
-        return stretches
-    source = np.asarray(state.get("source", np.zeros(len(state["frame_index"]), dtype=np.int8))) != 0
-    return _runs(source)
-
-
-def _runs(flags: np.ndarray) -> list[tuple[int, int]]:
-    """Maximal runs of consecutive true entries as inclusive ``(first, last)`` pairs."""
-
-    runs: list[tuple[int, int]] = []
-    start: int | None = None
-    for row, on in enumerate(np.asarray(flags, dtype=bool).tolist() + [False]):
-        if on and start is None:
-            start = row
-        elif not on and start is not None:
-            runs.append((start, row - 1))
-            start = None
-    return runs
-
-
-def segment_info(workspace: Any, row: int, state: dict[str, np.ndarray] | None = None, stretches: Sequence[tuple[int, int]] | None = None) -> dict[str, Any]:
-    """The segment of ``row`` as the API reports it: frames, rows and whether it is a propagation stretch.
-
-    ``state`` (the workspace's arrays, or any dictionary holding
-    ``frame_index``, ``fitted`` and ``source``) and ``stretches`` spare the
-    disk when the caller already has them loaded (the app answers this for
-    every frame shown).
-    """
-
-    if state is None:
-        state = workspace.load_state()
-    n = int(len(state["frame_index"]))
-    if not 0 <= int(row) < n:
-        raise ValueError(f"row {row} outside 0..{n - 1}")
-    if stretches is None:
-        stretches = _stretches(workspace, state)
-    a, b = _segment_of(int(row), n, state, stretches)
-    in_stretch = any(s <= row <= e for s, e in stretches)
-    frames = np.asarray(state["frame_index"], dtype=np.int64)
-    return {"frames": [int(frames[a]), int(frames[b])], "rows": [a, b], "in_stretch": in_stretch}
-
-
-def segment_of(workspace: Any, row: int) -> tuple[int, int]:
-    """The propagation stretch containing ``row``, else the run of consecutive fitted rows around it that lies outside every stretch.
-
-    Rows are inclusive.  An unfitted row outside every stretch is its own segment.
-    """
-
-    rows = segment_info(workspace, row)["rows"]
-    return int(rows[0]), int(rows[1])
-
-
-def _segment_of(row: int, n: int, state: dict[str, np.ndarray], stretches: Sequence[tuple[int, int]]) -> tuple[int, int]:
-    for a, b in stretches:
-        if a <= row <= b:
-            return a, b
-    fitted = np.asarray(state.get("fitted", np.ones(n, dtype=bool)), dtype=bool).copy()
-    for a, b in stretches:
-        fitted[max(a, 0) : min(b, n - 1) + 1] = False
-    if not fitted[row]:
-        return row, row
-    a = b = row
-    while a > 0 and fitted[a - 1]:
-        a -= 1
-    while b < n - 1 and fitted[b + 1]:
-        b += 1
-    return a, b
 
 
 # ---------------------------------------------------------------------------
@@ -578,115 +490,43 @@ def _commit(
     return EditResult(edit_id=edit_id, kind=kind, rows=[int(r) for r in rows], summary=summary)
 
 
-Install = Callable[[dict[str, np.ndarray]], dict[str, np.ndarray]]
-
-
-def _pick_rows(
-    workspace: Any,
-    choices: Sequence[tuple[int, int, bool]],
-    *,
-    kind: str,
-    algorithm: str,
-    job: str | None,
-    note: str,
-    extra: dict[str, Any] | None = None,
-    install: Install | None = None,
-) -> EditResult:
-    """The shared body of ``pick_hypothesis`` and ``accept_path``: write hypotheses into rows in one edit.
-
-    ``install`` (a region accept) rewrites the hypotheses arrays, given the
-    loaded dictionary and returning the one to use (it may grow the slot
-    count), AFTER the before-snapshot is taken and before the choices are
-    read from it: the rows' previous candidates land in the snapshot, so an
-    undo brings them back, and a failure leaves the files untouched.
-    """
-
-    with workspace_lock(workspace, timeout=LOCK_TIMEOUT):
-        loaded = _load(workspace)
-        if install is None and "hypotheses_centerline_xy" not in loaded.hypotheses:
-            raise ValueError("the workspace has no hypotheses")
-        rows = _check_rows([row for row, _, _ in choices], loaded.n)
-        if len(rows) != len(choices):
-            raise ValueError("a row appears more than once in the choices")
-        window = _window(rows, loaded.n)
-        before = _capture(loaded, window)
-        summary_before = {row: _row_summary(loaded, row) for row in rows}
-        if install is not None:
-            loaded.hypotheses = install(loaded.hypotheses)
-            if "hypotheses_centerline_xy" not in loaded.hypotheses:
-                raise ValueError("the installed hypotheses have no centerlines")
-            # Arrays the install created (a workspace without hypotheses so far) were blank before it:
-            # the snapshot holds blank slices, so an undo empties the rows again.
-            index = np.asarray(window, dtype=np.int64)
-            for key in _row_arrays(loaded.hypotheses, loaded.n):
-                before.setdefault(f"hypotheses:{key}", _blank_like(loaded.hypotheses[key][index], key))
-        poses = {int(row): pose_from_hypothesis(loaded.state, loaded.hypotheses, int(row), int(index), bool(mirrored), image_shape=loaded.image_shape) for row, index, mirrored in choices}
-        for row, index, mirrored in choices:
-            _write_pose(loaded.state, int(row), poses[int(row)])
-            loaded.hypotheses["path_index"][int(row)] = int(index)
-            loaded.hypotheses["path_mirrored"][int(row)] = bool(mirrored)
-        _refresh_ambiguity(loaded, rows)
-        edit_id = _next_edit_id(workspace)
-        _apply_provenance(workspace, loaded, rows, algorithm, job or f"edit:{edit_id}")
-        payload = {
-            "choices": [{"row": int(r), "index": int(i), "mirrored": bool(m)} for r, i, m in choices],
-            "algorithm": algorithm, "job": job or f"edit:{edit_id}", "note": str(note or ""), **(extra or {}),
-        }
-        return _commit(workspace, loaded, before, window, rows, kind, payload, summary_before, edit_id)
-
-
 # ---------------------------------------------------------------------------
 # Public edits
 
 
-def pick_hypothesis(workspace: Any, row: int, index: int, *, mirrored: bool = False, note: str = "") -> EditResult:
-    """Make hypothesis ``index`` of ``row`` (mirrored on request) the row's pose; provenance ``manual:pick``."""
-
-    return _pick_rows(workspace, [(int(row), int(index), bool(mirrored))], kind="pick_hypothesis", algorithm=PICK_ALGORITHM, job=None, note=note)
-
-
-def accept_path(
+def set_poses(
     workspace: Any,
-    choices: Sequence[tuple[int, int, bool]],
+    poses: dict[int, dict[str, Any]],
     *,
     algorithm: str,
     job: str,
     note: str = "",
-    install: Install | None = None,
     extra: dict[str, Any] | None = None,
+    check: Callable[[dict[str, np.ndarray]], None] | None = None,
 ) -> EditResult:
-    """Pick a hypothesis for every row in ``choices`` (row, index, mirrored) as one edit, attributed to ``algorithm`` and ``job``.
+    """Write explicit poses (row -> the ``pose_from_hypothesis`` fields) as one edit; they are not stored hypotheses.
 
-    ``install`` puts the candidates the choices index into the hypotheses
-    arrays inside the edit (see ``_pick_rows``); ``extra`` adds fields to the
-    log entry (a region accept records its ``candidate_set`` so ``undo`` can
-    un-mark the set).
+    ``check`` sees the state under the workspace lock before anything is
+    written and raises to refuse the edit (a refit result whose inputs
+    changed since it ran); ``extra`` adds fields to the log entry.
     """
-
-    if not choices:
-        raise ValueError("no choices given")
-    return _pick_rows(
-        workspace, [(int(r), int(i), bool(m)) for r, i, m in choices], kind="accept_path", algorithm=str(algorithm), job=str(job), note=note,
-        extra=extra, install=install,
-    )
-
-
-def set_pose(workspace: Any, row: int, pose: dict[str, Any], *, algorithm: str, job: str, note: str = "") -> EditResult:
-    """Write an explicit pose (the ``pose_from_hypothesis`` fields) into ``row``; it is not one of the stored hypotheses."""
 
     with workspace_lock(workspace, timeout=LOCK_TIMEOUT):
         loaded = _load(workspace)
-        rows = _check_rows([row], loaded.n)
+        rows = _check_rows(list(poses), loaded.n)
+        if check is not None:
+            check(loaded.state)
         window = _window(rows, loaded.n)
         before = _capture(loaded, window)
-        summary_before = {rows[0]: _row_summary(loaded, rows[0])}
-        _write_pose(loaded.state, rows[0], pose)
-        if loaded.hypotheses:
-            loaded.hypotheses["path_index"][rows[0]] = -1
-            loaded.hypotheses["path_mirrored"][rows[0]] = False
+        summary_before = {row: _row_summary(loaded, row) for row in rows}
+        for row in rows:
+            _write_pose(loaded.state, row, poses[row])
+            if loaded.hypotheses:
+                loaded.hypotheses["path_index"][row] = -1
+                loaded.hypotheses["path_mirrored"][row] = False
         _refresh_ambiguity(loaded, rows)
         _apply_provenance(workspace, loaded, rows, str(algorithm), str(job))
-        payload = {"algorithm": str(algorithm), "job": str(job), "note": str(note or "")}
+        payload = {"algorithm": str(algorithm), "job": str(job), "note": str(note or ""), **(extra or {})}
         return _commit(workspace, loaded, before, window, rows, "set_pose", payload, summary_before)
 
 
@@ -715,19 +555,6 @@ def flip_orientation(workspace: Any, rows: Sequence[int], *, note: str = "") -> 
         _apply_provenance(workspace, loaded, fitted, FLIP_ALGORITHM, f"edit:{edit_id}")
         payload = {"algorithm": FLIP_ALGORITHM, "job": f"edit:{edit_id}", "note": str(note or ""), "requested_rows": [int(r) for r in wanted]}
         return _commit(workspace, loaded, before, window, fitted, "flip_orientation", payload, summary_before, edit_id)
-
-
-def flip_frame(workspace: Any, row: int, *, note: str = "") -> EditResult:
-    """``flip_orientation`` of one row."""
-
-    return flip_orientation(workspace, [int(row)], note=note or "flip frame")
-
-
-def flip_segment(workspace: Any, row: int, *, note: str = "") -> EditResult:
-    """``flip_orientation`` of the segment (``segment_of``) around ``row``."""
-
-    a, b = segment_of(workspace, int(row))
-    return flip_orientation(workspace, list(range(a, b + 1)), note=note or f"flip segment rows {a}-{b}")
 
 
 def set_mask(workspace: Any, row: int, labels: np.ndarray | None, *, revision: str | None = None, note: str = "") -> EditResult:
@@ -910,16 +737,8 @@ def undo(workspace: Any, edit_id: str | None = None) -> EditResult:
         if mask_present is None:
             _refresh_ambiguity(loaded, rows)
         record = {"undoes": target["id"], "undone_kind": target.get("kind"), "note": f"undo {target['id']}"}
-        if payload.get("candidate_set"):
-            record["candidate_set"] = str(payload["candidate_set"])
         result = _commit(workspace, loaded, before, window, rows, "undo", record, summary_before)
         result.undone = str(target["id"])
-    if target.get("kind") == "accept_path" and payload.get("candidate_set"):
-        # The accepted candidate set (Phase 3) is no longer in the state: un-mark it.
-        # (Imported here: ``algorithms`` builds on this module.)
-        from .algorithms import unaccept_candidates
-
-        unaccept_candidates(workspace, str(payload["candidate_set"]), rows=rows, edit=result.edit_id, undoes=str(target["id"]))
     return result
 
 

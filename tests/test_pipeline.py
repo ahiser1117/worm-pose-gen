@@ -13,7 +13,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -32,7 +32,6 @@ from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import default_width_template, render_tube_segments
 from worm_pose_gen import pipeline
 from worm_pose_gen.pipeline import (
-    STAGES,
     DarkPixelSegmenter,
     FitParams,
     Frames,
@@ -42,7 +41,7 @@ from worm_pose_gen.pipeline import (
     TrackParams,
     build_fit_config,
     config_from_dict,
-    export_table,
+    fit_setup,
     independent_copies,
     new_arrays,
     read_summary,
@@ -51,9 +50,11 @@ from worm_pose_gen.pipeline import (
     workspace_setup,
     segment_frames,
     stage_command,
-    stage_schema,
 )
+from worm_pose_gen.recording_prior import RecordingPrior
 from worm_pose_gen.workspace import Workspace
+
+from tests.slow import slow
 
 
 HEIGHT, WIDTH, FRAMES = 160, 220, 6
@@ -162,18 +163,6 @@ class ParamTests(unittest.TestCase):
         self.assertEqual((propagate.min_score, propagate.pad, propagate.max_gap, propagate.beam, propagate.path_inview_weight), (2, 2, 3, 3, 2.0))
         self.assertEqual(TrackParams().track_refit, "clipped-deviating")
 
-    def test_stage_schema_lists_every_field(self) -> None:
-        for stage in STAGES:
-            schema = stage_schema(stage)
-            self.assertEqual([f["name"] for f in schema], list(asdict(pipeline.STAGE_PARAMS[stage]()).keys()))
-            for entry in schema:
-                self.assertEqual(set(entry), {"name", "type", "default", "help"})
-        fit = {f["name"]: f for f in stage_schema("fit")}
-        self.assertEqual(fit["preset"]["type"], "str")
-        self.assertEqual(fit["padding"]["type"], "int")
-        self.assertEqual(fit["overrides"]["type"], "dict")
-        self.assertTrue(fit["preset"]["help"])
-
     def test_fit_config_from_params_and_back(self) -> None:
         config = build_fit_config(FitParams(compile=False, padding=48, overrides=SMALL_OVERRIDES))
         self.assertEqual(config.crop_padding, 16)  # overrides win over the flags
@@ -184,10 +173,22 @@ class ParamTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown BatchFitConfig field"):
             build_fit_config(FitParams(overrides={"no_such": 1}))
 
+    def test_the_network_and_a_prior_fix_the_length(self) -> None:
+        coefficients = BatchFitConfig().width_coefficients
+        prior = RecordingPrior(
+            length_px=700.0, log_length_sigma=0.05, width_px=24.0, log_width_sigma=0.05,
+            width_shape=(0.0,) * coefficients, width_shape_sigma=(0.1,) * coefficients, frames_used=12, frames_candidates=12, selection={},
+        )
+        fixed = fit_setup(FitParams(body_net="net.ckpt"), prior).config
+        self.assertEqual((fixed.length_fixed, fixed.length_prior_px), (True, 700.0))
+        self.assertFalse(fit_setup(FitParams(), prior).config.length_fixed)
+        self.assertFalse(fit_setup(FitParams(body_net="net.ckpt"), None).config.length_fixed)
+        self.assertTrue(config_from_dict(json.loads(json.dumps(asdict(fixed)))).length_fixed)
+
     def test_stage_command_round_trips_the_parameters(self) -> None:
         params = {"preset": "fast", "overrides": {"stage_steps": [1, 2]}, "threshold": 0.4}
         command = stage_command(Path("/tmp/ws"), "fit", params)
-        self.assertEqual(command[:3], [".venv/bin/python", "-m", "worm_pose_gen.pipeline"])
+        self.assertEqual(command[:3], [sys.executable, "-m", "worm_pose_gen.pipeline"])
         self.assertEqual(command[command.index("--workspace") + 1], "/tmp/ws")
         self.assertEqual(command[command.index("--stage") + 1], "fit")
         self.assertEqual(json.loads(command[command.index("--params") + 1]), params)
@@ -234,6 +235,7 @@ class StageTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.directory.cleanup()
 
+    @slow
     def test_stages_in_order(self) -> None:
         self._segment()
         self._fit()
@@ -245,7 +247,6 @@ class StageTests(unittest.TestCase):
         self._export()
         self._cli()
         self._fit_scores_override_masks()
-        self._imported_workspace_keeps_its_fit_configuration()
         self._stages_wait_for_the_workspace_lock()
 
     def _segment(self) -> None:
@@ -392,28 +393,22 @@ class StageTests(unittest.TestCase):
         self.assertTrue(np.isfinite(state["track_length_px"]).all())
 
     def _export(self) -> None:
+        # The stage over a fitted workspace (tests/test_export.py covers the table itself).
         import pyarrow.parquet as pq
 
-        result = run_stage(self.workspace, "export", {"name": "test"}, device="cpu")
+        result = run_stage(self.workspace, "export", {"pixel_size_um": 1.5}, device="cpu")
         path = Path(result["path"])
-        self.assertEqual(path, self.workspace.path / "exports" / "test.parquet")
-        table = pq.read_table(path)
-        self.assertEqual(table.num_rows, FRAMES)
-        expected = {
-            "frame_index", "fitted", "iou", "tube_coverage", "body_length_px", "width_px", "points_in_fov", "source", "ambiguity_score",
-            "provenance_algorithm", "provenance_job", "provenance_time", "centerline_x", "centerline_y", "width_profile",
-            "centroid_x", "centroid_y", "speed_px_per_frame", "mean_abs_curvature",
-        } | {f"flag_{name}" for name in FLAG_NAMES}
-        self.assertEqual(set(table.column_names), expected)
-        rows = table.to_pylist()
-        self.assertEqual(rows[0]["frame_index"], 0)
-        self.assertEqual(len(rows[0]["centerline_x"]), 100)
-        self.assertEqual(len(rows[0]["width_profile"]), 100)
-        self.assertEqual(rows[0]["provenance_algorithm"], "independent_fit")
-        self.assertIsNone(rows[0]["speed_px_per_frame"])  # no earlier frame
-        self.assertTrue(all(np.isfinite(r["speed_px_per_frame"]) for r in rows[1:]))
-        self.assertTrue(all(r["mean_abs_curvature"] > 0 for r in rows))
-        self.assertAlmostEqual(rows[0]["centroid_x"], float(np.mean(rows[0]["centerline_x"])))
+        self.assertEqual(path.parent.parent, self.workspace.path / "exports")
+        self.assertTrue((path.parent / "export.json").is_file())
+        rows = pq.read_table(path).to_pylist()
+        self.assertEqual(len(rows), FRAMES)
+        self.assertEqual(rows[0]["frame"], 0)
+        self.assertEqual(len(rows[0]["midline_x"]), 100)
+        self.assertTrue(all(r["status"] in ("auto", "unresolved") for r in rows))
+        fitted = [r for r in rows if r["head_x"] is not None]
+        self.assertTrue(fitted)
+        self.assertTrue(all(np.isfinite(r["curvature"]).all() and min(r["width"]) > 0 for r in fitted))
+        self.assertEqual(result["length_unit"], "um")
 
     def _cli(self) -> None:
         # The job command re-runs the ambiguity stage through the module's entry point and reports progress.
@@ -453,36 +448,12 @@ class StageTests(unittest.TestCase):
         self.assertEqual(int(state["worm_pixels"][2]), int(stored.sum()))
         self.assertAlmostEqual(float(np.mean(state["centerline_xy"][2, :, 0])), centroid_before, delta=3.0)
 
-    def _imported_workspace_keeps_its_fit_configuration(self) -> None:
-        # A run directory from this workspace, imported: the first stage on it must not lose the run's fit configuration.
-        run_dir = Path(self.directory.name) / "runs" / "demo_run"
-        run_dir.mkdir(parents=True)
-        np.savez(run_dir / "poses.npz", **self.workspace.load_arrays())
-        summary = json.loads((self.workspace.path / "summary.json").read_text())
-        summary["starts"] = "skeleton+reversed"
-        (run_dir / "summary.json").write_text(json.dumps(summary))
-        imported = Workspace.import_run(Path(self.directory.name) / "workspaces", run_dir, "imported")
-        self.assertFalse((imported.path / "summary.json").exists())
-        self.assertEqual(workspace_setup(imported).start_set, "skeleton+reversed")
-        run_stage(imported, "ambiguity", {}, device="cpu")
-        self.assertTrue((imported.path / "summary.json").exists())
-        merged = read_summary(imported)
-        self.assertEqual(config_from_dict(merged["fit_config"]).stage_steps, (60, 60))
-        self.assertEqual(merged["starts"], "skeleton+reversed")
-        for key in ("threshold", "mask_cleanup", "preset", "fit_params", "ambiguity", "finished_at"):
-            self.assertIn(key, merged)
-        self.assertEqual(workspace_setup(imported).start_set, "skeleton+reversed")
-        self.assertEqual(workspace_setup(imported).config.stage_steps, (60, 60))
-        run_stage(imported, "export", {"name": "imported"}, device="cpu")
-        self.assertEqual(read_summary(imported)["starts"], "skeleton+reversed")
-        shutil.rmtree(imported.path)
-
     def _stages_wait_for_the_workspace_lock(self) -> None:
         # Another process holding the workspace's lock (a running stage) delays the stage until it lets go.
         handle = open(self.workspace.path / ".lock", "w")
         fcntl.flock(handle, fcntl.LOCK_EX)
         finished: list[float] = []
-        thread = threading.Thread(target=lambda: (run_stage(self.workspace, "export", {"name": "locked"}, device="cpu"), finished.append(time.monotonic())))
+        thread = threading.Thread(target=lambda: (run_stage(self.workspace, "export", {}, device="cpu"), finished.append(time.monotonic())))
         thread.start()
         time.sleep(0.4)
         self.assertEqual(finished, [])
@@ -492,12 +463,13 @@ class StageTests(unittest.TestCase):
         thread.join(timeout=30)
         self.assertEqual(len(finished), 1)
         self.assertGreaterEqual(finished[0], released)
-        self.assertTrue((self.workspace.path / "exports" / "locked.parquet").exists())
+        self.assertEqual(len(list((self.workspace.path / "exports").glob("*/export.json"))), 2)
 
 
 class BodyFieldStageTests(unittest.TestCase):
     """The stages of a workspace fit with the body-field network (a stub that knows the bodies): its evidence reaches every fit."""
 
+    @slow
     def test_evidence_reaches_the_fit_propagate_and_track_stages(self) -> None:
         predictors: list[_StubPredictor] = []
 
@@ -518,7 +490,14 @@ class BodyFieldStageTests(unittest.TestCase):
             _write_recording(recording_path)
             workspace = Workspace.create(root / "workspaces", "fields", recording_path, 0, FRAMES - 1)
             run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
-            run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
+            fit_starts: list = []
+
+            def fit_recording(masks, starts, **kwargs):
+                fit_starts.append(starts)
+                return fit_masks(masks, starts, **kwargs)
+
+            with mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=fit_recording):
+                run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
             self.assertEqual(config_from_dict(read_summary(workspace)["fit_config"]).field_ap_weight, FIELD_AP_WEIGHT)
             state = workspace.load_state()
             # Every fit is scored against the evidence, which also decides the orientation: heads first.
@@ -526,6 +505,13 @@ class BodyFieldStageTests(unittest.TestCase):
             np.testing.assert_array_equal(state["field_energy_independent"], state["field_energy"])
             for row in range(FRAMES):
                 self.assertLess(float(np.linalg.norm(state["centerline_xy"][row, 0] - _body_curve(row)[0])), 6.0)
+            # Both ends are in view on every frame, so each standard start is fit once, head first, and no orientation gap is measured.
+            self.assertTrue(np.isnan(state["orientation_gap"]).all())
+            self.assertEqual(len(fit_starts), 1)
+            for frame_starts in fit_starts[0]:
+                names = [s.name.removesuffix("_reversed") for s in frame_starts]
+                self.assertEqual(len(names), len(set(names)))
+                self.assertIn("network_trace", names)
             run_stage(workspace, "ambiguity", {}, device="cpu")
             # A pose two body widths off its mask seeds a stretch around row 3 (as in HypothesisArrayTests).
             state = workspace.load_state()
@@ -564,6 +550,50 @@ class BodyFieldStageTests(unittest.TestCase):
             self.assertTrue(set(refit.tolist()).isdisjoint({2, 3, 4}))
             self.assertTrue((workspace.load_state()["field_energy"][refit] > 0).all())
 
+    def test_masks_from_the_body_net(self) -> None:
+        predictors: list[_StubPredictor] = []
+
+        def field_predictor(checkpoint, frames, device):
+            self.assertEqual(checkpoint, "stub.ckpt")
+            predictors.append(_StubPredictor(frames))
+            return predictors[-1]
+
+        # A segmenter checkpoint that does not exist: loading it would fail, so the masks must be the network's.
+        params = {**SEGMENT_PARAMS, "checkpoint": "missing.ckpt", "mask_source": "body_net", "body_net": "stub.ckpt"}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pipeline, "field_predictor", side_effect=field_predictor):
+            root = Path(directory)
+            recording_path = root / "rec.h5"
+            bodies = _write_recording(recording_path)
+            workspace = Workspace.create(root / "workspaces", "net-masks", recording_path, 0, FRAMES - 1)
+            result = run_stage(workspace, "segment", params, device="cpu")
+            self.assertEqual(result["frames_with_worm"], FRAMES)
+            self.assertEqual(sorted(f for request in predictors[-1].requested for f in request), list(range(FRAMES)))
+            for row in range(FRAMES):
+                np.testing.assert_array_equal(workspace.get_mask(row), bodies[row])
+            summary = read_summary(workspace)
+            self.assertEqual((summary["mask_source"], summary["checkpoint"]["path"]), ("body_net", "stub.ckpt"))
+            # The region algorithms segment rows the way the workspace was segmented.
+            from worm_pose_gen.algorithms import _segment_params, segment_rows
+
+            recorded = _segment_params(workspace)
+            self.assertEqual((recorded.mask_source, recorded.body_net), ("body_net", "stub.ckpt"))
+            np.testing.assert_array_equal(segment_rows(workspace, [2], torch.device("cpu"))[2], bodies[2])
+            # The prior's bootstrap takes the same masks; the network is required and the source must be known.
+            frames = Frames(recording_path, flat_field=False)
+            try:
+                model = pipeline.load_mask_model(PriorParams.from_dict(params), frames, torch.device("cpu"))
+                self.assertIsInstance(model, pipeline.BodyNetMasks)
+                masks, _, timing = segment_frames(frames, model, [1, 4], PriorParams.from_dict(params), torch.device("cpu"))
+                np.testing.assert_array_equal(masks[1], bodies[4])
+                self.assertEqual(len(model.last), 2)
+                self.assertEqual((timing["read"], timing["flat_field"]), (0.0, 0.0))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="body_net"), frames, torch.device("cpu"))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="network"), frames, torch.device("cpu"))
+            finally:
+                frames.close()
+
 
 class IndependentCopyTests(unittest.TestCase):
     def test_copies_and_restore_by_provenance(self) -> None:
@@ -600,7 +630,7 @@ class IndependentCopyTests(unittest.TestCase):
         arrays["fitted"][7] = False
         algorithm = np.array(["independent_fit", "manual:pick", "chain_forward", "manual:flip", "mirror", "track_length_refit", "", "manual:pick"])
         placed = pipeline.placed_rows(arrays, algorithm)
-        # Picks, flips and accepted region runs are placed; the stages' rows and unfitted rows are not.
+        # Flips and kept fixes are placed; the stages' rows and unfitted rows are not.
         self.assertEqual(placed.tolist(), [False, True, False, True, True, False, False, False])
         self.assertEqual(pipeline.split_stretches([(0, 6)], placed), [(0, 0), (2, 2), (5, 6)])
         self.assertEqual(pipeline.split_stretches([(1, 1), (3, 4)], placed), [])
@@ -619,29 +649,6 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertEqual(fresh["hypotheses_source"][1].tolist(), ["forward"] * 3)
         self.assertEqual(int(fresh["path_index"][1]), 4)
         self.assertEqual(int(fresh["hypotheses_count"][2]), 0)
-
-
-class ExportTableTests(unittest.TestCase):
-    def test_kinematics_from_synthetic_arrays(self) -> None:
-        config = BatchFitConfig()
-        arrays = new_arrays(np.array([10, 11, 13]), config)
-        template = default_width_template()
-        for row, shift in enumerate((0.0, 3.0, 9.0)):
-            latent = np.concatenate((np.zeros(16), [0.0, 100.0], [50.0 + shift, 40.0]))
-            arrays["centerline_xy"][row] = decode_centerline(latent)
-            arrays["width_profile"][row] = 10.0 * template
-            arrays["fitted"][row] = True
-            arrays["iou"][row] = 0.9
-        arrays["fitted"][1] = False
-        table = export_table(arrays, {"algorithm": np.array(["a", "", "b"]), "job": np.array(["j", "", "j"]), "time": np.array([1.0, np.nan, 2.0])})
-        rows = table.to_pylist()
-        self.assertIsNone(rows[1]["centerline_x"])
-        self.assertIsNone(rows[1]["centroid_x"])
-        # Row 2 follows row 0 (row 1 is not fitted): 9 px over 3 frames.
-        self.assertAlmostEqual(rows[2]["speed_px_per_frame"], 3.0, places=6)
-        self.assertAlmostEqual(rows[2]["mean_abs_curvature"], 0.0, places=6)  # a straight body
-        self.assertEqual(rows[2]["provenance_algorithm"], "b")
-        self.assertEqual(rows[0]["frame_index"], 10)
 
 
 if __name__ == "__main__":
@@ -702,7 +709,8 @@ class HypothesisArrayTests(unittest.TestCase):
         self.assertEqual(blanked["hypotheses_crop"][1, 0].tolist(), [1, 2, 3, 4])
         self.assertFalse(blanked["hypotheses_points_in_fov"][2].any())
 
-    def test_propagate_stores_the_candidates_fields_and_a_pick_reuses_them(self) -> None:
+    @slow
+    def test_propagate_stores_the_candidates_fields_and_a_placed_candidate_survives(self) -> None:
         # A forced stretch around row 3 makes the pass produce real candidates on the synthetic recording.
         from worm_pose_gen import edits
 
@@ -755,19 +763,23 @@ class HypothesisArrayTests(unittest.TestCase):
                     self.assertEqual(float(state["width_px"][row]), float(hyps["hypotheses_width_px"][row, chosen]))
                     self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, chosen].tolist())
                     self.assertEqual(float(state["energy"][row]), float(hyps["hypotheses_soft_dice"][row, chosen]))
-            # A manual pick of another candidate writes exactly the stored fields, and undo puts the path's choice back.
+            # Placing another candidate (as a kept fix does) writes exactly the stored fields, and undo puts the path's choice back.
             row = 3
             before = {k: v[row].copy() for k, v in workspace.load_arrays().items() if v.ndim >= 1 and v.shape[0] == FRAMES}
             other = next(j for j in range(int(hyps["hypotheses_count"][row])) if j != int(hyps["path_index"][row]))
-            edit = edits.pick_hypothesis(workspace, row, other)
+
+            def place() -> edits.EditResult:
+                pose = edits.pose_from_hypothesis(workspace.load_state(), workspace.load_hypotheses(), row, other, False, image_shape=(HEIGHT, WIDTH))
+                return edits.set_poses(workspace, {row: pose}, algorithm="mirror", job="fix:p000001", note="place a candidate")
+
+            edit = place()
             state = workspace.load_state()
             np.testing.assert_array_equal(state["latent"][row], hyps["hypotheses_latent"][row, other])
             np.testing.assert_array_equal(state["centerline_xy"][row], hyps["hypotheses_centerline_xy"][row, other])
             np.testing.assert_array_equal(state["width_profile"][row], hyps["hypotheses_width_profile"][row, other])
             self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, other].tolist())
             self.assertEqual(int(state["points_in_fov"][row]), int(hyps["hypotheses_points_in_fov"][row, other]))
-            self.assertEqual(int(workspace.load_hypotheses()["path_index"][row]), other)
-            self.assertEqual(str(workspace.load_provenance()["algorithm"][row]), "manual:pick")
+            self.assertEqual(str(workspace.load_provenance()["algorithm"][row]), "mirror")
             edits.undo(workspace, edit.edit_id)
             after = workspace.load_arrays()
             for key, value in before.items():
@@ -775,9 +787,9 @@ class HypothesisArrayTests(unittest.TestCase):
                     continue
                 np.testing.assert_array_equal(after[key][row], value, err_msg=key)
             self.assertEqual(str(workspace.load_provenance()["job"][row]), "jprop")
-            # A pick that stands when the pass runs again is kept: the row anchors the stretch's two halves,
+            # A placed pose that stands when the pass runs again is kept: the row anchors the stretch's two halves,
             # its hypotheses and provenance survive, and the edit log still describes what is in the arrays.
-            edit = edits.pick_hypothesis(workspace, row, other)
+            edit = place()
             picked = workspace.load_state()
             result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1, "propagate_preset": "fast"}, device="cpu", job="jprop2")
             self.assertEqual([list(s) for s in result["stretches"]], [[2, 2], [4, 4]])
@@ -785,11 +797,11 @@ class HypothesisArrayTests(unittest.TestCase):
             np.testing.assert_array_equal(state["centerline_xy"][row], picked["centerline_xy"][row])
             np.testing.assert_array_equal(state["latent"][row], picked["latent"][row])
             provenance = workspace.load_provenance()
-            self.assertEqual((str(provenance["algorithm"][row]), str(provenance["job"][row])), ("manual:pick", f"edit:{edit.edit_id}"))
+            self.assertEqual((str(provenance["algorithm"][row]), str(provenance["job"][row])), ("mirror", "fix:p000001"))
             self.assertEqual(str(provenance["job"][2]), "jprop2")
             kept = workspace.load_hypotheses()
             self.assertEqual(int(kept["hypotheses_count"][row]), int(hyps["hypotheses_count"][row]))
-            self.assertEqual(int(kept["path_index"][row]), other)
+            self.assertEqual(int(kept["path_index"][row]), -1)
             np.testing.assert_array_equal(kept["hypotheses_centerline_xy"][row], hyps["hypotheses_centerline_xy"][row])
             self.assertEqual(pipeline.read_summary(workspace)["propagation"]["fixed_rows"], 1)
             self.assertTrue(edits.edited_rows(workspace, FRAMES)[row])

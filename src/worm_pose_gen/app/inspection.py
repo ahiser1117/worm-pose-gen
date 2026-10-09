@@ -1,4 +1,18 @@
-"""Human review is separate from automatic quality flags and bound to inputs."""
+"""Human review is separate from automatic quality flags and bound to inputs.
+
+A reviewed row is stored with a fingerprint of its content and its
+neighbours' (``row_fingerprints``), so any change near it (a fix, a mask
+edit) drops the review.  ``issues`` reads it for the Issues panel
+(``worm_pose_gen.fixes.issue_report``: stretches with plain-language
+reasons, each unreviewed, reviewed or fixed), and ``review_issue`` (Looks
+OK) adds an issue's rows to it.
+
+Every computation of the issues also writes their counts with the review
+token to ``issues_summary.json`` (``ISSUES_SUMMARY``), so the Recordings
+screen can show "N issues to review" without loading the arrays of every
+workspace; ``cached_issue_summary`` returns them while the token still
+holds.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -13,9 +27,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from .workspace_view import WorkspaceView, STAMPED_FILES
-from ..pipeline import workspace_lock
+from .. import fixes
+from ..pipeline import placed_rows, workspace_lock
 from ..workspace import _write_json_atomic, utc_now
 
+ISSUES_SUMMARY = "issues_summary.json"
 _REVIEW_LOCK = threading.RLock()
 _FINGERPRINT_CACHE: WeakKeyDictionary = WeakKeyDictionary()
 
@@ -85,58 +101,68 @@ def row_fingerprints(view: WorkspaceView, rows: list[int]) -> dict[str, str]:
     return {str(row): cached[str(row)] for row in rows}
 
 
-def inspection(view: WorkspaceView) -> dict[str, Any]:
+def _reviewed(view: WorkspaceView) -> set[int]:
+    """The rows whose review still holds: stored with a fingerprint that matches the row now."""
+
+    path = view.workspace.path / "human_review.json"
+    saved = json.loads(path.read_text()) if path.exists() else {}
+    saved_rows = [r for r in saved.get("rows", []) if isinstance(r, int) and 0 <= r < view.workspace.n]
+    fingerprints = row_fingerprints(view, saved_rows)
+    # Legacy global-token records cannot prove an individual row unchanged.
+    return {r for r in saved_rows if saved.get("row_fingerprints", {}).get(str(r)) == fingerprints[str(r)]}
+
+
+def issues(view: WorkspaceView) -> dict[str, Any]:
+    """The Issues panel: ``fixes.issue_report`` over the current arrays and review, with the review token ``revision``."""
+
     with _REVIEW_LOCK, workspace_lock(view.workspace, timeout=0):
-        return _inspection(view)
+        return _issues(view)
 
 
-def _inspection(view: WorkspaceView) -> dict[str, Any]:
-    with _REVIEW_LOCK:
-        run = view.run
-        token = revision(view)
-        path = view.workspace.path / "human_review.json"
-        saved = json.loads(path.read_text()) if path.exists() else {}
-        saved_rows = [r for r in saved.get("rows", []) if isinstance(r, int) and 0 <= r < view.workspace.n]
-        fingerprints = row_fingerprints(view, saved_rows)
-        # Legacy global-token records cannot prove an individual row unchanged.
-        reviewed = {r for r in saved_rows if saved.get("row_fingerprints", {}).get(str(r)) == fingerprints[str(r)]}
-        segments: list[dict[str, Any]] = []
-        counts = dict(unprocessed_frames=0, flagged_frames=0, unreviewed_flagged_frames=0, reviewed_frames=len(reviewed), attention_segments=0, stale_frames=0)
-        stale_rows = run.arrays.get("mask_stale")
-        for row, frame in enumerate(run.frame_index):
-            fitted = bool(run.arrays["fitted"][row])
-            flags = [str(k) for k, value in run._flags(row).items() if value]
-            stale = stale_rows is not None and bool(stale_rows[row])
-            if stale:
-                flags.append("mask_changed_refit_required")
-                counts["stale_frames"] += 1
-            kind = "unprocessed" if not fitted else "flagged" if flags else "clean"
-            if kind == "unprocessed":
-                counts["unprocessed_frames"] += 1
-            if kind == "flagged":
-                counts["flagged_frames"] += 1
-                counts["unreviewed_flagged_frames"] += int(row not in reviewed)
-            if kind == "clean":
-                continue
-            is_reviewed = row in reviewed
-            if segments and segments[-1]["last"] == row - 1 and segments[-1]["kind"] == kind and segments[-1]["reviewed"] == is_reviewed:
-                segment = segments[-1]
-                segment["last"] = row
-                segment["frames"][1] = int(frame)
-                segment["reasons"] = sorted(set(segment["reasons"] + flags))
-            else:
-                segments.append(dict(id=f"{row}:{kind}", first=row, last=row, frames=[int(frame), int(frame)], kind=kind, reasons=flags, reviewed=is_reviewed))
-        counts["attention_segments"] = sum(not s["reviewed"] for s in segments)
-        return dict(revision=token, summary=counts, segments=segments, reviewed_rows=sorted(reviewed))
+def _issues(view: WorkspaceView) -> dict[str, Any]:
+    run = view.run
+    token = revision(view)
+    n = view.workspace.n
+    reviewed = np.zeros(n, dtype=bool)
+    reviewed[sorted(_reviewed(view))] = True
+    provenance = view.workspace.load_provenance()
+    placed = placed_rows(run.arrays, provenance["algorithm"], provenance["job"])
+    report = fixes.issue_report(run.arrays, placed, reviewed)
+    path = view.workspace.path / ISSUES_SUMMARY
+    cached = json.loads(path.read_text()) if path.exists() else None
+    if cached != {"revision": token, "summary": report["summary"]}:
+        _write_json_atomic(path, {"revision": token, "summary": report["summary"]})
+    return {"revision": token, **report, "min_issue_frames": fixes.MIN_ISSUE_FRAMES}
 
 
-def mark_reviewed(view: WorkspaceView, first: int, last: int, expected_revision: str) -> dict[str, Any]:
-    with _REVIEW_LOCK, workspace_lock(view.workspace, timeout=0):
-        current = _inspection(view)
-        if expected_revision != current["revision"]:
-            raise HTTPException(409, "Workspace changed. Refresh inspection before marking reviewed.")
-        if first < 0 or last < first or last >= view.workspace.n:
-            raise ValueError("Review bounds must be valid inclusive workspace rows.")
-        rows = sorted(set(current["reviewed_rows"]).union(range(first, last + 1)))
-        _write_json_atomic(view.workspace.path / "human_review.json", dict(revision=current["revision"], rows=rows, row_fingerprints=row_fingerprints(view, rows), reviewed_at=utc_now()))
-        return _inspection(view)
+def cached_issue_summary(view: WorkspaceView) -> dict[str, Any] | None:
+    """The issue counts last computed for the workspace (``fixes.issue_report``'s summary), or ``None`` when anything changed since."""
+
+    path = view.workspace.path / ISSUES_SUMMARY
+    try:
+        cached = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return cached.get("summary") if cached.get("revision") == revision(view) else None
+
+
+def review_issue(view: WorkspaceView, first_frame: int, last_frame: int, expected_revision: str) -> dict[str, Any]:
+    """Looks OK: mark the frames ``first_frame..last_frame`` reviewed (an issue's frames) and answer with the issues."""
+
+    workspace = view.workspace
+    first, last = workspace.row_of(int(first_frame)), workspace.row_of(int(last_frame))
+    with _REVIEW_LOCK, workspace_lock(workspace, timeout=0):
+        _mark(view, first, last, expected_revision)
+        return _issues(view)
+
+
+def _mark(view: WorkspaceView, first: int, last: int, expected_revision: str) -> None:
+    """Add rows ``first..last`` to the stored review (caller holds the locks); 409 when the workspace changed since ``expected_revision``."""
+
+    token = revision(view)
+    if expected_revision != token:
+        raise HTTPException(409, "Workspace changed. Refresh the issues before marking them reviewed.")
+    if first < 0 or last < first or last >= view.workspace.n:
+        raise ValueError("Review bounds must be valid inclusive workspace rows.")
+    rows = sorted(_reviewed(view).union(range(first, last + 1)))
+    _write_json_atomic(view.workspace.path / "human_review.json", dict(revision=token, rows=rows, row_fingerprints=row_fingerprints(view, rows), reviewed_at=utc_now()))

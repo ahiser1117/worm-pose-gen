@@ -44,9 +44,12 @@ from .mask_fit import (
     _MaskFitState,
     bend_penalty,
     crop_window,
+    crossing_reach,
     default_width_template,
+    extend_start_to_length,
     hard_coverage,
     hard_iou,
+    lay_start_to_length,
     render_tube_segments,
     separation_penalty,
     signed_edge_distance,
@@ -174,6 +177,8 @@ class BodyFieldEvidence:
     ``ap`` is the full-image A-P field (0 head, 1 tail), NaN where it says
     nothing: off the body and on predicted crossings.  ``head_xy`` and
     ``tail_xy`` are the predicted ends, ``None`` when that end is not in view.
+    Only the head scores a fit; the tail only orients starts
+    (``mask_fit.head_first``), since people trace the tail inconsistently.
     """
 
     ap: NDArray[np.float32]
@@ -340,13 +345,13 @@ def _field_tensors(
     fields: Sequence[BodyFieldEvidence | None], windows: Sequence[CropWindow], height: int, width: int,
     device: torch.device,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Per frame: A-P crop and its validity on the batch window raster, ends and their presence."""
+    """Per frame: A-P crop and its validity on the batch window raster, the head and its presence."""
 
     n = len(fields)
     ap = np.zeros((n, height, width), dtype=np.float32)
     valid = np.zeros_like(ap)
-    ends = np.zeros((n, 2, 2), dtype=np.float32)
-    has_end = np.zeros((n, 2), dtype=np.float32)
+    head = np.zeros((n, 2), dtype=np.float32)
+    has_head = np.zeros(n, dtype=np.float32)
     for f, (evidence, w) in enumerate(zip(fields, windows, strict=True)):
         if evidence is None:
             continue
@@ -357,20 +362,30 @@ def _field_tensors(
         known = np.isfinite(local)
         ap[f, rows, cols] = np.where(known, local, 0.0)
         valid[f, rows, cols] = known
-        for k, point in enumerate((evidence.head_xy, evidence.tail_xy)):
-            if point is not None and np.all(np.isfinite(point)):
-                ends[f, k], has_end[f, k] = point, 1.0
-    return tuple(torch.from_numpy(a).to(device) for a in (ap, valid, ends, has_end))
+        if evidence.head_xy is not None and np.all(np.isfinite(evidence.head_xy)):
+            head[f], has_head[f] = evidence.head_xy, 1.0
+    return tuple(torch.from_numpy(a).to(device) for a in (ap, valid, head, has_head))
+
+
+# The A-P term scores the midline points of this front fraction of the body.
+# A label's A-P runs to its own tail, which people place inconsistently, so
+# the field's A-P at a given distance from the head varies with the label's
+# length by up to its value; near the head that matters least.  Against the
+# whole body (with a fixed length, sequence set and held-out poses) the fits
+# lost median IoU (traced held-out 0.938 against 0.951); comparing up to a
+# per-fit scale gave the same counts with the lower IoU
+# (docs/BODY_FIELDS.md, "Head-anchored body of fixed length").
+AP_ANTERIOR_FRACTION = 0.5
 
 
 def _field_penalty(
-    centerline: Tensor, origin: Tensor, ap: Tensor, valid: Tensor, ends: Tensor, has_end: Tensor, config: MaskFitConfig
+    centerline: Tensor, origin: Tensor, ap: Tensor, valid: Tensor, head: Tensor, has_head: Tensor, config: MaskFitConfig
 ) -> Tensor:
-    """Per row: A-P agreement of the midline points and distance of the ends to the predicted ones.
+    """Per row: A-P agreement of the anterior midline points and distance of the first point to the predicted head.
 
     ``ap`` and ``valid`` are per-row rasters whose pixel (0, 0) is image pixel
-    ``origin`` (x, y); ``ends`` holds the predicted head and tail of each row
-    and ``has_end`` whether each is in view.
+    ``origin`` (x, y); ``head`` holds the predicted head of each row and
+    ``has_head`` whether it is in view.
     """
 
     total = torch.zeros(centerline.shape[0], dtype=centerline.dtype, device=centerline.device)
@@ -381,12 +396,13 @@ def _field_penalty(
         grid = torch.stack((2 * (local[..., 0] + 0.5) / width - 1, 2 * (local[..., 1] + 0.5) / height - 1), -1)[:, None]
         sampled = F.grid_sample(ap[:, None], grid, align_corners=False)[:, 0, 0]
         known = (F.grid_sample(valid[:, None], grid, align_corners=False)[:, 0, 0] > 0.999).to(centerline.dtype)
-        position = torch.linspace(0.0, 1.0, centerline.shape[1], device=centerline.device)
-        squared = ((sampled - position[None, :]) / config.field_ap_sigma).square()
+        position = torch.linspace(0.0, 1.0, centerline.shape[1], device=centerline.device)[None, :]
+        known = known * (position <= AP_ANTERIOR_FRACTION)
+        squared = ((sampled - position) / config.field_ap_sigma).square()
         total = total + config.field_ap_weight * (squared * known).sum(1) / known.sum(1).clamp_min(1.0)
     if config.field_end_weight > 0:
-        squared = (torch.stack((centerline[:, 0], centerline[:, -1]), 1) - ends).square().sum(-1) / config.field_end_sigma_px**2
-        total = total + config.field_end_weight * (squared * has_end).sum(1)
+        squared = (centerline[:, 0] - head).square().sum(-1) / config.field_end_sigma_px**2
+        total = total + config.field_end_weight * squared * has_head
     return total
 
 
@@ -415,10 +431,10 @@ def field_energies(
         x0, y0 = (int(v) - 1 for v in np.floor(points.min(0)))
         x1, y1 = (int(v) + 2 for v in np.ceil(points.max(0)))
         window = CropWindow(x0, x1, y0, y1, *evidence.ap.shape)
-        ap, valid, ends, has_end = _field_tensors([evidence], [window], window.height, window.width, cpu)
+        ap, valid, head, has_head = _field_tensors([evidence], [window], window.height, window.width, cpu)
         origin = torch.tensor([[x0, y0]], dtype=torch.float32)
         centerline = torch.as_tensor(points[None], dtype=torch.float32)
-        out[k] = float(_field_penalty(centerline, origin, ap, valid, ends, has_end, config)[0])
+        out[k] = float(_field_penalty(centerline, origin, ap, valid, head, has_head, config)[0])
     return out
 
 
@@ -441,8 +457,12 @@ def fit_masks(
     ``fields`` gives, per mask, body-field network evidence the fit is
     scored against (``config.field_ap_weight`` / ``field_end_weight``), or
     ``None`` for none on that frame.
-    ``head_constraints`` adds tracking/previous-head penalties and projects
+    ``head_constraints`` adds tracking/previous-head (and tail) penalties and projects
     every optimizer iterate into the permitted head movement and image bounds.
+    With ``config.length_fixed`` every start is first lengthened off camera
+    (``mask_fit.extend_start_to_length``) and laid to ``length_prior_px``
+    from its first point (``mask_fit.lay_start_to_length``), and keeps that
+    length.
     """
 
     if len(masks) != len(initializations):
@@ -464,6 +484,14 @@ def fit_masks(
         raise ValueError("stage_downsample, stage_steps, stage_lr_scale, and stage_point_stride must align")
     if not 0 < config.within_stage_decay <= 1:
         raise ValueError("within_stage_decay must lie in (0, 1]")
+    if config.length_fixed:
+        if config.length_prior_px is None:
+            raise ValueError("length_fixed needs length_prior_px")
+        length = config.length_prior_px
+        initializations = [
+            [lay_start_to_length(extend_start_to_length(s, mask, length, config=config), mask, length, config=config) for s in starts]
+            for mask, starts in zip(masks, initializations, strict=True)
+        ]
     binaries = []
     for index, (mask, starts) in enumerate(zip(masks, initializations, strict=True)):
         binary = np.asarray(mask, dtype=bool)
@@ -571,12 +599,12 @@ def _fit_group(
         crossing_reference_t = torch.where(has_reference, reference_t, torch.full_like(reference_t, float("nan")))
 
     if use_fields:
-        field_ap, field_valid, field_ends, field_has_end = _field_tensors(fields, windows, height, width, device)
+        field_ap, field_valid, field_head, field_has_head = _field_tensors(fields, windows, height, width, device)
 
     def field_energy(centerline: Tensor) -> Tensor:
         return _field_penalty(
-            centerline, offsets, field_ap[frame_of_row], field_valid[frame_of_row], field_ends[frame_of_row],
-            field_has_end[frame_of_row], config,
+            centerline, offsets, field_ap[frame_of_row], field_valid[frame_of_row], field_head[frame_of_row],
+            field_has_head[frame_of_row], config,
         )
 
     state = _MaskFitState(starts_flat, config, device)
@@ -591,13 +619,19 @@ def _fit_group(
                 state.centroid.add_(head_priors.project(head) - head)
 
     constrain_head()
+    # The crossing exemption's reach (separation_penalty), once on the starting poses.
+    reach = None
+    if use_temporal and config.separation_weight > 0:
+        with torch.no_grad():
+            reach = crossing_reach(state.centerline(), state.diameter(template))
     # On CUDA every step after a stage's first replays a recording of the
     # whole step, Adam included (fused, reading its learning rates on the
     # device); the first runs eagerly, so the renderer is compiled for the
     # stage's raster outside the recording.  The crossing exemption of the
-    # separation penalty reads its reach on the host, so fits that use it
-    # stay eager.
-    record = device.type == "cuda" and not (use_temporal and config.separation_weight > 0)
+    # separation penalty spans a fixed number of points, measured once on
+    # the starting poses, since reading it per step would stop the recording
+    # (a body's width and point spacing barely change over a fit).
+    record = device.type == "cuda"
     optimizer = state.optimizer(capturable=record)
     base_rates = [group["lr"] for group in optimizer.param_groups]
     # Each step's learning rate per parameter group: the stage's scale times the within-stage decay.
@@ -640,12 +674,14 @@ def _fit_group(
         escape = ((below + above) * inside_camera).mean(1)
         total = smooth + state.size_regularization() + c.crop_escape_weight * escape + state.width_prior()
         total = total + bend_penalty(centerline, state.log_length.exp(), state.log_width.exp(), c)
-        total = total + separation_penalty(centerline, diameter, c, crossing_reference_t if use_temporal else None)
+        total = total + separation_penalty(
+            centerline, diameter, c, crossing_reference_t if use_temporal else None, reach if use_temporal else None,
+        )
         if use_temporal:
             squared = ((centerline - reference_t).square().sum(-1) * reference_mask_t).sum(1) / reference_mask_t.sum(1).clamp_min(1.0)
             total = total + temporal_scale * squared
         if head_priors is not None:
-            total = total + head_priors.energy(centerline[:, 0])
+            total = total + head_priors.energy(centerline[:, 0], centerline[:, -1])
         if use_fields:
             total = total + field_energy(centerline)
         return total

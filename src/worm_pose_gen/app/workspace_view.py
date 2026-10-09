@@ -1,19 +1,13 @@
-"""A workspace seen through the viewer's eyes.
+"""A workspace as the Workspace page sees it.
 
-The viewer's ``LoadedRun`` computes series, statistics, classification and
-frame layers from the ``poses.npz`` dictionary and a run summary.  A
-workspace holds the same arrays split across ``state.npz`` and
-``hypotheses.npz``, its summary in ``summary.json`` (or the imported run's),
-and the masks the fit was scored against; ``WorkspaceView`` merges them into
-a ``LoadedRun`` and rebuilds it whenever a job or an edit changes the files,
-so the browser always sees the current state without the server holding a
-stale copy.  The Phase 2 interventions (``worm_pose_gen.edits``) run through
-``WorkspaceView.edit``, which drops the cached run and answers with what the
-browser must redraw: the frame, a patch of the per-row series, the provenance
-and the edit log.  The Phase 3 candidate sets (``worm_pose_gen.algorithms``)
-live under ``<workspace>/candidates/``; the view keeps the loaded sets cached
-by their metadata's modification time and adds the sets covering a frame to
-its pose payload so the browser can overlay them.
+A workspace holds its per-frame arrays split across ``state.npz`` and
+``hypotheses.npz``, its summary in ``summary.json``, and the masks the fit
+was scored against; ``WorkspaceView`` merges them into a ``LoadedRun``
+(``app/frame_view.py``) and rebuilds it whenever a job or an edit changes
+the files, so the browser always sees the current state without the server
+holding a stale copy.  A fix or a mask edit answers through
+``edit_response``: the edit, the refreshed frame, a patch of the per-row
+series, the provenance and the edit log, so the page redraws in place.
 """
 
 from __future__ import annotations
@@ -25,19 +19,17 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 
-from .. import algorithms
 from .. import edits as edit_ops
-from ..algorithms import CandidateSet
 from ..batch_fit import BatchFitConfig
-from ..label_app import RecordingSource, data_url, mask_to_png_values
-from ..pipeline import config_from_dict, read_summary, workspace_arrays
-from ..pose_run import cleanup_options
-from ..pose_viewer import LoadedRun, Segmenters, _round, compatible_entries, run_payload
-from ..workspace import Workspace
 from ..fixed_body import FixedBodyResult
+from ..pipeline import config_from_dict, read_summary, workspace_arrays
+from ..recordings import RecordingSource
+from ..workspace import Workspace
+from .frame_view import LoadedRun, Segmenters
+from .images import data_url, mask_to_png_values, probability_data_url
 
-STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "imported_summary.json", "recording_prior.json", "edits.jsonl", "fixed_body.npz")
-STAMPED_DIRS = ("masks", "overrides/masks", "snapshots")
+STAMPED_FILES = ("workspace.json", "state.npz", "hypotheses.npz", "provenance.npz", "summary.json", "recording_prior.json", "edits.jsonl", "fixed_body.npz")
+STAMPED_DIRS = ("masks", "overrides/masks")
 # The per-row series an edit can change: the pose's own numbers, the ambiguity
 # signals of the row and its neighbours (a pose jump belongs to a pair of
 # frames), and the path bookkeeping.  The classification and the provenance
@@ -47,7 +39,6 @@ PATCHED_SERIES = (
     "self_contact_px", "pose_jump_px", "length_deviation", "area_ratio", "ambiguity_score", "source", "reversed", "path_mirrored", "best_start",
     "tube_coverage", "max_bend_widths", "length_refit", "tube_area_px", "tube_area_visible_px",
 )
-EDIT_KINDS = ("pick_hypothesis", "flip", "undo")
 
 
 def provenance_block(provenance: dict[str, np.ndarray], edited: np.ndarray) -> dict[str, Any]:
@@ -87,7 +78,7 @@ def workspace_stamp(path: Path) -> tuple[int, ...]:
 
 
 def workspace_run(workspace: Workspace, source: RecordingSource | None, source_error: str | None) -> LoadedRun:
-    """The viewer's ``LoadedRun`` over a workspace's current arrays, summary and masks."""
+    """The ``LoadedRun`` over a workspace's current arrays, summary and masks."""
 
     summary = dict(read_summary(workspace))
     summary["selected_checkpoint"] = workspace.info.settings.get("checkpoint")
@@ -101,64 +92,8 @@ def workspace_run(workspace: Workspace, source: RecordingSource | None, source_e
     return LoadedRun(workspace.path, source, source_error, arrays=arrays, summary=summary, masks=workspace.effective_mask)
 
 
-FIT_NETWORK_STATES = ("with", "without", "not_fitted")
-
-
-def fit_network(summary: dict[str, Any], fitted: int) -> tuple[str, str | None]:
-    """Whether the current poses were fit with the body-field network: ``with``, ``without`` or ``not_fitted``, and its checkpoint when known.
-
-    ``summary`` is the workspace's run summary (``pipeline.read_summary``: its
-    own ``summary.json``, else the ``imported_summary.json`` copied from the
-    imported run's directory).  A fit stage (and ``scripts/fit_recording.py``)
-    records ``fit_params.body_net``; older runs only their ``fit_config``,
-    whose body-field weights are nonzero exactly when the network scored the
-    fits.
-    """
-
-    config = summary.get("fit_config")
-    if not fitted or not config:
-        return "not_fitted", None
-    params = summary.get("fit_params") or {}
-    if "body_net" in params:
-        return ("with" if params["body_net"] else "without"), params["body_net"] or None
-    weights = (config.get("field_ap_weight") or 0, config.get("field_end_weight") or 0)
-    return ("with" if max(weights) > 0 else "without"), None
-
-
-def workspace_entry(workspace: Workspace, summary: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
-    """A catalog row for a workspace, shaped like ``pose_viewer.run_entry`` so the browser can list both."""
-
-    cleanup = cleanup_options(summary)
-    iou = stats.get("iou") or {}
-    checkpoint = summary.get("checkpoint") or {}
-    network, network_checkpoint = fit_network(summary, int(stats.get("fitted") or 0))
-    return {
-        "name": workspace.info.name,
-        "path": str(workspace.path),
-        "kind": "workspace",
-        "recording": workspace.recording.stem,
-        "recording_path": str(workspace.recording),
-        "frames": [int(v) for v in workspace.info.frames],
-        "step": int(workspace.info.step),
-        "frame_count": workspace.n,
-        "started_at": workspace.info.created_at,
-        "preset": summary.get("preset"),
-        "iou_median": _round(iou.get("median")),
-        "iou_min": _round(iou.get("min")),
-        "frames_below_0.9": iou.get("frames_below_0.9"),
-        "mask_cleanup": ("fill" if cleanup["fill_holes"] else "no fill") + " + " + ("largest" if cleanup["largest_only"] else "all components"),
-        "propagated": bool(summary.get("propagation")),
-        "checkpoint_sha": (checkpoint.get("sha256") or "")[:8],
-        "checkpoint_path": checkpoint.get("path"),
-        "git_commit": (summary.get("git") or {}).get("commit", "")[:8],
-        "imported_runs": list(workspace.info.imported_runs),
-        "fit_network": network,
-        "fit_network_checkpoint": network_checkpoint,
-    }
-
-
 class WorkspaceView:
-    """One workspace's ``LoadedRun``, summary and catalog entry, rebuilt when its files change."""
+    """One workspace's ``LoadedRun`` and summary, rebuilt when its files change."""
 
     def __init__(self, workspace: Workspace, source: RecordingSource | None, source_error: str | None) -> None:
         self.workspace = workspace
@@ -168,8 +103,6 @@ class WorkspaceView:
         self._stamp: tuple[int, ...] | None = None
         self._run: LoadedRun | None = None
         self._summary: dict[str, Any] | None = None
-        # Candidate sets by id with the modification time of the metadata they were loaded from.
-        self._sets: dict[str, tuple[int, CandidateSet]] = {}
         self._fixed_body: FixedBodyResult | None = None
 
     @property
@@ -200,33 +133,36 @@ class WorkspaceView:
         assert self._summary is not None
         return self._summary
 
-    def entry(self) -> dict[str, Any]:
-        return workspace_entry(self.workspace, self.run.summary, self.summary())
-
-    def info(self) -> dict[str, Any]:
-        """``WorkspaceInfo`` plus the workspace summary: the row of the workspace list."""
-
-        self.refresh()
-        summary = self.summary()
-        network, checkpoint = fit_network(read_summary(self.workspace), int(summary.get("fitted") or 0))
-        return {**self.workspace.info.to_dict(), "kind": "workspace", "summary": summary,
-                "fit_network": network, "fit_network_checkpoint": checkpoint}
-
-    def payload(self, others: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        """The viewer's run payload for this workspace, with its info, summary and provenance counts."""
+    def payload(self) -> dict[str, Any]:
+        """The whole workspace for the developer tools: its info, summary, provenance and every per-frame series."""
 
         run = self.run
-        entry = self.entry()
+        summary = run.summary
         return {
             **self.workspace.info.to_dict(),
-            "kind": "workspace",
             "summary": self.summary(),
             "provenance_counts": self.workspace.provenance_counts(),
             "provenance": self.provenance(),
             "edits_count": len(self.workspace.edits()),
             "mask_rows": [int(r) for r in self.workspace.mask_rows().tolist()],
             "override_rows": self.workspace.override_rows(),
-            **run_payload(run, entry, compatible_entries(entry, others)),
+            "recording_readable": run.source is not None,
+            "recording_error": run.source_error,
+            "image_shape": None if run.image_shape is None else list(run.image_shape),
+            "n_points": run.n_points,
+            "threshold": run.threshold,
+            "selected_checkpoint": run.segmentation_checkpoint,
+            "cleanup": run.cleanup,
+            "prior": run.prior,
+            "thresholds": run.thresholds.__dict__,
+            "stretches": [[a, b] for a, b in run.stretches],
+            "propagation": summary.get("propagation"),
+            "ambiguity": summary.get("ambiguity"),
+            "fit_config": summary.get("fit_config"),
+            "has_independent_pose": "centerline_xy_independent" in run.arrays,
+            "continuity": summary.get("continuity"),
+            "track_length": summary.get("track_length"),
+            "series": run.series(),
         }
 
     def provenance(self) -> dict[str, Any]:
@@ -249,16 +185,6 @@ class WorkspaceView:
         self.refresh()
         return edit_ops.list_edits(self.workspace)
 
-    def segment(self, frame: int) -> dict[str, Any]:
-        """The segment around ``frame``: its frames and rows and whether it is a propagation stretch (``edits.segment_info``).
-
-        Answered from the loaded run's arrays and stretches (the browser asks
-        for every frame it shows), not from the files.
-        """
-
-        run = self.run
-        return edit_ops.segment_info(self.workspace, run.row_of(frame), state=run.arrays, stretches=edit_ops.stretches_of(run.arrays, run.summary))
-
     def invalidate(self) -> None:
         """Forget the cached run so the next request rebuilds it from disk (after an edit wrote the arrays)."""
 
@@ -267,60 +193,15 @@ class WorkspaceView:
             self._run = None
             self._summary = None
 
-    def _apply_edit(self, payload: dict[str, Any]) -> tuple[edit_ops.EditResult, int]:
-        """Run the edit ``payload`` describes; returns the result and the frame to refresh for the caller."""
-
-        run = self.run
-        workspace = self.workspace
-        kind = str(payload.get("kind") or "")
-        note = str(payload.get("note") or "")
-        if kind == "pick_hypothesis":
-            frame = int(payload["frame"])
-            result = edit_ops.pick_hypothesis(
-                workspace, run.row_of(frame), int(payload["index"]), mirrored=bool(payload.get("mirrored", False)), note=note,
-            )
-        elif kind == "flip":
-            if payload.get("frames") is not None:
-                frames = [int(f) for f in payload["frames"]]
-                if not frames:
-                    raise ValueError("'frames' is empty")
-                result = edit_ops.flip_orientation(workspace, [run.row_of(f) for f in frames], note=note)
-                frame = int(payload.get("frame", frames[0]))
-            else:
-                frame = int(payload["frame"])
-                scope = str(payload.get("scope") or "frame")
-                if scope == "frame":
-                    result = edit_ops.flip_frame(workspace, run.row_of(frame), note=note)
-                elif scope == "segment":
-                    result = edit_ops.flip_segment(workspace, run.row_of(frame), note=note)
-                else:
-                    raise ValueError("scope must be 'frame' or 'segment'")
-        elif kind == "undo":
-            target = payload.get("edit")
-            result = edit_ops.undo(workspace, None if target in (None, "") else str(target))
-            frame = int(payload["frame"]) if payload.get("frame") not in (None, "") else int(run.frame_index[result.rows[0]])
-        else:
-            raise ValueError(f"unknown edit kind {kind!r}; expected one of {', '.join(EDIT_KINDS)}")
-        return result, frame
-
-    def edit(self, payload: dict[str, Any], segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
-        """Apply one edit and report what the browser must update.
+    def edit_response(self, result: edit_ops.EditResult, frame: int, segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
+        """What the browser must update after ``result`` changed the workspace; the cached run must already be dropped.
 
         The response carries the ``EditResult``, the light frame payload of
-        the frame the edit concerned (its pose is the new one), a
-        ``series_patch`` (``{series key: {row: value}}``) and ``flags_patch``
-        (``{flag name: {row: value}}``) for the rows the edit and its
-        ambiguity refresh touched, the new provenance block, the edit list
-        and count.  The cached run is dropped first so every payload here and
-        afterwards is built from the arrays the edit wrote.
+        ``frame`` (its pose is the new one), a ``series_patch`` (``{series
+        key: {row: value}}``) and ``flags_patch`` (``{flag name: {row:
+        value}}``) for the rows the edit and its ambiguity refresh touched,
+        the new provenance block, the edit list and count.
         """
-
-        result, frame = self._apply_edit(payload)
-        self.invalidate()
-        return self.edit_response(result, frame, segmenters, device)
-
-    def edit_response(self, result: edit_ops.EditResult, frame: int, segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
-        """What the browser must update after ``result`` changed the workspace (see ``edit``); the cached run must already be dropped."""
 
         run = self.run
         rows = patch_window(result.rows, run.frame_index.shape[0])
@@ -338,7 +219,7 @@ class WorkspaceView:
         flags = {name: {str(r): values[r] for r in rows} for name, values in series.get("flags", {}).items()}
         return {
             "edit": edit_ops.json_safe(result),
-            "frame": self.frame(frame, segmenters, None, device, raw=False, detail="light"),
+            "frame": self.frame(frame, segmenters, device, raw=False, detail="light"),
             "rows": rows,
             "frames": [int(run.frame_index[r]) for r in rows],
             "series_patch": patch,
@@ -348,22 +229,23 @@ class WorkspaceView:
             "edits_count": len(self.workspace.edits()),
         }
 
-    def frame(self, frame: int, segmenters: Segmenters, threshold: float | None, device: torch.device, *, raw: bool, detail: str) -> dict[str, Any]:
-        """Defer mask metadata and validated candidate sets to full previews."""
+    def frame(self, frame: int, segmenters: Segmenters, device: torch.device, *, raw: bool, detail: str, segment: bool = False) -> dict[str, Any]:
+        """One frame's payload (``LoadedRun.frame``) with its provenance; the full detail adds the edited mask.
+
+        A light frame (playback and scrubbing) skips every mask read; the
+        stored and edited masks load when the frame rests.
+        """
 
         if detail not in ("full", "light"):
             raise ValueError("detail must be 'full' or 'light'")
         run = self.run
         row = run.row_of(frame)
-        payload = run.frame(row, segmenters, threshold, device, raw=raw, detail=detail)
+        payload = run.frame(row, segmenters, device, raw=raw, detail=detail, segment=segment)
         payload["provenance"] = self.row_provenance(row)
         payload["mask_stale"] = bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])
         payload["details_deferred"] = detail == "light"
         payload["fixed_body"] = self._fixed_body.frame(row) if self._fixed_body else None
         if detail == "light":
-            # Candidate validation fingerprints every input mask in the region,
-            # clearing the chunk cache to detect changes from other processes.
-            # Defer it, and mask reads for the selected row, until playback stops.
             return payload
         payload["has_stored_mask"] = self.workspace.get_mask(row) is not None
         override = self.workspace.get_override_mask(row)
@@ -373,95 +255,24 @@ class WorkspaceView:
             payload.setdefault("layers", {})["mask_override"] = data_url(mask_to_png_values(override))
             payload["layers"]["mask_final"] = data_url(np.where(override == 1, 255, 0).astype(np.uint8))
             payload["mask_final_source"] = "override"
-        self._attach_candidate_sets(payload, row)
         return payload
 
-    def pose(self, frame: int) -> dict[str, Any]:
+    def mask_probability(self, frame: int, segmenters: Segmenters) -> dict[str, Any]:
+        """The mask model's raw worm probability on ``frame`` (PNG of ``round(255 * p)``, unthresholded) and its peak."""
+
+        from .analysis import workspace_mask_net
+
         run = self.run
-        try:
-            row = run.row_of(frame)
-        except ValueError:
-            return {"present": False}
-        payload = {"present": True, "pose": run.pose(row), "stats": run.stats(row), "provenance": self.row_provenance(row)}
-        payload["fixed_body"] = self._fixed_body.frame(row) if self._fixed_body else None
-        self._attach_candidate_sets(payload, row)
-        return payload
-
-    def _attach_candidate_sets(self, payload: dict[str, Any], row: int) -> None:
-        """Add the pending candidate sets covering ``row`` to the payload and to its pose (when the row has one)."""
-
-        sets = self.candidate_sets_of_row(row)
-        payload["candidate_sets"] = sets
-        if isinstance(payload.get("pose"), dict):
-            payload["pose"]["candidate_sets"] = sets
-
-    # ----- candidate sets (Phase 3)
-
-    def candidate_set(self, set_id: str) -> CandidateSet:
-        """A stored candidate set, reloaded only when its metadata file changed (an accept rewrites it); ``FileNotFoundError`` when absent."""
-
-        path = algorithms.candidate_set_path(self.workspace, set_id).with_suffix(".json")
-        try:
-            stamp = path.stat().st_mtime_ns
-        except OSError:
-            with self._lock:
-                self._sets.pop(str(set_id), None)
-            raise FileNotFoundError(f"workspace {self.name} has no candidate set {set_id!r}") from None
-        with self._lock:
-            cached = self._sets.get(str(set_id))
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-        loaded = algorithms.load_candidate_set(self.workspace, set_id)
-        with self._lock:
-            self._sets[str(set_id)] = (stamp, loaded)
-        return loaded
-
-    def forget_candidate_set(self, set_id: str) -> None:
-        with self._lock:
-            self._sets.pop(str(set_id), None)
-
-    def candidate_sets_of_row(self, row: int) -> list[dict[str, Any]]:
-        """The sets covering ``row`` not accepted on it (as a whole or row by row), newest first: ``{id, algorithm, index, mirrored, centerline_xy, iou, source}`` each.
-
-        ``index`` is the path's candidate on this row (-1 when the path
-        skipped it, then ``centerline_xy`` is ``None``); ``centerline_xy`` is
-        the chosen candidate as the path presents it (mirrored applied).
-        """
-
-        out = []
-        for entry in algorithms.list_candidate_sets(self.workspace):
-            first, last = entry.get("rows") or (None, None)
-            if first is None or last is None or not int(first) <= int(row) <= int(last):
-                continue
-            if entry.get("accepted") or int(row) in {int(r) for r in entry.get("accepted_rows") or []}:
-                continue
-            try:
-                candidate_set = self.candidate_set(entry["id"])
-            except (FileNotFoundError, ValueError, KeyError):
-                continue
-            choice = candidate_set.path_by_row.get(int(row))
-            chosen = candidate_set.chosen(int(row))
-            out.append(
-                {
-                    "id": candidate_set.id,
-                    "algorithm": candidate_set.algorithm,
-                    "stale": self.candidate_mask_stale(candidate_set),
-                    "index": -1 if choice is None else int(choice[0]),
-                    "mirrored": bool(choice[1]) if choice is not None else False,
-                    "centerline_xy": None if chosen is None else _round(np.round(chosen.centerline_xy, 2), 2),
-                    "iou": None if chosen is None else _round(chosen.iou),
-                    "source": None if chosen is None else str(chosen.source),
-                    "candidates": len(candidate_set.candidates.get(int(row), [])),
-                }
-            )
-        return out
-
-    def candidate_mask_stale(self, candidate_set: CandidateSet) -> bool:
-        try:
-            algorithms.validate_candidate_masks(self.workspace, candidate_set)
-            return False
-        except ValueError:
-            return True
+        row = run.row_of(frame)
+        path = workspace_mask_net(self.workspace)
+        if path is None:
+            raise ValueError(f"workspace {self.name} has no mask model")
+        if self.source is None:
+            raise ValueError(f"recording not readable: {self.source_error}")
+        _, image = self.source.corrected(frame)
+        probability, _ = segmenters.probability(str(path), image)
+        return {"frame": int(frame), "row": row, "width": int(image.shape[1]), "height": int(image.shape[0]),
+                "probability": probability_data_url(probability), "peak": float(probability.max()), "model": path.name}
 
     def mask_payload(self, frame: int, segmenters: Segmenters, device: torch.device) -> dict[str, Any]:
         run = self.run
@@ -471,8 +282,7 @@ class WorkspaceView:
         raw, image = self.source.corrected(frame)
         base = self.workspace.get_mask(row)
         if base is None:
-            checkpoint = run.summary.get("selected_checkpoint") or (run.summary.get("checkpoint") or {}).get("path")
-            probability, _ = segmenters.probability(checkpoint, image)
+            probability, _ = segmenters.probability(run.segmentation_checkpoint, image)
             if probability is not None:
                 raw_mask = probability >= run.threshold
                 base = run._cleaned(raw_mask, device)[2] if raw_mask.any() else raw_mask
@@ -483,12 +293,3 @@ class WorkspaceView:
                 "base_mask": None if base is None else data_url(mask_to_png_values(base.astype(np.uint8))),
                 "has_override": override is not None, "revision": self.workspace.mask_revision(row),
                 "stale": bool(run.arrays.get("mask_stale", np.zeros(self.workspace.n, dtype=bool))[row])}
-
-    def starts(self, frame: int, segmenters: Segmenters, threshold: float | None, device: torch.device) -> dict[str, Any]:
-        run = self.run
-        row = run.row_of(frame)
-        # Threshold previews affect automatic masks only. Starts must use the
-        # same explicit override that an actual region refit consumes.
-        if self.workspace.get_override_mask(row) is not None:
-            threshold = run.threshold
-        return run.starts(row, segmenters, threshold, device)

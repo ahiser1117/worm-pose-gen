@@ -1,15 +1,16 @@
-"""Mask API transactions across imported, empty, and custom-dataset workspaces."""
+"""Edit mask on the Workspace page: saving an override and undoing it, across fitted, empty and custom-dataset workspaces."""
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+
 import h5py
 import numpy as np
 from fastapi.testclient import TestClient
+
 from worm_pose_gen.app import AppConfig, create_app
+from worm_pose_gen.app.images import data_url, decode_mask_data_url, mask_to_png_values
 from worm_pose_gen.workspace import Workspace
-from worm_pose_gen.label_app import data_url, mask_to_png_values, decode_mask_data_url
-from tests.test_pose_viewer import HEIGHT, WIDTH, FRAMES, _write_recording, _write_run
+from tests.test_frame_view import HEIGHT, WIDTH, FRAMES, _write_recording, _write_workspace
 
 
 class MaskAPITests(unittest.TestCase):
@@ -20,11 +21,8 @@ class MaskAPITests(unittest.TestCase):
         self.recording = root / 'recordings' / 'rec.h5'
         self.recording.parent.mkdir()
         _write_recording(self.recording)
-        self.run = root / 'runs' / 'demo'
-        _write_run(self.run, self.recording)
-        config = AppConfig(workspaces_root=root/'workspaces', recording_roots=(root/'recordings',),
-            poses_root=root/'runs', dataset_root=root/'dataset', checkpoint=None, prior_cache=None,
-            notes=root/'notes.json', gpus=(0,), device='cpu', job_interval=0.1)
+        config = AppConfig(workspaces_root=root / 'workspaces', dataset_root=root / 'dataset', gpus=(0,), device='cpu', job_interval=0.1,
+                           lab_library=root / 'lab', library=root / 'mine')
         self.app = create_app(config)
         self.client = TestClient(self.app)
         self.client.__enter__()
@@ -42,61 +40,54 @@ class MaskAPITests(unittest.TestCase):
 
     def exercise(self, workspace, frame):
         endpoint = f'/api/workspaces/{workspace.info.name}'
-        self.workspace = workspace
         before = workspace.load_arrays()
-        old_mask = self.check(self.client.get(endpoint+'/mask', params={'frame':frame}))
-        self.assertEqual((old_mask['height'],old_mask['width']), self.labels.shape)
+        old_mask = self.check(self.client.get(endpoint + '/mask', params={'frame': frame}))
+        self.assertEqual((old_mask['height'], old_mask['width']), self.labels.shape)
         encoded = data_url(mask_to_png_values(self.labels))
-        result = self.check(self.client.post(endpoint+'/mask',json={'frame':frame,'mask':encoded,'revision':old_mask['revision']}))
+        result = self.check(self.client.post(endpoint + '/mask', json={'frame': frame, 'mask': encoded, 'revision': old_mask['revision']}))
         self.assertTrue(result['mask']['has_override'])
         self.assertTrue(result['mask']['stale'])
         self.assertFalse(result['frame']['stats']['fitted'])
-        np.testing.assert_array_equal(decode_mask_data_url(result['mask']['mask'],self.labels.shape),self.labels)
+        np.testing.assert_array_equal(decode_mask_data_url(result['mask']['mask'], self.labels.shape), self.labels)
         revision = result['mask']['revision']
-        self.assertEqual(self.client.post(endpoint+'/mask',json={'frame':frame,'mask':encoded,'revision':old_mask['revision']}).status_code,400)
-        preview = self.check(self.client.get(endpoint+'/frame',params={'frame':frame,'threshold':0.9}))
-        self.assertEqual(preview['mask_final_source'],'override')
-        self.assertIn('mask_override',preview['layers'])
+        # A save against a revision that is no longer current is refused.
+        self.assertEqual(self.client.post(endpoint + '/mask', json={'frame': frame, 'mask': encoded, 'revision': old_mask['revision']}).status_code, 400)
+        preview = self.check(self.client.get(endpoint + '/frame', params={'frame': frame}))
+        self.assertEqual(preview['mask_final_source'], 'override')
+        self.assertIn('mask_override', preview['layers'])
         self.assertTrue(preview['has_override'])
         self.assertEqual(preview['mask_revision'], revision)
-        light = self.check(self.client.get(endpoint+'/frame',params={'frame':frame,'threshold':0.9,'detail':'light'}))
+        light = self.check(self.client.get(endpoint + '/frame', params={'frame': frame, 'detail': 'light'}))
         self.assertEqual(list(light['layers']), ['image'])
         self.assertTrue(light['details_deferred'])
         self.assertNotIn('has_override', light)
         self.assertNotIn('mask_revision', light)
-        cleared = self.check(self.client.delete(endpoint+'/mask',params={'frame':frame,'revision':revision}))
-        self.assertFalse(cleared['mask']['has_override'])
-        self.check(self.client.post(endpoint+'/edits',json={'kind':'undo','frame':frame}))
-        restored = self.check(self.client.get(endpoint+'/mask',params={'frame':frame}))
-        self.assertTrue(restored['has_override'])
-        np.testing.assert_array_equal(decode_mask_data_url(restored['mask'],self.labels.shape),self.labels)
-        self.check(self.client.post(endpoint+'/edits',json={'kind':'undo','frame':frame}))
+        # The edit is in the Fixes list, and its Undo removes the override and restores the arrays.
+        fixes = self.check(self.client.get(endpoint + '/fixes'))['fixes']
+        self.assertEqual([(f['kind'], f['frames']) for f in fixes], [('mask', [frame, frame])])
+        self.check(self.client.post(f"{endpoint}/fixes/{fixes[0]['id']}/undo", json={'frame': frame}))
+        restored = self.check(self.client.get(endpoint + '/mask', params={'frame': frame}))
+        self.assertFalse(restored['has_override'])
         self.assertIsNone(workspace.get_override_mask(workspace.row_of(frame)))
         current = workspace.load_arrays()
         for key, value in before.items():
-            np.testing.assert_array_equal(current[key],value,err_msg=key)
+            np.testing.assert_array_equal(current[key], value, err_msg=key)
 
-    def test_imported_pose_round_trip(self):
-        workspace = Workspace.import_run(self.root/'workspaces',self.run,'imported')
-        self.exercise(workspace,int(workspace.frame_index[-1]))
+    def test_fitted_workspace_round_trip(self):
+        workspace = _write_workspace(self.root / 'workspaces', 'fitted', self.recording)
+        self.exercise(workspace, int(workspace.frame_index[-1]))
 
     def test_unfitted_workspace_round_trip(self):
-        workspace = Workspace.create(self.root/'workspaces','empty',self.recording,0,FRAMES-1)
-        self.exercise(workspace,0)
+        workspace = Workspace.create(self.root / 'workspaces', 'empty', self.recording, 0, FRAMES - 1)
+        self.exercise(workspace, 0)
 
     def test_custom_dataset_round_trip(self):
-        recording = self.root/'recordings'/'custom.h5'
-        with h5py.File(self.recording,'r') as original, h5py.File(recording,'w') as custom:
-            custom.create_dataset('/camera/video',data=original['/img_nir'][:])
-        workspace = Workspace.create(self.root/'workspaces','custom',recording,0,FRAMES-1,settings={'dataset':'/camera/video'})
-        self.exercise(workspace,0)
+        recording = self.root / 'recordings' / 'custom.h5'
+        with h5py.File(self.recording, 'r') as original, h5py.File(recording, 'w') as custom:
+            custom.create_dataset('/camera/video', data=original['/img_nir'][:])
+        workspace = Workspace.create(self.root / 'workspaces', 'custom', recording, 0, FRAMES - 1, settings={'dataset': '/camera/video'})
+        self.exercise(workspace, 0)
 
-    def test_threshold_preview_does_not_change_override_fitter_starts(self):
-        workspace = Workspace.import_run(self.root/'workspaces', self.run, 'starts')
-        workspace.set_override_mask(0, self.labels)
-        segmenters = self.app.state.app_state.viewer.segmenters
-        with patch.object(segmenters, 'probability', return_value=(np.zeros(self.labels.shape), 'preview')):
-            with patch('worm_pose_gen.pose_viewer.standard_initializations', return_value=[]) as initialize:
-                self.check(self.client.get('/api/workspaces/starts/starts', params={'frame': 0, 'threshold': .8}))
-        initialize.assert_called_once()
-        np.testing.assert_array_equal(initialize.call_args.args[0], self.labels == 1)
+
+if __name__ == '__main__':
+    unittest.main()
