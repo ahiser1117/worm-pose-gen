@@ -8,6 +8,7 @@ the small schedule of ``tests/test_propagation.py``.
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import asdict
 import fcntl
 import json
@@ -44,12 +45,15 @@ from worm_pose_gen.pipeline import (
     fit_setup,
     independent_copies,
     new_arrays,
+    prefetched,
     read_summary,
     restore_independent_rows,
     run_stage,
     workspace_setup,
     segment_frames,
+    segment_slabs,
     stage_command,
+    submit_starts,
 )
 from worm_pose_gen.recording_prior import RecordingPrior
 from worm_pose_gen.workspace import Workspace
@@ -218,6 +222,66 @@ class SegmentationTests(unittest.TestCase):
                 self.assertEqual(set(timing), {"read", "flat_field", "network", "cleanup"})
             finally:
                 frames.close()
+
+    def test_pipelined_segmentation_matches_segment_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "rec.h5"
+            _write_recording(recording)
+            frames = Frames(recording, flat_field=False)
+            try:
+                model, params, device = DarkPixelSegmenter("cpu"), SegmentParams(**SEGMENT_PARAMS), torch.device("cpu")
+                slabs = [[0, 1], [2, 3], [4]]
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    pipelined = list(segment_slabs(frames, model, slabs, params, device, pool=pool))
+                self.assertEqual(len(pipelined), len(slabs))
+                for slab, (masks, stats, timing, predictions) in zip(slabs, pipelined, strict=True):
+                    expected_masks, expected_stats, _ = segment_frames(frames, model, slab, params, device)
+                    self.assertTrue(all(np.array_equal(a, b) for a, b in zip(masks, expected_masks, strict=True)))
+                    self.assertEqual(stats, expected_stats)
+                    self.assertEqual(set(timing), {"read", "flat_field", "network", "cleanup"})
+                    self.assertIsNone(predictions)
+            finally:
+                frames.close()
+
+
+class PipeliningTests(unittest.TestCase):
+    def test_prefetched_produces_the_next_item_while_the_caller_works(self) -> None:
+        produced = [threading.Event() for _ in range(3)]
+
+        def items():
+            for k in range(3):
+                produced[k].set()
+                yield k
+
+        seen = []
+        for k in prefetched(items()):
+            if k + 1 < len(produced):
+                # The next item is produced without the caller asking for it.
+                self.assertTrue(produced[k + 1].wait(timeout=10))
+            seen.append(k)
+        self.assertEqual(seen, [0, 1, 2])
+        self.assertEqual(list(prefetched([])), [])
+
+    def test_prefetched_raises_the_producer_error(self) -> None:
+        def items():
+            yield 0
+            raise ValueError("bad slab")
+
+        with self.assertRaisesRegex(ValueError, "bad slab"):
+            list(prefetched(items()))
+
+    def test_starts_on_a_pool_match_inline_starts(self) -> None:
+        setup = fit_setup(FitParams.from_dict(FIT_PARAMS), None)
+        masks = _bodies(3)
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            pooled = list(submit_starts(masks, setup, pool))
+        inline = list(submit_starts(masks, setup))
+        self.assertEqual(len(pooled), len(masks))
+        for (a, trace_a), (b, trace_b) in zip(pooled, inline, strict=True):
+            self.assertIsNone(trace_a)
+            self.assertIsNone(trace_b)
+            self.assertEqual([s.name for s in a], [s.name for s in b])
+            self.assertTrue(all(np.array_equal(x.latent, y.latent) and x.width_px == y.width_px for x, y in zip(a, b, strict=True)))
 
 
 class StageTests(unittest.TestCase):
