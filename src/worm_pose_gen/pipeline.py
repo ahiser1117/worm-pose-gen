@@ -345,6 +345,7 @@ class Frames:
             RecordingSource(self.path, Path(dataset_root or DEFAULT_DATASET_ROOT) / "flat_fields", dataset=dataset) if flat_field else None
         )
         self._field: Any = None
+        self._gain: torch.Tensor | None = None  # the flat field's gain on the device of corrected_on
         self.field_seconds = 0.0
         with h5py.File(self.path, "r") as handle:
             if dataset not in handle:
@@ -390,6 +391,27 @@ class Frames:
             for index, frame in enumerate(raw):
                 corrected[index] = flat_fielded(frame, field)
         return corrected, t1 - t0, time.perf_counter() - t1
+
+    def corrected_on(self, indices: Sequence[int], device: torch.device) -> torch.Tensor:
+        """Flat-fielded frames as a ``[N, H, W]`` uint8 tensor on ``device``, corrected there; equal to :meth:`corrected`'s.
+
+        The correction is :func:`flat_fielded`'s, in float64 one operation at
+        a time (as NumPy does it), so the frames match bit for bit.
+        """
+
+        raw = torch.as_tensor(self.read(indices))
+        # Pinned, the upload need not wait for the device's queued work.
+        raw = (raw.pin_memory() if device.type == "cuda" else raw).to(device, non_blocking=True)
+        field = self.field()
+        if field is None:
+            return raw
+        if self._gain is None or self._gain.device != raw.device:
+            self._gain = torch.as_tensor(field.gain, dtype=torch.float64, device=raw.device)
+        dark = float(field.dark_level)
+        corrected = torch.empty_like(raw)
+        for k, frame in enumerate(raw):
+            corrected[k] = (dark + (frame.double() - dark) * self._gain).clamp_(0.0, 255.0).round_().to(torch.uint8)
+        return corrected
 
     def close(self) -> None:
         if self._handle is not None:

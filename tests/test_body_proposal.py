@@ -5,12 +5,15 @@ import numpy as np
 import torch
 
 from worm_pose_gen.body_net import OUTPUTS
-from worm_pose_gen.body_proposal import OVERLAP_THRESHOLD, FieldPrediction, field_evidence, propose_trace, trace_start
+from worm_pose_gen.body_proposal import (
+    OVERLAP_THRESHOLD, FieldPrediction, RecordingFieldPredictor, field_evidence, network_inputs, propose_trace, trace_start,
+)
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import MaskFitConfig
 from worm_pose_gen.pipeline import FitParams, fit_setup, network_trace_start
 from worm_pose_gen.recording_prior import RecordingPrior
+from worm_pose_gen.segmenter import INPUT_MEAN, INPUT_STD
 
 SHAPE = (300, 420)
 CORNERS = np.array([[80, 150], [340, 150], [340, 250], [240, 250], [240, 60]], float)
@@ -183,6 +186,69 @@ class FieldEvidenceTests(unittest.TestCase):
         evidence = field_evidence(clipped, mask[50:])
         self.assertIsNone(evidence.tail_xy)
         np.testing.assert_allclose(evidence.head_xy, CORNERS[0] - [0, 50], atol=1)
+
+
+class RecordingPredictorTests(unittest.TestCase):
+    """RecordingFieldPredictor: the inputs it builds, the reduced fields it returns, and the neighbours it keeps between calls."""
+
+    def setUp(self):
+        rng = np.random.default_rng(1)
+        self.raw = rng.integers(0, 256, (12, 16, 20), dtype=np.uint8)
+
+    def frames(self):
+        raw = self.raw
+
+        class Frames:
+            total = len(raw)
+            read = []
+
+            def corrected_on(self, indices, device):
+                self.read.append(list(indices))
+                return torch.as_tensor(raw[list(indices)]).to(device)
+
+        return Frames()
+
+    def test_inputs_are_the_normalized_frame_and_the_lag_differences(self):
+        frames = {k: torch.as_tensor(frame) for k, frame in enumerate(self.raw)}
+        del frames[9]
+        inputs = network_inputs(frames, [2, 6], (1, 3)).numpy()
+        centre = (self.raw[2].astype(np.float32) / 255.0 - INPUT_MEAN) / INPUT_STD
+        np.testing.assert_array_equal(inputs[0, 0], centre)
+        np.testing.assert_array_equal(inputs[0, 1], (self.raw[3].astype(np.float32) - self.raw[1].astype(np.float32)) / (255.0 * INPUT_STD))
+        self.assertFalse(inputs[0, 2].any(), "frame -1 does not exist")
+        self.assertFalse(inputs[1, 2].any(), "frame 9 is missing")
+        self.assertTrue(inputs[1, 1].any())
+
+    def test_predictions_reduce_to_what_the_fit_reads(self):
+        centerline, mask = looped_body()
+        prediction = prediction_from(centerline, mask)
+        module = StubModule(prediction)
+        module.forward = lambda images: module.logits[None].expand(len(images), *module.logits.shape)
+        self.raw = np.zeros((3, *SHAPE), np.uint8)
+        predictor = RecordingFieldPredictor(module, self.frames(), batch_size=2)
+        full = predictor.predict_full([0, 1, 2])
+        fields = predictor.predict([0, 1, 2])
+        self.assertEqual(len(fields), 3)
+        for got, whole in zip(fields, full):
+            np.testing.assert_array_equal(got.mask, whole.mask)
+            np.testing.assert_array_equal(got.ap, whole.ap)
+            np.testing.assert_array_equal(got.crossing, whole.overlap >= OVERLAP_THRESHOLD)
+            self.assertEqual(got.peak("head"), whole.peak("head"))
+            self.assertEqual(got.peak("tail"), whole.peak("tail"))
+        np.testing.assert_array_equal(field_evidence(fields[0], mask).ap, field_evidence(full[0], mask).ap)
+
+    def test_consecutive_calls_reuse_their_shared_neighbours(self):
+        module = StubModule(prediction_from(*looped_body()))
+        module.lags = (1, 2)
+        frames = self.frames()
+        predictor = RecordingFieldPredictor(module, frames)
+        captured = []
+        with mock.patch("worm_pose_gen.body_proposal._probabilities", side_effect=lambda m, inputs: captured.append(inputs) or inputs):
+            list(predictor._probabilities([2, 3, 4]))
+            list(predictor._probabilities([5, 6, 7]))
+        self.assertEqual(frames.read, [[0, 1, 2, 3, 4, 5, 6], [7, 8, 9]])
+        fresh = network_inputs({k: torch.as_tensor(f) for k, f in enumerate(self.raw)}, [5, 6, 7], (1, 2))
+        torch.testing.assert_close(captured[-1], fresh, rtol=0, atol=0)
 
 
 class StubModule(torch.nn.Module):

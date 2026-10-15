@@ -119,7 +119,7 @@ class NetworkFields:
             with self._inference:
                 hit = self._cached(key)
                 if hit is None:
-                    prediction = RecordingFieldPredictor(module, self._frames_of(workspace)).predict([int(frame)])[0]
+                    prediction = RecordingFieldPredictor(module, self._frames_of(workspace)).predict_full([int(frame)])[0]
                     hit = {**encode_prediction(prediction, workspace.effective_mask(row)), "model": model, "lags": list(module.lags)}
                     with self._lock:
                         self._cache[key] = hit
