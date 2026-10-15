@@ -57,13 +57,14 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
 
 from worm_pose_gen.ambiguity import compute_ambiguity
 from worm_pose_gen.batch_fit import PRESETS, BatchFitConfig
+from worm_pose_gen.body_proposal import crop_fields
 from worm_pose_gen.pipeline import (
     field_predictor,
     BodyNetMasks,
@@ -365,6 +366,7 @@ def main() -> int:
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
     # A network that made the masks made the fit's predictions with them: they are reused, not predicted again.
     predictor = None if args.body_net is None or isinstance(model, BodyNetMasks) else field_predictor(args.body_net, frames, device)
+    field_crops: dict[int, Any] = {}
     try:
         for slab_start in range(0, n, args.slab):
             slab = indices[slab_start : slab_start + args.slab]
@@ -391,6 +393,9 @@ def main() -> int:
                 t_fields = time.perf_counter()
                 predictions = predictor.predict([indices[row] for row in fit_rows])
                 seg_timing["fields"] = time.perf_counter() - t_fields
+            if predictions is not None:
+                # What the fits read of each prediction, kept so the later passes score against the same one.
+                field_crops.update({row: crop_fields(p, mask) for row, p, mask in zip(fit_rows, predictions, fit_masks_here, strict=True)})
             fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, pool=pool, skipped=skipped, predictions=predictions)
             for stage, seconds in {**seg_timing, **fit_timing}.items():
                 timing[stage] += seconds
@@ -411,8 +416,15 @@ def main() -> int:
         return _segment_cached_rows(rows, frames, model, arrays["frame_index"], segmentation, device, mask_cache)
 
     # The body-field network scores the propagation and track refits too, as it scored the independent fits.
+    # Rows the independent pass scored keep its prediction; others (and masks past the kept region) are predicted.
     fields = model.predictor if isinstance(model, BodyNetMasks) else predictor
-    predictions_of = None if fields is None else (lambda rows: fields.predict([indices[row] for row in rows]))
+
+    def fields_of(rows: Sequence[int], masks: dict[int, np.ndarray]) -> list[Any]:
+        missing = [r for r in rows if r not in field_crops or not field_crops[r].covers(masks[r])]
+        if missing:
+            predicted = fields.predict([indices[row] for row in missing])
+            field_crops.update({row: crop_fields(p, masks[row]) for row, p in zip(missing, predicted, strict=True)})
+        return [field_crops[r] for r in rows]
 
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
     # independent pose itself is kept so the developer layers can show what
@@ -426,7 +438,7 @@ def main() -> int:
         # Temporal propagation (plan steps 5, 6a-c) across the ambiguous stretches.
         outcome = propagation_pass(
             arrays, segment_rows, setup, propagate_params(args), device, image_shape=image_shape,
-            predictions_of=predictions_of,
+            fields_of=None if fields is None else fields_of,
         )
         propagation_info, stretches = outcome.info, outcome.stretches
         timing["propagate"] = propagation_info["seconds"]
@@ -436,7 +448,7 @@ def main() -> int:
     if not args.no_track_length:
         track_info, _ = track_length_pass(
             arrays, segment_rows, setup, track_params(args), device, stretches=stretches, image_shape=image_shape,
-            predictions_of=predictions_of,
+            fields_of=None if fields is None else fields_of,
         )
         timing["track"] = track_info["seconds"]
 
