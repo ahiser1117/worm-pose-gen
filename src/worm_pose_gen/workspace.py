@@ -11,6 +11,7 @@ recording, always the whole recording (``docs/APP_SIMPLIFICATION.md``)::
       provenance.npz         per frame: algorithm id, job or edit id, unix time
       summary.json           the stages' run summary (fit configuration, prior, propagation)
       masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk
+      fields/chunk_NNNNN.npz the body-field network's outputs the fits read (``field_store``)
       overrides/masks/       sparse: frames whose mask the user edited
       edits.jsonl            append-only log of every intervention
       fixes/                 Refit and Relabel previews waiting for Keep or Discard
@@ -21,7 +22,8 @@ per-frame array has one entry per row.  Every file write goes through a
 temporary file and ``os.replace`` so a crash mid-write leaves the previous
 version intact.  Masks are kept (refits and mask edits need them) as
 ``np.packbits`` of the flattened boolean image, which compresses to a few
-kilobytes per frame; probability maps are not kept.
+kilobytes per frame; probability maps are not kept, but what the fits read
+of the body-field network's outputs is (:mod:`field_store`).
 """
 
 from __future__ import annotations

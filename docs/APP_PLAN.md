@@ -116,6 +116,9 @@ the whole recording), replacing the write-once run directory:
   masks/chunk_NNNNN.npz  bitpacked cleaned masks, 1024 rows per chunk, a few KB per frame
                          (the segment stage writes them; a refit stores the masks
                          it had to segment on the fly)
+  fields/chunk_NNNNN.npz the body-field network's outputs the fits read, 256 rows per chunk:
+                         A-P (float32) and crossing bits on the mask grown 2 px, end peaks
+                         (field_store; the network runs once per frame)
   overrides/masks/       sparse full uint8 labels: 0 background, 1 worm, 255 ignore
                         (NNNNNNN.npz per row; effective geometry mask is labels == 1)
   recording_prior.json   the prior the fit stage uses (bootstrapped, cached or given)

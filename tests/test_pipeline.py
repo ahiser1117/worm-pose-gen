@@ -522,8 +522,10 @@ class BodyFieldStageTests(unittest.TestCase):
             with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording):
                 result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1}, device="cpu")
             self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
-            # The workspace's fit used the network, so the pass predicts the stretch and its anchors and scores every fit.
-            self.assertEqual(predictors[-1].requested, [[1, 2, 3, 4, 5]])
+            # The workspace's fit used the network, so the pass scores every fit against the fields the fit
+            # stored for the stretch and its anchors, without running the network again.
+            self.assertEqual(len(predictors), 1)
+            self.assertEqual(read_summary(workspace)["propagation"]["fields"], {"stored": 5, "predicted": 0})
             self.assertTrue(calls)
             for fields in calls:
                 self.assertIsNotNone(fields)
@@ -548,6 +550,7 @@ class BodyFieldStageTests(unittest.TestCase):
                 self.assertTrue(fields is not None and all(f is not None for f in fields))
             refit = np.nonzero(workspace.load_state()["length_refit"])[0]
             self.assertTrue(set(refit.tolist()).isdisjoint({2, 3, 4}))
+            self.assertEqual(len(predictors), 1)
             self.assertTrue((workspace.load_state()["field_energy"][refit] > 0).all())
 
     def test_masks_from_the_body_net(self) -> None:
@@ -570,6 +573,10 @@ class BodyFieldStageTests(unittest.TestCase):
             self.assertEqual(sorted(f for request in predictors[-1].requested for f in request), list(range(FRAMES)))
             for row in range(FRAMES):
                 np.testing.assert_array_equal(workspace.get_mask(row), bodies[row])
+            # The network's fields of every frame are kept for the stages that score fits with them.
+            stored = pipeline.workspace_field_store(workspace, "stub.ckpt", SegmentParams.from_dict(params)).get(range(FRAMES))
+            self.assertEqual(sorted(stored), list(range(FRAMES)))
+            self.assertTrue(all(stored[row].covers(bodies[row]) for row in range(FRAMES)))
             summary = read_summary(workspace)
             self.assertEqual((summary["mask_source"], summary["checkpoint"]["path"]), ("body_net", "stub.ckpt"))
             # The region algorithms segment rows the way the workspace was segmented.

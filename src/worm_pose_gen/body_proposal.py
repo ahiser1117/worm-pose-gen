@@ -58,15 +58,111 @@ MIN_PATCH_FRACTION = 0.5
 CENTRAL_FRACTION = 0.7
 
 
+# A heatmap's maximum: (x, y, value).
+Peak = tuple[float, float, float]
+Box = tuple[slice, slice]
+
+
 @dataclass(frozen=True)
 class FieldPrediction:
-    """Per-pixel network outputs for one frame, as probabilities (A-P as a value in [0, 1])."""
+    """Per-pixel network outputs for one frame, as probabilities (A-P as a value in [0, 1]).
+
+    The trace and the evidence read a prediction only through :meth:`peak`,
+    :meth:`ap_in` and :meth:`crossing_in`, which :class:`FieldCrop` (the part
+    a workspace keeps) answers too.
+    """
 
     mask: NDArray[np.float32]
     ap: NDArray[np.float32]
     head: NDArray[np.float32]
     tail: NDArray[np.float32]
     overlap: NDArray[np.float32]
+
+    def peak(self, name: str) -> Peak:
+        """The maximum of the ``head`` or ``tail`` heatmap."""
+
+        heatmap = getattr(self, name)
+        index = int(np.argmax(heatmap))
+        y, x = np.unravel_index(index, heatmap.shape)
+        return float(x), float(y), float(heatmap.flat[index])
+
+    def ap_in(self, box: Box) -> NDArray[np.float32]:
+        return self.ap[box]
+
+    def crossing_in(self, box: Box) -> NDArray[np.bool_]:
+        """Pixels predicted as a crossing (overlap at least ``OVERLAP_THRESHOLD``)."""
+
+        return self.overlap[box] >= OVERLAP_THRESHOLD
+
+
+# The stored region of a frame's fields reaches this far past its mask, so a
+# mask edit that moves the edge a little still lies inside it.
+CROP_MARGIN_PX = 2
+
+
+@dataclass(frozen=True)
+class FieldCrop:
+    """What the fit reads of a prediction (:mod:`field_store` keeps one per workspace row).
+
+    The A-P field (float32, as predicted: rounding it moves fits) and the
+    crossings on ``support``, the frame's mask grown by
+    ``CROP_MARGIN_PX`` within its box ``(y0, y1, x0, x1)``, and the peaks of
+    the end heatmaps.  :meth:`covers` says whether a mask lies on the
+    support, which is where the trace and the evidence read the fields;
+    elsewhere A-P is NaN and nothing is a crossing.
+    """
+
+    shape: tuple[int, int]
+    box: tuple[int, int, int, int]
+    support: NDArray[np.bool_]
+    ap: NDArray[np.float32]
+    crossing: NDArray[np.bool_]
+    head: Peak
+    tail: Peak
+
+    def peak(self, name: str) -> Peak:
+        return self.head if name == "head" else self.tail
+
+    def _in(self, values: NDArray[Any], box: Box, fill: Any) -> NDArray[Any]:
+        rows, cols = (range(*s.indices(n)) for s, n in zip(box, self.shape))
+        y0, y1, x0, x1 = self.box
+        out = np.full((len(rows), len(cols)), fill, dtype=values.dtype)
+        top, bottom, left, right = max(rows.start, y0), min(rows.stop, y1), max(cols.start, x0), min(cols.stop, x1)
+        if top < bottom and left < right:
+            out[top - rows.start : bottom - rows.start, left - cols.start : right - cols.start] = values[top - y0 : bottom - y0, left - x0 : right - x0]
+        return out
+
+    def ap_in(self, box: Box) -> NDArray[np.float32]:
+        return self._in(self.ap, box, np.nan)
+
+    def crossing_in(self, box: Box) -> NDArray[np.bool_]:
+        return self._in(self.crossing, box, False)
+
+    def covers(self, mask: NDArray[np.generic]) -> bool:
+        body = np.asarray(mask, dtype=bool)
+        if body.shape != self.shape:
+            return False
+        y0, y1, x0, x1 = self.box
+        inside = body[y0:y1, x0:x1]
+        return int(np.count_nonzero(inside & self.support)) == int(np.count_nonzero(body))
+
+
+def crop_fields(prediction: FieldPrediction, mask: NDArray[np.generic]) -> FieldCrop:
+    """The part of ``prediction`` the fit of ``mask`` reads (an empty region and the peaks for an empty mask)."""
+
+    body = np.asarray(mask, dtype=bool)
+    height, width = body.shape
+    box = _box(body) or (slice(0, 0), slice(0, 0))
+    margin = CROP_MARGIN_PX if body.any() else 0
+    y0, y1 = max(box[0].start - margin, 0), min(box[0].stop + margin, height)
+    x0, x1 = max(box[1].start - margin, 0), min(box[1].stop + margin, width)
+    region = (slice(y0, y1), slice(x0, x1))
+    support = ndimage.binary_dilation(body[region], np.ones((3, 3), bool), iterations=margin) if margin else body[region]
+    ap = np.where(support, prediction.ap_in(region), np.nan).astype(np.float32)
+    return FieldCrop(
+        shape=(height, width), box=(y0, y1, x0, x1), support=support, ap=ap,
+        crossing=prediction.crossing_in(region) & support, head=prediction.peak("head"), tail=prediction.peak("tail"),
+    )
 
 
 # Body-field evidence weights for ordinary fits (``MaskFitConfig.field_*``).
@@ -143,13 +239,12 @@ class RecordingFieldPredictor:
         return results
 
 
-def _end(heatmap: NDArray[np.float32], body: NDArray[np.bool_]) -> FloatArray | None:
+def _end(peak: Peak, body: NDArray[np.bool_]) -> FloatArray | None:
     """The heatmap's peak (x, y); ``None`` below ``END_THRESHOLD`` or more than ``END_MASK_PX`` off ``body``."""
 
-    peak = int(np.argmax(heatmap))
-    if float(heatmap.flat[peak]) < END_THRESHOLD:
+    if peak[2] < END_THRESHOLD:
         return None
-    y, x = (int(v) for v in np.unravel_index(peak, heatmap.shape))
+    x, y = int(peak[0]), int(peak[1])
     reach = int(np.ceil(END_MASK_PX))
     top, left = max(y - reach, 0), max(x - reach, 0)
     ys, xs = np.nonzero(body[top : y + reach + 1, left : x + reach + 1])
@@ -180,7 +275,7 @@ def _scored(point: FloatArray | None, shape: tuple[int, ...]) -> FloatArray | No
 
 
 def propose_trace(
-    prediction: FieldPrediction, mask: NDArray[np.bool_], *, levels: int = TRACE_LEVELS, tail: bool = True,
+    prediction: FieldPrediction | FieldCrop, mask: NDArray[np.bool_], *, levels: int = TRACE_LEVELS, tail: bool = True,
 ) -> FloatArray | None:
     """Head-first trace points over ``mask`` from a prediction; ``None`` when it gives fewer than three.
 
@@ -203,12 +298,12 @@ def propose_trace(
     box = _box(body)
     if box is None:
         return None
-    head = _end(prediction.head, body)
-    tail = _end(prediction.tail, body) if tail else None
+    head = _end(prediction.peak("head"), body)
+    tail = _end(prediction.peak("tail"), body) if tail else None
     # Everything below works on the mask's box; ``origin`` is its corner in the image.
     origin = np.array([box[1].start, box[0].start])
     body = body[box]
-    ys, xs = np.nonzero(body & (prediction.overlap[box] < OVERLAP_THRESHOLD))
+    ys, xs = np.nonzero(body & ~prediction.crossing_in(box))
     if not len(ys):
         return None
     depth = ndimage.distance_transform_edt(body)
@@ -216,7 +311,7 @@ def propose_trace(
     points: list[FloatArray] = [] if head is None else [head]
     # Band k holds edges[k] <= A-P < edges[k + 1], the last one closed at 1.
     edges = np.linspace(0.0, 1.0, levels + 1)
-    ap = prediction.ap[box][ys, xs]
+    ap = prediction.ap_in(box)[ys, xs]
     level = np.searchsorted(edges, ap, side="right") - 1
     level[ap == edges[-1]] = levels - 1
     order = np.argsort(level, kind="stable")  # pixels grouped by band, in raster order within one
@@ -259,21 +354,21 @@ def propose_trace(
     return np.stack(kept) if len(kept) >= 3 else None
 
 
-def field_evidence(prediction: FieldPrediction, mask: NDArray[np.bool_]) -> BodyFieldEvidence:
+def field_evidence(prediction: FieldPrediction | FieldCrop, mask: NDArray[np.bool_]) -> BodyFieldEvidence:
     """What a fit of ``mask`` is scored against: the A-P field on the body (not on crossings) and the ends in view on it, away from the image edge."""
 
     body = np.asarray(mask, dtype=bool)
     ap = np.full(body.shape, np.nan, dtype=np.float32)
     box = _box(body)
     if box is not None:
-        ap[box] = np.where(body[box] & (prediction.overlap[box] < OVERLAP_THRESHOLD), prediction.ap[box], np.nan)
+        ap[box] = np.where(body[box] & ~prediction.crossing_in(box), prediction.ap_in(box), np.nan)
     return BodyFieldEvidence(
-        ap=ap, head_xy=_scored(_end(prediction.head, body), body.shape), tail_xy=_scored(_end(prediction.tail, body), body.shape),
+        ap=ap, head_xy=_scored(_end(prediction.peak("head"), body), body.shape), tail_xy=_scored(_end(prediction.peak("tail"), body), body.shape),
     )
 
 
 def trace_start(
-    prediction: FieldPrediction,
+    prediction: FieldPrediction | FieldCrop,
     mask: NDArray[np.bool_],
     *,
     config: MaskFitConfig,
@@ -306,7 +401,7 @@ def trace_start(
     """
 
     body = np.asarray(mask, dtype=bool)
-    anchored = length_px is not None and _scored(_end(prediction.head, body), body.shape) is not None
+    anchored = length_px is not None and _scored(_end(prediction.peak("head"), body), body.shape) is not None
     trace = propose_trace(prediction, body, tail=not anchored)
     if trace is None:
         return None
