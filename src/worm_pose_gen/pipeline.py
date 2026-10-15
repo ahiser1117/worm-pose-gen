@@ -54,18 +54,19 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields, replace
 from datetime import datetime
 import fcntl
+from functools import partial
 import json
 import sys
 import math
 import os
 from pathlib import Path
 import time
-from typing import Any, Callable, Iterator, Protocol, Sequence, TypeVar
+from typing import Any, Callable, Iterable, Iterator, Protocol, Sequence, TypeVar
 
 import h5py
 import numpy as np
@@ -182,6 +183,7 @@ HYPOTHESIS_ARRAYS = (
 Progress = Callable[[float, str], None]
 MaskArray = NDArray[np.bool_]
 P = TypeVar("P", bound="_Params")
+T = TypeVar("T")
 
 
 def _help(text: str, **kwargs: Any) -> Any:
@@ -500,26 +502,62 @@ def segment_frames(
     reading counts as ``network`` time.
     """
 
-    if isinstance(model, BodyNetMasks):
-        read_seconds = field_seconds = 0.0
-        t2 = time.perf_counter()
-        probability = model.predict(indices)
-    else:
-        corrected, read_seconds, field_seconds = frames.corrected(indices)
-        t2 = time.perf_counter()
-        probability = model.predict_probability_batch(corrected, batch_size=params.batch_size)
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-    t3 = time.perf_counter()
-    masks: list[MaskArray] = []
-    stats: list[dict[str, int]] = []
-    for prob in probability:
-        mask, frame_stats = clean_mask(prob, params.threshold, params.hole_radius, device, fill_holes=params.fill_holes)
-        frame_stats["mask_on_border"] = int(touches_border(mask, 2)) if frame_stats["worm_pixels"] else 0
-        masks.append(np.asarray(mask, dtype=bool))
-        stats.append(frame_stats)
-    timing = {"read": read_seconds, "flat_field": field_seconds, "network": t3 - t2, "cleanup": time.perf_counter() - t3}
+    ((masks, stats, timing, _),) = segment_slabs(frames, model, [indices], params, device)
     return masks, stats, timing
+
+
+# Threads that clean a slab's masks while the network predicts the next: scipy.ndimage releases the GIL, and
+# threads, unlike processes, need not copy the probability maps (0.7 MB a frame) to their workers (a process
+# pool measured no faster at cleaning a slab, and its copying slowed the network's pass).
+CLEANUP_WORKERS = min(8, os.cpu_count() or 1)
+
+
+def segment_slabs(
+    frames: Frames,
+    model: SegmentationModel | BodyNetMasks,
+    slabs: Iterable[Sequence[int]],
+    params: SegmentParams | PriorParams,
+    device: torch.device,
+    pool: Executor | None = None,
+) -> Iterator[tuple[list[MaskArray], list[dict[str, int]], dict[str, float], list[Any] | None]]:
+    """:func:`segment_frames` over ``slabs`` in turn, plus each slab's predictions (``BodyNetMasks.last``; ``None`` for a segmenter).
+
+    The network predicts the next slab on a background thread while this
+    one's masks are collected and the caller stores them; with ``pool``, a
+    slab's masks are cleaned there meanwhile, so the stage costs about the
+    network's pass alone.  ``cleanup`` then counts only the time spent
+    waiting for the masks.
+    """
+
+    clean = partial(_cleaned, params=params, device=device)
+
+    def predicted(indices: Sequence[int]) -> tuple[Iterable[tuple[MaskArray, dict[str, int]]], dict[str, float], list[Any] | None]:
+        if isinstance(model, BodyNetMasks):
+            read_seconds = field_seconds = 0.0
+            t2 = time.perf_counter()
+            probability = model.predict(indices)
+        else:
+            corrected, read_seconds, field_seconds = frames.corrected(indices)
+            t2 = time.perf_counter()
+            probability = model.predict_probability_batch(corrected, batch_size=params.batch_size)
+        if device.type == "cuda":
+            # This thread's stream only: a device-wide sync is refused while the caller records a fit step's CUDA graph.
+            torch.cuda.current_stream(device).synchronize()
+        timing = {"read": read_seconds, "flat_field": field_seconds, "network": time.perf_counter() - t2}
+        predictions = list(model.last) if isinstance(model, BodyNetMasks) else None
+        return (pool.map(clean, probability) if pool is not None else map(clean, probability)), timing, predictions
+
+    for cleaning, timing, predictions in prefetched(predicted(indices) for indices in slabs):
+        t3 = time.perf_counter()
+        cleaned = list(cleaning)
+        timing["cleanup"] = time.perf_counter() - t3
+        yield [mask for mask, _ in cleaned], [frame_stats for _, frame_stats in cleaned], timing, predictions
+
+
+def _cleaned(probability: NDArray[np.float32], params: SegmentParams | PriorParams, device: torch.device) -> tuple[MaskArray, dict[str, int]]:
+    mask, frame_stats = clean_mask(probability, params.threshold, params.hole_radius, device, fill_holes=params.fill_holes)
+    frame_stats["mask_on_border"] = int(touches_border(mask, 2)) if frame_stats["worm_pixels"] else 0
+    return np.asarray(mask, dtype=bool), frame_stats
 
 
 MASK_STAT_KEYS = ("worm_pixels", "raw_worm_pixels", "pixels_filled", "components", "pixels_outside_largest")
@@ -782,25 +820,50 @@ def body_field_inputs(
     return evidence, starts
 
 
+def frame_starts(mask: MaskArray, setup: FitSetup, prediction: Any = None) -> tuple[list[Initialization], Initialization | None]:
+    """A frame's standard starts (:func:`initializations_for`) and, given the body-field network's prediction, its trace start."""
+
+    starts = initializations_for(mask, setup.config, setup.start_names, setup.start_shape, setup.start_length)
+    return starts, network_trace_start(prediction, mask, setup) if prediction is not None else None
+
+
+def submit_starts(
+    masks: Sequence[MaskArray], setup: FitSetup, pool: ProcessPoolExecutor | None = None, predictions: Sequence[Any] | None = None
+) -> Iterable[tuple[list[Initialization], Initialization | None]]:
+    """Each mask's :func:`frame_starts`; with ``pool`` they are computing there when this returns.
+
+    Submitting the next slab's starts before fitting this one on the GPU
+    makes the fit stage cost about the larger of the two, not their sum.
+    ``predictions`` go to the pool, so they should be the small
+    ``body_proposal.FieldCrop``, not whole predictions.
+    """
+
+    args = (masks, [setup] * len(masks), predictions if predictions is not None else [None] * len(masks))
+    if pool is None:
+        return [frame_starts(*frame_args) for frame_args in zip(*args)]
+    return pool.map(frame_starts, *args)
+
+
 def fit_frames(
     masks: Sequence[MaskArray],
     rows: Sequence[int],
     setup: FitSetup,
     arrays: dict[str, np.ndarray],
     device: torch.device,
+    starts: Iterable[tuple[list[Initialization], Initialization | None]],
     *,
-    pool: ProcessPoolExecutor | None = None,
     skipped: dict[str, int] | None = None,
     predictions: Sequence[Any] | None = None,
 ) -> dict[str, float]:
-    """Independent multi-start fit of these masks into ``arrays[rows]``; returns init and fit seconds.
+    """Independent multi-start fit of these masks from their :func:`submit_starts` into ``arrays[rows]``; returns init and fit seconds.
 
+    ``init`` counts the time spent waiting for the starts and orienting them.
     Frames without a start are skipped (``skipped['no_starts']``); when the
     batch fails, the frames are fit one at a time and the ones that still
     fail are counted under ``fit_error``.
 
     ``predictions`` (the body-field network's fields, one per mask,
-    ``body_proposal.FieldCrop``) score every
+    ``body_proposal.FieldCrop``, as given to :func:`submit_starts`) score every
     fit against the network's A-P field and ends (the config's ``field_*``
     weights), add the network's proposed trace as a start, and fit every
     start in both orientations, so the evidence rather than the taper
@@ -810,17 +873,9 @@ def fit_frames(
     """
 
     skipped = skipped if skipped is not None else defaultdict(int)
-    config, names = setup.config, setup.start_names
+    config = setup.config
     t4 = time.perf_counter()
-    if pool is not None:
-        starts = list(
-            pool.map(
-                initializations_for, masks, [config] * len(masks), [names] * len(masks),
-                [setup.start_shape] * len(masks), [setup.start_length] * len(masks),
-            )
-        )
-    else:
-        starts = [initializations_for(m, config, names, setup.start_shape, setup.start_length) for m in masks]
+    starts, traces = (list(values) for values in zip(*starts)) if masks else ([], [])
     fields: list[Any] | None = None
     oriented: set[int] = set()
     if predictions is not None:
@@ -828,9 +883,8 @@ def fit_frames(
         from .body_proposal import field_evidence
 
         fields = [field_evidence(p, m) for p, m in zip(predictions, masks, strict=True)]
-        for k, (prediction, mask) in enumerate(zip(predictions, masks, strict=True)):
+        for k, trace in enumerate(traces):
             base = [s for s in starts[k] if not s.name.endswith("_reversed")]
-            trace = network_trace_start(prediction, mask, setup)
             head, tail = fields[k].head_xy, fields[k].tail_xy
             if head is not None and tail is not None:
                 oriented.add(rows[k])
@@ -1653,6 +1707,26 @@ def _slabs(rows: Sequence[int], size: int) -> list[list[int]]:
     return [rows[i : i + max(1, size)] for i in range(0, len(rows), max(1, size))]
 
 
+def prefetched(items: Iterable[T]) -> Iterator[T]:
+    """``items`` in order, the next one produced on a background thread while the caller works on the current one.
+
+    A stage's preparation (reading, the network's pass, collecting cleaned
+    masks, submitting starts) then runs while the GPU fits the slab before
+    it; torch, h5py, NumPy and SciPy release the GIL for most of their work.
+    The producer must not touch what the caller's work on an item changes.
+    """
+
+    items = iter(items)
+    with ThreadPoolExecutor(max_workers=1) as thread:
+        following = thread.submit(next, items, _END)
+        while (current := following.result()) is not _END:
+            following = thread.submit(next, items, _END)
+            yield current
+
+
+_END: Any = object()
+
+
 class _PendingMasks:
     """Packed masks waiting to be written; ``add`` flushes when the chunk changes, ``flush`` at the end."""
 
@@ -1677,6 +1751,7 @@ class _PendingMasks:
 
 def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, progress: Progress | None, job: str) -> dict[str, Any]:
     frames = workspace_frames(workspace, params)
+    cleanup = ThreadPoolExecutor(max_workers=CLEANUP_WORKERS)
     try:
         model = load_mask_model(params, frames, device)
         arrays = workspace.load_state()
@@ -1694,14 +1769,15 @@ def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, 
         fields = workspace_field_store(workspace, params.body_net, params) if isinstance(model, BodyNetMasks) else None
         if fields is not None:
             from .body_proposal import crop_fields
-        for slab in _slabs(range(n), params.slab):
-            masks, stats, slab_timing = segment_frames(frames, model, workspace.frame_index[slab], params, device)
+        slabs = _slabs(range(n), params.slab)
+        segmented_slabs = segment_slabs(frames, model, [workspace.frame_index[slab] for slab in slabs], params, device, pool=cleanup)
+        for slab, (masks, stats, slab_timing, predictions) in zip(slabs, segmented_slabs, strict=True):
             for row, mask, frame_stats in zip(slab, masks, stats, strict=True):
                 store_mask_stats(arrays, row, frame_stats)
                 pending.add(row, mask)
             if fields is not None:
                 t = time.perf_counter()
-                fields.put({row: crop_fields(prediction, mask) for row, prediction, mask in zip(slab, model.last, masks, strict=True)})
+                fields.put({row: crop_fields(prediction, mask) for row, prediction, mask in zip(slab, predictions, masks, strict=True)})
                 slab_timing["fields"] = time.perf_counter() - t
             for stage, seconds in slab_timing.items():
                 timing[stage] += seconds
@@ -1741,6 +1817,7 @@ def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, 
         )
         return result
     finally:
+        cleanup.shutdown()
         frames.close()
 
 
@@ -1794,18 +1871,20 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     done = 0
     try:
         masks_of = workspace_masks_of(workspace)
-        for slab in _slabs(rows, params.slab):
+
+        def submitted(slab: list[int]) -> tuple[list[int], list[int], list[MaskArray], list[Any] | None, Iterable[Any], float]:
             masks_by_row = masks_of(slab)
             slab_rows = [r for r in slab if r in masks_by_row]
-            predictions = None
-            if fields is not None:
-                t = time.perf_counter()
-                predictions = fields(slab_rows, masks_by_row)
-                timing["fields"] += time.perf_counter() - t
-            slab_timing = fit_frames(
-                [masks_by_row[r] for r in slab_rows], slab_rows, setup, arrays, device, pool=pool, skipped=skipped,
-                predictions=predictions,
-            )
+            masks = [masks_by_row[r] for r in slab_rows]
+            t = time.perf_counter()
+            predictions = fields(slab_rows, masks_by_row) if fields is not None else None
+            fields_seconds = time.perf_counter() - t
+            return slab, slab_rows, masks, predictions, submit_starts(masks, setup, pool, predictions), fields_seconds
+
+        # The next slab is read and its starts submitted to the pool while this one fits on the GPU.
+        for slab, slab_rows, masks, predictions, starts, fields_seconds in prefetched(submitted(slab) for slab in _slabs(rows, params.slab)):
+            timing["fields"] += fields_seconds
+            slab_timing = fit_frames(masks, slab_rows, setup, arrays, device, starts, skipped=skipped, predictions=predictions)
             for stage, seconds in slab_timing.items():
                 timing[stage] += seconds
             done += len(slab)

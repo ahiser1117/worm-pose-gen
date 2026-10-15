@@ -50,13 +50,13 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 import time
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 import numpy as np
 import torch
@@ -67,6 +67,7 @@ from worm_pose_gen.body_proposal import crop_fields
 from worm_pose_gen.pipeline import (
     field_predictor,
     BodyNetMasks,
+    CLEANUP_WORKERS,
     DEFAULT_CHECKPOINT,
     DEFAULT_PRIOR_CACHE,
     EXTERNAL_ROOT,
@@ -87,10 +88,13 @@ from worm_pose_gen.pipeline import (
     load_mask_model,
     mask_checkpoint,
     new_arrays,
+    prefetched,
     propagation_pass,
     resolve_prior,
     segment_frames,
+    segment_slabs,
     store_mask_stats,
+    submit_starts,
     track_length_pass,
 )
 from worm_pose_gen.pose_run import (
@@ -355,18 +359,21 @@ def main() -> int:
     skipped: dict[str, int] = {"empty_mask": 0, "small_mask": 0, "no_starts": 0, "fit_error": 0}
     timing = {stage: 0.0 for stage in STAGES}
 
-    # Independent fits, slab by slab: segment, clean, start, fit, store.
+    # Independent fits, slab by slab: segment, clean, start, fit, store.  A slab is segmented and its starts
+    # submitted on a background thread while the slab before it fits on the GPU.
     mask_cache = _PackedMaskCache()
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
+    cleanup = ThreadPoolExecutor(max_workers=CLEANUP_WORKERS)
     # A network that made the masks made the fit's predictions with them: they are reused, not predicted again.
     predictor = None if args.body_net is None or isinstance(model, BodyNetMasks) else field_predictor(args.body_net, frames, device)
     field_crops: dict[int, Any] = {}
-    try:
-        for slab_start in range(0, n, args.slab):
-            slab = indices[slab_start : slab_start + args.slab]
+
+    def segmented() -> Iterator[tuple[Any, ...]]:
+        slabs = [indices[slab_start : slab_start + args.slab] for slab_start in range(0, n, args.slab)]
+        for slab_start, slab, (masks, stats, seg_timing, mask_predictions) in zip(
+            range(0, n, args.slab), slabs, segment_slabs(frames, model, slabs, segmentation, device, pool=cleanup), strict=True
+        ):
             slab_rows = list(range(slab_start, slab_start + len(slab)))
-            t0 = time.perf_counter()
-            masks, stats, seg_timing = segment_frames(frames, model, slab, segmentation, device)
             fit_masks_here: list[np.ndarray] = []
             fit_rows: list[int] = []
             fit_predictions: list[Any] = []
@@ -380,17 +387,25 @@ def main() -> int:
                 else:
                     fit_masks_here.append(mask)
                     fit_rows.append(row)
-                    if isinstance(model, BodyNetMasks):
-                        fit_predictions.append(model.last[k])
+                    if mask_predictions is not None:
+                        fit_predictions.append(mask_predictions[k])
             predictions = fit_predictions or None
             if predictor is not None and fit_rows:
                 t_fields = time.perf_counter()
                 predictions = predictor.predict([indices[row] for row in fit_rows])
                 seg_timing["fields"] = time.perf_counter() - t_fields
+            crops = None
             if predictions is not None:
-                # What the fits read of each prediction, kept so the later passes score against the same one.
-                field_crops.update({row: crop_fields(p, mask) for row, p, mask in zip(fit_rows, predictions, fit_masks_here, strict=True)})
-            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, pool=pool, skipped=skipped, predictions=predictions)
+                # What the fits read of each prediction (all they read of it, and small enough for the start pool),
+                # kept so the later passes score against the same one.
+                crops = [crop_fields(p, mask) for p, mask in zip(predictions, fit_masks_here, strict=True)]
+                field_crops.update(zip(fit_rows, crops))
+            yield slab, slab_rows, fit_masks_here, fit_rows, crops, seg_timing, submit_starts(fit_masks_here, setup, pool, crops)
+
+    try:
+        t0 = time.perf_counter()
+        for slab, slab_rows, fit_masks_here, fit_rows, crops, seg_timing, starts in prefetched(segmented()):
+            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, starts, skipped=skipped, predictions=crops)
             for stage, seconds in {**seg_timing, **fit_timing}.items():
                 timing[stage] += seconds
             fitted_here = int(arrays["fitted"][slab_rows].sum())
@@ -402,7 +417,9 @@ def main() -> int:
                 f" {time.perf_counter() - t0:.1f} s",
                 flush=True,
             )
+            t0 = time.perf_counter()
     finally:
+        cleanup.shutdown()
         if pool is not None:
             pool.shutdown()
 

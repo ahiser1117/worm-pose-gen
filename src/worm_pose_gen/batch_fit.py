@@ -153,7 +153,8 @@ def _record_step(step: Callable[[], None], device: torch.device) -> torch.cuda.C
     if device not in _CAPTURE:
         stream, pool, keeper = torch.cuda.Stream(device), torch.cuda.graph_pool_handle(), torch.cuda.CUDAGraph()
         with torch.cuda.stream(stream):
-            keeper.capture_begin(pool=pool)
+            # Thread-local like the steps: another thread (a pipeline's prefetch) may be on the GPU now.
+            keeper.capture_begin(pool=pool, capture_error_mode="thread_local")
             torch.zeros(1, device=device)
             keeper.capture_end()
         _CAPTURE[device] = (stream, pool, keeper)
