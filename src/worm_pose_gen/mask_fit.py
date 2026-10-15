@@ -728,14 +728,17 @@ def fill_narrow_holes(
     radius: int,
     *,
     device: torch.device | str | None = None,
-    max_iterations: int = 4096,
 ) -> tuple[BoolArray, int]:
-    """Fill enclosed background that cannot contain a ``(2r+1)`` square.
+    """Fill each enclosed hole that cannot contain a ``(2r+1)`` square, entirely.
 
-    Segmentation texture holes inside the body are narrow; the interior of a
-    coiled worm is not.  Background connected to the image border is never
-    filled. Returns the filled mask and the number of pixels added. Cleanup
-    runs on the CPU; ``device`` is retained for compatibility with fit callers.
+    A hole is a component of background that the mask outlines on all sides:
+    it is not 8-connected to the background outside the mask's box, so a gap
+    of one pixel, diagonal ones included, leaves it open.  Segmentation
+    texture holes inside the body are narrow and filled whole; the interior
+    of a coiled worm holds a square somewhere and is left open whole, its
+    narrow corners included.  Nothing is filled in part.  Returns the filled
+    mask and the number of pixels added. Cleanup runs on the CPU; ``device``
+    is retained for compatibility with fit callers.
     """
 
     binary = np.asarray(mask, dtype=bool)
@@ -746,34 +749,19 @@ def fill_narrow_holes(
     if radius == 0 or not binary.any():
         return binary.copy(), 0
     # Inputs and outputs are NumPy arrays even when the fit runs on CUDA.
-    # A compiled frontier flood fill avoids pooling the entire crop once for
-    # every pixel of geodesic distance from the border.
     yy, xx = np.nonzero(binary)
     height, width = binary.shape
     y0, y1 = max(0, int(yy.min()) - 1), min(height, int(yy.max()) + 2)
     x0, x1 = max(0, int(xx.min()) - 1), min(width, int(xx.max()) + 2)
-    background = ~binary[y0:y1, x0:x1]
-    reached = np.zeros_like(background)
-    reached[0, :] = background[0, :]
-    reached[-1, :] = background[-1, :]
-    reached[:, 0] = background[:, 0]
-    reached[:, -1] = background[:, -1]
-    if max_iterations > 0:
-        reached = ndimage.binary_dilation(
-            reached,
-            structure=np.ones((3, 3), dtype=bool),
-            iterations=max_iterations,
-            mask=background,
-        )
-    enclosed = background & ~reached
+    labels, count = ndimage.label(~binary[y0:y1, x0:x1], structure=np.ones((3, 3), dtype=bool))
+    # Background on the box's edge reaches the outside; what it connects to is not a hole.
+    outside = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    enclosed = (labels > 0) & ~np.isin(labels, outside)
     if not enclosed.any():
         return binary.copy(), 0
-    size = 2 * radius + 1
-    # max_pool2d ignores out-of-image pixels. For erosion this is equivalent
-    # to a foreground border, including with a deliberately truncated flood.
-    eroded = ndimage.minimum_filter(enclosed, size=size, mode="constant", cval=1)
-    survivors = ndimage.maximum_filter(eroded, size=size, mode="constant", cval=0) & enclosed
-    addition = enclosed & ~survivors
+    # A square of enclosed pixels is 8-connected, so it lies in one hole; that hole stays open.
+    fits = ndimage.minimum_filter(enclosed, size=2 * radius + 1, mode="constant", cval=0)
+    addition = enclosed & ~np.isin(labels, np.unique(labels[fits]))
     filled = binary.copy()
     filled[y0:y1, x0:x1] |= addition
     return filled, int(addition.sum())

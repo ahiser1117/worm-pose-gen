@@ -1234,8 +1234,6 @@ def _segment_params(workspace: Any) -> SegmentParams:
         values["fill_holes"] = bool(cleanup["fill_holes"])
     if "fill_holes_radius_px" in cleanup:
         values["hole_radius"] = int(cleanup["fill_holes_radius_px"])
-    if "largest_component" in cleanup:
-        values["largest_only"] = bool(cleanup["largest_component"])
     if "min_worm_pixels" in cleanup:
         values["min_worm_pixels"] = int(cleanup["min_worm_pixels"])
     if "flat_field" in settings:

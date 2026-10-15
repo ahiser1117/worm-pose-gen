@@ -209,7 +209,6 @@ class SegmentParams(_Params):
     threshold: float = _help("probability at or above which a pixel is worm", default=0.5)
     hole_radius: int = _help("largest hole width to fill, in pixels", default=HOLE_FILL_RADIUS_PX)
     fill_holes: bool = _help("fill narrow holes in the mask", default=True)
-    largest_only: bool = _help("keep only the largest connected component", default=True)
     min_worm_pixels: int = _help("smaller cleaned masks are not fit", default=MIN_WORM_PIXELS)
     batch_size: int = _help("frames per segmenter forward pass", default=16)
     slab: int = _help("frames read from disk together", default=64)
@@ -234,7 +233,6 @@ class PriorParams(_Params):
     threshold: float = _help("probability threshold", default=0.5)
     hole_radius: int = _help("largest hole width to fill", default=HOLE_FILL_RADIUS_PX)
     fill_holes: bool = _help("fill narrow holes", default=True)
-    largest_only: bool = _help("keep the largest component", default=True)
     min_worm_pixels: int = _help("smaller masks are not fit", default=MIN_WORM_PIXELS)
     batch_size: int = _help("frames per segmenter forward pass", default=16)
     dataset_root: str = _help("flat field cache root", default=str(DEFAULT_DATASET_ROOT))
@@ -487,10 +485,6 @@ def mask_checkpoint(params: SegmentParams | PriorParams) -> str | None:
     return params.body_net if params.mask_source == "body_net" else params.checkpoint
 
 
-def cleanup_kwargs(params: SegmentParams | PriorParams) -> dict[str, bool]:
-    return {"fill_holes": bool(params.fill_holes), "largest_only": bool(params.largest_only)}
-
-
 def segment_frames(
     frames: Frames,
     model: SegmentationModel | BodyNetMasks,
@@ -520,7 +514,7 @@ def segment_frames(
     masks: list[MaskArray] = []
     stats: list[dict[str, int]] = []
     for prob in probability:
-        mask, frame_stats = clean_mask(prob, params.threshold, params.hole_radius, device, **cleanup_kwargs(params))
+        mask, frame_stats = clean_mask(prob, params.threshold, params.hole_radius, device, fill_holes=params.fill_holes)
         frame_stats["mask_on_border"] = int(touches_border(mask, 2)) if frame_stats["worm_pixels"] else 0
         masks.append(np.asarray(mask, dtype=bool))
         stats.append(frame_stats)
@@ -1739,8 +1733,7 @@ def run_segment(workspace: Any, params: SegmentParams, *, device: torch.device, 
                 "checkpoint": checkpoint_fingerprint(mask_checkpoint(params)),
                 "threshold": params.threshold,
                 "mask_cleanup": {
-                    "fill_holes": params.fill_holes, "fill_holes_radius_px": params.hole_radius,
-                    "largest_component": params.largest_only, "min_worm_pixels": params.min_worm_pixels,
+                    "fill_holes": params.fill_holes, "fill_holes_radius_px": params.hole_radius, "min_worm_pixels": params.min_worm_pixels,
                 },
                 "segment": result,
                 "mask": mask_statistics(arrays),

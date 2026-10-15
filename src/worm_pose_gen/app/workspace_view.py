@@ -285,7 +285,7 @@ class WorkspaceView:
             probability, _ = segmenters.probability(run.segmentation_checkpoint, image)
             if probability is not None:
                 raw_mask = probability >= run.threshold
-                base = run._cleaned(raw_mask, device)[2] if raw_mask.any() else raw_mask
+                base = run._cleaned(raw_mask, device)[1] if raw_mask.any() else raw_mask
         override = self.workspace.get_override_mask(row)
         labels = override if override is not None else np.zeros(image.shape, dtype=np.uint8) if base is None else base.astype(np.uint8)
         return {"frame": frame, "row": row, "width": image.shape[1], "height": image.shape[0],

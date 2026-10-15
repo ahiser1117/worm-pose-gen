@@ -1004,7 +1004,10 @@ the head is unmistakable) reports head consistency per segment; it is not
 a target of the step. Once the tube follows continuity through a coil,
 re-run the set without the hole fill (`--no-fill-holes`, keeping the
 largest-component rule that guards unseen plates) and flip the default if
-the raw spiral's 14 failures go and nothing else regresses.
+the raw spiral's 14 failures go and nothing else regresses. (2026-10-15: the
+largest-component rule is removed, every component is kept, and the hole
+fill fills only holes the mask outlines on all sides, each whole or not at
+all.)
 
 **Order.** 6a and 6b on the sequence set and the two held-out minutes
 first, since they attack the jumps Alex sees directly; 6c once the

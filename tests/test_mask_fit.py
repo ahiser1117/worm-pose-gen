@@ -204,6 +204,34 @@ class MaskFitTests(unittest.TestCase):
         self.assertEqual(none_added, 0)
         self.assertTrue(np.array_equal(untouched, mask))
 
+    def test_fill_narrow_holes_fills_a_hole_whole_or_not_at_all(self) -> None:
+        mask = np.zeros((60, 80), dtype=bool)
+        mask[10:50, 10:70] = True
+        mask[25:45, 20:40] = False  # wide enclosed cavity, like a coil interior...
+        mask[30:32, 40:60] = False  # ...with a narrow arm, which a partial fill would close
+        mask[15:18, 50:53] = False  # narrow enclosed hole
+        filled, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 9)
+        self.assertTrue(filled[15:18, 50:53].all())
+        self.assertFalse(filled[25:45, 20:40].any())
+        self.assertFalse(filled[30:32, 40:60].any())
+
+    def test_fill_narrow_holes_leaves_holes_with_a_gap_open(self) -> None:
+        mask = np.zeros((30, 30), dtype=bool)
+        mask[5:25, 5:25] = True
+        mask[10:13, 10:13] = False  # narrow hole with a one-pixel channel to the outside
+        mask[11, 5:10] = False
+        mask[17:20, 17:20] = False  # narrow hole reaching the outside only through diagonal steps
+        mask[[20, 21, 22, 23, 24], [20, 21, 22, 23, 24]] = False
+        filled, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 0)
+        self.assertTrue(np.array_equal(filled, mask))
+        mask[11, 5] = True  # closing the channel's mouth outlines the first hole on all sides
+        closed, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 9 + 4)
+        self.assertTrue(closed[10:13, 10:13].all() and closed[11, 6:10].all())
+        self.assertFalse(closed[17:20, 17:20].any())
+
     def test_hard_iou_handles_empty_union(self) -> None:
         empty = np.zeros((4, 4), dtype=bool)
         self.assertEqual(hard_iou(empty, empty), 0.0)

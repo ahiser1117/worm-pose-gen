@@ -151,6 +151,13 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/fit_recording.py
   --start 0 --frames 1200 --video --scale 0.5
 ```
 
+Cleaning thresholds the probability at `--threshold 0.5` and fills each hole
+the mask outlines on all sides, whole, when no 17-pixel square fits in it
+(`--hole-radius 8`); a hole open to the background through any gap, a
+diagonal one included, stays open, and `--no-fill-holes` skips the fill.
+Every connected component is kept: a frame with more than one is reported by
+the ambiguity `fragments` flag rather than cut down to its largest piece.
+
 Each run writes `summary.json`, `poses.npz`, and `overlay.mp4` to a
 timestamped directory under `/temp_data4/alex/external_artifacts/poses/`.
 `--preset fast` (default, about 0.25 s/frame) trades 0.008 median IoU against
