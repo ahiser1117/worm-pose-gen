@@ -46,7 +46,7 @@ class RecordingMaskCacheTests(unittest.TestCase):
         self.indices = np.array([10, 13, 17, 20])
         self.frames = _Frames(self.masks, self.indices)
         self.model = _CountingSegmenter()
-        self.params = SegmentParams(fill_holes=False, largest_only=False, hole_radius=0, min_worm_pixels=4, batch_size=2)
+        self.params = SegmentParams(fill_holes=False, hole_radius=0, min_worm_pixels=4, batch_size=2)
 
     def rows(self, rows, cache):
         return runner._segment_cached_rows(rows, self.frames, self.model, self.indices, self.params, torch.device("cpu"), cache)

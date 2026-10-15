@@ -414,8 +414,8 @@ segment stage can take its masks from it instead of the segmenter
 `body_net`, which reads the `body_net` checkpoint;
 `scripts/fit_recording.py --mask-source body_net --body-net <checkpoint>`;
 in the pose app, **Masks from** in the Analyse dialog, offered when a body
-model is chosen). The same cleanup applies (threshold 0.5, narrow holes
-filled, largest component kept), and the prior's bootstrap takes its masks
+model is chosen). The same cleanup applies (threshold 0.5, narrow enclosed
+holes filled, every component kept), and the prior's bootstrap takes its masks
 from the same source (its cache file gets a `_body_net` suffix). With the
 network as the mask source an analysis needs no mask model: the workspace
 settings record `mask_source`, no mask model and no segmenter checkpoint,

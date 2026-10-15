@@ -185,11 +185,11 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/segment_video.py
 flat-fields it with the cached per-recording correction, runs the promoted
 checkpoint in batches (`--batch-size 16`, about `27 ms` per frame on the
 project GPU including padding to full resolution), thresholds at `0.5`,
-fills narrow holes and keeps the largest component (`--raw-mask` skips
-that), and writes an MP4 under `checkpoints/segmenter/videos/` with the
-mask filled in magenta and outlined in green, plus a JSON file of per-frame
-worm pixels, raw component counts, pixels dropped by the component
-selection, and pixels added by hole filling. `--scale 0.5` halves the
+fills the narrow holes the mask encloses (`--no-fill-holes` skips that;
+every component is kept), and writes an MP4 under
+`checkpoints/segmenter/videos/` with the mask filled in magenta and outlined
+in green, plus a JSON file of per-frame worm pixels, raw component counts,
+pixels outside the largest component, and pixels added by hole filling. `--scale 0.5` halves the
 output for sharing; `--show-uncertain` tints the `0.2` to `0.8` probability
 band yellow.
 

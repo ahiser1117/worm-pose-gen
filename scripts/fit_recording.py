@@ -5,9 +5,8 @@ Frames are read from the HDF5 recording in slabs, flat-fielded with the
 per-recording correction the labeling app uses, pushed through the promoted
 segmenter (or, with ``--mask-source body_net``, the ``--body-net`` network's
 mask output), cleaned (probability at or above ``--threshold``; then, unless
-``--no-fill-holes`` / ``--no-largest-component`` / ``--raw-mask`` say
-otherwise, narrow holes filled and the largest component kept), and then
-fit in GPU batches with
+``--no-fill-holes``, the narrow holes the mask encloses filled; every
+component is kept), and then fit in GPU batches with
 ``worm_pose_gen.batch_fit.fit_masks``.  Per frame the run records the latent,
 width scale and profile, centerline, body length, in-view fraction, final
 energy and overlap, mask statistics, and per-stage timing.
@@ -126,10 +125,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
     parser.add_argument("--fill-holes", action=argparse.BooleanOptionalAction, default=True, help="fill narrow holes in the mask before fitting")
-    parser.add_argument(
-        "--largest-component", action=argparse.BooleanOptionalAction, default=True, help="keep only the largest connected component of the mask"
-    )
-    parser.add_argument("--raw-mask", action="store_true", help="shorthand for --no-fill-holes --no-largest-component")
     parser.add_argument("--min-worm-pixels", type=int, default=MIN_WORM_PIXELS, help="smaller cleaned masks are not fit")
     parser.add_argument("--body-net", type=Path, default=None,
                         help="body-field network checkpoint: its A-P field and ends score every fit (independent, propagation, track pass)"
@@ -208,12 +203,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def segment_params(args: argparse.Namespace) -> SegmentParams:
-    """Segmentation switches from the command line (``--raw-mask`` turns both cleanup steps off)."""
+    """Segmentation switches from the command line."""
 
     return SegmentParams(
         mask_source=args.mask_source, checkpoint=str(args.checkpoint), body_net=None if args.body_net is None else str(args.body_net),
-        threshold=args.threshold, hole_radius=args.hole_radius,
-        fill_holes=bool(args.fill_holes) and not args.raw_mask, largest_only=bool(args.largest_component) and not args.raw_mask,
+        threshold=args.threshold, hole_radius=args.hole_radius, fill_holes=bool(args.fill_holes),
         min_worm_pixels=args.min_worm_pixels, batch_size=args.batch_size, slab=args.slab, dataset_root=str(args.dataset_root),
     )
 
@@ -224,7 +218,7 @@ def prior_params(args: argparse.Namespace, segmentation: SegmentParams) -> Prior
         use_cache=not args.no_prior_cache, rebootstrap=args.rebootstrap, bootstrap_frames=args.bootstrap_frames,
         bootstrap_target=args.bootstrap_target, bootstrap_preset=args.bootstrap_preset,
         mask_source=segmentation.mask_source, checkpoint=segmentation.checkpoint, body_net=segmentation.body_net, threshold=segmentation.threshold, hole_radius=segmentation.hole_radius,
-        fill_holes=segmentation.fill_holes, largest_only=segmentation.largest_only, min_worm_pixels=segmentation.min_worm_pixels,
+        fill_holes=segmentation.fill_holes, min_worm_pixels=segmentation.min_worm_pixels,
         batch_size=segmentation.batch_size, dataset_root=segmentation.dataset_root,
     )
 
@@ -492,8 +486,7 @@ def main() -> int:
         "device": str(device),
         "threshold": args.threshold,
         "mask_cleanup": {
-            "fill_holes": segmentation.fill_holes, "fill_holes_radius_px": args.hole_radius,
-            "largest_component": segmentation.largest_only, "min_worm_pixels": args.min_worm_pixels,
+            "fill_holes": segmentation.fill_holes, "fill_holes_radius_px": args.hole_radius, "min_worm_pixels": args.min_worm_pixels,
         },
         "fit_config": asdict(config),
         # As a workspace's fit stage records them: a workspace imported from this run knows the fit's body-field network.

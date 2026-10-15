@@ -6,7 +6,7 @@ was scored against, and answers per frame with
 
 - the flat-fielded image (JPEG) and, from ``--dev`` only, the cleanup
   steps behind the mask from the network's probability (thresholded, holes
-  filled, largest component): running the segmenter on every rested frame
+  filled): running the segmenter on every rested frame
   only feeds those developer layers, so an analyst's frame shows the stored
   mask and costs no network pass (the probability itself is the Model
   outputs menu's, ``WorkspaceView.mask_probability``);
@@ -464,16 +464,14 @@ class LoadedRun:
 
         return self.masks(row)
 
-    def _cleaned(self, raw_mask: NDArray[np.bool_], device: torch.device) -> tuple[NDArray[np.bool_], NDArray[np.bool_], NDArray[np.bool_], dict[str, int]]:
-        """The fitter's cleanup of a thresholded mask: filled, largest component, final, and its statistics."""
+    def _cleaned(self, raw_mask: NDArray[np.bool_], device: torch.device) -> tuple[NDArray[np.bool_], NDArray[np.bool_], dict[str, int]]:
+        """The fitter's cleanup of a thresholded mask: filled, final, and its statistics."""
 
         filled, added = fill_narrow_holes(raw_mask, self.cleanup["hole_radius"], device=device)
-        largest, area, count = largest_component(filled)
+        _, area, count = largest_component(filled)
         final = filled if self.cleanup["fill_holes"] else raw_mask
-        if self.cleanup["largest_only"]:
-            final = largest if self.cleanup["fill_holes"] else (raw_mask & largest)
         stats = {"pixels_filled": int(added), "components": int(count), "pixels_outside_largest": int(filled.sum()) - int(area), "worm_pixels": int(final.sum())}
-        return filled, largest, final, stats
+        return filled, final, stats
 
     def _layers(self, row: int, segmenters: Segmenters, device: torch.device, *, light: bool, segment: bool) -> dict[str, Any]:
         arrays = self.arrays
@@ -498,10 +496,9 @@ class LoadedRun:
                 stats = {"raw_worm_pixels": int(raw_mask.sum()), "pixels_filled": 0, "components": 0, "pixels_outside_largest": 0, "worm_pixels": 0}
                 payload["layers"]["mask_raw"] = mask_data_url(raw_mask)
                 if raw_mask.any():
-                    filled, largest, final, cleaned = self._cleaned(raw_mask, device)
+                    filled, final, cleaned = self._cleaned(raw_mask, device)
                     stats.update(cleaned)
                     payload["layers"]["mask_filled"] = mask_data_url(filled)
-                    payload["layers"]["mask_largest"] = mask_data_url(largest)
                     payload["layers"]["mask_final"] = mask_data_url(final)
                 payload["mask_stats"] = stats
             stored_mask = None if light else self.stored_mask(row)

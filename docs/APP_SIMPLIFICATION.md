@@ -900,6 +900,7 @@ Decided with Alex 2026-10-07, outside this branch's scope:
   list for now. The next step is to repair them automatically before review,
   so the analyst sees only the ones the automatic patch could not settle.
 - **Masks first, before mask-free stitching:** when a stitch gap's masks are
-  bad, improve the masks rather than bridging without them. One candidate is
-  a hole fill that fills only holes fully enclosed by the worm (full
-  containment), leaving openings to the background unfilled.
+  bad, improve the masks rather than bridging without them. The hole fill
+  now fills only holes fully enclosed by the worm (full containment), whole
+  or not at all, leaving openings to the background unfilled, and the
+  largest-component rule is gone (2026-10-15).

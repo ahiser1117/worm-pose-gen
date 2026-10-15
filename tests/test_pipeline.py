@@ -155,7 +155,7 @@ class ParamTests(unittest.TestCase):
 
     def test_defaults_match_the_script_flags(self) -> None:
         segment = SegmentParams()
-        self.assertEqual((segment.threshold, segment.hole_radius, segment.fill_holes, segment.largest_only, segment.min_worm_pixels), (0.5, 8, True, True, 500))
+        self.assertEqual((segment.threshold, segment.hole_radius, segment.fill_holes, segment.min_worm_pixels), (0.5, 8, True, 500))
         self.assertTrue(segment.checkpoint.endswith("checkpoints/segmenter/best.ckpt"))
         self.assertEqual(FitParams().preset, "fast")
         self.assertEqual(PriorParams().prior, "bootstrap")

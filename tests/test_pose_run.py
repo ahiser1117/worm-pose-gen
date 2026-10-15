@@ -81,23 +81,20 @@ class PoseRunTests(unittest.TestCase):
         probability[30:33, 30:33] = 0.9  # small second component
         mask, stats = clean_mask(probability, 0.5, 2, "cpu")
         self.assertTrue(mask[9, 13])
-        self.assertFalse(mask[31, 31])
+        self.assertTrue(mask[31, 31])  # every component is kept
         self.assertEqual(stats["components"], 2)
+        self.assertEqual(stats["pixels_outside_largest"], 9)
         self.assertEqual(stats["pixels_filled"], 4)
-        self.assertEqual(stats["worm_pixels"], 10 * 25)
-        raw, raw_stats = clean_mask(probability, 0.5, 2, "cpu", fill_holes=False, largest_only=False)
+        self.assertEqual(stats["worm_pixels"], 10 * 25 + 9)
+        raw, raw_stats = clean_mask(probability, 0.5, 2, "cpu", fill_holes=False)
         self.assertFalse(raw[9, 13])
         self.assertTrue(raw[31, 31])
         self.assertEqual(raw_stats["pixels_filled"], 4)
         self.assertEqual(raw_stats["components"], 2)
         self.assertEqual(raw_stats["worm_pixels"], 10 * 25 - 4 + 9)
-        largest_raw, _ = clean_mask(probability, 0.5, 2, "cpu", fill_holes=False, largest_only=True)
-        self.assertFalse(largest_raw[9, 13])
-        self.assertFalse(largest_raw[31, 31])
-        self.assertEqual(cleanup_options({}), {"hole_radius": 8, "fill_holes": True, "largest_only": True})
+        self.assertEqual(cleanup_options({}), {"hole_radius": 8, "fill_holes": True})
         self.assertEqual(
-            cleanup_options({"mask_cleanup": {"fill_holes": False, "fill_holes_radius_px": 4, "largest_component": False}}),
-            {"hole_radius": 4, "fill_holes": False, "largest_only": False},
+            cleanup_options({"mask_cleanup": {"fill_holes": False, "fill_holes_radius_px": 4}}), {"hole_radius": 4, "fill_holes": False}
         )
         self.assertEqual(run_label({}), "symmetric template")
         self.assertEqual(run_label({"width_model": {"coefficients": 6}}), "6 width coefficients")

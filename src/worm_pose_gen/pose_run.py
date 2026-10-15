@@ -41,15 +41,14 @@ def clean_mask(
     device: torch.device | str | None,
     *,
     fill_holes: bool = True,
-    largest_only: bool = True,
 ) -> tuple[BoolArray, dict[str, int]]:
-    """Threshold, then optionally fill narrow holes and keep the largest component.
+    """Threshold, then optionally fill the narrow holes; every component is kept.
 
     Returns the mask and its statistics.  The statistics (pixels a hole fill
     would add, component count, pixels outside the largest component) are
-    computed whether or not the corresponding step is applied, so the
-    ambiguity flags ``holes`` and ``fragments`` keep their meaning on a raw
-    mask; ``worm_pixels`` counts the mask that is returned.
+    computed whether or not the hole fill is applied, so the ambiguity flags
+    ``holes`` and ``fragments`` keep their meaning on a raw mask;
+    ``worm_pixels`` counts the mask that is returned.
     """
 
     raw = probability >= threshold
@@ -57,10 +56,8 @@ def clean_mask(
     if not raw.any():
         return raw, stats
     filled, added = fill_narrow_holes(raw, hole_radius, device=device)
-    largest, area, count = largest_component(filled)
+    _, area, count = largest_component(filled)
     mask = filled if fill_holes else raw
-    if largest_only:
-        mask = largest if fill_holes else (raw & largest)
     stats.update(
         pixels_filled=int(added), components=int(count), pixels_outside_largest=int(filled.sum()) - int(area), worm_pixels=int(mask.sum())
     )
@@ -71,11 +68,7 @@ def cleanup_options(summary: dict[str, Any]) -> dict[str, Any]:
     """``clean_mask`` keyword arguments recorded in a run's ``summary.json``."""
 
     cleanup = summary.get("mask_cleanup") or {}
-    return {
-        "hole_radius": int(cleanup.get("fill_holes_radius_px", 8)),
-        "fill_holes": bool(cleanup.get("fill_holes", True)),
-        "largest_only": bool(cleanup.get("largest_component", True)),
-    }
+    return {"hole_radius": int(cleanup.get("fill_holes_radius_px", 8)), "fill_holes": bool(cleanup.get("fill_holes", True))}
 
 
 def render_tube(

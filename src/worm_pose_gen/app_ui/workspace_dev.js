@@ -13,7 +13,6 @@ import {maskCanvas, drawMidline} from "./frame_canvas.js";
 const RASTERS = [
   ["mask_raw", "Mask: thresholded", [255, 209, 102]],
   ["mask_filled", "Mask: holes filled", [255, 140, 66]],
-  ["mask_largest", "Mask: largest part", [184, 120, 255]],
   ["mask_override", "Mask: edited", [255, 79, 163]],
   ["tube", "Fitted tube", [87, 214, 141]],
   ["tube_independent", "Independent fit tube", [108, 180, 255]],
