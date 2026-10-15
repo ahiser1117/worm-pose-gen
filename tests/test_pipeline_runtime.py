@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from worm_pose_gen.flat_field import FlatField
 from worm_pose_gen.pipeline import Frames
 from worm_pose_gen.latent import cubic_bspline_basis
 from worm_pose_gen.propagation import PropagationConfig, _path_edge_costs, pose_distance_px
@@ -60,6 +61,24 @@ class PipelineRuntimeTests(unittest.TestCase):
             try:
                 corrected, _, _ = frames.corrected([0, 1, 2])
                 self.assertIs(corrected, raw)
+            finally:
+                frames.close()
+
+    def test_frames_corrected_on_a_device_match_the_host_correction(self) -> None:
+        rng = np.random.default_rng(5)
+        raw = rng.integers(0, 256, (4, 7, 9), dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.h5"
+            with h5py.File(path, "w") as handle:
+                handle.create_dataset("frames", data=raw)
+            frames = Frames(path, flat_field=False, dataset="frames")
+            # A gain that clips and rounds at halves too.
+            frames._field = FlatField(illumination=np.ones((7, 9)), dark_level=3.0, reference_level=100.0, gain=rng.uniform(0.5, 2.5, (7, 9)))
+            try:
+                corrected, _, _ = frames.corrected([0, 1, 3])
+                on_device = frames.corrected_on([0, 1, 3], torch.device("cpu"))
+                self.assertEqual(on_device.dtype, torch.uint8)
+                np.testing.assert_array_equal(on_device.numpy(), corrected)
             finally:
                 frames.close()
 

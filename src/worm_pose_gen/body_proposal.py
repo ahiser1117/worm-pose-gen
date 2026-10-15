@@ -16,12 +16,13 @@ and the trace starts it (:func:`trace_start`).
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy import ndimage
 import torch
+from torch import Tensor
 
 from .batch_fit import BodyFieldEvidence
 from .body_net import OUTPUTS, BodyFieldModule
@@ -174,32 +175,111 @@ FIELD_AP_WEIGHT = 0.001
 FIELD_END_WEIGHT = 0.01
 
 
-def network_inputs(
-    centre: NDArray[np.uint8], pairs: Sequence[tuple[NDArray[np.uint8] | None, NDArray[np.uint8] | None]],
-) -> NDArray[np.float32]:
-    """The network's input stack: the normalized frame, then one difference per lag.
+def network_inputs(frames: Mapping[int, Tensor], targets: Sequence[int], lags: Sequence[int]) -> Tensor:
+    """The network's ``[B, 1 + len(lags), H, W]`` input stacks of frames ``targets``: the normalized frame, then one difference per lag.
 
-    ``pairs`` holds ``(frame[t + lag], frame[t - lag])`` per lag, ``None`` for
-    a frame that does not exist; such a lag gets a zero channel, as in
-    training (:func:`temporal_context.difference_channels`).
+    ``frames`` maps a frame's index to it (uint8 ``[H, W]``, on the device
+    the stacks are built on); the difference of lag ``lag`` is
+    ``frame[t + lag] - frame[t - lag]``, and a lag reaching a frame missing
+    from ``frames`` (one that does not exist) gets a zero channel, as in
+    training (:func:`temporal_context.difference_channels`).  The arithmetic
+    is float32, as the network was trained on.
     """
 
-    channels = [(centre.astype(np.float32) / 255.0 - INPUT_MEAN) / INPUT_STD]
-    for later, earlier in pairs:
-        if later is None or earlier is None:
-            channels.append(np.zeros(centre.shape, dtype=np.float32))
-        else:
-            channels.append((later.astype(np.float32) - earlier.astype(np.float32)) / (255.0 * INPUT_STD))
-    return np.stack(channels)
+    centre = torch.stack([frames[f] for f in targets]).float()
+    # Divisors as tensors on the device: CUDA divides by a host scalar as a
+    # multiplication by its reciprocal, which rounds differently from NumPy.
+    full, std, step = torch.tensor([255.0, INPUT_STD, 255.0 * INPUT_STD], dtype=torch.float32, device=centre.device)
+    channels = [(centre / full - INPUT_MEAN) / std]
+    zero = torch.zeros_like(frames[targets[0]])
+    for lag in lags:
+        present = torch.tensor([f + lag in frames and f - lag in frames for f in targets], device=centre.device)
+        later = torch.stack([frames.get(f + lag, zero) for f in targets]).float()
+        earlier = torch.stack([frames.get(f - lag, zero) for f in targets]).float()
+        channels.append(torch.where(present[:, None, None], (later - earlier) / step, 0.0))
+    return torch.stack(channels, 1)
 
 
 @torch.inference_mode()
-def _run(module: BodyFieldModule, inputs: NDArray[np.float32]) -> list[FieldPrediction]:
-    tensor = torch.as_tensor(inputs).to(module.device)
+def _probabilities(module: BodyFieldModule, inputs: Tensor) -> Tensor:
+    """The network's ``[B, 5, H, W]`` sigmoids (float32) on its device."""
+
     with torch.autocast(device_type=module.device.type, enabled=module.device.type == "cuda"):
-        logits = module(tensor).float()
-    maps = torch.sigmoid(logits).cpu().numpy()
+        logits = module(inputs.to(module.device)).float()
+    return torch.sigmoid(logits)
+
+
+def _predictions(probability: Tensor) -> list[FieldPrediction]:
+    maps = probability.cpu().numpy()
     return [FieldPrediction(**{name: m[k] for k, name in enumerate(OUTPUTS)}) for m in maps]
+
+
+@dataclass(frozen=True)
+class FrameFields:
+    """What the pipeline reads of a frame's prediction: the mask probability, A-P, crossings and the end peaks.
+
+    The mask and A-P are the network's float32 sigmoids, as in a
+    :class:`FieldPrediction`; the head and tail heatmaps are reduced to their
+    peaks and the overlap to its crossings on the device, so a frame moves
+    less than half of a full prediction to the host.  It answers
+    :meth:`peak`, :meth:`ap_in` and :meth:`crossing_in` as a
+    :class:`FieldPrediction` does.
+    """
+
+    mask: NDArray[np.float32]
+    ap: NDArray[np.float32]
+    crossing: NDArray[np.bool_]
+    head: Peak
+    tail: Peak
+
+    def peak(self, name: str) -> Peak:
+        return self.head if name == "head" else self.tail
+
+    def ap_in(self, box: Box) -> NDArray[np.float32]:
+        return self.ap[box]
+
+    def crossing_in(self, box: Box) -> NDArray[np.bool_]:
+        return self.crossing[box]
+
+
+def _to_host(values: Tensor) -> Tensor:
+    """A copy of ``values`` on the host, started without waiting (into pinned memory) when they are on a GPU."""
+
+    if not values.is_cuda:
+        return values.cpu()
+    host = torch.empty(values.shape, dtype=values.dtype, pin_memory=True)
+    return host.copy_(values, non_blocking=True)
+
+
+class _FieldTransfer:
+    """A batch's :class:`FrameFields` on their way to the host.
+
+    The peaks and crossings are found on the device and the copies are only
+    started, so the host can read the next batch's frames while the device
+    finishes this one; :meth:`fields` waits for them.
+    """
+
+    def __init__(self, probability: Tensor) -> None:
+        width = probability.shape[-1]
+        # Each end's first maximum, as np.argmax finds it in a FieldPrediction.
+        values, index = probability[:, OUTPUTS.index("head") : OUTPUTS.index("tail") + 1].flatten(2).max(2)
+        peaks = torch.stack(((index % width).double(), (index // width).double(), values.double()), -1)
+        maps = probability[:, : OUTPUTS.index("ap") + 1]
+        crossing = probability[:, OUTPUTS.index("overlap")] >= OVERLAP_THRESHOLD
+        self.host = [_to_host(t) for t in (maps, crossing, peaks)]
+        self.done = None
+        if probability.is_cuda:
+            self.done = torch.cuda.Event()
+            self.done.record()
+
+    def fields(self) -> list[FrameFields]:
+        if self.done is not None:
+            self.done.synchronize()
+        maps, crossing, peaks = (t.numpy() for t in self.host)
+        return [
+            FrameFields(mask=m[0], ap=m[1], crossing=c, head=tuple(float(v) for v in p[0]), tail=tuple(float(v) for v in p[1]))
+            for m, c, p in zip(maps, crossing, peaks)
+        ]
 
 
 def predict_fields(module: BodyFieldModule, context: NDArray[np.uint8], valid: NDArray[np.bool_]) -> FieldPrediction:
@@ -208,35 +288,72 @@ def predict_fields(module: BodyFieldModule, context: NDArray[np.uint8], valid: N
     centre = context.shape[0] // 2
     if module.lags and max(module.lags) > centre:
         raise ValueError(f"the model needs lags up to {max(module.lags)}; the context reaches {centre}")
-    pairs = [
-        (context[centre + lag] if valid[centre + lag] else None, context[centre - lag] if valid[centre - lag] else None)
-        for lag in module.lags
-    ]
-    return _run(module, network_inputs(context[centre], pairs)[None])[0]
+    frames = {k: torch.as_tensor(context[k]).to(module.device) for k in range(len(context)) if valid[k]}
+    frames[centre] = torch.as_tensor(context[centre]).to(module.device)
+    return _predictions(_probabilities(module, network_inputs(frames, [centre], module.lags)))[0]
+
+
+# Frames run through the network at once.  At 732x968 on an RTX 6000 Ada the
+# forward pass costs 5.0 ms/frame at 8 and 5.3 at 16 (4.7 and 4.9 with
+# channels_last, cudnn.benchmark no different), and the outputs depend on the
+# batch size in the fourth decimal (cuDNN's kernel choice), so it stays at the
+# batch the fits were tuned with.
+PREDICT_BATCH = 8
 
 
 class RecordingFieldPredictor:
-    """Body-field predictions for frames of one recording, from their flat-fielded neighbours."""
+    """Body-field predictions for frames of one recording, from their flat-fielded neighbours.
 
-    def __init__(self, module: BodyFieldModule, frames: Any, *, batch_size: int = 8) -> None:
+    The frames are flat-fielded and stacked into the network's inputs on the
+    module's device.  The frames of a call stay there for the next: the
+    slabs a stage predicts one after another share their neighbours, which
+    are then not read and corrected again.
+    """
+
+    def __init__(self, module: BodyFieldModule, frames: Any, *, batch_size: int = PREDICT_BATCH) -> None:
         self.module = module
         self.frames = frames
         self.batch_size = batch_size
+        self._corrected: dict[int, Tensor] = {}
 
-    def predict(self, frame_indices: Sequence[int]) -> list[FieldPrediction]:
-        """One prediction per source frame index; neighbours outside the recording give zero channels."""
+    def _probabilities(self, frame_indices: Sequence[int]) -> Iterator[Tensor]:
+        """The sigmoids of these source frames, a batch at a time; neighbours outside the recording give zero channels.
+
+        A batch's frames are read when the batch is asked for, so the reading
+        overlaps the device's work on the batch before.
+        """
 
         lags = self.module.lags
         targets = [int(f) for f in frame_indices]
-        needed = sorted({f + o for f in targets for o in (0, *lags, *(-lag for lag in lags)) if 0 <= f + o < self.frames.total})
-        corrected, _, _ = self.frames.corrected(needed)
-        frame = dict(zip(needed, corrected))
-        results: list[FieldPrediction] = []
+        frames: dict[int, Tensor] = {}
         for start in range(0, len(targets), self.batch_size):
             batch = targets[start : start + self.batch_size]
-            inputs = np.stack([network_inputs(frame[f], [(frame.get(f + lag), frame.get(f - lag)) for lag in lags]) for f in batch])
-            results.extend(_run(self.module, inputs))
+            needed = sorted({f + o for f in batch for o in (0, *lags, *(-lag for lag in lags)) if 0 <= f + o < self.frames.total} - frames.keys())
+            frames.update((f, self._corrected[f]) for f in needed if f in self._corrected)
+            new = [f for f in needed if f not in frames]
+            if new:
+                frames.update(zip(new, self.frames.corrected_on(new, self.module.device)))
+            yield _probabilities(self.module, network_inputs(frames, batch, lags))
+        self._corrected = frames
+
+    def predict(self, frame_indices: Sequence[int]) -> list[FrameFields]:
+        """What the pipeline reads of each source frame's prediction, in order."""
+
+        results: list[FrameFields] = []
+        pending: _FieldTransfer | None = None
+        for probability in self._probabilities(frame_indices):
+            transfer = _FieldTransfer(probability)
+            if pending is not None:
+                results.extend(pending.fields())
+            pending = transfer
+        if pending is not None:
+            results.extend(pending.fields())
         return results
+
+    def predict_full(self, frame_indices: Sequence[int]) -> list[FieldPrediction]:
+        """Every output map of each source frame's prediction (the app's views of the raw channels)."""
+
+        return [prediction for probability in self._probabilities(frame_indices) for prediction in _predictions(probability)]
 
 
 def _end(peak: Peak, body: NDArray[np.bool_]) -> FloatArray | None:
