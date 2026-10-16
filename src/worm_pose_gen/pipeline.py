@@ -1233,7 +1233,7 @@ def propagation_pass(
     refit: the stretches are cut around them (``split_stretches``) so they
     anchor the chains instead.  With ``fields_of`` (the body-field
     network, as in the fit) every fit of the pass is scored against the
-    network's evidence and the chains also start from its trace.
+    network's evidence.
     """
 
     config, template = setup.config, setup.template
@@ -1260,12 +1260,16 @@ def propagation_pass(
     if progress is not None:
         progress(0.05, f"propagation: {len(stretches)} stretches, {len(stretch_rows)} frames")
     stretch_masks = masks_of(sorted(set(stretch_rows + anchor_rows)))
-    evidence, network_starts = body_field_inputs(fields_of, stretch_masks, setup, stretch_rows)
+    # The evidence only: the network's trace as a chain start (which the
+    # region algorithms keep) was chosen on 3-6% of stretch frames and on none
+    # of worm004's 2,541; dropping it cut this pass by 20-27% at the same IoU
+    # (idea 6, Oct 2026).
+    evidence, _ = body_field_inputs(fields_of, stretch_masks, setup)
     candidates, info = propagate(
         arrays, stretches, stretch_masks, config=config, device=device, width_template=template, propagation=propagation,
         warm_config=refit_config,
         progress=None if progress is None else lambda fraction, message: progress(0.06 + 0.73 * fraction, message),
-        evidence=evidence, network_starts=network_starts,
+        evidence=evidence,
     )
     if progress is not None:
         progress(0.8, "propagation: selecting paths")
