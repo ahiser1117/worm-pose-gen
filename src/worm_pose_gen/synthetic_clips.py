@@ -479,6 +479,27 @@ def background_shift(reference: NDArray[np.floating], image: NDArray[np.floating
     return np.array((float(x), float(y)))
 
 
+def add_fibers(
+    frames: NDArray[np.floating], centre: int, near: FloatArray, rng: np.random.Generator, count: int | None = None,
+) -> NDArray[np.float32]:
+    """Real frames (a context stack, ``frames[centre]`` the labeled one) with fibres lying on the agar.
+
+    The fibres are placed in the centre frame and follow the background into
+    the other frames (phase correlation), as a real fibre does when the stage
+    tracks the worm.  Labels stay as they are: a fibre is never worm.
+    """
+
+    stack = np.asarray(frames, dtype=np.float32)
+    fibers = [random_fiber(rng, stack.shape[1:], np.asarray(near, dtype=np.float64))
+              for _ in range(count if count is not None else int(rng.integers(1, 3)))]
+    result = stack.copy()
+    for k in range(len(stack)):
+        shift = background_shift(stack[centre], stack[k]) if k != centre else np.zeros(2)
+        for fiber in fibers:
+            result[k] *= fiber_transmission(fiber, stack.shape[1:], shift)
+    return result
+
+
 # --------------------------------------------------------------------------- poses
 
 

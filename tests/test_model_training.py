@@ -281,6 +281,33 @@ class TrainEndToEndTests(LibraryTestCase):
         self.assertIsNotNone(evaluation["iou_mean"])
 
 
+class SyntheticMixTests(LibraryTestCase):
+    def test_synthetic_items_and_fibres_train_and_are_recorded(self):
+        from worm_pose_gen import synthetic_clips
+        from tests.test_synthetic_clips import FakeSource, texture
+
+        items = self.root / "items"
+        items.mkdir()
+        rng = np.random.default_rng(0)
+        for k in range(3):
+            item = None
+            while item is None:
+                item = synthetic_clips.make_item(FakeSource(), [texture()], 35, (1, 2), rng, want_contact=False, tries=200)
+            synthetic_clips.save_item(items / f"item_{k:06d}.npz", item)
+        request = model_training.TrainRequest(
+            setup="lab:rig", dataset="lab:base", start_from="lab:body", name="mixed",
+            params={"max_epochs": 1, "batch_size": 2, "crop_size": 64}, synthetic=str(items), synthetic_fraction=0.5, fiber_share=1.0,
+        )
+        card = model_training.train(self.libraries, request, device="cpu")
+        self.assertEqual(card.hparams["synthetic"], {"items": str(items), "count": 3, "fraction": 0.5})
+        self.assertEqual(card.hparams["fiber_share"], 1.0)
+        self.assertEqual(load_model(self.libraries, "mine:mixed", device="cpu").lags, (1, 2))
+        argv = model_training.command(self.libraries, request, model_training.plan(
+            self.libraries, model_training.TrainRequest(**{**request.__dict__, "name": "again"})))
+        self.assertIn("--synthetic-fraction", argv)
+        self.assertIn("--fiber-share", argv)
+
+
 class EvaluateTests(LibraryTestCase):
     def test_lab_model_evaluation_goes_to_the_personal_library(self):
         result = model_eval.evaluate(self.libraries, "lab:body", "lab:rig-v1", device="cpu")

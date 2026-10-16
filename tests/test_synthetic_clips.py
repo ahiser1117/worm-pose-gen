@@ -198,6 +198,18 @@ class FiberTest(unittest.TestCase):
         self.assertAlmostEqual(float(shifted[70, 80]), 0.8, places=2)
 
 
+    def test_fibres_follow_the_background(self):
+        rng = np.random.default_rng(1)
+        base = 180 + ndimage_blur(rng.normal(0, 20, (140, 180)))
+        frames = np.stack([np.roll(base, (0, k), axis=(0, 1)) for k in (-4, 0, 6)])
+        out = sc.add_fibers(frames, 1, np.array((90.0, 70.0)), np.random.default_rng(2), count=1)
+        ratio = out / frames
+        self.assertLess(float(ratio[1].min()), 0.97)
+        # The darkening in each frame is the centre frame's, moved with the background.
+        for k, dx in ((0, -4), (2, 6)):
+            np.testing.assert_allclose(ratio[k][:, 20:160], np.roll(ratio[1], dx, axis=1)[:, 20:160], atol=1e-4)
+
+
 def ndimage_blur(image):
     from scipy import ndimage
 
