@@ -7,7 +7,7 @@ from unittest import mock
 import numpy as np
 import torch
 
-from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks
+from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks, prepare_fit
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import (
     Initialization,
@@ -310,12 +310,17 @@ class PropagationTests(unittest.TestCase):
         trace = Initialization("network_trace", latents[3], 12.0)
         calls = []
 
-        def recording(masks_arg, starts_arg, **kwargs):
-            calls.append((masks_arg, starts_arg, kwargs.get("fields")))
-            return fit_masks(masks_arg, starts_arg, **kwargs)
+        def recording(fit):
+            def call(masks_arg, starts_arg, **kwargs):
+                calls.append((masks_arg, starts_arg, kwargs.get("fields")))
+                return fit(masks_arg, starts_arg, **kwargs)
+
+            return call
 
         stretch_masks = {k: masks[k] for k in range(n)}
-        with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording):
+        # Anchor refits go through fit_masks; stored-pose refits and chain steps are prepared ahead (prepare_fit).
+        with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording(fit_masks)), \
+                mock.patch("worm_pose_gen.propagation.prepare_fit", side_effect=recording(prepare_fit)):
             candidates, info = propagate(
                 arrays, [(2, 4)], stretch_masks, config=config, device="cpu", propagation=PropagationConfig(pad=0, beam=2),
                 evidence=evidence, network_starts={3: trace},

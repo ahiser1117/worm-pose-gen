@@ -88,7 +88,6 @@ from worm_pose_gen.pipeline import (
     load_mask_model,
     mask_checkpoint,
     new_arrays,
-    prefetched,
     propagation_pass,
     resolve_prior,
     segment_frames,
@@ -104,6 +103,7 @@ from worm_pose_gen.pose_run import (
     residual_rows,
     write_overlay_video,
 )
+from worm_pose_gen.prefetch import prefetched
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
 

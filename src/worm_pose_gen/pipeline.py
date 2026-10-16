@@ -76,6 +76,7 @@ import torch
 from .ambiguity import FLAG_NAMES, compute_ambiguity, summarize_ambiguity
 from .batch_fit import PRESETS, BatchFitConfig, fit_masks
 from .field_store import FieldStore, source_key
+from .prefetch import prefetched
 from .recordings import DATASET_PATH, RecordingSource
 from .mask_fit import (
     Initialization,
@@ -183,7 +184,6 @@ HYPOTHESIS_ARRAYS = (
 Progress = Callable[[float, str], None]
 MaskArray = NDArray[np.bool_]
 P = TypeVar("P", bound="_Params")
-T = TypeVar("T")
 
 
 def _help(text: str, **kwargs: Any) -> Any:
@@ -783,6 +783,8 @@ def field_predictor(checkpoint: str | Path, frames: Frames, device: torch.device
 FieldsOf = Callable[[Sequence[int], dict[int, MaskArray]], list[Any]]
 # Rows predicted at once: a prediction holds five full-image maps, so a whole stretch set at once would not fit in memory.
 PREDICTION_SLAB = 64
+# Processes laying the network's trace starts of a propagation, track or region pass.
+TRACE_WORKERS = min(8, os.cpu_count() or 1)
 
 
 def network_trace_start(prediction: Any, mask: MaskArray, setup: FitSetup) -> Initialization | None:
@@ -801,7 +803,11 @@ def network_trace_start(prediction: Any, mask: MaskArray, setup: FitSetup) -> In
 def body_field_inputs(
     fields_of: FieldsOf | None, masks: dict[int, MaskArray], setup: FitSetup, trace_rows: Sequence[int] = ()
 ) -> tuple[dict[int, Any], dict[int, Initialization]]:
-    """Per row of ``masks``: the body-field evidence and, for ``trace_rows``, the network's trace start (empty without a network)."""
+    """Per row of ``masks``: the body-field evidence and, for ``trace_rows``, the network's trace start (empty without a network).
+
+    The trace starts are laid on ``TRACE_WORKERS`` processes (about 15 ms of
+    Python a frame, 5x faster there than on threads).
+    """
 
     evidence: dict[int, Any] = {}
     starts: dict[int, Initialization] = {}
@@ -811,12 +817,18 @@ def body_field_inputs(
     from .body_proposal import field_evidence
 
     wanted = {int(r) for r in trace_rows}
+    traced: list[tuple[int, Any]] = []
     for slab in _slabs(sorted(masks), PREDICTION_SLAB):
         for row, prediction in zip(slab, fields_of(slab, masks), strict=True):
             evidence[row] = field_evidence(prediction, masks[row])
-            start = network_trace_start(prediction, masks[row], setup) if row in wanted else None
-            if start is not None:
-                starts[row] = start
+            if row in wanted:
+                traced.append((row, prediction))
+    if len(traced) > 1 and TRACE_WORKERS > 1:
+        with ProcessPoolExecutor(max_workers=TRACE_WORKERS) as pool:
+            laid = list(pool.map(network_trace_start, [p for _, p in traced], [masks[r] for r, _ in traced], [setup] * len(traced)))
+    else:
+        laid = [network_trace_start(p, masks[r], setup) for r, p in traced]
+    starts.update({row: start for (row, _), start in zip(traced, laid, strict=True) if start is not None})
     return evidence, starts
 
 
@@ -1705,26 +1717,6 @@ def workspace_masks_of(workspace: Any, min_worm_pixels: int = 0) -> MasksOf:
 def _slabs(rows: Sequence[int], size: int) -> list[list[int]]:
     rows = [int(r) for r in rows]
     return [rows[i : i + max(1, size)] for i in range(0, len(rows), max(1, size))]
-
-
-def prefetched(items: Iterable[T]) -> Iterator[T]:
-    """``items`` in order, the next one produced on a background thread while the caller works on the current one.
-
-    A stage's preparation (reading, the network's pass, collecting cleaned
-    masks, submitting starts) then runs while the GPU fits the slab before
-    it; torch, h5py, NumPy and SciPy release the GIL for most of their work.
-    The producer must not touch what the caller's work on an item changes.
-    """
-
-    items = iter(items)
-    with ThreadPoolExecutor(max_workers=1) as thread:
-        following = thread.submit(next, items, _END)
-        while (current := following.result()) is not _END:
-            following = thread.submit(next, items, _END)
-            yield current
-
-
-_END: Any = object()
 
 
 class _PendingMasks:

@@ -252,13 +252,15 @@ def _point_index(n_points: int, stride: int, device: torch.device) -> Tensor:
 
 
 def _window_targets(
-    masks: Sequence[BoolArray], windows: Sequence[CropWindow], height: int, width: int, device: torch.device
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Hard target, signed edge distance (-inf off camera), and validity per frame.
+    masks: Sequence[BoolArray], windows: Sequence[CropWindow], height: int, width: int
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32], list[int]]:
+    """Hard target, signed edge distance (-inf off camera), and validity per distinct frame, and each frame's distinct index.
 
     Frames that share a mask object and a window (propagation fits every
     start of a chain step as its own frame) are prepared once, and distinct
     ones in parallel threads: the exact distance transforms release the GIL.
+    Everything stays on the host, so a caller can prepare a group while the
+    device fits another (:func:`prepare_fit`).
     """
 
     # Masks and the exact distance transform live on the host. Assemble the
@@ -296,8 +298,7 @@ def _window_targets(
             list(pool.map(prepare, range(len(distinct))))
     else:
         prepare(0)
-    index = torch.as_tensor(source, device=device)
-    return tuple(torch.from_numpy(array).to(device=device)[index] for array in (target, distance, valid))
+    return target, distance, valid, source
 
 
 @torch.no_grad()
@@ -342,10 +343,9 @@ def _render_hard_winners(
     return hard
 
 
-def _field_tensors(
+def _field_arrays(
     fields: Sequence[BodyFieldEvidence | None], windows: Sequence[CropWindow], height: int, width: int,
-    device: torch.device,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[NDArray[np.float32], ...]:
     """Per frame: A-P crop and its validity on the batch window raster, the head and its presence."""
 
     n = len(fields)
@@ -365,7 +365,7 @@ def _field_tensors(
         valid[f, rows, cols] = known
         if evidence.head_xy is not None and np.all(np.isfinite(evidence.head_xy)):
             head[f], has_head[f] = evidence.head_xy, 1.0
-    return tuple(torch.from_numpy(a).to(device) for a in (ap, valid, head, has_head))
+    return ap, valid, head, has_head
 
 
 # The A-P term scores the midline points of this front fraction of the body.
@@ -424,7 +424,6 @@ def field_energies(
     out = np.zeros(len(centerlines))
     if config.field_ap_weight <= 0 and config.field_end_weight <= 0:
         return out
-    cpu = torch.device("cpu")
     for k, (curve, evidence) in enumerate(zip(centerlines, fields, strict=True)):
         if evidence is None:
             continue
@@ -432,7 +431,7 @@ def field_energies(
         x0, y0 = (int(v) - 1 for v in np.floor(points.min(0)))
         x1, y1 = (int(v) + 2 for v in np.ceil(points.max(0)))
         window = CropWindow(x0, x1, y0, y1, *evidence.ap.shape)
-        ap, valid, head, has_head = _field_tensors([evidence], [window], window.height, window.width, cpu)
+        ap, valid, head, has_head = (torch.from_numpy(a) for a in _field_arrays([evidence], [window], window.height, window.width))
         origin = torch.tensor([[x0, y0]], dtype=torch.float32)
         centerline = torch.as_tensor(points[None], dtype=torch.float32)
         out[k] = float(_field_penalty(centerline, origin, ap, valid, head, has_head, config)[0])
@@ -466,6 +465,58 @@ def fit_masks(
     length.
     """
 
+    inputs = prepare_fit(
+        masks, initializations, width_template=width_template, config=config, references=references,
+        head_constraints=head_constraints, fields=fields,
+    )
+    return run_fit(inputs, device)
+
+
+@dataclass(frozen=True)
+class _GroupInputs:
+    """One group of a fit prepared on the host: its frames, their common window raster, targets and evidence arrays."""
+
+    masks: list[BoolArray]
+    initializations: list[Sequence[Initialization]]
+    windows: list[CropWindow]
+    height: int
+    width: int
+    # Per distinct (mask, window): hard target, signed edge distance, validity; ``source`` maps each frame to its distinct row.
+    targets: tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]
+    source: list[int]
+    references: list[NDArray[np.generic] | None] | None
+    head_constraints: list[HeadConstraint | None] | None
+    # The evidence arrays (``_field_arrays``) when the group is scored against evidence, else ``None``.
+    fields: tuple[NDArray[np.float32], ...] | None
+
+
+@dataclass(frozen=True)
+class FitInputs:
+    """A :func:`fit_masks` call prepared on the host (:func:`prepare_fit`), for :func:`run_fit` to fit on a device."""
+
+    config: BatchFitConfig
+    template: NDArray[np.float64]
+    count: int
+    groups: list[tuple[list[int], _GroupInputs]]
+
+
+def prepare_fit(
+    masks: Sequence[NDArray[np.generic]],
+    initializations: Sequence[Sequence[Initialization]],
+    *,
+    width_template: NDArray[np.generic] | None = None,
+    config: BatchFitConfig = BatchFitConfig(),
+    references: Sequence[NDArray[np.generic] | None] | None = None,
+    head_constraints: Sequence[HeadConstraint | None] | None = None,
+    fields: Sequence[BodyFieldEvidence | None] | None = None,
+) -> FitInputs:
+    """The host half of :func:`fit_masks` (its arguments but the device): checks, starts laid to length, groups and their target arrays.
+
+    It touches no device, so a caller can prepare its next fit on another
+    thread while the device runs the current one (:func:`run_fit`); the two
+    halves compute exactly what :func:`fit_masks` does.
+    """
+
     if len(masks) != len(initializations):
         raise ValueError("masks and initializations must align")
     if references is not None and len(references) != len(masks):
@@ -475,7 +526,7 @@ def fit_masks(
     if fields is not None and len(fields) != len(masks):
         raise ValueError("fields must align with masks")
     if not masks:
-        return []
+        return FitInputs(config, np.zeros(0), 0, [])
     if not (
         len(config.stage_downsample)
         == len(config.stage_steps)
@@ -485,6 +536,13 @@ def fit_masks(
         raise ValueError("stage_downsample, stage_steps, stage_lr_scale, and stage_point_stride must align")
     if not 0 < config.within_stage_decay <= 1:
         raise ValueError("within_stage_decay must lie in (0, 1]")
+    template = (
+        default_width_template(config.n_points)
+        if width_template is None
+        else np.asarray(width_template, dtype=np.float64)
+    )
+    if template.shape != (config.n_points,) or np.any(template <= 0):
+        raise ValueError("width_template must be positive with shape [n_points]")
     if config.length_fixed:
         if config.length_prior_px is None:
             raise ValueError("length_fixed needs length_prior_px")
@@ -501,58 +559,54 @@ def fit_masks(
         if not starts:
             raise ValueError(f"mask {index} has no initializations")
         binaries.append(binary)
+    multiple = max(max(config.stage_downsample), config.crop_multiple)
+    crops = [crop_window(b, config.crop_padding, multiple) for b in binaries]
+    groups = []
+    for group in plan_groups(crops, [len(s) for s in initializations], config):
+        group_masks = [binaries[i] for i in group]
+        group_fields = None if fields is None else [fields[i] for i in group]
+        windows, height, width = batch_windows([crops[i] for i in group])
+        *targets, source = _window_targets(group_masks, windows, height, width)
+        use_fields = group_fields is not None and any(f is not None for f in group_fields) and (
+            config.field_ap_weight > 0 or config.field_end_weight > 0
+        )
+        groups.append((group, _GroupInputs(
+            masks=group_masks, initializations=[initializations[i] for i in group], windows=windows, height=height, width=width,
+            targets=tuple(targets), source=source,
+            references=None if references is None else [references[i] for i in group],
+            head_constraints=None if head_constraints is None else [head_constraints[i] for i in group],
+            fields=_field_arrays(group_fields, windows, height, width) if use_fields else None,
+        )))
+    return FitInputs(config, template, len(binaries), groups)
+
+
+def run_fit(inputs: FitInputs, device: torch.device | str | None = None) -> list[MaskFitResult]:
+    """The device half of :func:`fit_masks`: fit every prepared group; results follow the input order."""
+
+    if not inputs.groups:
+        return []
     resolved_device = torch.device(
         device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
     )
-    template = (
-        default_width_template(config.n_points)
-        if width_template is None
-        else np.asarray(width_template, dtype=np.float64)
-    )
-    if template.shape != (config.n_points,) or np.any(template <= 0):
-        raise ValueError("width_template must be positive with shape [n_points]")
-    template_t = torch.as_tensor(template, dtype=torch.float32, device=resolved_device)
-    multiple = max(max(config.stage_downsample), config.crop_multiple)
-    crops = [crop_window(b, config.crop_padding, multiple) for b in binaries]
-    results: list[MaskFitResult | None] = [None] * len(binaries)
-    for group in plan_groups(crops, [len(s) for s in initializations], config):
-        fitted = _fit_group(
-            [binaries[i] for i in group],
-            [initializations[i] for i in group],
-            [crops[i] for i in group],
-            template_t,
-            config,
-            resolved_device,
-            references=None if references is None else [references[i] for i in group],
-            head_constraints=None if head_constraints is None else [head_constraints[i] for i in group],
-            fields=None if fields is None else [fields[i] for i in group],
-        )
-        for index, result in zip(group, fitted, strict=True):
+    template_t = torch.as_tensor(inputs.template, dtype=torch.float32, device=resolved_device)
+    results: list[MaskFitResult | None] = [None] * inputs.count
+    for group, prepared in inputs.groups:
+        for index, result in zip(group, _fit_group(prepared, template_t, inputs.config, resolved_device), strict=True):
             results[index] = result
     return [r for r in results if r is not None]
 
 
-def _fit_group(
-    masks: Sequence[BoolArray],
-    initializations: Sequence[Sequence[Initialization]],
-    crops: Sequence[CropWindow],
-    template: Tensor,
-    config: BatchFitConfig,
-    device: torch.device,
-    references: Sequence[NDArray[np.generic] | None] | None = None,
-    head_constraints: Sequence[HeadConstraint | None] | None = None,
-    fields: Sequence[BodyFieldEvidence | None] | None = None,
-) -> list[MaskFitResult]:
+def _fit_group(group: _GroupInputs, template: Tensor, config: BatchFitConfig, device: torch.device) -> list[MaskFitResult]:
+    masks, initializations, windows, height, width = group.masks, group.initializations, group.windows, group.height, group.width
+    references, head_constraints = group.references, group.head_constraints
+    use_fields = group.fields is not None
     # Whole-energy compilation is measured only for independent fits. The
     # changing references/head constraints in sequential fitting can generate
     # unstable specialized GPU kernels, so those calls retain normal rendering.
-    use_fields = fields is not None and any(f is not None for f in fields) and (
-        config.field_ap_weight > 0 or config.field_end_weight > 0
-    )
     compile_energy = config.compile_energy and references is None and head_constraints is None and not use_fields
     renderer = get_renderer(config.compile_renderer and not compile_energy)
-    windows, height, width = batch_windows(crops)
-    target, distance, valid = _window_targets(masks, windows, height, width, device)
+    index = torch.as_tensor(group.source, device=device)
+    target, distance, valid = (torch.from_numpy(array).to(device=device)[index] for array in group.targets)
     starts_flat = [s for starts in initializations for s in starts]
     frame_indices = [f for f, starts in enumerate(initializations) for _ in starts]
     frame_of_row = torch.as_tensor(frame_indices, device=device)
@@ -600,7 +654,7 @@ def _fit_group(
         crossing_reference_t = torch.where(has_reference, reference_t, torch.full_like(reference_t, float("nan")))
 
     if use_fields:
-        field_ap, field_valid, field_head, field_has_head = _field_tensors(fields, windows, height, width, device)
+        field_ap, field_valid, field_head, field_has_head = (torch.from_numpy(a).to(device) for a in group.fields)
 
     def field_energy(centerline: Tensor) -> Tensor:
         return _field_penalty(

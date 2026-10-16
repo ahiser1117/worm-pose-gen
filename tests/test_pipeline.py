@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 from worm_pose_gen.ambiguity import FLAG_NAMES
-from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks
+from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks, prepare_fit
 from worm_pose_gen.body_proposal import FIELD_AP_WEIGHT, FieldPrediction
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.latent import decode_centerline
@@ -45,7 +45,6 @@ from worm_pose_gen.pipeline import (
     fit_setup,
     independent_copies,
     new_arrays,
-    prefetched,
     read_summary,
     restore_independent_rows,
     run_stage,
@@ -55,6 +54,7 @@ from worm_pose_gen.pipeline import (
     stage_command,
     submit_starts,
 )
+from worm_pose_gen.prefetch import prefetched
 from worm_pose_gen.recording_prior import RecordingPrior
 from worm_pose_gen.workspace import Workspace
 
@@ -583,7 +583,13 @@ class BodyFieldStageTests(unittest.TestCase):
             state["latent"][3, -2] += 25.0
             state["iou"][3] = 0.5
             workspace.save_state(state)
-            with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording):
+            # Anchor refits go through fit_masks; stored-pose refits and chain steps are prepared ahead (prepare_fit).
+            def preparing(masks, starts, **kwargs):
+                calls.append(kwargs.get("fields"))
+                return prepare_fit(masks, starts, **kwargs)
+
+            with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording), \
+                    mock.patch("worm_pose_gen.propagation.prepare_fit", side_effect=preparing):
                 result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1}, device="cpu")
             self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
             # The workspace's fit used the network, so the pass scores every fit against the fields the fit

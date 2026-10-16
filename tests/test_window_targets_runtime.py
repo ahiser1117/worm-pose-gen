@@ -29,7 +29,8 @@ def expected_targets(masks: list[np.ndarray], windows: list[CropWindow], height:
 
 class WindowTargetsRuntimeTests(unittest.TestCase):
     def assert_targets(self, masks: list[np.ndarray], windows: list[CropWindow], height: int, width: int) -> None:
-        actual = _window_targets(masks, windows, height, width, torch.device("cpu"))
+        *distinct, source = _window_targets(masks, windows, height, width)
+        actual = [torch.from_numpy(array)[torch.as_tensor(source)] for array in distinct]
         for result, expected in zip(actual, expected_targets(masks, windows, height, width)):
             torch.testing.assert_close(result, expected, rtol=0, atol=0)
             self.assertEqual(result.dtype, torch.float32)

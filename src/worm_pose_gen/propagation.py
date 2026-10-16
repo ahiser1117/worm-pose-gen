@@ -24,10 +24,11 @@ from typing import Any, Callable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from .batch_fit import BatchFitConfig, BodyFieldEvidence, field_energies, fit_masks
+from .batch_fit import BatchFitConfig, BodyFieldEvidence, field_energies, fit_masks, prepare_fit, run_fit
 from .latent import decode_centerline, unwrap_latent_rotation
 from .mask_fit import Initialization, MaskFitConfig, MaskFitResult, redirect_start_through_exit, reverse_result
 from .pose_run import touches_border
+from .prefetch import prefetched
 
 
 FloatArray = NDArray[np.float64]
@@ -535,7 +536,9 @@ def propagate(
     # length where the path switched to them).  One batch per stretch.
     if progress is not None:
         progress(0.1, f"propagation: {anchor_refits} anchor refits complete; refitting stored poses")
-    if propagation.refit_independent:
+    def refit_jobs() -> Any:
+        """Each stretch's stored-pose refits, a chunk at a time, prepared on the host (``prepare_fit``)."""
+
         for a, b in stretches:
             rows = [r for r in range(a, b + 1) if fitted[r] and r in masks and np.asarray(masks[r]).any()]
             if not rows:
@@ -546,35 +549,26 @@ def propagate(
             independent_config = _chain_config(warm, length)
             for chunk_start in range(0, len(rows), max(1, config.max_rows)):
                 chunk = rows[chunk_start : chunk_start + max(1, config.max_rows)]
-                if progress is not None:
-                    progress(0.1 + 0.2 * independent_refits / max(int(in_stretch.sum()), 1),
-                             f"propagation: {independent_refits} stored poses refit; fitting frames {chunk[0]}–{chunk[-1]}")
                 starts = [[warm_initialization(*_pose_of(arrays, r), "independent_refit")] for r in chunk]
-                results = fit_masks(
+                yield chunk, prepare_fit(
                     [np.asarray(masks[r], dtype=bool) for r in chunk], starts, width_template=width_template, config=independent_config,
-                    device=device, fields=fields_of(chunk),
+                    fields=fields_of(chunk),
                 )
-                for r, result in zip(chunk, results, strict=True):
-                    candidates[int(r)].append(Candidate("independent", result, comparable_energy(config, result), None, "independent_refit", float("nan")))
-                    independent_refits += 1
 
-    longest = max((len(c["rows"]) for c in chains), default=0)
-    for k in range(longest):
-        # Chains are batched by anchor-length bucket, since the length prior
-        # is part of the configuration of a fit_masks call.
-        groups: dict[int | None, list[tuple[dict[str, Any], int]]] = defaultdict(list)
-        for chain in chains:
-            if k >= len(chain["rows"]):
-                continue
-            row = chain["rows"][k]
-            mask = masks.get(row)
-            if mask is None or not np.asarray(mask).any():
-                continue
-            key = None if chain["length"] is None else int(round(math.log(chain["length"]) / propagation.anchor_length_bucket))
-            groups[key].append((chain, row))
-        if not groups:
-            continue
-        steps += 1
+    if propagation.refit_independent:
+        # The next chunk is prepared while the device fits this one; the refits do not depend on each other.
+        for chunk, inputs in prefetched(refit_jobs()):
+            if progress is not None:
+                progress(0.1 + 0.2 * independent_refits / max(int(in_stretch.sum()), 1),
+                         f"propagation: {independent_refits} stored poses refit; fitting frames {chunk[0]}–{chunk[-1]}")
+            for r, result in zip(chunk, run_fit(inputs, device), strict=True):
+                candidates[int(r)].append(Candidate("independent", result, comparable_energy(config, result), None, "independent_refit", float("nan")))
+                independent_refits += 1
+
+    def step_jobs(groups: dict[int | None, list[tuple[dict[str, Any], int]]]) -> Any:
+        """Per length group of a chain step: its members, the owner of each fit row, the row count and the prepared fit."""
+
+        nonlocal predictions_offered, redirects, network_offered
         for key, members in groups.items():
             sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([s["pose"][1] for c, _ in members for s in c["states"]]))
             group_config = _chain_config(
@@ -619,13 +613,36 @@ def propagate(
                         batch_references.append(reference if propagation.temporal_prior_weight > 0 else None)
                         batch_rows.append(row)
                         owners.append((chain, row, state, prediction_xy))
-            if progress is not None:
-                progress(0.3 + 0.7 * k / max(longest, 1),
-                         f"propagation: chain step {k + 1}/{longest}; {rows_fit} fits complete; fitting {len(batch_masks)} starts")
-            results = fit_masks(
-                batch_masks, batch_starts, width_template=width_template, config=group_config, device=device, references=batch_references,
+            yield members, owners, len(batch_masks), prepare_fit(
+                batch_masks, batch_starts, width_template=width_template, config=group_config, references=batch_references,
                 fields=fields_of(batch_rows),
             )
+
+    longest = max((len(c["rows"]) for c in chains), default=0)
+    for k in range(longest):
+        # Chains are batched by anchor-length bucket, since the length prior
+        # is part of the configuration of a fit_masks call.
+        groups: dict[int | None, list[tuple[dict[str, Any], int]]] = defaultdict(list)
+        for chain in chains:
+            if k >= len(chain["rows"]):
+                continue
+            row = chain["rows"][k]
+            mask = masks.get(row)
+            if mask is None or not np.asarray(mask).any():
+                continue
+            key = None if chain["length"] is None else int(round(math.log(chain["length"]) / propagation.anchor_length_bucket))
+            groups[key].append((chain, row))
+        if not groups:
+            continue
+        steps += 1
+        # The groups of a step hold different chains, so the next group's
+        # starts and targets are prepared while the device fits this one; the
+        # next step waits for this step's results.
+        for members, owners, batch_count, inputs in prefetched(step_jobs(groups)):
+            if progress is not None:
+                progress(0.3 + 0.7 * k / max(longest, 1),
+                         f"propagation: chain step {k + 1}/{longest}; {rows_fit} fits complete; fitting {batch_count} starts")
+            results = run_fit(inputs, device)
             rows_fit += len(results)
             # Pool each chain's results and keep the beam.  States are ranked
             # by the fit's full energy, temporal prior included, so the chain
