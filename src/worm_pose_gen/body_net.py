@@ -271,12 +271,24 @@ class BodyFieldModule(L.LightningModule):
         }
 
 
-def load_body_net(checkpoint_path: str | Path, device: torch.device | str | None = None) -> BodyFieldModule:
+def load_body_net(checkpoint_path: str | Path, device: torch.device | str | None = None) -> Any:
+    """The network of a body-field checkpoint, frozen on ``device``.
+
+    A :class:`BodyFieldModule`, or a :class:`body_ensemble.BodyFieldEnsemble`
+    for an ensemble/flip-TTA checkpoint; both take the same inputs, return
+    logits and carry ``.lags`` and ``.device``.
+    """
+
+    from .body_ensemble import is_ensemble_checkpoint, load_ensemble
+
     resolved = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
-    module = BodyFieldModule.load_from_checkpoint(str(checkpoint_path), map_location=resolved, pretrained=False)
+    if is_ensemble_checkpoint(checkpoint_path):
+        module = load_ensemble(checkpoint_path)
+    else:
+        module = BodyFieldModule.load_from_checkpoint(str(checkpoint_path), map_location=resolved, pretrained=False)
     module.to(resolved)
     module.eval()
-    module.freeze()
+    module.requires_grad_(False)
     module.checkpoint_path = str(checkpoint_path)
     return module
 
