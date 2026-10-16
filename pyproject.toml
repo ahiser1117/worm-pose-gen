@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=2.5.2",
     "pyarrow>=25.0.1",
     "scipy>=1.18.1",
+    "timm>=1.0.20",
     "torch>=2.13.0",
     "torchvision>=0.28.0",
     "uvicorn>=0.52.4",
