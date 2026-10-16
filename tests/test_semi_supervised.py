@@ -127,6 +127,18 @@ class TransformTests(unittest.TestCase):
         self.assertEqual(ramp(5.0, config), 2.0)
 
 
+class TeacherTests(unittest.TestCase):
+    def test_teacher_batches_do_not_move_its_running_statistics(self):
+        module = SemiBodyFieldModule(semi={"store": "-"}, lags=(1,), pretrained=False)
+        before = [b.clone() for b in module.teacher.buffers() if b.dtype.is_floating_point]
+        module.teacher.train()
+        with torch.no_grad():
+            module.teacher(torch.randn(2, 2, 64, 64) * 3 + 1)
+        after = [b for b in module.teacher.buffers() if b.dtype.is_floating_point]
+        for x, y in zip(before, after):
+            torch.testing.assert_close(x, y)
+
+
 class ExportTests(unittest.TestCase):
     def test_exported_checkpoint_loads_as_a_plain_body_net(self):
         module = SemiBodyFieldModule(semi={"store": "-"}, lags=(1, 4), pretrained=False, heatmap_weight=0.2)

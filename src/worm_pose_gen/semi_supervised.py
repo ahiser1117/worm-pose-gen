@@ -396,6 +396,10 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.save_hyperparameters()
         self.teacher = copy.deepcopy(self.network)
         self.teacher.requires_grad_(False)
+        # The teacher's running statistics are the EMA of the student's, never its own batches'.
+        for module in self.teacher.modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                module.momentum = 0.0
         self._offsets = sorted({o + sign * lag for o in (-1, 0, 1) for lag in (0, *self.lags) for sign in (-1, 1)})
 
     @classmethod
@@ -419,10 +423,6 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.log("train_semi_weight", weight, batch_size=size, on_step=False, on_epoch=True)
         if weight <= 0:
             return supervised
-        # Lightning restores each submodule's training flag itself, so the teacher is put
-        # back in eval mode here: in train mode its batch norm would use (and update
-        # its running statistics from) the statistics of mostly-background whole frames.
-        self.teacher.eval()
         height, width = unlabeled["student"].shape[-2:]
         crops = [(int(y), int(x)) for y, x in unlabeled["origin"]]
         with torch.no_grad():
@@ -431,10 +431,19 @@ class SemiBodyFieldModule(BodyFieldModule):
             # from another view (the whole frame) differs systematically, and the
             # student chasing it drags the teacher along (A-P drifted by +0.1).
             # The whole frame only decides which mask component is the worm.
+            # Lightning sets each submodule's train/eval flag itself, so the teacher's is
+            # set here: the whole frame as at inference (running statistics), the crop
+            # in the student's batch-norm mode (batch statistics, as Tarvainen & Valpola
+            # run their teacher; its momentum is 0, so they do not leak into the running
+            # ones).  A teacher in eval mode against a student in train mode differs
+            # systematically, and the student chasing it made A-P drift.
+            self.teacher.eval()
             whole = self.teacher(inputs.flatten(0, 1)).unflatten(0, (size, 3))
             worm_whole = worm_components(torch.sigmoid(whole[:, :, _MASK].float()) > 0.5)
             cropped = torch.stack([inputs[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
+            self.teacher.train()
             teacher = self.teacher(cropped.flatten(0, 1)).unflatten(0, (size, 3))
+            self.teacher.eval()
             hint = torch.stack([worm_whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
         student = self(unlabeled["student"])
         student = torch.stack([undo_transform(student[k], *(int(v) for v in unlabeled["transform"][k])) for k in range(size)])
