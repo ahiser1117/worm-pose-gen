@@ -86,6 +86,15 @@ class ConsistencyLossTests(unittest.TestCase):
         self.assertEqual(float(terms["mask_sandwich"]), 0.0)
         self.assertGreater(float(terms["mask_teacher"]), 0.1)
 
+    def test_stray_teacher_positives_are_no_target(self):
+        student, teacher = window()
+        teacher[:, :, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0  # a track the teacher segments in every frame
+        base, _ = consistency_terms(student, teacher, CONFIG)
+        student[0, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
+        follows, _ = consistency_terms(student, teacher, CONFIG)
+        for name in ("mask_sandwich", "mask_teacher"):
+            self.assertAlmostEqual(float(base[name]), float(follows[name]), places=6)
+
     def test_empty_window_is_ignored(self):
         student, teacher = window()
         teacher[:, :, OUTPUTS.index("mask")] = -20.0

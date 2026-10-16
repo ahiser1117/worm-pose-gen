@@ -28,6 +28,11 @@ pulled toward targets built from the teacher (:func:`consistency_terms`):
                    confident pixels (mask, A-P, confident end peaks): flip and
                    rotation equivariance plus the usual mean-teacher term
 
+Only the largest connected component of each teacher mask counts as worm:
+other confident positives (agar tracks the worm left, debris) are no target
+at all, since the first runs showed self-training turning partly segmented
+tracks into confident false positives.
+
 The unlabeled loss ramps up from zero (``ramp_epochs``) after an optional
 delay.  Validation, early stopping and the learning-rate plateau are on the
 supervised validation loss alone, as for supervised training, of the network
@@ -252,6 +257,20 @@ def _end_terms(student: Tensor, teacher: Tensor, items: Tensor, use_temporal: bo
     )
 
 
+def largest_component(masks: Tensor) -> Tensor:
+    """Each ``[..., H, W]`` boolean map reduced to its largest 8-connected component."""
+
+    from scipy import ndimage
+
+    flat = masks.reshape(-1, *masks.shape[-2:]).cpu().numpy()
+    kept = np.zeros_like(flat)
+    for k, mask in enumerate(flat):
+        labels, count = ndimage.label(mask, structure=np.ones((3, 3), bool))
+        if count:
+            kept[k] = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
+    return torch.as_tensor(kept, device=masks.device).reshape(masks.shape)
+
+
 def consistency_terms(student: Tensor, teacher: Tensor, config: SemiConfig) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """The unlabeled loss terms (module docstring) and gate statistics.
 
@@ -264,8 +283,11 @@ def consistency_terms(student: Tensor, teacher: Tensor, config: SemiConfig) -> t
     student, teacher = student.float(), teacher.float()
     c = config.confidence
     p = torch.sigmoid(teacher[:, :, _MASK])
-    inside = p > 0.5
-    confident = (p > c) | (p < 1 - c)
+    # Only the teacher's largest component is worm; other positives (agar
+    # tracks, debris) are neither target nor gate, so self-training cannot
+    # reinforce them.
+    inside = largest_component(p > 0.5)
+    confident = ((p > c) & inside) | (p < 1 - c)
     items = inside[:, 1].sum((1, 2)) >= config.min_area
     item_pixels = items[:, None, None]
 
@@ -285,13 +307,13 @@ def consistency_terms(student: Tensor, teacher: Tensor, config: SemiConfig) -> t
 
     ap = torch.sigmoid(teacher[:, :, _AP])
     s_ap = torch.sigmoid(student[:, _AP])
-    body = (p > c).all(1) & (torch.sigmoid(teacher[:, 1, _OVERLAP]) < 0.5) & item_pixels
+    body = ((p > c) & inside).all(1) & (torch.sigmoid(teacher[:, 1, _OVERLAP]) < 0.5) & item_pixels
     if config.ap_temporal > 0:
         ap_gate = body & ((ap[:, 0] - ap[:, 2]).abs() < config.ap_neighbour_max)
     else:
         ap_gate = torch.zeros_like(body)
     middle = 0.5 * (ap[:, 0] + ap[:, 2])
-    ap_teacher_gate = (p[:, 1] > c) & (torch.sigmoid(teacher[:, 1, _OVERLAP]) < 0.5) & item_pixels & ~ap_gate
+    ap_teacher_gate = (p[:, 1] > c) & inside[:, 1] & (torch.sigmoid(teacher[:, 1, _OVERLAP]) < 0.5) & item_pixels & ~ap_gate
 
     sigma = HEATMAP_SIGMA_DIAMETERS * BODY_WIDTH_PX
     head_temporal, head_teacher, head_fraction = _end_terms(student[:, _HEAD], teacher[:, :, _HEAD], items, config.head_temporal > 0, sigma)
