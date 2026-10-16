@@ -666,7 +666,7 @@ def real_offsets(lags: Sequence[int], speed: float) -> list[int]:
 
 def make_item(
     source: Source, textures: Sequence[Texture], centre: int, lags: Sequence[int], rng: np.random.Generator,
-    *, want_contact: bool | None = None, tries: int = 40,
+    *, want_contact: bool | None = None, tries: int = 40, fiber_share: float = FIBER_SHARE,
 ) -> dict[str, Any] | None:
     """One rendered item around ``centre`` (a row of ``source.windows``), or ``None`` when no transform qualifies."""
 
@@ -705,7 +705,7 @@ def make_item(
     noise = camera_noise(real[centre_position], source.mask(rows[centre_position]))
     frames = np.empty_like(real)
     fibers = [random_fiber(rng, real.shape[1:], poses[centre_position].mean(0)) for _ in range(int(rng.integers(1, 3)))] \
-        if rng.random() < FIBER_SHARE else []
+        if rng.random() < fiber_share else []
     backgrounds = [remove_worm(frame, source.mask(row), rng, noise) for row, frame in zip(rows, real)]
     for k, (row, pose) in enumerate(zip(rows, poses)):
         background, filled = backgrounds[k]
@@ -749,8 +749,8 @@ def save_item(path: Path, item: dict[str, Any]) -> None:
 TEXTURES_PER_WORKER = 12
 
 
-def _render_batch(job: tuple[str, list[int], tuple[int, ...], int, str]) -> list[dict[str, Any]]:
-    workspace, ids, lags, seed, output = job
+def _render_batch(job: tuple[str, list[int], tuple[int, ...], int, str, float]) -> list[dict[str, Any]]:
+    workspace, ids, lags, seed, output, fiber_share = job
     rng = np.random.default_rng((seed, ids[0]))
     source = Source(Path(workspace))
     textures = build_textures(source, TEXTURES_PER_WORKER, rng)
@@ -759,7 +759,7 @@ def _render_batch(job: tuple[str, list[int], tuple[int, ...], int, str]) -> list
     for item_id in ids:
         item = None
         while item is None:
-            item = make_item(source, textures, int(rng.choice(centres)), lags, rng)
+            item = make_item(source, textures, int(rng.choice(centres)), lags, rng, fiber_share=fiber_share)
         save_item(Path(output) / f"item_{item_id:06d}.npz", item)
         written.append({"id": item_id, **json.loads(str(item["meta"]))})
     return written
@@ -767,7 +767,7 @@ def _render_batch(job: tuple[str, list[int], tuple[int, ...], int, str]) -> list
 
 def generate(
     workspaces: Sequence[Path], output: Path, items: int, lags: Sequence[int], *, processes: int = 16, seed: int = 0,
-    batch: int = 25,
+    batch: int = 25, fiber_share: float = FIBER_SHARE,
 ) -> dict[str, Any]:
     """Render ``items`` items, split evenly over ``workspaces``, into ``output`` (with ``manifest.json``)."""
 
@@ -780,7 +780,7 @@ def generate(
     jobs = []
     for item_id in range(0, items, batch):
         ids = list(range(item_id, min(items, item_id + batch)))
-        jobs.append((str(workspaces[(item_id // batch) % len(workspaces)]), ids, tuple(int(l) for l in lags), seed, str(output)))
+        jobs.append((str(workspaces[(item_id // batch) % len(workspaces)]), ids, tuple(int(l) for l in lags), seed, str(output), fiber_share))
     started = time.monotonic()
     records: list[dict[str, Any]] = []
     with get_context("spawn").Pool(processes) as pool:
@@ -792,7 +792,8 @@ def generate(
         "items": len(records), "lags": list(lags), "seed": seed, "workspaces": [str(w) for w in workspaces],
         "git": _git_commit(), "seconds": round(time.monotonic() - started, 1),
         "settings": {"U_MAX": U_MAX, "OVERLAP_GAMMA": OVERLAP_GAMMA, "SPEEDS": SPEEDS, "CONTACT_SHARE": CONTACT_SHARE,
-                     "MIN_SOURCE_IOU": MIN_SOURCE_IOU, "MIN_BEND_RADIUS_DIAMETERS": MIN_BEND_RADIUS_DIAMETERS},
+                     "MIN_SOURCE_IOU": MIN_SOURCE_IOU, "MIN_BEND_RADIUS_DIAMETERS": MIN_BEND_RADIUS_DIAMETERS,
+                     "TEXTURE_SHAPE": TEXTURE_SHAPE, "FIBER_SHARE": fiber_share, "WHIP_MAX_FRACTION": WHIP_MAX_FRACTION},
         "contact_items": sum(r["contact"] for r in records), "records": records,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=1))
@@ -892,9 +893,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--lags", type=int, nargs="+", default=[1, 4, 16])
     parser.add_argument("--processes", type=int, default=16)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--fiber-share", type=float, default=FIBER_SHARE, help="share of items with fibre distractors")
     args = parser.parse_args(argv)
     manifest = generate([Path(w) for w in args.workspace], Path(args.output), args.items, args.lags,
-                        processes=args.processes, seed=args.seed)
+                        processes=args.processes, seed=args.seed, fiber_share=args.fiber_share)
     print(json.dumps({k: v for k, v in manifest.items() if k != "records"}), flush=True)
     print("done", flush=True)
     return 0
