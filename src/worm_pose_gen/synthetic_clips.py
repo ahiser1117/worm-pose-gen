@@ -193,9 +193,18 @@ def body_layers(
 
 @dataclass(frozen=True)
 class Texture:
-    """Transmission (image / background) of a real worm on a ``[along, across]`` grid of body coordinates."""
+    """A real worm's appearance in body coordinates, tail whip included.
+
+    ``transmission`` (image / background) is sampled on a ``[along, across]``
+    grid of the extended body: arc position from the head to the tip of the
+    tail whip, lateral offset in local radii.  ``width`` is the full width (px)
+    at each ``along`` sample; ``body_fraction`` is where the fitted tube ends
+    on that axis (the whip, too thin for the tube model, makes up the rest).
+    """
 
     transmission: NDArray[np.float32]
+    width: NDArray[np.float32]
+    body_fraction: float = 1.0
     source: str = ""
 
     def sample(self, s: NDArray[np.floating], u: NDArray[np.floating]) -> NDArray[np.float32]:
@@ -206,39 +215,107 @@ class Texture:
         values = values.reshape(np.shape(s)).astype(np.float32)
         return np.where(np.isnan(s) | np.isnan(u), np.float32(1.0), values)
 
+    def width_at(self, fraction: NDArray[np.floating]) -> NDArray[np.float64]:
+        """Full width (px) at positions along the extended body (0 head, 1 whip tip)."""
 
-def sample_texture(
-    frame: NDArray[np.generic], background: NDArray[np.generic], centerline_xy: NDArray[np.generic],
-    width_profile: NDArray[np.generic], source: str = "",
-) -> Texture:
-    """The transmission map of the worm in ``frame`` along its fitted head-first tube.
+        return np.interp(fraction, np.linspace(0.0, 1.0, len(self.width)), self.width)
 
-    ``background`` is the frame without the worm (:func:`remove_worm`).  The
-    map fades to 1 at the band's edge so a drawn worm never leaves a seam.
+
+# The tail ends in a whip a few pixels wide that the tube model does not
+# represent: the fitted tube stops at a blunt end.  It is measured on the
+# mask straight on from the tube's end, up to this share of the body length.
+WHIP_MAX_FRACTION = 0.2
+WHIP_MIN_WIDTH_PX = 2.0
+
+
+def measure_whip(mask: NDArray[np.bool_], centerline_xy: NDArray[np.generic]) -> tuple[float, NDArray[np.float64]]:
+    """Length (px) of the mask's tail whip straight on from the tube's tail end, and the mask's half-width map.
+
+    The whip may bend a little off the straight line: it counts as present
+    where the mask lies within 2 px of it.  The half-width map is the
+    distance to the background, maximized over 3 x 3 pixels.
     """
 
     centerline = np.asarray(centerline_xy, dtype=np.float64)
-    radius = 0.5 * np.asarray(width_profile, dtype=np.float64)
+    distance = ndimage.distance_transform_edt(mask)
+    near = ndimage.maximum_filter(distance, size=5)
+    half = ndimage.maximum_filter(distance, size=3)
+    direction = centerline[-1] - centerline[-4]
+    direction /= max(float(np.linalg.norm(direction)), 1e-9)
+    length = float(np.linalg.norm(np.diff(centerline, axis=0), axis=1).sum())
+    height, width = mask.shape
+    whip, misses = 0.0, 0
+    for k in range(1, int(WHIP_MAX_FRACTION * length) + 1):
+        x, y = np.rint(centerline[-1] + k * direction).astype(int)
+        if not (0 <= x < width and 0 <= y < height):
+            break
+        if near[y, x] >= 1.0:
+            whip, misses = float(k), 0
+        else:
+            misses += 1
+            if misses > 3:
+                break
+    return whip, half
+
+
+def extend_centerline(centerline_xy: NDArray[np.generic], whip_px: float) -> FloatArray:
+    """The centerline continued straight on from its tail end by ``whip_px``, at about its own spacing."""
+
+    centerline = np.asarray(centerline_xy, dtype=np.float64)
+    if whip_px <= 0:
+        return centerline.copy()
+    step = float(np.linalg.norm(np.diff(centerline, axis=0), axis=1).mean())
+    count = max(2, int(round(whip_px / max(step, 1e-9))))
+    direction = centerline[-1] - centerline[-4]
+    direction /= max(float(np.linalg.norm(direction)), 1e-9)
+    extra = centerline[-1] + np.linspace(whip_px / count, whip_px, count)[:, None] * direction
+    return np.vstack((centerline, extra))
+
+
+def sample_texture(
+    frame: NDArray[np.generic], background: NDArray[np.generic], centerline_xy: NDArray[np.generic],
+    width_profile: NDArray[np.generic], mask: NDArray[np.bool_], source: str = "",
+) -> Texture:
+    """The appearance of the worm in ``frame`` along its fitted head-first tube and the tail whip beyond it.
+
+    ``background`` is the frame without the worm (:func:`remove_worm`),
+    ``mask`` the worm's mask (it gives the whip and its width).  The map
+    fades to 1 at the band's edge so a drawn worm never leaves a seam.
+    """
+
+    centerline = np.asarray(centerline_xy, dtype=np.float64)
+    fitted = np.asarray(width_profile, dtype=np.float64)
+    whip, half = measure_whip(np.asarray(mask, dtype=bool), centerline)
+    extended = extend_centerline(centerline, whip)
+    count = len(centerline)
+    # The tube's widths on the body, the mask's on the whip; the tube's last
+    # points narrow to nothing, so they take the mask's width where wider.
+    ix = np.clip(np.rint(extended[:, 0]).astype(int), 0, half.shape[1] - 1)
+    iy = np.clip(np.rint(extended[:, 1]).astype(int), 0, half.shape[0] - 1)
+    measured = 2.0 * half[iy, ix]
+    widths = np.concatenate((fitted, np.maximum(measured[count:], WHIP_MIN_WIDTH_PX)))
+    widths[count - 3 : count] = np.maximum(widths[count - 3 : count], measured[count - 3 : count])
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(extended, axis=0), axis=1))))
+    position = arc / arc[-1]
     along, across = TEXTURE_SHAPE
     s = np.linspace(0.0, 1.0, along)
     u = np.linspace(-U_MAX, U_MAX, across)
-    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(centerline, axis=0), axis=1))))
-    position = arc / arc[-1]
-    x = np.interp(s, position, centerline[:, 0])
-    y = np.interp(s, position, centerline[:, 1])
-    r = np.interp(s, position, radius)
+    x = np.interp(s, position, extended[:, 0])
+    y = np.interp(s, position, extended[:, 1])
+    w = np.interp(s, position, widths)
     tangent = np.gradient(np.stack((x, y), 1), axis=0)
     tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-9)
     # The side with positive cross product (segment x offset) is +u, as in body_layers.
     normal = np.stack((-tangent[:, 1], tangent[:, 0]), axis=1)
-    px = x[:, None] + u[None, :] * r[:, None] * normal[:, None, 0]
-    py = y[:, None] + u[None, :] * r[:, None] * normal[:, None, 1]
+    px = x[:, None] + u[None, :] * 0.5 * w[:, None] * normal[:, None, 0]
+    py = y[:, None] + u[None, :] * 0.5 * w[:, None] * normal[:, None, 1]
     image = ndimage.map_coordinates(np.asarray(frame, dtype=np.float32), [py.ravel(), px.ravel()], order=1, mode="nearest")
     base = ndimage.map_coordinates(np.asarray(background, dtype=np.float32), [py.ravel(), px.ravel()], order=1, mode="nearest")
     transmission = (image / np.maximum(base, 1.0)).reshape(along, across)
     fade = np.clip((U_MAX - np.abs(u)) / 0.25, 0.0, 1.0)[None, :]
     transmission = 1.0 + (transmission - 1.0) * fade
-    return Texture(np.clip(transmission, 0.2, 1.6).astype(np.float32), source)
+    return Texture(np.clip(transmission, 0.2, 1.6).astype(np.float32), w.astype(np.float32),
+                   float(arc[count - 1] / arc[-1]), source)
 
 
 def remove_worm(
@@ -489,7 +566,8 @@ def build_textures(source: Source, count: int, rng: np.random.Generator) -> list
     for row, frame in zip(chosen, frames):
         worm = source.mask(int(row))
         background, _ = remove_worm(frame, worm, rng, 0.0)
-        textures.append(sample_texture(frame, background, source.centerline[row], source.width[row], f"{source.name}:{source.frame_index[row]}"))
+        textures.append(sample_texture(frame, background, source.centerline[row], source.width[row], worm,
+                                       f"{source.name}:{source.frame_index[row]}"))
     return textures
 
 
@@ -526,7 +604,10 @@ def make_item(
     rows = [centre + o for o in signed]
     if not source.good[rows].all():
         return None
-    width = source.width[centre]
+    texture = textures[int(rng.integers(len(textures)))]
+    count = source.centerline.shape[1]
+    # The tube's widths from the texture's worm (same recording), so outline and texture agree.
+    width = texture.width_at(texture.body_fraction * np.linspace(0.0, 1.0, count))
     length = float(np.linalg.norm(np.diff(source.centerline[centre], axis=0), axis=1).sum())
     chosen = None
     for _ in range(tries):
@@ -542,16 +623,19 @@ def make_item(
     if chosen is None:
         return None
     transform, diameter, poses = chosen
-    texture = textures[int(rng.integers(len(textures)))]
+    whip = transform.scale * length * (1.0 / texture.body_fraction - 1.0)
     real = source.frames(rows)
     centre_position = len(offsets)
     noise = camera_noise(real[centre_position], source.mask(rows[centre_position]))
     frames = np.empty_like(real)
     for k, (row, frame, pose) in enumerate(zip(rows, real, poses)):
         background, filled = remove_worm(frame, source.mask(row), rng, noise)
-        frames[k], mask = render_worm(background, pose, diameter, texture, rng, noise)
+        extended = extend_centerline(pose, whip)
+        arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(extended, axis=0), axis=1))))
+        frames[k], mask = render_worm(background, extended, transform.scale * texture.width_at(arc / arc[-1]), texture, rng, noise)
         if k == centre_position:
             centre_mask, centre_filled = mask, filled
+    # Targets from the tube alone, as hand labels get them: whip pixels take the tail end's A-P.
     targets = render_body_targets(centre_mask, poses[centre_position], diameter)
     label = centre_mask.astype(np.uint8)
     label[centre_filled & ~ndimage.binary_dilation(centre_mask, iterations=3)] = IGNORE_LABEL
@@ -563,7 +647,7 @@ def make_item(
         "meta": json.dumps({
             "source": str(source.path), "recording": source.name, "frame": int(source.frame_index[centre]),
             "speed": speed, "transform": transform.__dict__, "texture": texture.source, "contact": want_contact,
-            "overlap_px": int(targets.overlap.sum()),
+            "overlap_px": int(targets.overlap.sum()), "whip_px": round(whip, 1),
         }),
     }
 

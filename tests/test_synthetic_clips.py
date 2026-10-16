@@ -63,7 +63,10 @@ def texture():
     along, across = sc.TEXTURE_SHAPE
     u = np.linspace(-sc.U_MAX, sc.U_MAX, across)
     profile = np.where(np.abs(u) < 1, 0.8 - 0.1 * (np.abs(u) > 0.7), 1.0)
-    return sc.Texture(np.tile(profile, (along, 1)).astype(np.float32), "test")
+    # A body of the test width profile (90 % of the length), then a 3-px whip.
+    s = np.linspace(0, 1, along)
+    width = np.where(s <= 0.9, np.interp(s / 0.9, np.linspace(0, 1, 100), width_profile()), 3.0)
+    return sc.Texture(np.tile(profile, (along, 1)).astype(np.float32), width.astype(np.float32), 0.9, "test")
 
 
 class BodyLayersTest(unittest.TestCase):
@@ -120,16 +123,41 @@ class ItemTest(unittest.TestCase):
         item = self.make(0)
         self.assertIsNotNone(item)
         self.assertEqual(item["frames"].shape, (7, *SHAPE))
+        worm = item["mask"] == 1
         tube = sc.body_layers(item["centerline_xy"], item["width_profile"], SHAPE).mask_in(SHAPE)
-        np.testing.assert_array_equal(item["mask"] == 1, tube)
+        # The mask is the tube plus the tail whip beyond its end.
+        self.assertFalse((tube & ~worm).any())
+        whip = worm & ~tube
+        self.assertGreater(whip.sum(), 10)
+        tail = item["centerline_xy"][-1]
+        yy, xx = np.nonzero(whip)
+        self.assertLess(np.hypot(xx - tail[0], yy - tail[1]).min(), 3.0)
         # Ignored pixels are the filled real worm away from the synthetic one.
-        self.assertFalse(((item["mask"] == IGNORE_LABEL) & tube).any())
+        self.assertFalse(((item["mask"] == IGNORE_LABEL) & worm).any())
         ap = item["ap"].astype(np.float32)
-        self.assertTrue(np.isfinite(ap[tube & ~item["overlap"]]).all())
-        self.assertFalse(np.isfinite(ap[~tube]).any())
+        self.assertTrue(np.isfinite(ap[worm & ~item["overlap"]]).all())
+        self.assertFalse(np.isfinite(ap[~worm]).any())
+        # Whip pixels take the A-P of the tube's tail end, as hand labels do.
+        self.assertGreater(float(ap[whip].min()), 0.95)
         np.testing.assert_allclose(item["head_xy"], item["centerline_xy"][0], atol=1e-4)
         # The worm is darker than its surroundings in the rendered frame.
         self.assertLess(item["frames"][3][tube].mean(), item["frames"][3][~tube & (item["mask"] != IGNORE_LABEL)].mean() - 10)
+
+    def test_whip_measured_and_sampled_from_the_mask(self):
+        centerline = straight(length=100.0, x0=40.0)
+        width = np.full(100, 14.0)
+        mask = sc.body_layers(centerline, width, SHAPE).mask_in(SHAPE)
+        mask[79:82, 140:156] = True  # a 3-px whip of 15 px beyond the tail end at x = 140
+        whip, _ = sc.measure_whip(mask, centerline)
+        self.assertAlmostEqual(whip, 15.0, delta=3.0)
+        frame = np.where(mask, 120.0, 180.0)
+        texture = sc.sample_texture(frame, np.full(SHAPE, 180.0), centerline, width, mask)
+        self.assertAlmostEqual(texture.body_fraction, 99 / (99 + whip), places=2)
+        along = np.linspace(0, 1, len(texture.width))
+        on_whip = along > texture.body_fraction + 0.05
+        self.assertTrue(np.all(texture.width[on_whip] < 6.0))
+        middle = np.argmin(np.abs(along - 0.5 * (texture.body_fraction + 1.0)))
+        self.assertLess(float(texture.transmission[middle, sc.TEXTURE_SHAPE[1] // 2]), 0.75)
 
     def test_deterministic_with_a_seed(self):
         first, second, other = self.make(5), self.make(5), self.make(6)
