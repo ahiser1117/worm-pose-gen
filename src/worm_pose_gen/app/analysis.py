@@ -28,7 +28,10 @@ workspace row, one row per midline point head to tail, the signed curvature
 times the body length (dimensionless, so worms of any size and pixel size
 compare) clipped to ``±KYMOGRAPH_RANGE``.  It goes to the browser as one
 8-bit PNG: 0 where the frame has no pose, else ``1 + round(254 * (kL +
-R) / 2R)`` (128 is straight).
+R) / 2R)`` (128 is straight).  Beside it goes a second 8-bit PNG of the
+same size, 255 where the midline point lies outside the frame (the part of
+the body the fit completed off camera), else 0; ``null`` when the
+recording's frame size is unknown.
 """
 
 from __future__ import annotations
@@ -380,12 +383,26 @@ def encode_kymograph(values: np.ndarray, limit: float = KYMOGRAPH_RANGE) -> np.n
     return np.where(np.isfinite(values), scaled, 0).astype(np.uint8)
 
 
+def off_screen_kymograph(centerline_xy: np.ndarray, fitted: np.ndarray, image_shape: tuple[int, int]) -> np.ndarray:
+    """``(points, rows)``, true where a fitted row's midline point lies outside the ``(H, W)`` frame."""
+
+    curves = np.asarray(centerline_xy, dtype=np.float64)
+    height, width = image_shape
+    x, y = curves[..., 0], curves[..., 1]
+    outside = (x < 0) | (x >= width) | (y < 0) | (y >= height)
+    outside[~np.asarray(fitted, dtype=bool)] = False
+    return outside.T
+
+
 def kymograph(app: AppState, name: str) -> dict[str, Any]:
-    run = app.view(name).run
+    view = app.view(name)
+    run, image_shape = view.run, view.workspace.image_shape
     arrays = run.arrays
     values = curvature_kymograph(arrays["centerline_xy"], arrays["body_length_px"], arrays["fitted"])
+    off_screen = None if image_shape is None else off_screen_kymograph(arrays["centerline_xy"], arrays["fitted"], image_shape)
     return {
         "rows": int(values.shape[1]), "points": int(values.shape[0]), "range": KYMOGRAPH_RANGE,
         "frames": [int(run.frame_index[0]), int(run.frame_index[-1])], "step": int(run.frame_index[1] - run.frame_index[0]) if len(run.frame_index) > 1 else 1,
         "image": data_url(encode_kymograph(values)),
+        "off_screen": None if off_screen is None else data_url(off_screen.astype(np.uint8) * 255),
     }

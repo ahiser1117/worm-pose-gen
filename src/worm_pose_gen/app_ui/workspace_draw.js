@@ -84,6 +84,8 @@ export function probabilityLut([r, g, b]) {
 export const KYMOGRAPH_LUT = divergingLut();
 export const AP_LUT = apLut();
 export const RAW_AP_LUT = rawApLut();
+// A 0/255 mask: transparent at 0, opaque white at 255.
+export const MASK_LUT = new Uint8Array(256 * 4).fill(255, 255 * 4, 256 * 4);
 
 // A canvas of a decoded gray image through a lookup table of 256 RGBA entries.
 export function colorize({width, height, data}, lut) {

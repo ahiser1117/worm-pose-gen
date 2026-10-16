@@ -167,6 +167,7 @@ class WorkspacePageTests(unittest.TestCase):
         kymograph = self.call("GET", f"/api/workspaces/{name}/kymograph")
         self.assertEqual((kymograph["rows"], kymograph["frames"], kymograph["step"]), (FRAMES, [0, FRAMES - 1], 1))
         self.assertTrue(kymograph["image"].startswith("data:image/png;base64,"))
+        self.assertTrue(kymograph["off_screen"].startswith("data:image/png;base64,"))
 
         # Analysing again reuses the workspace.
         again = self.call("POST", "/api/analyse", {"path": str(self.recording), "stages": ["ambiguity"]})
@@ -221,6 +222,12 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertTrue(np.isnan(values[:, 1]).all())
         encoded = analysis.encode_kymograph(np.array([[np.nan, 0.0, 100.0, -100.0]]))
         self.assertEqual(encoded.tolist(), [[0, 128, 255, 1]])
+
+    def test_off_screen_kymograph(self) -> None:
+        # Frame 10 high, 20 wide: x in [0, 20), y in [0, 10). Row 1 has no pose, so nothing in it is off screen.
+        curve = np.array([[-1.0, 5.0], [0.0, 0.0], [19.9, 9.9], [20.0, 5.0], [5.0, 10.0]])
+        outside = analysis.off_screen_kymograph(np.stack((curve, curve)), np.array([True, False]), (10, 20))
+        self.assertEqual(outside.T.tolist(), [[True, False, False, True, True], [False] * 5])
 
 
 class MaskRefitKeepTests(unittest.TestCase):

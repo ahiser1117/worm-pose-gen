@@ -21,7 +21,7 @@
 import {api, el, post, query} from "./api.js";
 import {FrameCanvas, drawMidline, maskCanvas} from "./frame_canvas.js";
 import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
-import {AP_LUT, KYMOGRAPH_LUT, RAW_AP_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage, probabilityLut} from "./workspace_draw.js";
+import {AP_LUT, KYMOGRAPH_LUT, MASK_LUT, RAW_AP_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage, probabilityLut} from "./workspace_draw.js";
 import {STAGE_WORDS, describeStatus} from "./workspace_home.js";
 import {MaskEditor} from "./workspace_mask.js";
 import {Timeline} from "./workspace_timeline.js";
@@ -111,6 +111,7 @@ export class WorkspaceView {
       this.loop = !this.loop; this.loopButton.setAttribute("aria-pressed", String(this.loop));
     }}, "Loop");
     this.selectionNote = el("span", {class: "ws-selection"});
+    this.minimapHost = el("span", {class: "ws-minimap-host"});
     this.transport = el("div", {class: "ws-transport"},
       el("button", {type: "button", title: "Previous frame (←)", "aria-label": "Previous frame", onclick: () => this.step(-1)}, "◀"),
       this.playButton,
@@ -118,7 +119,8 @@ export class WorkspaceView {
       el("label", {class: "inline"}, "Frame", this.frameInput), this.frameTotal,
       el("label", {class: "inline"}, "Speed", this.speedSelect), this.loopButton, this.selectionNote,
       el("span", {class: "ws-grow"}),
-      el("span", {class: "note ws-timeline-hint"}, "Drag to scrub · right-drag to select · wheel to zoom"));
+      el("span", {class: "note ws-timeline-hint"}, "Drag to scrub · right-drag to select · wheel to zoom · hatched: off screen"),
+      this.minimapHost);
     this.timelineHost = el("div", {class: "ws-timeline"});
     this.bottom = el("div", {class: "ws-bottom"}, this.transport, this.timelineHost);
     this.node = el("div", {class: "ws-main", hidden: true}, this.left, this.center, this.bottom);
@@ -133,7 +135,7 @@ export class WorkspaceView {
     };
     this.canvasHost.addEventListener("pointerleave", () => { if (this.mask?.active) { this.mask.cursor = null; this.canvas.redraw(); } });
     this._layers();
-    this.timeline = new Timeline(this.timelineHost, {
+    this.timeline = new Timeline(this.timelineHost, this.minimapHost, {
       onSeek: (row) => this.seek(row),
       onSelect: (rows) => this.select({first: rows.first, last: rows.last, kind: "range"}),
       onKeyframe: (row) => this.toggleKeyframe(row),
@@ -194,7 +196,7 @@ export class WorkspaceView {
     this.probability = null; this.probabilityCache = new Map();
     this.generation = 0; this.kymographStamp = null;
     this.mask = new MaskEditor(name);
-    this.timeline.set("issues", []); this.timeline.set("kymograph", null); this.timeline.set("selection", null);
+    this.timeline.set("issues", []); this.timeline.set("kymograph", null); this.timeline.set("offScreen", null); this.timeline.set("selection", null);
     this.timeline.set("preview", null); this.timeline.set("keyframes", null); this.timeline.set("selected", null);
     this.dev?.reset();
   }
@@ -301,13 +303,14 @@ export class WorkspaceView {
   }
 
   async loadKymograph() {
-    if (!this.status.analysed) { this.timeline.set("kymograph", null); return; }
+    if (!this.status.analysed) { this.timeline.set("kymograph", null); this.timeline.set("offScreen", null); return; }
     try {
       const payload = await api(`${this.base}/kymograph`);
-      const gray = await decodeGray(payload.image);
+      const [gray, offScreen] = await Promise.all([decodeGray(payload.image), decodeGray(payload.off_screen)]);
       this.timeline.set("kymograph", colorize(gray, KYMOGRAPH_LUT));
+      this.timeline.set("offScreen", offScreen && colorize(offScreen, MASK_LUT));
     } catch (error) {
-      this.timeline.set("kymograph", null);
+      this.timeline.set("kymograph", null); this.timeline.set("offScreen", null);
     }
   }
 
@@ -1083,7 +1086,7 @@ export class WorkspaceView {
       ["O", "Looks OK: mark the issue reviewed, go to the next"], ["F", "Flip head/tail on the issue or selection"], ["Shift+F", "Flip this frame"],
       ["R", "Refit"], ["E", "Edit mask"], ["L", "Relabel"], ["Enter / Esc", "Keep / Discard a preview; Save / Cancel an edit"],
       ["W  B", "Worm / Background brush"], ["[  ]", "Smaller / larger brush"], ["N", "Network proposal (while editing)"], ["Ctrl+Z", "Undo a stroke"],
-      ["1 2 3 4", "Mask, Midline, Outline, A-P field"], ["0", "Fit the frame to the view"], ["Esc", "Clear the selection"], ["Timeline", "Drag scrubs, right-drag selects a range, wheel zooms"], ["Frame", "Wheel zooms, right- or Shift-drag pans"],
+      ["1 2 3 4", "Mask, Midline, Outline, A-P field"], ["0", "Fit the frame to the view"], ["Esc", "Clear the selection"], ["Timeline", "Drag scrubs, right-drag selects a range, wheel zooms; hatching marks body parts off screen"], ["Minimap", "Drag the box to move the zoomed timeline"], ["Frame", "Wheel zooms, right- or Shift-drag pans"],
     ];
     const dialog = el("dialog", {class: "ws-dialog ws-help"},
       el("h2", {}, "Keyboard shortcuts"),

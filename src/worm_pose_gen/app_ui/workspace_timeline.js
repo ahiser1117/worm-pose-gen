@@ -2,7 +2,12 @@
 // (head at the top, tail at the bottom, one column per frame; blue and
 // orange are the two bending directions), with the current frame, the
 // selection, a fix's preview range and Relabel's keyframes drawn over it.
-// Developers can add one extra per-frame series below.
+// Body points the fit placed outside the frame are hatched over. Developers
+// can add one extra per-frame series below.
+//
+// The minimap (its own small canvas, placed by the page) shows the whole
+// recording with the zoomed window boxed; dragging it moves the window, and a
+// press outside the box centres the window there first.
 //
 // Everything is in workspace rows; the page converts to frames. A left press
 // seeks and a left drag scrubs; a right drag selects a range (for a fix
@@ -13,21 +18,39 @@
 const ISSUE_H = 10, GAP = 3, KYMO_H = 96, AXIS_H = 16, SERIES_H = 34;
 const ISSUE_COLORS = {unreviewed: "#e0b04d", reviewed: "#3f7a5a", fixed: "#6cb4ff"};
 const DRAG_PX = 4;
+const MINIMAP_ISSUE_H = 4;
+
+// A diagonal hatch tile that dims what it covers.
+function hatchTile() {
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 6;
+  const g = tile.getContext("2d");
+  g.fillStyle = "rgba(8, 11, 14, 0.62)"; g.fillRect(0, 0, 6, 6);
+  g.strokeStyle = "rgba(210, 220, 230, 0.4)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(-1, 7); g.lineTo(7, -1); g.moveTo(-1, 1); g.lineTo(1, -1); g.moveTo(5, 7); g.lineTo(7, 5); g.stroke();
+  return tile;
+}
 
 export class Timeline {
-  constructor(container, {onSeek, onSelect, onKeyframe}) {
+  constructor(container, minimapHost, {onSeek, onSelect, onKeyframe}) {
     this.container = container;
     this.canvas = document.createElement("canvas");
     this.canvas.className = "ws-timeline-canvas";
     container.append(this.canvas);
+    this.minimap = document.createElement("canvas");
+    this.minimap.className = "ws-minimap";
+    this.minimap.title = "The whole recording; drag the box to move the zoomed window";
+    minimapHost.append(this.minimap);
+    this.hatchTile = hatchTile(); this.scratch = document.createElement("canvas");
     this.onSeek = onSeek; this.onSelect = onSelect; this.onKeyframe = onKeyframe;
     this.rows = 0; this.first = 0; this.step = 1;
     this.window = [0, 1];
     this.row = 0;
-    this.kymograph = null; this.issues = []; this.selection = null; this.preview = null; this.keyframes = null;
-    this.series = null; this.hover = null; this.drag = null; this.selected = null;
+    this.kymograph = null; this.offScreen = null; this.issues = []; this.selection = null; this.preview = null; this.keyframes = null;
+    this.series = null; this.hover = null; this.drag = null; this.minimapDrag = null; this.selected = null;
     this._frame = 0;
     this._bind();
+    this._bindMinimap();
     new ResizeObserver(() => this.draw()).observe(container);
   }
 
@@ -65,6 +88,8 @@ export class Timeline {
     return [start, start + span];
   }
 
+  get zoomed() { return this.window[1] - this.window[0] < this.rows; }
+
   _x(row, width) { const [a, b] = this.window; return (row - a) / (b - a) * width; }
   _row(x, width) { const [a, b] = this.window; return Math.max(0, Math.min(this.rows - 1, Math.floor(a + x / width * (b - a)))); }
 
@@ -73,7 +98,22 @@ export class Timeline {
     this._frame = requestAnimationFrame(() => { this._frame = 0; this._draw(); });
   }
 
+  // A canvas, at device resolution, of `mask`'s columns sx..sx+sw scaled to w x h and filled with the hatch.
+  _hatched(mask, sx, sw, w, h, dpr) {
+    const canvas = this.scratch;
+    canvas.width = Math.max(1, Math.round(w * dpr)); canvas.height = Math.max(1, Math.round(h * dpr));
+    const g = canvas.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.imageSmoothingEnabled = sw > w;
+    g.drawImage(mask, sx, 0, sw, mask.height, 0, 0, w, h);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = g.createPattern(this.hatchTile, "repeat");
+    g.fillRect(0, 0, w, h);
+    return canvas;
+  }
+
   _draw() {
+    this._drawMinimap();
     const width = this.container.clientWidth, height = this.height, dpr = window.devicePixelRatio || 1;
     this.canvas.style.height = `${height}px`;
     this.canvas.width = Math.max(1, Math.round(width * dpr)); this.canvas.height = Math.round(height * dpr);
@@ -102,6 +142,7 @@ export class Timeline {
     if (this.kymograph) {
       g.imageSmoothingEnabled = perRow < 1;
       g.drawImage(this.kymograph, a, 0, b - a, this.kymograph.height, 0, kymoTop, width, KYMO_H);
+      if (this.offScreen) g.drawImage(this._hatched(this.offScreen, a, b - a, width, KYMO_H, dpr), 0, kymoTop, width, KYMO_H);
     }
     g.fillStyle = muted; g.font = "10px system-ui, sans-serif"; g.textBaseline = "top";
     g.fillText("head", 4, kymoTop + 2);
@@ -174,6 +215,59 @@ export class Timeline {
       g.fillStyle = "rgba(15,20,24,0.9)"; g.fillRect(left, kymoTop + 2, w, 16);
       g.fillStyle = "#e6ebef"; g.textBaseline = "top"; g.fillText(text, left + 4, kymoTop + 4);
     }
+  }
+
+  // The whole recording: issues on top, the kymograph below, the window boxed and the rest dimmed, the cursor a line.
+  _drawMinimap() {
+    const canvas = this.minimap, width = canvas.clientWidth, height = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(width * dpr)); canvas.height = Math.max(1, Math.round(height * dpr));
+    const g = canvas.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = "#0b0f12"; g.fillRect(0, 0, width, height);
+    if (!this.rows || !width) return;
+    const x = (row) => row / this.rows * width, kymoH = height - MINIMAP_ISSUE_H;
+    for (const issue of this.issues) {
+      const x0 = x(issue.rows[0]);
+      g.fillStyle = ISSUE_COLORS[issue.state] || "#9aa6b0";
+      g.fillRect(x0, 0, Math.max(1, x(issue.rows[1] + 1) - x0), MINIMAP_ISSUE_H - 1);
+    }
+    if (this.kymograph) {
+      g.imageSmoothingEnabled = true;
+      g.drawImage(this.kymograph, 0, 0, this.rows, this.kymograph.height, 0, MINIMAP_ISSUE_H, width, kymoH);
+      if (this.offScreen) g.drawImage(this._hatched(this.offScreen, 0, this.rows, width, kymoH, dpr), 0, MINIMAP_ISSUE_H, width, kymoH);
+    }
+    const [a, b] = this.window, x0 = x(a), x1 = x(b);
+    if (this.zoomed) {
+      g.fillStyle = "rgba(0, 0, 0, 0.5)";
+      g.fillRect(0, 0, x0, height); g.fillRect(x1, 0, width - x1, height);
+    }
+    g.fillStyle = "#ffffff"; g.fillRect(Math.round(x(this.row + 0.5)) - 0.5, 0, 1, height);
+    g.strokeStyle = this.zoomed ? "#ffffff" : "rgba(255, 255, 255, 0.35)"; g.lineWidth = 1.5;
+    const left = Math.min(x0, width - 3);
+    g.strokeRect(left + 0.75, 0.75, Math.max(2, Math.min(x1, width) - left - 1.5), height - 1.5);
+    canvas.style.cursor = !this.zoomed ? "default" : this.minimapDrag ? "grabbing" : "grab";
+  }
+
+  _bindMinimap() {
+    const canvas = this.minimap, rowAt = (event) => event.offsetX / canvas.clientWidth * this.rows;
+    // minimapDrag: the row under the press, measured from the window's start, held while dragging.
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !this.rows || !this.zoomed) return;
+      canvas.setPointerCapture(event.pointerId);
+      const [a, b] = this.window, span = b - a, row = rowAt(event);
+      if (row < a || row >= b) this.window = this._clamp(row - span / 2, span);
+      this.minimapDrag = {offset: row - this.window[0]};
+      this.draw();
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!this.minimapDrag) return;
+      const [a, b] = this.window;
+      this.window = this._clamp(rowAt(event) - this.minimapDrag.offset, b - a);
+      this.draw();
+    });
+    const end = () => { this.minimapDrag = null; this.draw(); };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
   }
 
   _bind() {
