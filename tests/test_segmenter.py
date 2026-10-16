@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from worm_pose_gen.segmenter import (
     IGNORE_LABEL,
+    ConvNeXtUNet,
     ResNet18UNet,
     SegmentationModule,
     load_segmenter,
@@ -30,6 +31,29 @@ class SegmenterTests(unittest.TestCase):
         with torch.no_grad():
             logits = network(torch.randn(1, 1, 45, 70))
         self.assertEqual(tuple(logits.shape), (1, 1, 45, 70))
+
+    def test_convnext_network_returns_full_resolution_logits_for_odd_sizes(self) -> None:
+        network = ConvNeXtUNet(pretrained=False, in_channels=4, out_channels=5, final_channels=24).eval()
+        with torch.no_grad():
+            logits = network(torch.randn(1, 4, 45, 70))
+        self.assertEqual(tuple(logits.shape), (1, 5, 45, 70))
+
+    def test_convnext_stem_sums_rgb_onto_the_frame_and_zeros_the_differences(self) -> None:
+        import timm
+
+        torch.manual_seed(0)
+        network = ConvNeXtUNet(pretrained=False, in_channels=3)
+        torch.manual_seed(0)
+        reference = timm.create_model("convnext_tiny.dinov3_lvd1689m", pretrained=False)
+        stem = network.stem[0]
+        self.assertEqual((stem.in_channels, stem.kernel_size, stem.stride), (3, (4, 4), (4, 4)))
+        torch.testing.assert_close(stem.weight[:, 0], reference.stem[0].weight.sum(dim=1))
+        torch.testing.assert_close(stem.bias, reference.stem[0].bias)
+        self.assertEqual(float(stem.weight[:, 1:].abs().max()), 0.0)
+        torch.testing.assert_close(network.stages[3].blocks[0].conv_dw.weight, reference.stages[3].blocks[0].conv_dw.weight)
+        # Every parameter is in exactly one optimizer group.
+        grouped = [id(p) for p in network.encoder_parameters() + network.decoder_parameters()]
+        self.assertEqual(sorted(grouped), sorted(id(p) for p in network.parameters()))
 
     def test_masked_metrics_ignore_invalid_pixels(self) -> None:
         probability = torch.zeros(1, 4, 4)

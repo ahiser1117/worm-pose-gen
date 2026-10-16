@@ -6,10 +6,10 @@ import h5py
 import numpy as np
 import torch
 
-from worm_pose_gen.body_net import heatmap_focal_loss
+from worm_pose_gen.body_net import BodyFieldModule, heatmap_focal_loss, load_body_net
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets, self_contact
 from worm_pose_gen.recordings import RecordingSource
-from worm_pose_gen.segmenter import INPUT_STD
+from worm_pose_gen.segmenter import INPUT_STD, ConvNeXtUNet, ResNet18UNet
 from worm_pose_gen.temporal_context import difference_channels, read_context
 
 
@@ -83,6 +83,29 @@ class TemporalContextTests(unittest.TestCase):
         channels = difference_channels(context, valid, [1, 3])
         self.assertAlmostEqual(float(channels[0, 0, 0]), 20 / (255 * INPUT_STD), places=5)
         self.assertFalse(channels[1].any())  # lag 3 reaches before the recording
+
+
+class EncoderCheckpointTests(unittest.TestCase):
+    def round_trip(self, module, drop=()):
+        hparams = {k: v for k, v in module.hparams.items() if k not in drop}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "weights.ckpt"
+            torch.save({"state_dict": module.state_dict(), "hyper_parameters": hparams, "pytorch-lightning_version": "2.5.0"}, path)
+            loaded = load_body_net(path, device="cpu")
+        x = torch.randn(1, 1 + len(module.lags), 37, 53)
+        with torch.no_grad():
+            torch.testing.assert_close(loaded(x), module.eval()(x))
+        return loaded
+
+    def test_convnext_checkpoint_round_trip(self):
+        module = BodyFieldModule(lags=(1, 4), pretrained=False, encoder="dinov3_convnext_tiny")
+        loaded = self.round_trip(module)
+        self.assertIsInstance(loaded.network, ConvNeXtUNet)
+        self.assertEqual(loaded.hparams.encoder, "dinov3_convnext_tiny")
+
+    def test_checkpoint_without_encoder_is_a_resnet(self):
+        module = BodyFieldModule(lags=(1,), pretrained=False)
+        self.assertIsInstance(self.round_trip(module, drop=("encoder",)).network, ResNet18UNet)
 
 
 class HeatmapLossTests(unittest.TestCase):

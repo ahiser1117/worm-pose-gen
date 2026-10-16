@@ -129,7 +129,6 @@ CONVNEXT_ENCODERS = {
     "dinov3_convnext_tiny": "convnext_tiny.dinov3_lvd1689m",
     "dinov3_convnext_small": "convnext_small.dinov3_lvd1689m",
 }
-ENCODERS = ("resnet18", *CONVNEXT_ENCODERS)
 # Width of the convolutional branch that gives the ConvNeXt U-Net its stride-2 skip.
 FINE_CHANNELS = 32
 
@@ -210,7 +209,7 @@ class ConvNeXtUNet(nn.Module):
 
 
 def make_unet(encoder: str, *, pretrained: bool, in_channels: int, out_channels: int, final_channels: int) -> nn.Module:
-    """The U-Net with the named encoder (:data:`ENCODERS`)."""
+    """The U-Net with the named encoder: ``"resnet18"`` or one of :data:`CONVNEXT_ENCODERS`."""
 
     if encoder == "resnet18":
         return ResNet18UNet(pretrained=pretrained, in_channels=in_channels, out_channels=out_channels, final_channels=final_channels)
