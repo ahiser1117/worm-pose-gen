@@ -147,6 +147,10 @@ class TrainRequest:
     context: str = "none"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    # Rendered synthetic items (:mod:`synthetic_clips`) mixed into a body-field
+    # model's training batches, making up ``synthetic_fraction`` of each epoch.
+    synthetic: str = ""
+    synthetic_fraction: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainRequest":
@@ -212,6 +216,10 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
             raise ValueError(f"unknown temporal context {request.context!r}; expected one of {tuple(CONTEXTS)}")
         kind, lags = "body_net", CONTEXTS[request.context]
     params = validate_params(kind, request.params)
+    if request.synthetic and kind != "body_net":
+        raise ValueError("synthetic items train body-field models only")
+    if not 0.0 <= request.synthetic_fraction < 1.0:
+        raise ValueError("the synthetic fraction must lie in [0, 1)")
     train = library.labels(libraries, request.dataset, "train")
     val = library.labels(libraries, request.dataset, "val")
     if not train:
@@ -407,11 +415,26 @@ def train(
         torch.set_float32_matmul_precision("high")
         workers = (min(4, os.cpu_count() or 1) if use_cuda else 0) if num_workers is None else int(num_workers)
 
+        synthetic = None
+        if request.synthetic and request.synthetic_fraction > 0:
+            from .synthetic_clips import SyntheticClipDataset
+
+            synthetic = SyntheticClipDataset(request.synthetic, plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
+
         def loader(records: list[LabelRecord], training: bool) -> DataLoader:
             dataset = LabelDataset(libraries, records, kind=plan_.kind, lags=plan_.lags, augment=training,
                                    crop_size=p["crop_size"] if training else None, seed=p["seed"],
                                    min_fit_iou=p.get("min_fit_iou", 0.9))
-            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2), shuffle=training,
+            sampler = None
+            if training and synthetic is not None:
+                from torch.utils.data import ConcatDataset
+
+                from .synthetic_clips import MixedSampler
+
+                sampler = MixedSampler(len(dataset), len(synthetic), request.synthetic_fraction, seed=p["seed"])
+                dataset = ConcatDataset([dataset, synthetic])
+            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2),
+                              shuffle=training and sampler is None, sampler=sampler,
                               num_workers=workers, persistent_workers=workers > 0, pin_memory=use_cuda, collate_fn=collate)
 
         module = build_module(libraries, plan_)
@@ -457,7 +480,9 @@ def train(
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
             "trained_on": library.trained_on(request.dataset, records), "parent": request.start_from or None,
-            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context},
+            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
+                        **({"synthetic": {"items": request.synthetic, "count": len(synthetic), "fraction": request.synthetic_fraction}}
+                           if synthetic is not None else {})},
             "notes": request.notes,
         }
         run = {
@@ -504,6 +529,8 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
         argv += [f"--{key.replace('_', '-')}", str(value)]
     if request.notes:
         argv += ["--notes", request.notes]
+    if request.synthetic:
+        argv += ["--synthetic", request.synthetic, "--synthetic-fraction", str(request.synthetic_fraction)]
     return argv
 
 
@@ -516,6 +543,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start-from", default=None, help="model to fine-tune (default: from scratch, a body-field model)")
     parser.add_argument("--context", choices=tuple(CONTEXTS), default="none", help="temporal context from scratch: none or short (±1, 4, 16 frames)")
     parser.add_argument("--notes", default="")
+    parser.add_argument("--synthetic", default="", help="directory of rendered synthetic items (synthetic_clips) to mix in")
+    parser.add_argument("--synthetic-fraction", type=float, default=0.0, help="share of each epoch's items that are synthetic")
     parser.add_argument("--num-workers", type=int, default=None, help="data loader workers (default: 4 on a GPU, 0 on the CPU)")
     for p in PARAMETERS:
         parser.add_argument(f"--{p['name'].replace('_', '-')}", dest=p["name"], type=int if p["type"] == "int" else float,
@@ -529,6 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     request = TrainRequest(
         setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
+        synthetic=args.synthetic, synthetic_fraction=args.synthetic_fraction,
     )
     started = time.monotonic()
 
