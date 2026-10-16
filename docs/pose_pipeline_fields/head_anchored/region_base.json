@@ -1,0 +1,861 @@
+{
+ "clips": {
+  "spiral_0131": {
+   "stretches": [
+    [
+     86,
+     146
+    ],
+    [
+     164,
+     220
+    ],
+    [
+     282,
+     288
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "after": {
+      "frames": 125,
+      "frames_below_0_9": 11,
+      "pose_jumps_over_width": 9,
+      "length_jumps_over_3pct": 21,
+      "orientation_flips": 3
+     },
+     "seconds": 11.011782173532993,
+     "regions": 3,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "after": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "seconds": 24.58522023819387,
+     "regions": 3,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "after": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 3,
+      "orientation_flips": 2
+     },
+     "seconds": 2.5241234148852527,
+     "regions": 3,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 68,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 68,
+      "frames_below_0_9": 28,
+      "pose_jumps_over_width": 5,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 0.64291687682271,
+     "regions": 2,
+     "errors": [
+      "164-220: The anchor at frame 3873 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+     ]
+    },
+    "mirror": {
+     "before": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "after": {
+      "frames": 125,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 1,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 1
+     },
+     "seconds": 0.20943794073536992,
+     "regions": 3,
+     "errors": []
+    }
+   }
+  },
+  "loop_0131": {
+   "stretches": [
+    [
+     11,
+     16
+    ],
+    [
+     31,
+     45
+    ],
+    [
+     83,
+     94
+    ],
+    [
+     110,
+     115
+    ],
+    [
+     120,
+     159
+    ],
+    [
+     165,
+     170
+    ],
+    [
+     206,
+     211
+    ],
+    [
+     265,
+     275
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 102,
+      "frames_below_0_9": 4,
+      "pose_jumps_over_width": 4,
+      "length_jumps_over_3pct": 13,
+      "orientation_flips": 0
+     },
+     "seconds": 12.064449339639395,
+     "regions": 8,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 27.19854716770351,
+     "regions": 8,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 3.5924290381371975,
+     "regions": 8,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 96,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 96,
+      "frames_below_0_9": 29,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 1.352013386785984,
+     "regions": 7,
+     "errors": [
+      "110-115: The anchor at frame 14859 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+     ]
+    },
+    "mirror": {
+     "before": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 102,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 0.19694712851196527,
+     "regions": 8,
+     "errors": []
+    }
+   }
+  },
+  "omega_0822": {
+   "stretches": [
+    [
+     0,
+     4
+    ],
+    [
+     70,
+     135
+    ],
+    [
+     231,
+     236
+    ],
+    [
+     282,
+     295
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 91,
+      "frames_below_0_9": 11,
+      "pose_jumps_over_width": 3,
+      "length_jumps_over_3pct": 25,
+      "orientation_flips": 0
+     },
+     "seconds": 12.40413949266076,
+     "regions": 4,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 26.882509250659496,
+     "regions": 4,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 2.2885770085267723,
+     "regions": 4,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 91,
+      "frames_below_0_9": 54,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 1.1637294641695917,
+     "regions": 4,
+     "errors": []
+    },
+    "mirror": {
+     "before": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 91,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 0.1815255442634225,
+     "regions": 4,
+     "errors": []
+    }
+   }
+  },
+  "coil_0822": {
+   "stretches": [
+    [
+     35,
+     49
+    ],
+    [
+     72,
+     144
+    ],
+    [
+     151,
+     155
+    ],
+    [
+     183,
+     203
+    ],
+    [
+     230,
+     246
+    ],
+    [
+     288,
+     292
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 136,
+      "frames_below_0_9": 15,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 26,
+      "orientation_flips": 0
+     },
+     "seconds": 17.809091513510793,
+     "regions": 6,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 38.41402517911047,
+     "regions": 6,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 3.398154355119914,
+     "regions": 6,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 136,
+      "frames_below_0_9": 38,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 1.7589239501394331,
+     "regions": 6,
+     "errors": []
+    },
+    "mirror": {
+     "before": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 136,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 0.2876924080774188,
+     "regions": 6,
+     "errors": []
+    }
+   }
+  },
+  "spiral_0528": {
+   "stretches": [
+    [
+     49,
+     189
+    ],
+    [
+     226,
+     244
+    ],
+    [
+     254,
+     260
+    ],
+    [
+     274,
+     279
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 173,
+      "frames_below_0_9": 68,
+      "pose_jumps_over_width": 34,
+      "length_jumps_over_3pct": 72,
+      "orientation_flips": 14
+     },
+     "seconds": 17.44050901848823,
+     "regions": 4,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 43.15920952614397,
+     "regions": 4,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 2.973627395927906,
+     "regions": 4,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 173,
+      "frames_below_0_9": 114,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 1.6259871954098344,
+     "regions": 4,
+     "errors": []
+    },
+    "mirror": {
+     "before": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 173,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 0.30998851358890533,
+     "regions": 4,
+     "errors": []
+    }
+   }
+  },
+  "edge_0528": {
+   "stretches": [
+    [
+     0,
+     22
+    ],
+    [
+     63,
+     89
+    ],
+    [
+     135,
+     141
+    ],
+    [
+     178,
+     184
+    ],
+    [
+     277,
+     283
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 8,
+      "orientation_flips": 0
+     },
+     "seconds": 9.58016801206395,
+     "regions": 5,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 15.33271896885708,
+     "regions": 5,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 71,
+      "frames_below_0_9": 1,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 2.306700193323195,
+     "regions": 5,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 0,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 0,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 0.0,
+     "regions": 0,
+     "errors": [
+      "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+      "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+      "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+      "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+      "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+     ]
+    },
+    "mirror": {
+     "before": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 71,
+      "frames_below_0_9": 0,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 0.143964234739542,
+     "regions": 5,
+     "errors": []
+    }
+   }
+  },
+  "tail_reentry_0623": {
+   "stretches": [
+    [
+     0,
+     7
+    ],
+    [
+     129,
+     138
+    ],
+    [
+     286,
+     296
+    ]
+   ],
+   "algorithms": {
+    "independent_multistart": {
+     "before": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 29,
+      "frames_below_0_9": 7,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 5,
+      "orientation_flips": 0
+     },
+     "seconds": 4.459012664388865,
+     "regions": 3,
+     "errors": []
+    },
+    "beam_path": {
+     "before": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 29,
+      "frames_below_0_9": 2,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 1,
+      "orientation_flips": 0
+     },
+     "seconds": 6.848469938151538,
+     "regions": 3,
+     "errors": []
+    },
+    "slow_refit": {
+     "before": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 29,
+      "frames_below_0_9": 2,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 0,
+      "orientation_flips": 0
+     },
+     "seconds": 1.0127408783882856,
+     "regions": 3,
+     "errors": []
+    },
+    "fixed_body_smoother": {
+     "before": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 29,
+      "frames_below_0_9": 7,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 3,
+      "orientation_flips": 0
+     },
+     "seconds": 0.4908300335519016,
+     "regions": 3,
+     "errors": []
+    },
+    "mirror": {
+     "before": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "after": {
+      "frames": 29,
+      "frames_below_0_9": 3,
+      "pose_jumps_over_width": 0,
+      "length_jumps_over_3pct": 2,
+      "orientation_flips": 0
+     },
+     "seconds": 0.07047618180513382,
+     "regions": 3,
+     "errors": []
+    }
+   }
+  }
+ },
+ "generated_at": "2026-10-09T00:24:39+00:00",
+ "git": {
+  "commit": null,
+  "dirty": null
+ },
+ "code": "/temp_data4/alex/external_artifacts/body-net-pipeline/head-anchored/trees/base/src/worm_pose_gen/algorithms.py",
+ "params": {},
+ "root": "/temp_data4/alex/external_artifacts/body-net-pipeline/head-anchored/ws_base"
+}

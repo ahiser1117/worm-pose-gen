@@ -1,0 +1,60 @@
+{
+ "clips": {
+  "spiral_0131": {
+   "frames": 300,
+   "head_anchored": 290,
+   "head_below_threshold": 10,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "loop_0131": {
+   "frames": 300,
+   "head_anchored": 300,
+   "head_below_threshold": 0,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "omega_0822": {
+   "frames": 300,
+   "head_anchored": 300,
+   "head_below_threshold": 0,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "coil_0822": {
+   "frames": 300,
+   "head_anchored": 298,
+   "head_below_threshold": 2,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "spiral_0528": {
+   "frames": 300,
+   "head_anchored": 220,
+   "head_below_threshold": 80,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "edge_0528": {
+   "frames": 300,
+   "head_anchored": 300,
+   "head_below_threshold": 0,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  },
+  "tail_reentry_0623": {
+   "frames": 300,
+   "head_anchored": 300,
+   "head_below_threshold": 0,
+   "head_off_mask": 0,
+   "head_at_edge": 0
+  }
+ },
+ "total": {
+  "frames": 2100,
+  "head_anchored": 2008,
+  "head_below_threshold": 92,
+  "head_off_mask": 0,
+  "head_at_edge": 0
+ }
+}

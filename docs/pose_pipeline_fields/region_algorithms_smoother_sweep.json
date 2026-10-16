@@ -1,0 +1,1310 @@
+{
+ "description": "fixed_body_smoother with the evidence terms in its joint energy (weights times the fit's field_ap_weight / field_end_weight); not adopted",
+ "runs": {
+  "none": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 28,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.7617589803412557,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 37,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.629004047717899,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 53,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.493409768678248,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 37,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 2.7173823677003384,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 114,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.5564717780798674,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.636021186131984,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P and ends x100": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5664115315303206,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 30,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.60815554484725,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 50,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.9932328257709742,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 32,
+     "pose_jumps_over_width": 1,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 2.8260311358608305,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 117,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.2271735896356404,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.5994139332324266,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P and ends x1000": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.934964535292238,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 38,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.5289174099452794,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 50,
+     "pose_jumps_over_width": 2,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.8032473996281624,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 38,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 3.877420963253826,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 119,
+     "pose_jumps_over_width": 4,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 5.473965112585574,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.7250421978533268,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P and ends x10000": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 16,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5459073358215392,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 41,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.1914505711756647,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 50,
+     "pose_jumps_over_width": 6,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.106439032126218,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 45,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 3.3414917150512338,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 119,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 5.100388555787504,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.9382090708240867,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P and ends x100000": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 11,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.2255936325527728,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 46,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.4538250169716775,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 50,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.7605628836899996,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 45,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 4.038632090669125,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 119,
+     "pose_jumps_over_width": 8,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 5.106645678170025,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.8906832099892199,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P x100": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.6637022057548165,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 37,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.2363952011801302,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 52,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.5515729635953903,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 43,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 2.6087517919950187,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 119,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 4.78626711666584,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.8168366025201976,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "A-P x1000": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5413568932563066,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 45,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 2.6064844098873436,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 53,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 1
+    },
+    "seconds": 2.3152209748513997,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 45,
+     "pose_jumps_over_width": 3,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 2.613287172280252,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 119,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 5.103475844953209,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.7392630479298532,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "ends x100": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5369460391812027,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 29,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.950433169491589,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 50,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5197749342769384,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 36,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 2.201384461019188,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 117,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 4.581037622876465,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.7332154880277812,
+    "regions": 3,
+    "errors": []
+   }
+  },
+  "ends x1000": {
+   "spiral_0131": {
+    "before": {
+     "frames": 68,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 68,
+     "frames_below_0_9": 35,
+     "pose_jumps_over_width": 5,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.170345419086516,
+    "regions": 2,
+    "errors": [
+     "164-220: The anchor at frame 239 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "loop_0131": {
+    "before": {
+     "frames": 102,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 102,
+     "frames_below_0_9": 38,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.363000176846981,
+    "regions": 7,
+    "errors": [
+     "110-115: The anchor at frame 175 is oriented opposite to the chain reaching it. Correct its orientation or choose another anchor."
+    ]
+   },
+   "omega_0822": {
+    "before": {
+     "frames": 93,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 93,
+     "frames_below_0_9": 52,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 1.5835638553835452,
+    "regions": 4,
+    "errors": []
+   },
+   "coil_0822": {
+    "before": {
+     "frames": 136,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 136,
+     "frames_below_0_9": 38,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "seconds": 1.9030534490011632,
+    "regions": 6,
+    "errors": []
+   },
+   "spiral_0528": {
+    "before": {
+     "frames": 173,
+     "frames_below_0_9": 1,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 173,
+     "frames_below_0_9": 117,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 3.2913234615698457,
+    "regions": 4,
+    "errors": []
+   },
+   "edge_0528": {
+    "before": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 0,
+     "frames_below_0_9": 0,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 0,
+     "orientation_flips": 0
+    },
+    "seconds": 0.0,
+    "regions": 0,
+    "errors": [
+     "0-22: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "63-89: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "135-141: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "178-184: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs.",
+     "277-283: Fixed body needs at least 3 unambiguous, fully visible frames; found 0. Review poses or specify trusted anchor frame IDs."
+    ]
+   },
+   "tail_reentry_0623": {
+    "before": {
+     "frames": 29,
+     "frames_below_0_9": 3,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 1,
+     "orientation_flips": 0
+    },
+    "after": {
+     "frames": 29,
+     "frames_below_0_9": 7,
+     "pose_jumps_over_width": 0,
+     "length_jumps_over_3pct": 3,
+     "orientation_flips": 0
+    },
+    "seconds": 0.5916819553822279,
+    "regions": 3,
+    "errors": []
+   }
+  }
+ }
+}
