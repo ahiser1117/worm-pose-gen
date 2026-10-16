@@ -284,6 +284,49 @@ class PipeliningTests(unittest.TestCase):
             self.assertTrue(all(np.array_equal(x.latent, y.latent) and x.width_px == y.width_px for x, y in zip(a, b, strict=True)))
 
 
+class TraceFirstFitTests(unittest.TestCase):
+    """With the body-field network, the trace is fit first and the standard starts only where its fit falls short of TRACE_FIT_IOU."""
+
+    def _fit(self, threshold: float) -> tuple[dict[str, np.ndarray], list]:
+        from worm_pose_gen.body_proposal import crop_fields
+
+        n = 2
+        masks = _bodies(n)
+        predictions = [crop_fields(p, m) for p, m in zip(_StubPredictor(None).predict(range(n)), masks, strict=True)]
+        setup = fit_setup(FitParams.from_dict(FIT_PARAMS), None)
+        arrays = new_arrays(np.arange(n), setup.config)
+        calls: list = []
+
+        def recording(masks, starts, **kwargs):
+            calls.append([[s.name for s in frame_starts] for frame_starts in starts])
+            return fit_masks(masks, starts, **kwargs)
+
+        with mock.patch.object(pipeline, "TRACE_FIT_IOU", threshold), mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=recording):
+            pipeline.fit_frames(masks, list(range(n)), setup, arrays, torch.device("cpu"), submit_starts(masks, setup, None, predictions), predictions=predictions)
+        return arrays, calls
+
+    @slow
+    def test_a_good_trace_fit_is_the_only_one(self) -> None:
+        arrays, calls = self._fit(0.0)
+        self.assertEqual(calls, [[["network_trace"]] * 2])
+        np.testing.assert_array_equal(arrays["n_starts"], [1, 1])
+        self.assertEqual(arrays["best_start"].tolist(), ["network_trace"] * 2)
+
+    @slow
+    def test_a_short_trace_fit_adds_the_standard_starts(self) -> None:
+        trace_only, _ = self._fit(0.0)
+        arrays, calls = self._fit(1.01)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], [["network_trace"]] * 2)
+        # Both ends in view: each standard start once, head first.
+        standard = [name for name in fit_setup(FitParams.from_dict(FIT_PARAMS), None).start_names if not name.endswith("_reversed")]
+        self.assertEqual([[name.removesuffix("_reversed") for name in names] for names in calls[1]], [standard] * 2)
+        np.testing.assert_array_equal(arrays["n_starts"], [1 + len(standard)] * 2)
+        # The winner of both batches by energy: never worse than the trace alone.
+        self.assertTrue(np.all(arrays["total_energy"] <= trace_only["total_energy"] + 1e-6))
+        self.assertTrue(np.isfinite(arrays["iou"]).all())
+
+
 class StageTests(unittest.TestCase):
     """The stages in pipeline order over one workspace on the synthetic recording."""
 
@@ -571,11 +614,14 @@ class BodyFieldStageTests(unittest.TestCase):
                 self.assertLess(float(np.linalg.norm(state["centerline_xy"][row, 0] - _body_curve(row)[0])), 6.0)
             # Both ends are in view on every frame, so each standard start is fit once, head first, and no orientation gap is measured.
             self.assertTrue(np.isnan(state["orientation_gap"]).all())
-            self.assertEqual(len(fit_starts), 1)
-            for frame_starts in fit_starts[0]:
-                names = [s.name.removesuffix("_reversed") for s in frame_starts]
-                self.assertEqual(len(names), len(set(names)))
-                self.assertIn("network_trace", names)
+            # The trace alone first; the standard starts only for frames whose trace fit falls short.
+            self.assertIn(len(fit_starts), (1, 2))
+            self.assertEqual([[s.name for s in frame_starts] for frame_starts in fit_starts[0]], [["network_trace"]] * FRAMES)
+            for frame_starts in fit_starts[1:]:
+                for starts in frame_starts:
+                    names = [s.name.removesuffix("_reversed") for s in starts]
+                    self.assertEqual(len(names), len(set(names)))
+                    self.assertNotIn("network_trace", names)
             run_stage(workspace, "ambiguity", {}, device="cpu")
             # A pose two body widths off its mask seeds a stretch around row 3 (as in HypothesisArrayTests).
             state = workspace.load_state()

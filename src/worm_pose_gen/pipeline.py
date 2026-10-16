@@ -85,6 +85,7 @@ from .mask_fit import (
     extend_start_to_length,
     head_first,
     max_bend_widths,
+    moments_name,
     orient_tail_last,
     orientation_pair,
     standard_initializations,
@@ -122,6 +123,10 @@ MIN_WORM_PIXELS = 500
 # Where the segment stage's masks come from: the segmenter (``checkpoint``) or the body-field network's mask output (``body_net``).
 MASK_SOURCES = ("segmenter", "body_net")
 TIMING_STAGES = ("read", "flat_field", "network", "cleanup", "fields", "init", "fit", "video")
+# A frame whose trace fit reaches this IoU is not fit from the standard starts too (fit_frames).
+# On 2,000 frames of 2023-03-30-01 that skips them on three quarters of the frames and halves
+# the fit's GPU time; 287 poses move more than 1 px (6 a body width), median IoU -0.001.
+TRACE_FIT_IOU = 0.95
 START_SETS: dict[str, tuple[str, ...] | None] = {
     "skeleton": ("skeleton_longest_path",),
     "skeleton+straight": ("skeleton_longest_path", "moments_straight"),
@@ -663,11 +668,10 @@ def initializations_for(
     border is lengthened off camera to that length before fitting.
     """
 
-    starts = standard_initializations(mask, config=config)
-    if names is None:
-        chosen = starts
-    else:
-        chosen = [s for s in starts if s.name in names] or starts[:1]
+    chosen = standard_initializations(mask, names=names, config=config)
+    if names is not None:
+        # Without the named starts (no skeleton), the first moment arc.
+        chosen = chosen or standard_initializations(mask, names={moments_name(c) for c in config.moment_arc_curvatures}, config=config)[:1]
         if target_length_px is not None:
             chosen = [extend_start_to_length(s, mask, target_length_px, config=config) for s in chosen]
         if "skeleton_longest_path_reversed" in names:
@@ -833,9 +837,16 @@ def body_field_inputs(
 
 
 def frame_starts(mask: MaskArray, setup: FitSetup, prediction: Any = None) -> tuple[list[Initialization], Initialization | None]:
-    """A frame's standard starts (:func:`initializations_for`) and, given the body-field network's prediction, its trace start."""
+    """A frame's standard starts (:func:`initializations_for`) and, given the body-field network's prediction, its trace start.
 
-    starts = initializations_for(mask, setup.config, setup.start_names, setup.start_shape, setup.start_length)
+    With the prediction, no reversed start is made: :func:`fit_frames` orients
+    each start by the network's ends or fits both orientations itself.
+    """
+
+    names = setup.start_names
+    if prediction is not None and names is not None:
+        names = tuple(name for name in names if not name.endswith("_reversed"))
+    starts = initializations_for(mask, setup.config, names, setup.start_shape, setup.start_length)
     return starts, network_trace_start(prediction, mask, setup) if prediction is not None else None
 
 
@@ -877,11 +888,15 @@ def fit_frames(
     ``predictions`` (the body-field network's fields, one per mask,
     ``body_proposal.FieldCrop``, as given to :func:`submit_starts`) score every
     fit against the network's A-P field and ends (the config's ``field_*``
-    weights), add the network's proposed trace as a start, and fit every
-    start in both orientations, so the evidence rather than the taper
-    decides which end is the head.  Where the evidence holds both ends, each
-    start is fit once, head first by them (``mask_fit.head_first``), and the
-    frame's ``orientation_gap`` stays NaN.
+    weights) and add the network's proposed trace as a start.  The trace is
+    fit first, alone; the standard starts are fit only for frames whose trace
+    fit reaches an IoU below ``TRACE_FIT_IOU`` (or that have no trace), and
+    the lower energy of both fits wins.  Where the trace fits, the standard
+    starts mostly reach the same pose, so this halves the GPU work.  The
+    standard starts are fit in both orientations, so the evidence rather
+    than the taper decides which end is the head; where the evidence holds
+    both ends, each is fit once, head first by them
+    (``mask_fit.head_first``), and the frame's ``orientation_gap`` stays NaN.
     """
 
     skipped = skipped if skipped is not None else defaultdict(int)
@@ -895,44 +910,61 @@ def fit_frames(
         from .body_proposal import field_evidence
 
         fields = [field_evidence(p, m) for p, m in zip(predictions, masks, strict=True)]
-        for k, trace in enumerate(traces):
-            base = [s for s in starts[k] if not s.name.endswith("_reversed")]
+        for k in range(len(starts)):
             head, tail = fields[k].head_xy, fields[k].tail_xy
             if head is not None and tail is not None:
                 oriented.add(rows[k])
-                base = [head_first(start, head, tail, config=config) for start in base]
+                starts[k] = [head_first(start, head, tail, config=config) for start in starts[k]]
             else:
-                base = [s for start in base for s in orientation_pair(start, config=config)]
-            starts[k] = base + ([trace] if trace is not None else [])
-    keep = [k for k, s in enumerate(starts) if s]
+                starts[k] = [s for start in starts[k] for s in orientation_pair(start, config=config)]
+    keep = [k for k, (s, trace) in enumerate(zip(starts, traces, strict=True)) if s or trace is not None]
     skipped["no_starts"] += len(starts) - len(keep)
     masks = [masks[k] for k in keep]
     rows = [rows[k] for k in keep]
     starts = [starts[k] for k in keep]
+    traces = [traces[k] for k in keep]
     if fields is not None:
         fields = [fields[k] for k in keep]
+    first = [[trace] if trace is not None else frame_starts for frame_starts, trace in zip(starts, traces, strict=True)]
     t5 = time.perf_counter()
-    results: list[MaskFitResult | None] = []
-    if masks:
+
+    def fit_batch(ks: list[int], batch_starts: list[list[Initialization]]) -> list[MaskFitResult | None]:
+        """Fit frames ``ks`` from ``batch_starts``; when the batch fails, one frame at a time (``None`` where that fails too)."""
+
+        batch_fields = None if fields is None else [fields[k] for k in ks]
         try:
-            results = list(fit_masks(masks, starts, width_template=setup.template, config=config, device=device, fields=fields))
+            return list(fit_masks([masks[k] for k in ks], batch_starts, width_template=setup.template, config=config, device=device, fields=batch_fields))
         except (ValueError, RuntimeError) as error:
             print(f"batch fit failed ({error}); fitting frames one at a time", flush=True)
-            for k, (mask, frame_starts) in enumerate(zip(masks, starts, strict=True)):
-                try:
-                    results.append(fit_masks(
-                        [mask], [frame_starts], width_template=setup.template, config=config, device=device,
-                        fields=None if fields is None else [fields[k]],
-                    )[0])
-                except (ValueError, RuntimeError):
-                    results.append(None)
-                    skipped["fit_error"] += 1
-        if device.type == "cuda":
-            torch.cuda.synchronize()
+        out: list[MaskFitResult | None] = []
+        for j, k in enumerate(ks):
+            try:
+                out.append(fit_masks(
+                    [masks[k]], [batch_starts[j]], width_template=setup.template, config=config, device=device,
+                    fields=None if batch_fields is None else [batch_fields[j]],
+                )[0])
+            except (ValueError, RuntimeError):
+                out.append(None)
+        return out
+
+    results: list[MaskFitResult | None] = fit_batch(list(range(len(masks))), first) if masks else []
+    # A frame whose trace fit falls short of TRACE_FIT_IOU is fit from its standard starts too.
+    retry = [
+        k for k, (result, trace) in enumerate(zip(results, traces, strict=True))
+        if trace is not None and starts[k] and (result is None or float(result.records[result.best_index]["final_iou"]) < TRACE_FIT_IOU)
+    ]
+    if retry:
+        for k, result in zip(retry, fit_batch(retry, [starts[k] for k in retry]), strict=True):
+            trace_result = results[k]
+            results[k] = result if trace_result is None else trace_result if result is None else merged_result(result, trace_result)
+    if masks and device.type == "cuda":
+        torch.cuda.synchronize()
     t6 = time.perf_counter()
-    for row, frame_starts, result in zip(rows, starts, results, strict=True):
-        arrays["n_starts"][row] = len(frame_starts)
+    retried = set(retry)
+    for k, (row, result) in enumerate(zip(rows, results, strict=True)):
+        arrays["n_starts"][row] = len(first[k]) + (len(starts[k]) if k in retried else 0)
         if result is None:
+            skipped["fit_error"] += 1
             continue
         if setup.orient_after_fit and fields is None:
             result, flipped = orient_tail_last(result, config=config)
@@ -941,6 +973,20 @@ def fit_frames(
             arrays["orientation_gap"][row] = orientation_gap(result)
         store_result(arrays, row, result)
     return {"init": t5 - t4, "fit": t6 - t5}
+
+
+def merged_result(first: MaskFitResult, second: MaskFitResult) -> MaskFitResult:
+    """Two fits of one mask from different starts as one fit from all of them: the lower final energy wins (``first`` on a tie)."""
+
+    energy = [float(r.records[r.best_index]["final_energy"]) for r in (first, second)]
+    winner, offset = (first, 0) if energy[0] <= energy[1] else (second, len(first.initializations))
+    return replace(
+        winner,
+        best_index=winner.best_index + offset,
+        initializations=first.initializations + second.initializations,
+        records=first.records + second.records,
+        energy_history=np.concatenate((first.energy_history, second.energy_history), axis=1),
+    )
 
 
 def independent_copies(arrays: dict[str, np.ndarray], rows: np.ndarray | None = None) -> None:
