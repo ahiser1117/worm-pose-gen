@@ -147,6 +147,8 @@ class TrainRequest:
     context: str = "none"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    # Semi-supervised training on unlabeled video (:class:`semi_supervised.SemiConfig` settings), body-field models only.
+    semi: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainRequest":
@@ -415,6 +417,20 @@ def train(
                               num_workers=workers, persistent_workers=workers > 0, pin_memory=use_cuda, collate_fn=collate)
 
         module = build_module(libraries, plan_)
+        train_loader: Any = loader(plan_.train, True)
+        if request.semi:
+            from lightning.pytorch.utilities import CombinedLoader
+
+            from .semi_supervised import SemiBodyFieldModule, SemiConfig, unlabeled_loader
+
+            if plan_.kind != "body_net":
+                raise ValueError("semi-supervised training needs a body-field model")
+            semi = SemiConfig.from_dict(request.semi)
+            module = SemiBodyFieldModule.from_body(module, semi)
+            # An epoch is one pass over the labels; unlabeled windows are drawn alongside without end.
+            train_loader = CombinedLoader(
+                {"labeled": train_loader, "unlabeled": unlabeled_loader(semi, plan_.lags, seed=p["seed"], pin_memory=use_cuda)},
+                mode="min_size")
 
         class Progress(Callback):
             def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
@@ -442,11 +458,15 @@ def train(
             logger=CSVLogger(str(run_dir), name="", version=""), default_root_dir=str(run_dir),
             log_every_n_steps=1, enable_progress_bar=False, enable_model_summary=False, num_sanity_val_steps=0,
         )
-        trainer.fit(module, train_dataloaders=loader(plan_.train, True), val_dataloaders=loader(plan_.val, False))
+        trainer.fit(module, train_dataloaders=train_loader, val_dataloaders=loader(plan_.val, False))
         if not best.best_model_path:
             raise RuntimeError("training produced no validated checkpoint")
         checkpoint = Path(best.best_model_path)
         best_epoch = int(torch.load(checkpoint, map_location="cpu", weights_only=False)["epoch"]) + 1
+        if request.semi:
+            from .semi_supervised import export_body_checkpoint
+
+            checkpoint = export_body_checkpoint(checkpoint, run_dir / "body.ckpt", network=semi.export)
         records = plan_.train + plan_.val
         used = sum(
             body_used(r, library.cached_meta(libraries, r), p.get("min_fit_iou", 0.9)) for r in records
@@ -457,7 +477,8 @@ def train(
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
             "trained_on": library.trained_on(request.dataset, records), "parent": request.start_from or None,
-            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context},
+            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
+                        **({"semi": asdict(semi)} if request.semi else {})},
             "notes": request.notes,
         }
         run = {
@@ -504,6 +525,8 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
         argv += [f"--{key.replace('_', '-')}", str(value)]
     if request.notes:
         argv += ["--notes", request.notes]
+    if request.semi:
+        argv += ["--semi", json.dumps(request.semi)]
     return argv
 
 
@@ -517,6 +540,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--context", choices=tuple(CONTEXTS), default="none", help="temporal context from scratch: none or short (±1, 4, 16 frames)")
     parser.add_argument("--notes", default="")
     parser.add_argument("--num-workers", type=int, default=None, help="data loader workers (default: 4 on a GPU, 0 on the CPU)")
+    parser.add_argument("--semi", type=json.loads, default=None,
+                        help='semi-supervised training on unlabeled video: JSON of semi_supervised.SemiConfig settings, e.g. {"store": "<clip store>"}')
     for p in PARAMETERS:
         parser.add_argument(f"--{p['name'].replace('_', '-')}", dest=p["name"], type=int if p["type"] == "int" else float,
                             default=None, help=f"{p['label']} (default {p['default']})")
@@ -529,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
     request = TrainRequest(
         setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
+        semi=args.semi,
     )
     started = time.monotonic()
 
