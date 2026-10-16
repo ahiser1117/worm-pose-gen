@@ -400,11 +400,6 @@ class SemiBodyFieldModule(BodyFieldModule):
         semi.teacher.load_state_dict(module.network.state_dict())
         return semi
 
-    def train(self, mode: bool = True) -> "SemiBodyFieldModule":
-        super().train(mode)
-        self.teacher.eval()  # batch norm on its running statistics, no dropout
-        return self
-
     def _epoch(self, batch_index: int) -> float:
         steps = max(1, int(self.trainer.num_training_batches)) if self._trainer is not None else 1
         return self.current_epoch + batch_index / steps
@@ -417,6 +412,10 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.log("train_semi_weight", weight, batch_size=size, on_step=False, on_epoch=True)
         if weight <= 0:
             return supervised
+        # Lightning restores each submodule's training flag itself, so the teacher is put
+        # back in eval mode here: in train mode its batch norm would use (and update
+        # its running statistics from) the statistics of mostly-background whole frames.
+        self.teacher.eval()
         with torch.no_grad():
             inputs = teacher_inputs(unlabeled["frames"], self._offsets, self.lags)
             whole = self.teacher(inputs.flatten(0, 1)).unflatten(0, (size, 3))
@@ -448,6 +447,7 @@ class SemiBodyFieldModule(BodyFieldModule):
     def validation_step(self, batch: dict[str, Tensor], batch_index: int) -> None:
         """``val_*`` of the network that becomes the model (``export``), so early stopping selects it; both losses are logged too."""
 
+        self.teacher.eval()
         logits = {"student": self.network(batch["image"]), "teacher": self.teacher(batch["image"])}
         self._step(batch, "val", logits=logits[self.semi.export])
         for name, value in logits.items():
