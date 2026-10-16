@@ -126,6 +126,7 @@ def sheet(args: argparse.Namespace) -> None:
         draw.text((x + 2, y + 2), caption, fill=(255, 255, 255))
         listing.append({"tile": k, **entry})
     output = Path(args.sheet_output or Path(args.sheet).parent / f"audit_{args.sheet_kind or 'all'}.jpg")
+    output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output, quality=88)
     output.with_suffix(".json").write_text(json.dumps(listing, indent=1))
     print(output)
