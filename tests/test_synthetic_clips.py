@@ -184,6 +184,26 @@ class ItemTest(unittest.TestCase):
         np.testing.assert_allclose(sample["image"][1].numpy(), expected, atol=1e-5)
 
 
+class FiberTest(unittest.TestCase):
+    def test_background_shift_and_fibre_darkening(self):
+        rng = np.random.default_rng(0)
+        texture = ndimage_blur(rng.normal(0, 10, (128, 160)))
+        moved = np.roll(texture, (3, -5), axis=(0, 1))
+        np.testing.assert_array_equal(sc.background_shift(texture, moved), (-5.0, 3.0))
+        fiber = sc.Fiber(np.array(((10.0, 60.0), (80.0, 60.0), (150.0, 60.0))), 10.0, 0.2, np.ones(sc.FADE_KNOTS))
+        t = sc.fiber_transmission(fiber, (128, 160))
+        self.assertAlmostEqual(float(t[60, 80]), 0.8, places=2)
+        self.assertEqual(float(t[20, 80]), 1.0)
+        shifted = sc.fiber_transmission(fiber, (128, 160), np.array((0.0, 10.0)))
+        self.assertAlmostEqual(float(shifted[70, 80]), 0.8, places=2)
+
+
+def ndimage_blur(image):
+    from scipy import ndimage
+
+    return ndimage.gaussian_filter(image, 2.0)
+
+
 class MixedSamplerTest(unittest.TestCase):
     def test_every_real_item_once_and_the_synthetic_share(self):
         sampler = sc.MixedSampler(real=30, synthetic=50, fraction=0.25, seed=0)

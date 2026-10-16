@@ -61,7 +61,9 @@ FloatArray = NDArray[np.float64]
 # Half-width of the texture band in local radii: the real edge falls off a
 # little outside the fitted tube, and the band carries that fall-off.
 U_MAX = 1.5
-TEXTURE_SHAPE = (256, 61)  # samples along (head to tail) and across the body
+# Samples along (head to tail, about 0.4 px each) and across the body: the
+# pharynx and gut detail must survive, or the anterior body reads as mid-body.
+TEXTURE_SHAPE = (2048, 121)
 # The lighter layer of a crossing contributes ``t ** OVERLAP_GAMMA`` (:func:`composite`).
 OVERLAP_GAMMA = 0.5
 # Real worm pixels are removed with this margin (px) around the workspace mask.
@@ -404,6 +406,79 @@ def render_worm(
     return np.clip(np.rint(image), 0, 255).astype(np.uint8), mask
 
 
+# --------------------------------------------------------------------------- distractors
+
+
+@dataclass(frozen=True)
+class Fiber:
+    """A thin dark object lying on the agar (a hair, a fibre, a scratch): never worm.
+
+    A quadratic curve through ``points`` (``[3,2]`` px, frame of the centre
+    image), ``width`` px across (Gaussian profile, out of focus), darkening
+    the background by up to ``depth`` and fading along its length by the
+    random ``fade`` profile.
+    """
+
+    points: FloatArray
+    width: float
+    depth: float
+    fade: FloatArray  # [FADE_KNOTS] in [0, 1]
+
+
+FADE_KNOTS = 6
+FIBER_SHARE = 0.5
+
+
+def random_fiber(rng: np.random.Generator, shape: tuple[int, int], near: FloatArray) -> Fiber:
+    """A fibre passing within a body length of ``near`` (so crops around the worm usually include it)."""
+
+    height, width = shape
+    angle = rng.uniform(0, np.pi)
+    direction = np.array((np.cos(angle), np.sin(angle)))
+    centre = near + rng.normal(0, 150, 2)
+    half = rng.uniform(150, 1200)
+    start, end = centre - half * direction, centre + half * direction
+    bend = rng.normal(0, 0.1) * 2 * half * np.array((-direction[1], direction[0]))
+    fade = np.clip(rng.uniform(0.2, 1.3, FADE_KNOTS), 0.0, 1.0)
+    return Fiber(np.stack((start, centre + bend, end)), float(rng.uniform(4, 30)), float(rng.uniform(0.04, 0.25)), fade)
+
+
+def fiber_transmission(fiber: Fiber, shape: tuple[int, int], shift: FloatArray = np.zeros(2)) -> NDArray[np.float32]:
+    """The fibre's transmission over an image, displaced by ``shift`` (x, y) px."""
+
+    t = np.linspace(0.0, 1.0, 200)[:, None]
+    p0, p1, p2 = fiber.points + shift
+    curve = (1 - t) ** 2 * p0 + 2 * (1 - t) * t * p1 + t**2 * p2
+    result = np.ones(shape, dtype=np.float32)
+    layers = body_layers(curve, np.full(len(curve), 2.5 * fiber.width), shape, u_max=1.0)
+    h, w = layers.s.shape[1:]
+    if not (h and w):
+        return result
+    s, u = layers.s[0], layers.u[0]
+    present = np.isfinite(s)
+    # The band reaches 1.25 widths from the axis; a Gaussian of sigma = width / 2 is 0.4 of that.
+    fade = np.interp(np.nan_to_num(s), np.linspace(0, 1, FADE_KNOTS), fiber.fade)
+    dark = fiber.depth * fade * np.exp(-0.5 * (np.nan_to_num(u) / 0.4) ** 2)
+    result[layers.y0 : layers.y0 + h, layers.x0 : layers.x0 + w] = np.where(present, 1.0 - dark, 1.0)
+    return result
+
+
+def background_shift(reference: NDArray[np.floating], image: NDArray[np.floating]) -> FloatArray:
+    """(x, y) displacement of ``image``'s background relative to ``reference`` (phase correlation, whole pixels)."""
+
+    a = np.asarray(reference, dtype=np.float32) - float(np.mean(reference))
+    b = np.asarray(image, dtype=np.float32) - float(np.mean(image))
+    spectrum = np.fft.rfft2(b) * np.conj(np.fft.rfft2(a))
+    spectrum /= np.maximum(np.abs(spectrum), 1e-6)
+    correlation = np.fft.irfft2(spectrum, s=a.shape)
+    y, x = np.unravel_index(int(np.argmax(correlation)), correlation.shape)
+    if y > a.shape[0] // 2:
+        y -= a.shape[0]
+    if x > a.shape[1] // 2:
+        x -= a.shape[1]
+    return np.array((float(x), float(y)))
+
+
 # --------------------------------------------------------------------------- poses
 
 
@@ -449,9 +524,9 @@ def transform_pose(
 ) -> FloatArray:
     """A transformed copy of a head-first centerline: same centroid and mean orientation, ``length * scale`` long.
 
-    The shape is smoothed through the 16-coefficient B-spline of
-    :mod:`latent` first, so the gain amplifies the body wave, not the fit's
-    noise.
+    The gain multiplies the shape's 16-coefficient B-spline part (the latent
+    of :mod:`latent`), the body wave; the finer residual is kept as it is,
+    so the identity transform returns the fitted pose.
     """
 
     angle = tangent_angles(centerline_xy)
@@ -459,10 +534,11 @@ def transform_pose(
     basis = cubic_bspline_basis(count, 16)
     rotation = float(angle.mean())
     shape = basis @ np.linalg.lstsq(basis, angle - rotation, rcond=None)[0]
+    residual = angle - rotation - shape
     s = (np.arange(count) + 0.5) / count
     curl = transform.curl + transform.curl_drift * frame_offset / DRIFT_FRAMES
     extra = curl * (s - 0.5) + transform.head_bend * np.clip(1.0 - s / HEAD_BEND_EXTENT, 0.0, 1.0) ** 2
-    new = transform.gain * shape + extra
+    new = transform.gain * shape + residual + extra
     new = new - new.mean() + rotation
     step = transform.scale * length / count
     curve = np.vstack((np.zeros(2), np.cumsum(step * np.column_stack((np.cos(new), np.sin(new))), axis=0)))
@@ -628,8 +704,16 @@ def make_item(
     centre_position = len(offsets)
     noise = camera_noise(real[centre_position], source.mask(rows[centre_position]))
     frames = np.empty_like(real)
-    for k, (row, frame, pose) in enumerate(zip(rows, real, poses)):
-        background, filled = remove_worm(frame, source.mask(row), rng, noise)
+    fibers = [random_fiber(rng, real.shape[1:], poses[centre_position].mean(0)) for _ in range(int(rng.integers(1, 3)))] \
+        if rng.random() < FIBER_SHARE else []
+    backgrounds = [remove_worm(frame, source.mask(row), rng, noise) for row, frame in zip(rows, real)]
+    for k, (row, pose) in enumerate(zip(rows, poses)):
+        background, filled = backgrounds[k]
+        if fibers:
+            # A fibre lies on the agar: it moves with the background as the stage tracks.
+            shift = background_shift(backgrounds[centre_position][0], background) if k != centre_position else np.zeros(2)
+            for fiber in fibers:
+                background = background * fiber_transmission(fiber, background.shape, shift)
         extended = extend_centerline(pose, whip)
         arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(extended, axis=0), axis=1))))
         frames[k], mask = render_worm(background, extended, transform.scale * texture.width_at(arc / arc[-1]), texture, rng, noise)
@@ -647,7 +731,7 @@ def make_item(
         "meta": json.dumps({
             "source": str(source.path), "recording": source.name, "frame": int(source.frame_index[centre]),
             "speed": speed, "transform": transform.__dict__, "texture": texture.source, "contact": want_contact,
-            "overlap_px": int(targets.overlap.sum()), "whip_px": round(whip, 1),
+            "overlap_px": int(targets.overlap.sum()), "whip_px": round(whip, 1), "fibers": len(fibers),
         }),
     }
 
