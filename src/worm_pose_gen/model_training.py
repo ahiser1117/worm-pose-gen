@@ -147,6 +147,10 @@ class TrainRequest:
     context: str = "none"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    # Self-training (command line only): directories of pseudo-label items
+    # (:mod:`pseudo_labels`) making up ``pseudo_fraction`` of every epoch.
+    pseudo_labels: list[str] = field(default_factory=list)
+    pseudo_fraction: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainRequest":
@@ -218,6 +222,8 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
         raise ValueError(f"{request.dataset} has no training labels (no labeled recording is in the train split)")
     if not val:
         raise ValueError(f"{request.dataset} has no validation labels (no labeled recording is in the val split)")
+    if request.pseudo_labels and (kind != "body_net" or not 0.0 < float(request.pseudo_fraction) < 1.0):
+        raise ValueError("pseudo-labels train a body-field model at a pseudo-label fraction in (0, 1)")
     request.name = request.name.strip() if request.name else suggest_name(libraries, request.dataset, len(train), taken)
     check_id(request.name)
     if model_exists(libraries, request.name) or request.name in taken:
@@ -411,8 +417,23 @@ def train(
             dataset = LabelDataset(libraries, records, kind=plan_.kind, lags=plan_.lags, augment=training,
                                    crop_size=p["crop_size"] if training else None, seed=p["seed"],
                                    min_fit_iou=p.get("min_fit_iou", 0.9))
-            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2), shuffle=training,
+            sampler = None
+            if training and pseudo is not None:
+                from torch.utils.data import ConcatDataset
+
+                from .pseudo_labels import MixedSampler
+
+                sampler = MixedSampler(len(dataset), len(pseudo), request.pseudo_fraction, seed=p["seed"])
+                dataset = ConcatDataset([dataset, pseudo])
+            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2),
+                              shuffle=training and sampler is None, sampler=sampler,
                               num_workers=workers, persistent_workers=workers > 0, pin_memory=use_cuda, collate_fn=collate)
+
+        pseudo = None
+        if request.pseudo_labels:
+            from .pseudo_labels import PseudoLabelDataset
+
+            pseudo = PseudoLabelDataset(request.pseudo_labels, lags=plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
 
         module = build_module(libraries, plan_)
 
@@ -456,8 +477,10 @@ def train(
             "name": name, "kind": plan_.kind, "setup": setup.ref,
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
-            "trained_on": library.trained_on(request.dataset, records), "parent": request.start_from or None,
-            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context},
+            "trained_on": library.trained_on(request.dataset, records) + ([] if pseudo is None else [pseudo.trained_on()]),
+            "parent": request.start_from or None,
+            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
+                        **({} if pseudo is None else {"pseudo_labels": list(request.pseudo_labels), "pseudo_fraction": request.pseudo_fraction})},
             "notes": request.notes,
         }
         run = {
@@ -466,6 +489,7 @@ def train(
             "best_val_loss": None if best.best_model_score is None else float(best.best_model_score),
             "device": str(torch_device), "git": _git_commit(), "targets_built": prepared,
             "labels": {"train": len(plan_.train), "val": len(plan_.val), "body_trained": used},
+            "pseudo_labels": None if pseudo is None else pseudo.trained_on(),
         }
         files = {n: run_dir / n for n in ("metrics.csv", "hparams.yaml") if (run_dir / n).exists()}
         created = library.create_model(
@@ -504,6 +528,10 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
         argv += [f"--{key.replace('_', '-')}", str(value)]
     if request.notes:
         argv += ["--notes", request.notes]
+    for directory in request.pseudo_labels:
+        argv += ["--pseudo-labels", directory]
+    if request.pseudo_labels:
+        argv += ["--pseudo-fraction", str(request.pseudo_fraction)]
     return argv
 
 
@@ -516,6 +544,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start-from", default=None, help="model to fine-tune (default: from scratch, a body-field model)")
     parser.add_argument("--context", choices=tuple(CONTEXTS), default="none", help="temporal context from scratch: none or short (±1, 4, 16 frames)")
     parser.add_argument("--notes", default="")
+    parser.add_argument("--pseudo-labels", action="append", default=[],
+                        help="a directory of pseudo-label items (pseudo_labels.py) to mix in at --pseudo-fraction; repeatable")
+    parser.add_argument("--pseudo-fraction", type=float, default=0.0, help="share of every epoch drawn from the pseudo-labels")
     parser.add_argument("--num-workers", type=int, default=None, help="data loader workers (default: 4 on a GPU, 0 on the CPU)")
     for p in PARAMETERS:
         parser.add_argument(f"--{p['name'].replace('_', '-')}", dest=p["name"], type=int if p["type"] == "int" else float,
@@ -529,6 +560,7 @@ def main(argv: list[str] | None = None) -> int:
     request = TrainRequest(
         setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
+        pseudo_labels=list(args.pseudo_labels), pseudo_fraction=args.pseudo_fraction,
     )
     started = time.monotonic()
 
