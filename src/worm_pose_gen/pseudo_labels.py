@@ -18,8 +18,10 @@ context, and serves them to training beside the hand labels
              a failed fit, and are allowed);
 ``bridged``  a row of a propagation stretch of at most ``max_stretch`` rows,
              fitted by a chain or a refit, with IoU at least ``bridged_iou``,
-             no pose jump, length or edge flag, and anchors on both sides of
-             the stretch with IoU at least ``anchor_iou``.
+             no pose jump, length or edge flag, and fitted anchors on both
+             sides of the stretch, one with IoU at least ``anchor_iou`` and
+             neither below ``bridged_iou`` (chains run from both ends, and a
+             long chain from one good anchor is as sound as two short ones).
 
 Both kinds must also be **consistent** over ``±window`` rows: every row
 fitted, no orientation flip between consecutive rows (the head end of one
@@ -174,7 +176,8 @@ def select_rows(
         first, last = int(first), int(last)
         if last - first + 1 > params.max_stretch or first < 1 or last + 1 >= n:
             continue
-        if not (fitted[first - 1] and fitted[last + 1] and iou[first - 1] >= params.anchor_iou and iou[last + 1] >= params.anchor_iou):
+        anchors = iou[[first - 1, last + 1]]
+        if not (fitted[first - 1] and fitted[last + 1] and anchors.max() >= params.anchor_iou and anchors.min() >= params.bridged_iou):
             continue
         rows = np.arange(first, last + 1)
         stretch_rows += len(rows)
@@ -273,8 +276,8 @@ def workspace_selection(workspace_path: Path, params: SelectionParams = Selectio
 
 
 def build_items(workspace_path: Path, out_dir: Path, params: SelectionParams = SelectionParams(), *, limit: int | None = None,
-                seed: int = 0) -> list[dict[str, Any]]:
-    """Write the items of one workspace into ``out_dir`` (``<workspace>_<frame>.npz``) and return their index entries.
+                seed: int = 0) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Write the items of one workspace into ``out_dir`` (``<workspace>_<frame>.npz``); their index entries and the selection counts.
 
     ``limit`` caps the clear items (a random subset, ``seed``); bridged items are all kept.
     """
@@ -318,7 +321,7 @@ def build_items(workspace_path: Path, out_dir: Path, params: SelectionParams = S
             "iou": float(state["iou"][row]), "ignored_px": int((targets["mask"] == IGNORE).sum()),
             "overlap_px": int(targets["overlap"].sum()), "self_contact": bool(state["flag_self_contact"][row]),
         })
-    return entries
+    return entries, selection["counts"]
 
 
 def write_index(out_dir: Path, entries: list[dict[str, Any]], params: SelectionParams, extra: dict[str, Any] | None = None,
