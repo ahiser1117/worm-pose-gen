@@ -119,9 +119,14 @@ def _frame_geometry(centerline: FloatArray, diameter: FloatArray) -> tuple[Float
 
 def body_layers(
     centerline_xy: NDArray[np.generic], width_profile: NDArray[np.generic], shape: tuple[int, int], *, u_max: float = U_MAX,
-    chunk_pixels: int = 16384,
+    tile: int = 32,
 ) -> Layers:
-    """:class:`Layers` for every pixel of the box around the body (clipped to ``shape``)."""
+    """:class:`Layers` for every pixel of the box around the body (clipped to ``shape``).
+
+    The box is processed in ``tile``-pixel squares against only the segments
+    that can reach them, which gives the same result as testing every
+    segment (ties resolve to the lowest segment index either way).
+    """
 
     centerline = np.asarray(centerline_xy, dtype=np.float64)
     diameter = np.asarray(width_profile, dtype=np.float64)
@@ -138,40 +143,48 @@ def body_layers(
     c_out = np.full((2, h, w), -np.inf, dtype=np.float32)
     if h == 0 or w == 0:
         return Layers(y0, x0, s_out, u_out, c_out)
-    yy, xx = np.mgrid[y0:y1, x0:x1]
     # Float64 like body_targets.render_body_targets, so masks and overlaps agree pixel for pixel.
-    points = np.stack((xx.ravel(), yy.ravel()), axis=1).astype(np.float64)
     start = centerline[:-1]
     segment = np.diff(centerline, axis=0)
     length_sq = np.maximum((segment**2).sum(-1), 1e-12)
     r0, r1 = radius[:-1], radius[1:]
     p0, dp = position[:-1], position[1:] - position[:-1]
-    flat = [a.reshape(2, -1) for a in (s_out, u_out, c_out)]
-    for begin in range(0, len(points), chunk_pixels):
-        chunk = points[begin : begin + chunk_pixels]
-        offset = chunk[:, None, :] - start[None]
-        t = np.clip((offset * segment[None]).sum(-1) / length_sq[None], 0.0, 1.0)
-        rel = offset - t[..., None] * segment[None]
-        distance = np.sqrt((rel**2).sum(-1))
-        cross = segment[None, :, 0] * rel[..., 1] - segment[None, :, 1] * rel[..., 0]
-        r = (1 - t) * r0[None] + t * r1[None]
-        u = np.where(cross >= 0, 1.0, -1.0) * distance / np.maximum(r, 0.25)
-        s = p0[None] + t * dp[None]
-        coverage = r - distance
-        band = np.abs(u) < u_max
-        score = np.where(band, coverage, -np.inf)
-        rows = np.arange(len(chunk))
-        first = np.argmax(score, axis=1)
-        has_first = np.isfinite(score[rows, first])
-        far = np.abs(s - s[rows, first][:, None]) * float(arc[-1]) > separation
-        score2 = np.where(far, score, -np.inf)
-        second = np.argmax(score2, axis=1)
-        has_second = np.isfinite(score2[rows, second]) & has_first
-        sl = slice(begin, begin + len(chunk))
-        for layer, index, present in ((0, first, has_first), (1, second, has_second)):
-            flat[0][layer, sl] = np.where(present, s[rows, index], np.nan)
-            flat[1][layer, sl] = np.where(present, u[rows, index], np.nan)
-            flat[2][layer, sl] = np.where(present, coverage[rows, index], -np.inf)
+    middle = start + 0.5 * segment
+    # A pixel can lie in a segment's band only within this distance of the segment's middle.
+    reach = 0.5 * np.sqrt(length_sq) + u_max * np.maximum(r0, r1) + 1.0
+    for ty in range(y0, y1, tile):
+        for tx in range(x0, x1, tile):
+            ty1, tx1 = min(ty + tile, y1), min(tx + tile, x1)
+            centre = np.array((0.5 * (tx + tx1 - 1), 0.5 * (ty + ty1 - 1)))
+            half_diagonal = 0.5 * np.hypot(tx1 - tx, ty1 - ty)
+            near = np.flatnonzero(np.linalg.norm(middle - centre, axis=1) < reach + half_diagonal)
+            if not len(near):
+                continue
+            yy, xx = np.mgrid[ty:ty1, tx:tx1]
+            chunk = np.stack((xx.ravel(), yy.ravel()), axis=1).astype(np.float64)
+            seg, st = segment[near], start[near]
+            offset = chunk[:, None, :] - st[None]
+            t = np.clip((offset * seg[None]).sum(-1) / length_sq[near][None], 0.0, 1.0)
+            rel = offset - t[..., None] * seg[None]
+            distance = np.sqrt((rel**2).sum(-1))
+            cross = seg[None, :, 0] * rel[..., 1] - seg[None, :, 1] * rel[..., 0]
+            r = (1 - t) * r0[near][None] + t * r1[near][None]
+            u = np.where(cross >= 0, 1.0, -1.0) * distance / np.maximum(r, 0.25)
+            s = p0[near][None] + t * dp[near][None]
+            coverage = r - distance
+            score = np.where(np.abs(u) < u_max, coverage, -np.inf)
+            rows = np.arange(len(chunk))
+            first = np.argmax(score, axis=1)
+            has_first = np.isfinite(score[rows, first])
+            far = np.abs(s - s[rows, first][:, None]) * float(arc[-1]) > separation
+            score2 = np.where(far, score, -np.inf)
+            second = np.argmax(score2, axis=1)
+            has_second = np.isfinite(score2[rows, second]) & has_first
+            box = (slice(ty - y0, ty1 - y0), slice(tx - x0, tx1 - x0))
+            for layer, index, present in ((0, first, has_first), (1, second, has_second)):
+                s_out[(layer, *box)] = np.where(present, s[rows, index], np.nan).reshape(ty1 - ty, tx1 - tx)
+                u_out[(layer, *box)] = np.where(present, u[rows, index], np.nan).reshape(ty1 - ty, tx1 - tx)
+                c_out[(layer, *box)] = np.where(present, coverage[rows, index], -np.inf).reshape(ty1 - ty, tx1 - tx)
     return Layers(y0, x0, s_out, u_out, c_out)
 
 
@@ -246,7 +259,7 @@ def remove_worm(
         return result, filled
     # Work in the box around the worm, with room for the widest fill kernel.
     ys, xs = np.nonzero(filled)
-    pad = int(4 * FILL_SIGMA_PX * 4)
+    pad = int(3 * FILL_SIGMA_PX * 4)
     box = (slice(max(0, ys.min() - pad), ys.max() + pad + 1), slice(max(0, xs.min() - pad), xs.max() + pad + 1))
     region, hole = image[box], filled[box]
     known = (~hole).astype(np.float32)
@@ -254,8 +267,8 @@ def remove_worm(
     remaining = hole.copy()
     sigma = FILL_SIGMA_PX
     while remaining.any() and sigma <= 4 * FILL_SIGMA_PX:
-        weight = ndimage.gaussian_filter(known, sigma)
-        value = ndimage.gaussian_filter(region * known, sigma)
+        weight = ndimage.gaussian_filter(known, sigma, truncate=3.0)
+        value = ndimage.gaussian_filter(region * known, sigma, truncate=3.0)
         ready = remaining & (weight > 0.05)
         fill[ready] = value[ready] / weight[ready]
         remaining &= ~ready
