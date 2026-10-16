@@ -535,6 +535,36 @@ the saving (a tenth to a quarter) is rough. These runs used the lab model
 rather than `checkpoints/body_net/best.ckpt`, so their numbers differ from
 the tables above.
 
+### The trace first
+
+The independent fit (`pipeline.fit_frames`) fits the trace start alone
+first and fits the standard starts (the skeleton, oriented as above) only
+for frames whose trace fit reaches an IoU below `TRACE_FIT_IOU` (0.95) or
+that have no trace; the lower energy of both fits wins. Measured on
+2026-10-15 (flv-c4, body-net masks, `nir-flv-labels-279`, fast preset;
+files in `/temp_data4/alex/external_artifacts/opt/idea7/`):
+
+- Fitting every start on its own showed that where a skeleton start won
+  (1,069 of 2,000 frames of 2023-03-30-01, f6000-7999), the trace's own fit
+  was a median 0.8 px away at an energy a median 0.0005 higher, but 10% of
+  those were another pose (more than 40 px away). On worm004 (f7400-9999,
+  median IoU 0.76) the skeleton wins only 501 of 2,600 frames, nearly always
+  as another pose (median 82 px), and almost every trace fit stays below
+  0.95, so there the rule fits every start as before.
+- The fit stage, back to back on one GPU: 63 s → 36 s on 2023-03-30-01
+  (starts per frame 2.73 → 1.41) and 119-139 s → 129-130 s on worm004
+  (unchanged within noise).
+- 2023-03-30-01: 287 independent poses move more than 1 px, 6 more than a
+  body width, none swaps head and tail; independent IoU median 0.9625 →
+  0.9614, p10 0.9462 → 0.9482, frames below 0.9 29 → 29; after propagation
+  median 0.9640 → 0.9625, below 0.9 10 → 10.
+- The sequence set: frames below 0.9 16 → 17 (independent 117 → 111),
+  score ≥ 2 46 → 44, orientation flips 6 → 6, clip medians within 0.004.
+- Where the ends are unclear the reversed skeleton wins 314 of 1,466 frames
+  on 2023-03-30-01: dropping it raised frames below 0.9 from 29 to 63, and
+  keeping only the skeleton orientation that agrees with the trace turned
+  22 frames head for tail, so both orientations stay.
+
 ### Region algorithms
 
 The Workspace page's Refit and Relabel fixes (`algorithms.py`) use the

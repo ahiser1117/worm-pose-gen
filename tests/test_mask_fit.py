@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -142,6 +143,15 @@ class MaskFitTests(unittest.TestCase):
             self.assertEqual(start.latent.shape, (20,))
             self.assertTrue(np.isfinite(start.latent).all())
             self.assertGreater(start.width_px, 0)
+
+    def test_initializations_compute_only_the_named_starts(self) -> None:
+        _, _, _, mask = _synthetic_case()
+        with mock.patch("worm_pose_gen.mask_fit.init_from_moments", wraps=init_from_moments) as moments:
+            starts = standard_initializations(mask, names=("skeleton_longest_path",), config=SMALL)
+        self.assertEqual([s.name for s in starts], ["skeleton_longest_path"])
+        moments.assert_not_called()
+        straight = standard_initializations(mask, names=("moments_straight",), config=SMALL)
+        self.assertEqual([s.name for s in straight], ["moments_straight"])
 
     def test_moment_start_uses_principal_axis(self) -> None:
         mask = np.zeros((80, 200), dtype=bool)

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import math
-from typing import Sequence
+from typing import Collection, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -335,27 +335,36 @@ def init_from_moments(
     wlow, whigh = config.width_bounds_px or (3.0, float("inf"))
     if np.isfinite(area_width) and wlow < area_width < whigh:
         width = area_width
-    name = "moments_straight" if curvature == 0 else f"moments_arc_{curvature:+.4f}"
-    return Initialization(name, latent, width)
+    return Initialization(moments_name(curvature), latent, width)
+
+
+def moments_name(curvature: float) -> str:
+    """The name of the moment-arc start of this curvature (:func:`init_from_moments`)."""
+
+    return "moments_straight" if curvature == 0 else f"moments_arc_{curvature:+.4f}"
 
 
 def standard_initializations(
     mask: NDArray[np.generic],
     *,
     reference_centerline_xy: NDArray[np.generic] | None = None,
+    names: Collection[str] | None = None,
     config: MaskFitConfig = MaskFitConfig(),
 ) -> list[Initialization]:
-    """Reference curve (if any), longest skeleton path, and moment-based arcs."""
+    """Reference curve (if any), longest skeleton path, and moment-based arcs; only those in ``names`` when given (none computed otherwise)."""
 
     starts: list[Initialization] = []
     if reference_centerline_xy is not None:
         starts.append(
             init_from_centerline(reference_centerline_xy, mask, name="reference", config=config)
         )
-    skeleton = init_from_skeleton(mask, config=config)
-    if skeleton is not None:
-        starts.append(skeleton)
+    if names is None or "skeleton_longest_path" in names:
+        skeleton = init_from_skeleton(mask, config=config)
+        if skeleton is not None:
+            starts.append(skeleton)
     for curvature in config.moment_arc_curvatures:
+        if names is not None and moments_name(curvature) not in names:
+            continue
         start = init_from_moments(mask, curvature=curvature, config=config)
         if start is not None:
             starts.append(start)

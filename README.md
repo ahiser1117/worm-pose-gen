@@ -178,7 +178,9 @@ several runs side by side on the same frames.
 library) adds the body-field network:
 its A-P field (over the front half of the body) and head score every fit
 (independent, propagation and track pass), its proposed trace is an extra
-start, and the evidence rather than the taper decides the orientation. With
+start (the independent fit fits it first and the standard starts only where
+its IoU stays below 0.95), and the evidence rather than the taper decides
+the orientation. With
 a recording prior every fit keeps the prior's length: the trace start is
 laid from the predicted head along the trace to that length, and the tail
 ends wherever the body does (the network's tail, which people label
