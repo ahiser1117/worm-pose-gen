@@ -89,6 +89,7 @@ class SemiConfig:
     start_epoch: float = 0.0             # epochs before the unlabeled loss starts
     ramp_epochs: float = 5.0             # sigmoid ramp-up length (epochs)
     ema_decay: float = 0.995             # teacher decay (warmed up as 1 - 1/(step + 1) early on)
+    teacher_bn_momentum: float = 0.0     # > 0: the teacher's unlabeled crops also update its running statistics
     confidence: float = 0.9              # teacher mask probability (or 1 - it) a pixel needs to count
     min_area: int = 8000                 # teacher worm pixels at t (in the crop) a window needs to count
     mask_sandwich: float = 1.0           # (a)
@@ -396,10 +397,10 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.save_hyperparameters()
         self.teacher = copy.deepcopy(self.network)
         self.teacher.requires_grad_(False)
-        # The teacher's running statistics are the EMA of the student's, never its own batches'.
+        # By default the teacher's running statistics are the EMA of the student's, never its own batches'.
         for module in self.teacher.modules():
             if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
-                module.momentum = 0.0
+                module.momentum = float(self.semi.teacher_bn_momentum)
         self._offsets = sorted({o + sign * lag for o in (-1, 0, 1) for lag in (0, *self.lags) for sign in (-1, 1)})
 
     @classmethod
