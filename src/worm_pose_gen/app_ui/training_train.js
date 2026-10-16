@@ -60,12 +60,15 @@ export async function render(container, page, params) {
   const startSelect = el("select", {name: "start_from", "aria-label": "Start from"},
     models.models.map((m) => el("option", {value: m.ref, selected: m.ref === start},
       `${m.name} (${m.scope === "lab" ? "Lab" : "Mine"}, ${m.kind === "body_net" ? "body-field net" : "segmenter"}${m.default_for.length ? `, ★ ${m.default_for.join(" + ")}` : ""})`)),
-    el("option", {value: SCRATCH, selected: start === SCRATCH}, "From scratch (ImageNet weights)"));
+    el("option", {value: SCRATCH, selected: start === SCRATCH}, "From scratch (pretrained encoder)"));
   const kindNote = el("p", {class: "note tr-kind"});
   const contextRadios = Object.entries(schema.contexts).map(([key, lags]) => el("label", {class: "inline"},
     el("input", {type: "radio", name: "context", value: key, checked: key === "none"}),
     key === "none" ? "None (single frame)" : `Short: ±${lags.join(", ")} frames${setup.fps ? ` (${lags.map((l) => +(l / setup.fps).toFixed(2)).join(", ")} s)` : ""}`));
   const contextRow = el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Temporal context"), el("div", {class: "row"}, contextRadios));
+  const encoderRadios = Object.entries(schema.encoders).map(([key, text]) => el("label", {class: "inline"},
+    el("input", {type: "radio", name: "encoder", value: key, checked: key === "resnet18"}), text));
+  const encoderRow = el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Encoder"), el("div", {class: "row"}, encoderRadios));
 
   // ----- training data: one dataset; its recordings' splits decide what trains and validates
   const counts = (d) => `${d.ref.startsWith("lab:") ? "Lab" : "Mine"} · ${d.by_split.train} train / ${d.by_split.val} val labels`;
@@ -106,6 +109,7 @@ export async function render(container, page, params) {
     return {
       setup: setup.ref, dataset: datasets.length ? dataSelect.value : "", start_from: startSelect.value || null,
       context: startSelect.value ? "none" : (container.querySelector('input[name="context"]:checked')?.value || "none"),
+      encoder: startSelect.value ? "resnet18" : (container.querySelector('input[name="encoder"]:checked')?.value || "resnet18"),
       params: values, name: name.dataset.edited ? name.value.trim() : "", notes: notes.value.trim(),
     };
   };
@@ -139,11 +143,12 @@ export async function render(container, page, params) {
     const next = model?.kind === "segmenter" ? "segmenter" : "body_net";
     if (next !== kind) { kind = next; drawFields(); }
     contextRow.hidden = !!ref;
-    kindNote.textContent = `${KIND_TEXT[kind]} ${model ? `Keeps its inputs: ${lagsText(model.inputs)}.` : "Starts from ImageNet weights."}`;
+    encoderRow.hidden = !!ref;
+    kindNote.textContent = `${KIND_TEXT[kind]} ${model ? `Keeps its inputs: ${lagsText(model.inputs)}.` : "Starts from the encoder's pretrained weights."}`;
     check();
   };
   startSelect.addEventListener("change", onStart);
-  for (const radio of contextRadios) radio.addEventListener("change", check);
+  for (const radio of [...contextRadios, ...encoderRadios]) radio.addEventListener("change", check);
 
   const form = el("form", {class: "tr-form", onsubmit: async (event) => {
     event.preventDefault();
@@ -160,6 +165,7 @@ export async function render(container, page, params) {
   }},
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Start from"), el("div", {}, startSelect, kindNote)),
     contextRow,
+    encoderRow,
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Training data"), el("div", {}, dataList, summary)),
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Settings"), el("div", {}, shown,
       el("details", {class: "tr-advanced"}, el("summary", {}, "Advanced"), advanced))),

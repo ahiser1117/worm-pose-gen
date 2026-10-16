@@ -10,7 +10,7 @@ const SETTING_LABELS = {
   max_epochs: "Max epochs", epochs: "Max epochs", learning_rate: "Learning rate", batch_size: "Batch size", crop_size: "Crop size",
   patience: "Patience", plateau_patience: "Plateau patience", encoder_lr_scale: "Encoder LR scale", ap_weight: "A-P loss weight",
   heatmap_weight: "Head/tail loss weight", overlap_weight: "Overlap loss weight", min_fit_iou: "Minimum body fit IoU", seed: "Seed",
-  lags: "Lags (frames)", context: "Temporal context",
+  weight_decay: "Weight decay", lags: "Lags (frames)", context: "Temporal context", encoder: "Encoder",
 };
 
 function section(title, ...children) {

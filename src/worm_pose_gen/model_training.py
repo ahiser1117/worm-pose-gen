@@ -29,7 +29,10 @@ docs/APP_SIMPLIFICATION.md, section 4):
 
 **What is trained.**  Starting from a body-field model or from scratch
 trains a body-field model (all five outputs; from scratch it starts from
-ImageNet weights with no lags or the short lags ±1, 4, 16 frames).
+pretrained encoder weights with no lags or the short lags ±1, 4, 16 frames).
+From scratch the encoder is a choice (:data:`ENCODERS`): the ImageNet
+ResNet-18, or a DINOv3 ConvNeXt (Meta's self-supervised weights, DINOv3
+license); a fine-tune keeps its parent's.
 Starting from a mask-only segmenter fine-tunes the segmenter: it stays
 until a body-field model matches its mask IoU (section 4, decision 1).  A
 fine-tune keeps its parent's lags.
@@ -68,6 +71,12 @@ from .workspace import utc_now
 KINDS = ("segmenter", "body_net")
 # Temporal context of a model trained from scratch.
 CONTEXTS = {"none": (), "short": (1, 4, 16)}
+# Encoder of a body-field model trained from scratch (:func:`segmenter.make_unet`).
+ENCODERS = {
+    "resnet18": "ResNet-18 (ImageNet)",
+    "dinov3_convnext_tiny": "ConvNeXt-T (DINOv3, Meta research license)",
+    "dinov3_convnext_small": "ConvNeXt-S (DINOv3, Meta research license)",
+}
 RUNS_DIR = ".training"
 
 # Every hyperparameter the Train tab and the command line take.  ``default``
@@ -84,6 +93,8 @@ PARAMETERS: tuple[dict[str, Any], ...] = (
     {"name": "plateau_patience", "label": "Plateau patience (epochs)", "type": "int", "default": {"segmenter": 2, "body_net": 4},
      "min": 1, "max": 1000, "advanced": True, "help": "halve the learning rate after this many stalled epochs"},
     {"name": "encoder_lr_scale", "label": "Encoder LR scale", "type": "float", "default": 0.25, "min": 0.0, "max": 10.0, "advanced": True},
+    {"name": "weight_decay", "label": "Weight decay", "type": "float", "default": 1e-4, "min": 0.0, "max": 1.0, "advanced": True,
+     "help": "AdamW's decoupled weight decay, on every parameter"},
     {"name": "ap_weight", "label": "A-P loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0, "advanced": True,
      "kinds": ["body_net"]},
     {"name": "heatmap_weight", "label": "Head/tail loss weight", "type": "float", "default": 0.1, "min": 0.0, "max": 100.0,
@@ -143,8 +154,9 @@ class TrainRequest:
     dataset: str
     name: str = ""
     start_from: str | None = None
-    # From scratch only: "none" or "short" (CONTEXTS).
+    # From scratch only: "none" or "short" (CONTEXTS), and the encoder (ENCODERS).
     context: str = "none"
+    encoder: str = "resnet18"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
@@ -161,6 +173,7 @@ class Plan:
     request: TrainRequest
     kind: str
     lags: tuple[int, ...]
+    encoder: str
     params: dict[str, Any]
     train: list[LabelRecord]
     val: list[LabelRecord]
@@ -169,7 +182,7 @@ class Plan:
     def summary(self) -> dict[str, Any]:
         records = self.train + self.val
         return {
-            "kind": self.kind, "lags": list(self.lags), "params": self.params, "name": self.request.name,
+            "kind": self.kind, "lags": list(self.lags), "encoder": self.encoder, "params": self.params, "name": self.request.name,
             "train": len(self.train), "val": len(self.val), "recordings": len({r.recording for r in records}),
             "mask_only": sum(r.status == "mask_only" for r in records),
         }
@@ -207,10 +220,13 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
         from .library.inference import lags_at
 
         lags = lags_at(parent, setup.fps)
+        encoder = str(parent.hparams.get("encoder") or "resnet18")
     else:
         if request.context not in CONTEXTS:
             raise ValueError(f"unknown temporal context {request.context!r}; expected one of {tuple(CONTEXTS)}")
-        kind, lags = "body_net", CONTEXTS[request.context]
+        if request.encoder not in ENCODERS:
+            raise ValueError(f"unknown encoder {request.encoder!r}; expected one of {tuple(ENCODERS)}")
+        kind, lags, encoder = "body_net", CONTEXTS[request.context], request.encoder
     params = validate_params(kind, request.params)
     train = library.labels(libraries, request.dataset, "train")
     val = library.labels(libraries, request.dataset, "val")
@@ -222,7 +238,7 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
     check_id(request.name)
     if model_exists(libraries, request.name) or request.name in taken:
         raise ValueError(f"a model named {request.name} already exists; choose another name")
-    return Plan(request=request, kind=kind, lags=tuple(lags), params=params, train=train, val=val, parent_kind=parent_kind)
+    return Plan(request=request, kind=kind, lags=tuple(lags), encoder=encoder, params=params, train=train, val=val, parent_kind=parent_kind)
 
 
 # --------------------------------------------------------------------------- data
@@ -316,10 +332,11 @@ def collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_module(libraries: Libraries, plan_: Plan) -> Any:
-    """The network to train: the parent's weights with this run's settings, or ImageNet weights."""
+    """The network to train: the parent's weights with this run's settings, or pretrained encoder weights."""
 
     p = plan_.params
-    common = dict(learning_rate=p["learning_rate"], encoder_learning_rate_scale=p["encoder_lr_scale"], plateau_patience=p["plateau_patience"])
+    common = dict(learning_rate=p["learning_rate"], encoder_learning_rate_scale=p["encoder_lr_scale"], weight_decay=p["weight_decay"],
+                  plateau_patience=p["plateau_patience"])
     if plan_.kind == "segmenter":
         from .segmenter import SegmentationModule
 
@@ -334,7 +351,7 @@ def build_module(libraries: Libraries, plan_: Plan) -> Any:
         return BodyFieldModule.load_from_checkpoint(
             str(library.weights_path(libraries, plan_.request.start_from)), map_location="cpu", pretrained=False,
             lags=plan_.lags, **body)
-    return BodyFieldModule(lags=plan_.lags, pretrained=True, **body)
+    return BodyFieldModule(lags=plan_.lags, pretrained=True, encoder=plan_.encoder, **body)
 
 
 def read_curve(metrics_csv: Path) -> list[dict[str, Any]]:
@@ -457,7 +474,8 @@ def train(
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
             "trained_on": library.trained_on(request.dataset, records), "parent": request.start_from or None,
-            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context},
+            "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
+                        **({"encoder": plan_.encoder} if plan_.kind == "body_net" else {})},
             "notes": request.notes,
         }
         run = {
@@ -499,7 +517,7 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
     if request.start_from:
         argv += ["--start-from", request.start_from]
     else:
-        argv += ["--context", request.context]
+        argv += ["--context", request.context, "--encoder", request.encoder]
     for key, value in plan_.params.items():
         argv += [f"--{key.replace('_', '-')}", str(value)]
     if request.notes:
@@ -515,6 +533,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--name", default="", help="model id (default: <dataset>-<training labels>)")
     parser.add_argument("--start-from", default=None, help="model to fine-tune (default: from scratch, a body-field model)")
     parser.add_argument("--context", choices=tuple(CONTEXTS), default="none", help="temporal context from scratch: none or short (±1, 4, 16 frames)")
+    parser.add_argument("--encoder", choices=tuple(ENCODERS), default="resnet18",
+                        help="encoder from scratch: " + "; ".join(f"{k}: {v}" for k, v in ENCODERS.items()))
     parser.add_argument("--notes", default="")
     parser.add_argument("--num-workers", type=int, default=None, help="data loader workers (default: 4 on a GPU, 0 on the CPU)")
     for p in PARAMETERS:
@@ -527,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     request = TrainRequest(
-        setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context,
+        setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context, encoder=args.encoder,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
     )
     started = time.monotonic()

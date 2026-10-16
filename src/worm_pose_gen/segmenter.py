@@ -123,6 +123,100 @@ class ResNet18UNet(nn.Module):
         return logits[..., :height, :width]
 
 
+# DINOv3 ConvNeXt encoders (Meta's self-supervised LVD-1689M weights through
+# timm; DINOv3 license, research use) by the name a body-field model records.
+CONVNEXT_ENCODERS = {
+    "dinov3_convnext_tiny": "convnext_tiny.dinov3_lvd1689m",
+    "dinov3_convnext_small": "convnext_small.dinov3_lvd1689m",
+}
+ENCODERS = ("resnet18", *CONVNEXT_ENCODERS)
+# Width of the convolutional branch that gives the ConvNeXt U-Net its stride-2 skip.
+FINE_CHANNELS = 32
+
+
+class ConvNeXtUNet(nn.Module):
+    """A DINOv3 ConvNeXt encoder with the U-Net decoder and contract of :class:`ResNet18UNet`.
+
+    The ConvNeXt stem is a stride-4 patchify convolution, so features begin
+    at 1/4 resolution.  Its pretrained RGB filters are summed onto channel 0
+    (the frame) and the difference channels start at zero, as in the ResNet.
+    A worm is ~40 px wide, so a light convolutional branch on the input
+    (trained from scratch, in the decoder's parameter group) supplies the
+    1/2-resolution skip, and the input itself the full-resolution one.
+    ``pretrained=False`` builds the architecture without reading weights
+    (how a checkpoint is loaded).
+    """
+
+    def __init__(
+        self, encoder: str = "dinov3_convnext_tiny", pretrained: bool = True, in_channels: int = 1, out_channels: int = 1,
+        final_channels: int = 16,
+    ) -> None:
+        super().__init__()
+        import timm
+
+        if encoder not in CONVNEXT_ENCODERS:
+            raise ValueError(f"unknown ConvNeXt encoder {encoder!r}; expected one of {tuple(CONVNEXT_ENCODERS)}")
+        backbone = timm.create_model(CONVNEXT_ENCODERS[encoder], pretrained=pretrained)
+        self.in_channels = in_channels
+        patchify, norm = backbone.stem[0], backbone.stem[1]
+        stem = nn.Conv2d(in_channels, patchify.out_channels, kernel_size=4, stride=4)
+        with torch.no_grad():
+            stem.weight.zero_()
+            stem.weight[:, :1].copy_(patchify.weight.sum(dim=1, keepdim=True))
+            stem.bias.copy_(patchify.bias)
+        self.stem = nn.Sequential(stem, norm)
+        self.stages = backbone.stages
+        c4, c8, c16, c32 = (info["num_chs"] for info in backbone.feature_info)
+        self.fine = nn.Sequential(
+            nn.Conv2d(in_channels, FINE_CHANNELS, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(FINE_CHANNELS),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(FINE_CHANNELS, FINE_CHANNELS, 3, padding=1, bias=False),
+            nn.BatchNorm2d(FINE_CHANNELS),
+            nn.ReLU(inplace=True),
+        )
+        self.up4 = _UpBlock(c32, c16, 256)
+        self.up3 = _UpBlock(256, c8, 128)
+        self.up2 = _UpBlock(128, c4, 64)
+        self.up1 = _UpBlock(64, FINE_CHANNELS, 32)
+        self.up0 = _UpBlock(32, in_channels, final_channels)
+        self.head = nn.Conv2d(final_channels, out_channels, kernel_size=1)
+
+    def encoder_parameters(self) -> list[nn.Parameter]:
+        return [*self.stem.parameters(), *self.stages.parameters()]
+
+    def decoder_parameters(self) -> list[nn.Parameter]:
+        modules = (self.fine, self.up4, self.up3, self.up2, self.up1, self.up0, self.head)
+        return [parameter for module in modules for parameter in module.parameters()]
+
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim != 4 or x.shape[1] != self.in_channels:
+            raise ValueError(f"input must have shape [B,{self.in_channels},H,W]")
+        height, width = x.shape[-2:]
+        pad_h = (-height) % PAD_MULTIPLE
+        pad_w = (-width) % PAD_MULTIPLE
+        padded = F.pad(x, (0, pad_w, 0, pad_h), mode="reflect") if (pad_h or pad_w) else x
+        s4 = self.stages[0](self.stem(padded))
+        s8 = self.stages[1](s4)
+        s16 = self.stages[2](s8)
+        s32 = self.stages[3](s16)
+        d = self.up4(s32, s16)
+        d = self.up3(d, s8)
+        d = self.up2(d, s4)
+        d = self.up1(d, self.fine(padded))
+        d = self.up0(d, padded)
+        logits = self.head(d)
+        return logits[..., :height, :width]
+
+
+def make_unet(encoder: str, *, pretrained: bool, in_channels: int, out_channels: int, final_channels: int) -> nn.Module:
+    """The U-Net with the named encoder (:data:`ENCODERS`)."""
+
+    if encoder == "resnet18":
+        return ResNet18UNet(pretrained=pretrained, in_channels=in_channels, out_channels=out_channels, final_channels=final_channels)
+    return ConvNeXtUNet(encoder, pretrained=pretrained, in_channels=in_channels, out_channels=out_channels, final_channels=final_channels)
+
+
 def masked_binary_metrics(
     probability: Tensor, target: Tensor, valid: Tensor, threshold: float = 0.5
 ) -> dict[str, Tensor]:
