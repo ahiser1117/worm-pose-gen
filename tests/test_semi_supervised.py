@@ -99,8 +99,10 @@ class ConsistencyLossTests(unittest.TestCase):
         student, teacher = window()
         teacher[:, :, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
         student[0, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
-        worm = torch.sigmoid(teacher[:, :, OUTPUTS.index("mask")]) > 0.5  # both pieces are worm (decided on the whole frame)
-        terms, _ = consistency_terms(student, teacher, CONFIG, worm)
+        hint = torch.zeros(teacher.shape[0], 3, *SHAPE, dtype=torch.bool)
+        hint[:, :, 4, 2:40] = True  # the whole frame says the track piece belongs to the worm (only one row of it)
+        hint[:, :, 32, 60:100] = True
+        terms, _ = consistency_terms(student, teacher, CONFIG, hint)
         self.assertLess(float(terms["mask_sandwich"]), 1e-4)
 
     def test_empty_window_is_ignored(self):

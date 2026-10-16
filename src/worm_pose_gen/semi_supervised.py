@@ -28,9 +28,10 @@ pulled toward targets built from the teacher (:func:`consistency_terms`):
                    confident pixels (mask, A-P, confident end peaks): flip and
                    rotation equivariance plus the usual mean-teacher term
 
-The teacher predicts whole frames, and only the largest connected component
-of its mask counts as worm; its other positives (agar tracks the worm left,
-debris, image borders) are negative targets.  The first runs, which took
+The teacher predicts the student's crop (the targets) and the whole frame,
+where only the largest connected component of its mask counts as worm; its
+other positives in the crop (agar tracks the worm left, debris, image
+borders) are negative targets.  The first runs, which took
 every confident teacher positive as a target, self-trained partly segmented
 tracks into confident false positives; ignoring the other components instead
 let background blobs grow unchecked on another project's recording.
@@ -278,30 +279,36 @@ def _end_terms(student: Tensor, teacher: Tensor, items: Tensor, use_temporal: bo
     )
 
 
-def largest_component(masks: Tensor) -> Tensor:
-    """Each ``[..., H, W]`` boolean map reduced to its largest 8-connected component."""
+def worm_components(masks: Tensor, hint: Tensor | None = None) -> Tensor:
+    """Each ``[..., H, W]`` boolean map reduced to its worm: the 8-connected components touching ``hint``, else the largest."""
 
     from scipy import ndimage
 
     flat = masks.reshape(-1, *masks.shape[-2:]).cpu().numpy()
+    hints = None if hint is None else hint.reshape(flat.shape).cpu().numpy()
     kept = np.zeros_like(flat)
     for k, mask in enumerate(flat):
         labels, count = ndimage.label(mask, structure=np.ones((3, 3), bool))
-        if count:
+        if not count:
+            continue
+        if hints is None:
             kept[k] = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
+        else:
+            kept[k] = np.isin(labels, np.unique(labels[hints[k] & mask]))
     return torch.as_tensor(kept, device=masks.device).reshape(masks.shape)
 
 
 def consistency_terms(
-    student: Tensor, teacher: Tensor, config: SemiConfig, worm: Tensor | None = None,
+    student: Tensor, teacher: Tensor, config: SemiConfig, worm_hint: Tensor | None = None,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """The unlabeled loss terms (module docstring) and gate statistics.
 
     ``student`` holds the student's logits at ``t`` in the teacher's frame
     (``[B, 5, H, W]``, transform undone), ``teacher`` the teacher's logits at
-    ``t-1, t, t+1`` (``[B, 3, 5, H, W]``), ``worm`` which of the teacher's
-    mask pixels belong to the worm (``[B, 3, H, W]``; by default the largest
-    component of each mask).  A term whose weight is zero opens no gate, so
+    ``t-1, t, t+1`` (``[B, 3, 5, H, W]``) on the same crop, ``worm_hint`` the
+    worm as decided on the whole frame (``[B, 3, H, W]``, cropped): the
+    teacher's mask components touching it are the worm (by default the
+    largest component of each mask).  A term whose weight is zero opens no gate, so
     the teacher-at-``t`` term covers its pixels instead.
     """
 
@@ -311,7 +318,7 @@ def consistency_terms(
     # Only the worm component is worm: other teacher positives (agar tracks,
     # debris, image borders) are confident negatives, so self-training
     # neither reinforces them nor lets them drift.
-    inside = largest_component(p > 0.5) if worm is None else worm
+    inside = worm_components(p > 0.5, worm_hint)
     confident = ((p > c) & inside) | (p < 1 - c) | ((p > 0.5) & ~inside)
     items = inside[:, 1].sum((1, 2)) >= config.min_area
     item_pixels = items[:, None, None]
@@ -416,17 +423,22 @@ class SemiBodyFieldModule(BodyFieldModule):
         # back in eval mode here: in train mode its batch norm would use (and update
         # its running statistics from) the statistics of mostly-background whole frames.
         self.teacher.eval()
+        height, width = unlabeled["student"].shape[-2:]
+        crops = [(int(y), int(x)) for y, x in unlabeled["origin"]]
         with torch.no_grad():
             inputs = teacher_inputs(unlabeled["frames"], self._offsets, self.lags)
+            # The targets come from the teacher on the student's own crop: a target
+            # from another view (the whole frame) differs systematically, and the
+            # student chasing it drags the teacher along (A-P drifted by +0.1).
+            # The whole frame only decides which mask component is the worm.
             whole = self.teacher(inputs.flatten(0, 1)).unflatten(0, (size, 3))
-            worm_whole = largest_component(torch.sigmoid(whole[:, :, _MASK].float()) > 0.5)
+            worm_whole = worm_components(torch.sigmoid(whole[:, :, _MASK].float()) > 0.5)
+            cropped = torch.stack([inputs[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
+            teacher = self.teacher(cropped.flatten(0, 1)).unflatten(0, (size, 3))
+            hint = torch.stack([worm_whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
         student = self(unlabeled["student"])
         student = torch.stack([undo_transform(student[k], *(int(v) for v in unlabeled["transform"][k])) for k in range(size)])
-        height, width = student.shape[-2:]
-        crops = [(int(y), int(x)) for y, x in unlabeled["origin"]]
-        teacher = torch.stack([whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
-        worm = torch.stack([worm_whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
-        terms, stats = consistency_terms(student, teacher, self.semi, worm)
+        terms, stats = consistency_terms(student, teacher, self.semi, hint)
         total = weighted_total(terms, self.semi)
         self.log("train_semi_loss", total.detach(), batch_size=size, on_step=False, on_epoch=True)
         for name, value in {**terms, **stats}.items():
