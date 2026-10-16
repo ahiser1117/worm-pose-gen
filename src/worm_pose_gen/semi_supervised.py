@@ -30,8 +30,10 @@ pulled toward targets built from the teacher (:func:`consistency_terms`):
 
 The unlabeled loss ramps up from zero (``ramp_epochs``) after an optional
 delay.  Validation, early stopping and the learning-rate plateau are on the
-supervised validation loss alone, as for supervised training, so runs stay
-comparable; the teacher's validation loss is logged beside it.
+supervised validation loss alone, as for supervised training, of the network
+that becomes the model (``export``: the teacher by default, whose averaged
+weights validate lower and more steadily than the student's); both networks'
+validation losses are logged.
 
 The trained checkpoint is converted back to a plain
 :class:`body_net.BodyFieldModule` checkpoint (:func:`export_body_checkpoint`),
@@ -91,7 +93,7 @@ class SemiConfig:
     ap_teacher: float = 1.0
     head_teacher: float = 0.1
     tail_teacher: float = 0.0
-    export: str = "student"              # which network becomes the model: student or teacher
+    export: str = "teacher"              # which network becomes the model (and is validated): teacher or student
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemiConfig":
@@ -391,10 +393,13 @@ class SemiBodyFieldModule(BodyFieldModule):
                     teacher.copy_(student)
 
     def validation_step(self, batch: dict[str, Tensor], batch_index: int) -> None:
-        self._step(batch, "val")
-        with torch.no_grad():
-            total, _ = self.loss(self.teacher(batch["image"]), batch["targets"])
-        self.log("val_teacher_loss", total, batch_size=batch["image"].shape[0], on_epoch=True)
+        """``val_*`` of the network that becomes the model (``export``), so early stopping selects it; both losses are logged too."""
+
+        logits = {"student": self.network(batch["image"]), "teacher": self.teacher(batch["image"])}
+        self._step(batch, "val", logits=logits[self.semi.export])
+        for name, value in logits.items():
+            total, _ = self.loss(value, batch["targets"])
+            self.log(f"val_{name}_loss", total, batch_size=batch["image"].shape[0], on_epoch=True)
 
 
 def body_hparam_names() -> list[str]:

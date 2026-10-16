@@ -224,8 +224,8 @@ class BodyFieldModule(L.LightningModule):
         result["orientation_correct"] = (to_head < to_tail).float()[both]
         return result
 
-    def _step(self, batch: dict[str, Tensor], stage: str) -> Tensor:
-        logits = self(batch["image"])
+    def _step(self, batch: dict[str, Tensor], stage: str, logits: Tensor | None = None) -> Tensor:
+        logits = self(batch["image"]) if logits is None else logits
         targets = batch["targets"]
         total, parts = self.loss(logits, targets)
         batch_size = batch["image"].shape[0]
