@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Build self-training pseudo-label items from analysed workspaces, and a contact sheet to audit them.
 
-    build_pseudo_labels.py --workspaces <ws dir>... --output <items dir> [--clear-limit N] [--jobs J]
+    build_pseudo_labels.py --workspaces <ws dir>... --output <items dir> [--clear-limit N] [--jobs J] [--rebuild]
     build_pseudo_labels.py --sheet <items dir> --sheet-count 48 [--sheet-kind bridged]
 
 Each workspace must have been analysed through the propagate stage
 (``pipeline.main --stages segment,prior,fit,ambiguity,propagate,track``).
 Selection and targets are :mod:`worm_pose_gen.pseudo_labels`'; the output
-directory holds one ``.npz`` per item and ``index.json`` (the items, the
-selection parameters and every workspace's selection counts).  The sheet
+directory holds one directory per workspace (an ``.npz`` per item and its
+``index.json``) and a merged ``index.json`` over all of them (the items, the
+selection parameters and every workspace's selection counts), so workspaces
+can be added as their analyses finish.  The sheet
 shows each sampled item twice: the frame as is, and with the A-P target
 (head red to tail blue), the ignored band (yellow) and the head (green ring).
 """
@@ -26,29 +28,46 @@ import numpy as np
 
 
 def build_one(args: tuple[str, str, dict, int | None, int]) -> tuple[str, list[dict], dict]:
-    from worm_pose_gen.pseudo_labels import SelectionParams, build_items
+    """One workspace's items into ``<output>/<workspace>/`` with their own index."""
+
+    from worm_pose_gen.pseudo_labels import SelectionParams, build_items, write_index
 
     workspace, output, params, limit, seed = args
-    entries, counts = build_items(Path(workspace), Path(output), SelectionParams(**params), limit=limit, seed=seed)
+    directory = Path(output) / Path(workspace).name
+    entries, counts = build_items(Path(workspace), directory, SelectionParams(**params), limit=limit, seed=seed)
+    write_index(directory, entries, SelectionParams(**params), extra={"workspaces": {Path(workspace).name: counts}})
     return workspace, entries, counts
 
 
+def merge(output: Path) -> dict:
+    """``<output>/index.json`` over every workspace directory built so far (file paths relative to ``output``)."""
+
+    from worm_pose_gen.pseudo_labels import SelectionParams, read_index, write_index
+
+    entries, counts, params = [], {}, None
+    for index_path in sorted(Path(output).glob("*/index.json")):
+        index = read_index(index_path.parent)
+        params = params or index["params"]
+        if index["params"] != params:
+            raise ValueError(f"{index_path.parent} was built with other selection parameters")
+        entries += [{**e, "file": f"{index_path.parent.name}/{e['file']}"} for e in index["items"]]
+        counts.update(index.get("workspaces", {}))
+    write_index(output, entries, SelectionParams(**(params or {})), extra={"workspaces": counts})
+    kinds = [e["kind"] for e in entries]
+    return {"items": len(entries), "clear": kinds.count("clear"), "bridged": kinds.count("bridged"),
+            "workspaces": len(counts), "recordings": len({e["recording"] for e in entries})}
+
+
 def build(args: argparse.Namespace) -> None:
-    from worm_pose_gen.pseudo_labels import SelectionParams, write_index
+    from worm_pose_gen.pseudo_labels import SelectionParams
 
     params = {f.name: getattr(args, f.name) for f in fields(SelectionParams) if getattr(args, f.name, None) is not None}
-    jobs = [(str(w), str(args.output), params, args.clear_limit, args.seed) for w in args.workspaces]
-    entries: list[dict] = []
-    counts: dict[str, dict] = {}
+    todo = [w for w in args.workspaces if args.rebuild or not (Path(args.output) / Path(w).name / "index.json").exists()]
+    jobs = [(str(w), str(args.output), params, args.clear_limit, args.seed) for w in todo]
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         for workspace, found, workspace_counts in pool.map(build_one, jobs):
-            entries += found
-            counts[Path(workspace).name] = {**workspace_counts, "items": len(found)}
             print(f"{Path(workspace).name}: {len(found)} items {workspace_counts}", flush=True)
-    write_index(args.output, entries, SelectionParams(**params), extra={"workspaces": counts})
-    kinds = [e["kind"] for e in entries]
-    print(json.dumps({"items": len(entries), "clear": kinds.count("clear"), "bridged": kinds.count("bridged"),
-                      "recordings": len({e["recording"] for e in entries})}), flush=True)
+    print(json.dumps(merge(args.output)), flush=True)
 
 
 def tile(item: dict, size: int) -> np.ndarray:
@@ -120,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--clear-limit", type=int, default=None, help="at most this many clear items per workspace (random)")
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--rebuild", action="store_true", help="rebuild workspaces already built in --output")
     parser.add_argument("--seed", type=int, default=0)
     for f in fields(SelectionParams):
         parser.add_argument(f"--{f.name.replace('_', '-')}", dest=f.name, type=type(f.default), default=None)
