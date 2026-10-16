@@ -596,7 +596,8 @@ class BodyFieldStageTests(unittest.TestCase):
                 self.assertTrue(all(f is not None for f in fields))
             info = read_summary(workspace)["propagation"]
             self.assertEqual(info["frames_with_evidence"], 3)
-            self.assertEqual(info["network_starts_offered"], 2 * 3)
+            # The pass offers the chains no network trace start (the region algorithms do).
+            self.assertEqual(info["network_starts_offered"], 0)
             state = workspace.load_state()
             self.assertTrue((state["field_energy"][2:5] > 0).all())
             hypotheses = workspace.load_hypotheses()

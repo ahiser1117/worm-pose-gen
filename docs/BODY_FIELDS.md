@@ -282,9 +282,14 @@ evidence. A candidate's comparable energy includes its evidence energy, so
 the independent and chain candidates of a frame compete on the same footing,
 and a mirrored option of the path pays the mirror's own evidence energy
 (`propagation.Candidate.energy`), so the path cannot flip a pose against the
-evidence for free. Each chain also fits the network's trace once per stretch
-frame, as one more start of its best beam state, so the trace competes under
-that state's temporal prior. The propagation summary counts
+evidence for free. The pass does not start the chains from the network's
+trace: as one more start of each chain's best beam state it was chosen by
+the path on 3-6% of stretch frames (none of 2,541 on worm004), and dropping
+it (and the trace computation) cut the pass by 20-27% at the same IoU
+(frames below 0.9: 16 → 18 on the sequence set, 10 → 14 and 451 → 438 on
+the 2023-03-30-01 and worm004 benches), with slightly more `edge_inside`
+flags (+30 of 2,000 and +14 of 2,600 frames).
+The region algorithms still offer it. The propagation summary counts
 `frames_with_evidence`, `network_starts_offered` and `network_starts_won`.
 The region algorithms use it too ([below](#region-algorithms)).
 
