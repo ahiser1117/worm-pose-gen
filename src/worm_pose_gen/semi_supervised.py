@@ -28,10 +28,12 @@ pulled toward targets built from the teacher (:func:`consistency_terms`):
                    confident pixels (mask, A-P, confident end peaks): flip and
                    rotation equivariance plus the usual mean-teacher term
 
-Only the largest connected component of each teacher mask counts as worm:
-other confident positives (agar tracks the worm left, debris) are no target
-at all, since the first runs showed self-training turning partly segmented
-tracks into confident false positives.
+The teacher predicts whole frames, and only the largest connected component
+of its mask counts as worm; its other positives (agar tracks the worm left,
+debris, image borders) are negative targets.  The first runs, which took
+every confident teacher positive as a target, self-trained partly segmented
+tracks into confident false positives; ignoring the other components instead
+let background blobs grow unchecked on another project's recording.
 
 The unlabeled loss ramps up from zero (``ramp_epochs``) after an optional
 delay.  Validation, early stopping and the learning-rate plateau are on the
@@ -87,7 +89,7 @@ class SemiConfig:
     ramp_epochs: float = 5.0             # sigmoid ramp-up length (epochs)
     ema_decay: float = 0.995             # teacher decay (warmed up as 1 - 1/(step + 1) early on)
     confidence: float = 0.9              # teacher mask probability (or 1 - it) a pixel needs to count
-    min_area: int = 1500                 # teacher worm pixels at t a window needs to count
+    min_area: int = 8000                 # teacher worm pixels at t (in the crop) a window needs to count
     mask_sandwich: float = 1.0           # (a)
     ap_temporal: float = 1.0             # (b)
     ap_margin: float = 0.02
@@ -147,10 +149,14 @@ class UnlabeledWindows:
     """Training windows of a clip store (a torch ``Dataset``; draw it with a sampler over a large index space).
 
     Item ``i`` is window ``i mod windows`` with a crop and augmentation drawn
-    from ``(seed, i)``: ``teacher`` holds the clean inputs of ``t-1, t, t+1``
-    (``[3, 1 + lags, crop, crop]``), ``student`` the augmented input of ``t``
-    after the flip/rotation ``transform`` (flip x, flip y, quarter turns).
-    The crop is centred near a dark (worm) block of frame ``t`` most of the time.
+    from ``(seed, i)``: ``frames`` holds the whole uint8 frames at
+    :attr:`offsets` from ``t`` (what the teacher's inputs at ``t-1, t, t+1``
+    read, :func:`teacher_inputs`), ``origin`` the crop's top-left corner and
+    ``student`` the augmented input of ``t`` in the crop after the
+    flip/rotation ``transform`` (flip x, flip y, quarter turns).  The crop is
+    centred near a dark (worm) block of frame ``t`` most of the time.  The
+    teacher sees whole frames so that which mask component is the worm is
+    decided on the whole frame, not on a crop that may cut the body apart.
     """
 
     def __init__(self, store: ClipStore, lags: Sequence[int], *, crop: int = 512, seed: int = 0, augment: bool = True) -> None:
@@ -160,6 +166,7 @@ class UnlabeledWindows:
         self.crop = crop
         self.seed = seed
         self.augment = augment
+        self.offsets = sorted({o + sign * lag for o in (-1, 0, 1) for lag in (0, *self.lags) for sign in (-1, 1)})
         self.windows = [(s, c) for s in range(len(store)) for c in store.centres(s, 1, max(self.lags, default=0))]
         if not self.windows:
             raise ValueError(f"{store.root}: no segment is long enough for windows of ±1 frame with ±{max(self.lags, default=0)} lags")
@@ -186,11 +193,11 @@ class UnlabeledWindows:
         rng = np.random.default_rng((self.seed, int(index)))
         frames = self.store.frames(segment)
         first = centre - self.reach
-        y0, x0 = self._crop_origin(np.asarray(frames[centre]), rng)
+        whole = np.asarray(frames[first : centre + self.reach + 1])
+        y0, x0 = self._crop_origin(whole[self.reach], rng)
         size = min(self.crop, frames.shape[1]), min(self.crop, frames.shape[2])
-        window = np.asarray(frames[first : centre + self.reach + 1, y0 : y0 + size[0], x0 : x0 + size[1]], dtype=np.float32)
+        window = whole[:, y0 : y0 + size[0], x0 : x0 + size[1]].astype(np.float32)
         middle = self.reach
-        teacher = np.stack([_input_stack(window, middle + offset, self.lags) for offset in (-1, 0, 1)])
         student = window
         flip_x = flip_y = False
         rotations = 0
@@ -202,9 +209,23 @@ class UnlabeledWindows:
             rotations = int(rng.random() < 0.5) if size[0] == size[1] else 0
         student_input = apply_transform(torch.as_tensor(_input_stack(student.astype(np.float32), middle, self.lags)), flip_x, flip_y, rotations)
         return {
-            "teacher": torch.as_tensor(teacher), "student": student_input.contiguous(),
+            "frames": torch.as_tensor(np.ascontiguousarray(whole[[middle + o for o in self.offsets]])),
+            "origin": torch.tensor([y0, x0]), "student": student_input.contiguous(),
             "transform": torch.tensor([int(flip_x), int(flip_y), rotations]),
         }
+
+
+def teacher_inputs(frames: Tensor, offsets: Sequence[int], lags: Sequence[int]) -> Tensor:
+    """``[B, 3, 1 + lags, H, W]`` network inputs of ``t-1, t, t+1`` from uint8 frames ``[B, len(offsets), H, W]`` at ``offsets`` from ``t``."""
+
+    position = {offset: k for k, offset in enumerate(offsets)}
+    f = frames.float()
+    windows = []
+    for o in (-1, 0, 1):
+        channels = [(f[:, position[o]] / 255.0 - INPUT_MEAN) / INPUT_STD]
+        channels += [(f[:, position[o + lag]] - f[:, position[o - lag]]) / (255.0 * INPUT_STD) for lag in lags]
+        windows.append(torch.stack(channels, 1))
+    return torch.stack(windows, 1)
 
 
 def unlabeled_loader(config: SemiConfig, lags: Sequence[int], *, seed: int, pin_memory: bool) -> Any:
@@ -271,23 +292,27 @@ def largest_component(masks: Tensor) -> Tensor:
     return torch.as_tensor(kept, device=masks.device).reshape(masks.shape)
 
 
-def consistency_terms(student: Tensor, teacher: Tensor, config: SemiConfig) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+def consistency_terms(
+    student: Tensor, teacher: Tensor, config: SemiConfig, worm: Tensor | None = None,
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """The unlabeled loss terms (module docstring) and gate statistics.
 
     ``student`` holds the student's logits at ``t`` in the teacher's frame
     (``[B, 5, H, W]``, transform undone), ``teacher`` the teacher's logits at
-    ``t-1, t, t+1`` (``[B, 3, 5, H, W]``).  A term whose weight is zero opens
-    no gate, so the teacher-at-``t`` term covers its pixels instead.
+    ``t-1, t, t+1`` (``[B, 3, 5, H, W]``), ``worm`` which of the teacher's
+    mask pixels belong to the worm (``[B, 3, H, W]``; by default the largest
+    component of each mask).  A term whose weight is zero opens no gate, so
+    the teacher-at-``t`` term covers its pixels instead.
     """
 
     student, teacher = student.float(), teacher.float()
     c = config.confidence
     p = torch.sigmoid(teacher[:, :, _MASK])
-    # Only the teacher's largest component is worm; other positives (agar
-    # tracks, debris) are neither target nor gate, so self-training cannot
-    # reinforce them.
-    inside = largest_component(p > 0.5)
-    confident = ((p > c) & inside) | (p < 1 - c)
+    # Only the worm component is worm: other teacher positives (agar tracks,
+    # debris, image borders) are confident negatives, so self-training
+    # neither reinforces them nor lets them drift.
+    inside = largest_component(p > 0.5) if worm is None else worm
+    confident = ((p > c) & inside) | (p < 1 - c) | ((p > 0.5) & ~inside)
     items = inside[:, 1].sum((1, 2)) >= config.min_area
     item_pixels = items[:, None, None]
 
@@ -364,6 +389,7 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.save_hyperparameters()
         self.teacher = copy.deepcopy(self.network)
         self.teacher.requires_grad_(False)
+        self._offsets = sorted({o + sign * lag for o in (-1, 0, 1) for lag in (0, *self.lags) for sign in (-1, 1)})
 
     @classmethod
     def from_body(cls, module: BodyFieldModule, config: SemiConfig) -> "SemiBodyFieldModule":
@@ -391,12 +417,17 @@ class SemiBodyFieldModule(BodyFieldModule):
         self.log("train_semi_weight", weight, batch_size=size, on_step=False, on_epoch=True)
         if weight <= 0:
             return supervised
-        teacher_input = unlabeled["teacher"].flatten(0, 1)
         with torch.no_grad():
-            teacher = self.teacher(teacher_input).unflatten(0, (size, 3))
+            inputs = teacher_inputs(unlabeled["frames"], self._offsets, self.lags)
+            whole = self.teacher(inputs.flatten(0, 1)).unflatten(0, (size, 3))
+            worm_whole = largest_component(torch.sigmoid(whole[:, :, _MASK].float()) > 0.5)
         student = self(unlabeled["student"])
         student = torch.stack([undo_transform(student[k], *(int(v) for v in unlabeled["transform"][k])) for k in range(size)])
-        terms, stats = consistency_terms(student, teacher, self.semi)
+        height, width = student.shape[-2:]
+        crops = [(int(y), int(x)) for y, x in unlabeled["origin"]]
+        teacher = torch.stack([whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
+        worm = torch.stack([worm_whole[k, ..., y : y + height, x : x + width] for k, (y, x) in enumerate(crops)])
+        terms, stats = consistency_terms(student, teacher, self.semi, worm)
         total = weighted_total(terms, self.semi)
         self.log("train_semi_loss", total.detach(), batch_size=size, on_step=False, on_epoch=True)
         for name, value in {**terms, **stats}.items():

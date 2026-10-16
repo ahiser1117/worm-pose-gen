@@ -12,7 +12,7 @@ import torch
 from worm_pose_gen.body_net import OUTPUTS, load_body_net
 from worm_pose_gen.semi_supervised import (
     SemiBodyFieldModule, SemiConfig, UnlabeledWindows, apply_transform, consistency_terms, export_body_checkpoint, ramp,
-    undo_transform,
+    teacher_inputs, undo_transform,
 )
 from worm_pose_gen.unlabeled_clips import ClipStore, build_store, plan_segments
 
@@ -86,14 +86,22 @@ class ConsistencyLossTests(unittest.TestCase):
         self.assertEqual(float(terms["mask_sandwich"]), 0.0)
         self.assertGreater(float(terms["mask_teacher"]), 0.1)
 
-    def test_stray_teacher_positives_are_no_target(self):
+    def test_stray_teacher_positives_are_negative_targets(self):
         student, teacher = window()
         teacher[:, :, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0  # a track the teacher segments in every frame
         base, _ = consistency_terms(student, teacher, CONFIG)
+        self.assertLess(float(base["mask_sandwich"]), 1e-4)
         student[0, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
         follows, _ = consistency_terms(student, teacher, CONFIG)
-        for name in ("mask_sandwich", "mask_teacher"):
-            self.assertAlmostEqual(float(base[name]), float(follows[name]), places=6)
+        self.assertGreater(float(follows["mask_sandwich"]), 0.1)
+
+    def test_given_worm_mask_decides_the_component(self):
+        student, teacher = window()
+        teacher[:, :, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
+        student[0, OUTPUTS.index("mask"), 2:8, 2:40] = 20.0
+        worm = torch.sigmoid(teacher[:, :, OUTPUTS.index("mask")]) > 0.5  # both pieces are worm (decided on the whole frame)
+        terms, _ = consistency_terms(student, teacher, CONFIG, worm)
+        self.assertLess(float(terms["mask_sandwich"]), 1e-4)
 
     def test_empty_window_is_ignored(self):
         student, teacher = window()
@@ -178,9 +186,13 @@ class ClipStoreTests(unittest.TestCase):
             self.assertEqual(list(store.centres(0, 1, 16)), list(range(17, 23)))
             windows = UnlabeledWindows(store, (1, 4, 16), crop=32, augment=False)
             self.assertEqual(len(windows), 12)
+            self.assertEqual(windows.offsets, [-17, -16, -15, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 15, 16, 17])
             item = windows[5]
-            self.assertEqual(tuple(item["teacher"].shape), (3, 4, 32, 32))
-            torch.testing.assert_close(item["student"], item["teacher"][1])
+            self.assertEqual(tuple(item["frames"].shape), (17, 48, 64))
+            teacher = teacher_inputs(item["frames"][None], windows.offsets, (1, 4, 16))[0]
+            self.assertEqual(tuple(teacher.shape), (3, 4, 48, 64))
+            y, x = (int(v) for v in item["origin"])
+            torch.testing.assert_close(item["student"], teacher[1, :, y : y + 32, x : x + 32])
             augmented = UnlabeledWindows(store, (1, 4, 16), crop=32, seed=3)[5]
             self.assertEqual(tuple(augmented["student"].shape), (4, 32, 32))
             torch.testing.assert_close(UnlabeledWindows(store, (1, 4, 16), crop=32, seed=3)[5]["student"], augmented["student"])
