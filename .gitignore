@@ -31,3 +31,11 @@ external_artifacts
 # Agent skills installed by tooling, not project code
 .agents/
 skills-lock.json
+
+# Evaluation results and agent scratch stay out of the repository (the
+# pose-field results already tracked stay tracked: the docs link them)
+docs/pose_pipeline_fields/**/*.json
+.claude/tmp/
+
+# A separate repository checked out here
+swt_ynet/
