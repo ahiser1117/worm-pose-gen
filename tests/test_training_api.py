@@ -7,7 +7,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from worm_pose_gen import library, model_eval
+from worm_pose_gen import library, model_eval, model_training
 from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.library.roots import write_json
 
@@ -93,6 +93,7 @@ class TrainingApiTests(unittest.TestCase):
         names = [p["name"] for p in schema["parameters"]]
         self.assertEqual(names[:3], ["max_epochs", "learning_rate", "batch_size"])
         self.assertEqual(schema["contexts"], {"none": [], "short": [1, 4, 16]})
+        self.assertEqual(list(schema["encoders"]), list(model_training.ENCODERS))
 
     def test_train_and_evaluate_jobs(self):
         job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:body",

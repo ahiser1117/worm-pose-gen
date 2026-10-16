@@ -18,7 +18,7 @@ from worm_pose_gen.body_targets import render_body_targets, self_contact
 from worm_pose_gen.library import Libraries
 from worm_pose_gen.library.inference import Outputs, lags_at, load_model
 from worm_pose_gen.library.targets import write_targets
-from worm_pose_gen.segmenter import SegmentationModule
+from worm_pose_gen.segmenter import CONVNEXT_ENCODERS, SegmentationModule
 
 from tests.slow import slow
 
@@ -164,6 +164,11 @@ class PlanTests(LibraryTestCase):
         scratch = model_training.plan(self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", context="short"),
                                       taken=["base-2"])
         self.assertEqual((scratch.kind, scratch.lags, scratch.request.name), ("body_net", (1, 4, 16), "base-2-2"))
+        self.assertEqual((plan.encoder, segmenter.encoder, scratch.encoder), ("resnet18", "resnet18", "resnet18"))
+        convnext = model_training.plan(self.libraries, model_training.TrainRequest(
+            setup="lab:rig", dataset="lab:base", context="short", encoder="dinov3_convnext_tiny"))
+        self.assertEqual((convnext.encoder, convnext.summary()["encoder"]), ("dinov3_convnext_tiny", "dinov3_convnext_tiny"))
+        self.assertEqual(set(model_training.ENCODERS), {"resnet18", *CONVNEXT_ENCODERS})
 
     def test_refusals(self):
         bad = [
@@ -172,6 +177,7 @@ class PlanTests(LibraryTestCase):
             ({"params": {"learning_rate": -1}}, "must lie"),
             ({"params": {"warmup": 3}}, "unknown training parameters"),
             ({"context": "long"}, "temporal context"),
+            ({"encoder": "vit"}, "unknown encoder"),
             ({"name": "bad name"}, "invalid library id"),
         ]
         for change, message in bad:

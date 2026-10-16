@@ -3,7 +3,9 @@
 The input is the flat-fielded frame plus one symmetric difference channel per
 lag (:mod:`temporal_context`), fused at the first convolution of the same
 ResNet-18 U-Net the segmenter uses, so the lag set costs almost nothing at
-inference.  An empty lag set is the single-frame baseline.
+inference.  An empty lag set is the single-frame baseline.  The ``encoder``
+hyperparameter swaps the ResNet-18 for a DINOv3 ConvNeXt
+(:class:`segmenter.ConvNeXtUNet`); checkpoints without it are ResNet-18.
 
 Output channels (:data:`OUTPUTS`):
 
@@ -33,7 +35,7 @@ from torch import Tensor
 import torch.nn.functional as F
 
 from .body_targets import point_heatmap
-from .segmenter import IGNORE_LABEL, ResNet18UNet, masked_binary_metrics
+from .segmenter import IGNORE_LABEL, make_unet, masked_binary_metrics
 
 
 OUTPUTS = ("mask", "ap", "head", "tail", "overlap")
@@ -158,12 +160,13 @@ class BodyFieldModule(L.LightningModule):
         heatmap_weight: float = 0.1,
         overlap_weight: float = 1.0,
         plateau_patience: int = 2,
+        encoder: str = "resnet18",
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
         self.lags = tuple(int(lag) for lag in lags)
-        self.network = ResNet18UNet(
-            pretrained=pretrained, in_channels=1 + len(self.lags), out_channels=len(OUTPUTS), final_channels=FINAL_CHANNELS,
+        self.network = make_unet(
+            encoder, pretrained=pretrained, in_channels=1 + len(self.lags), out_channels=len(OUTPUTS), final_channels=FINAL_CHANNELS,
         )
         # Heatmaps start near zero everywhere (CenterNet's prior of 0.01).  At
         # an even start the focal loss sums every pixel's negative term over a

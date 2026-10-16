@@ -12,7 +12,8 @@ new microscope picks its first default.
 Jobs go through ``POST /api/jobs`` like every other job:
 
 - ``{"kind": "train", "setup", "dataset": ref, "start_from": ref | null,
-  "context": "none" | "short", "params": {...}, "name", "notes"}`` checks
+  "context": "none" | "short", "encoder": one of ``model_training.ENCODERS``,
+  "params": {...}, "name", "notes"}`` checks
   the request (:func:`model_training.plan`) and queues
   ``python -m worm_pose_gen.model_training`` (prepare targets, train,
   evaluate on every benchmark, write the card);
@@ -131,10 +132,10 @@ def default_benchmark(benchmarks: list[library.Benchmark]) -> str | None:
 
 @router.get("/schema")
 def schema() -> dict[str, Any]:
-    """The Train form: every parameter with its per-kind default, and the from-scratch temporal contexts."""
+    """The Train form: every parameter with its per-kind default, and the from-scratch temporal contexts and encoders."""
 
     return {"parameters": list(model_training.PARAMETERS), "contexts": {k: list(v) for k, v in model_training.CONTEXTS.items()},
-            "kinds": list(model_training.KINDS)}
+            "encoders": dict(model_training.ENCODERS), "kinds": list(model_training.KINDS)}
 
 
 @router.get("/models")
@@ -239,7 +240,7 @@ def training_job(app: AppState, payload: dict[str, Any]) -> tuple[JobSpec, list[
     with _found():
         planned = model_training.plan(app.libraries, request, taken=_taken_names(app))
     params = {**planned.summary(), "setup": request.setup, "dataset": request.dataset, "start_from": request.start_from,
-              "context": request.context, "notes": request.notes}
+              "context": request.context, "encoder": planned.encoder, "notes": request.notes}
     spec = JobSpec(kind="train", params=params, label=f"Train {planned.request.name}")
     return spec, model_training.command(app.libraries, request, planned)
 
