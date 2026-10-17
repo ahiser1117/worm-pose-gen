@@ -3,8 +3,8 @@
 Written 2026-10-16 on branch `model-architecture-survey`. A survey of current
 architectures, pretrained models and training schemes that could replace or
 extend the body-field network (`src/worm_pose_gen/body_net.py`), with the
-reason each might beat it. Nothing here has been run; each proposal ends with
-the measurement that would decide it.
+reason each might beat it. Each proposal ends with the measurement that would decide it; P1, P2, P3, P5 and
+P9 were tested on 2026-10-16/17, see [`ARCH_SURVEY_RESULTS.md`](ARCH_SURVEY_RESULTS.md).
 
 ## 1. What the current model is, and where it is weak
 
