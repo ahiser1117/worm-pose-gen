@@ -358,11 +358,14 @@ def _field_arrays(
             continue
         ix0, ix1 = max(w.x0, 0), min(w.x1, w.image_width)
         iy0, iy1 = max(w.y0, 0), min(w.y1, w.image_height)
-        local = np.asarray(evidence.ap, dtype=np.float32)[iy0:iy1, ix0:ix1]
-        rows, cols = slice(iy0 - w.y0, iy1 - w.y0), slice(ix0 - w.x0, ix1 - w.x0)
-        known = np.isfinite(local)
-        ap[f, rows, cols] = np.where(known, local, 0.0)
-        valid[f, rows, cols] = known
+        # A window wholly off camera (a pose completed off camera, or its
+        # mirror) reads no A-P; its head still scores.
+        if ix0 < ix1 and iy0 < iy1:
+            local = np.asarray(evidence.ap, dtype=np.float32)[iy0:iy1, ix0:ix1]
+            rows, cols = slice(iy0 - w.y0, iy1 - w.y0), slice(ix0 - w.x0, ix1 - w.x0)
+            known = np.isfinite(local)
+            ap[f, rows, cols] = np.where(known, local, 0.0)
+            valid[f, rows, cols] = known
         if evidence.head_xy is not None and np.all(np.isfinite(evidence.head_xy)):
             head[f], has_head[f] = evidence.head_xy, 1.0
     return ap, valid, head, has_head

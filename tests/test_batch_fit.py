@@ -260,6 +260,19 @@ class BatchFitTests(unittest.TestCase):
         shifted = replace(evidence, head_xy=evidence.head_xy + [30.0, 40.0])
         self.assertAlmostEqual(float(field_energies([curve], [shifted], config)[0]), 0.01 * 25.0, places=4)
 
+    def test_a_pose_wholly_off_camera_reads_no_a_p_and_keeps_its_head_term(self) -> None:
+        height, width = 160, 220
+        latent = _latent(6, (width / 2, height / 2))
+        mask = _render(latent, height, width)
+        curve = decode_centerline(latent)
+        evidence = body_evidence(curve, mask)
+        config = replace(SMALL, field_ap_weight=0.01, field_end_weight=0.01)
+        # Completed off camera, just below the frame: the A-P term has nothing to read.
+        below = curve + [0.0, height + 2.0 - float(curve[:, 1].min())]
+        energy = float(field_energies([below], [evidence], config)[0])
+        head = float(np.square(below[0] - evidence.head_xy).sum()) / config.field_end_sigma_px**2
+        self.assertAlmostEqual(energy, config.field_end_weight * head, places=3)
+
     def test_the_ap_term_scores_the_front_half(self) -> None:
         height, width = 160, 220
         latent = _latent(6, (width / 2, height / 2))
