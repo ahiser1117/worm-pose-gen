@@ -28,10 +28,11 @@ pulled toward targets built from the teacher (:func:`consistency_terms`):
                    confident pixels (mask, A-P, confident end peaks): flip and
                    rotation equivariance plus the usual mean-teacher term
 
-The teacher predicts the student's crop (the targets) and the whole frame,
-where only the largest connected component of its mask counts as worm; its
-other positives in the crop (agar tracks the worm left, debris, image
-borders) are negative targets.  The first runs, which took
+The teacher predicts the student's crop in the student's batch-norm mode
+(the targets) and the whole frame as at inference, where only the largest
+connected component of its mask counts as worm; its other positives in the
+crop (agar tracks the worm left, debris, image borders) are negative
+targets.  The first runs, which took
 every confident teacher positive as a target, self-trained partly segmented
 tracks into confident false positives; ignoring the other components instead
 let background blobs grow unchecked on another project's recording.
@@ -428,16 +429,14 @@ class SemiBodyFieldModule(BodyFieldModule):
         crops = [(int(y), int(x)) for y, x in unlabeled["origin"]]
         with torch.no_grad():
             inputs = teacher_inputs(unlabeled["frames"], self._offsets, self.lags)
-            # The targets come from the teacher on the student's own crop: a target
-            # from another view (the whole frame) differs systematically, and the
-            # student chasing it drags the teacher along (A-P drifted by +0.1).
-            # The whole frame only decides which mask component is the worm.
-            # Lightning sets each submodule's train/eval flag itself, so the teacher's is
-            # set here: the whole frame as at inference (running statistics), the crop
-            # in the student's batch-norm mode (batch statistics, as Tarvainen & Valpola
-            # run their teacher; its momentum is 0, so they do not leak into the running
-            # ones).  A teacher in eval mode against a student in train mode differs
-            # systematically, and the student chasing it made A-P drift.
+            # The targets must come from the student's own view: a target that differs
+            # systematically (another crop, or batch norm in another mode) is chased by
+            # the student, the EMA teacher follows, and the fields drift (A-P did, by
+            # +0.1).  So the targets are the teacher on the student's crop with batch
+            # statistics, as Tarvainen & Valpola run it (momentum 0 keeps them out of
+            # its running statistics); the whole frame, run as at inference, only
+            # decides which mask component is the worm.  Lightning sets submodules'
+            # train/eval flags itself, so the teacher's are set here.
             self.teacher.eval()
             whole = self.teacher(inputs.flatten(0, 1)).unflatten(0, (size, 3))
             worm_whole = worm_components(torch.sigmoid(whole[:, :, _MASK].float()) > 0.5)
