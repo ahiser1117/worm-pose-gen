@@ -240,6 +240,31 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(model_eval.summarize(rows[:3])["worst5_count"], 1)
 
 
+class MixedSamplerTests(unittest.TestCase):
+    def test_every_hand_label_once_each_share_and_cycling_without_replacement(self):
+        sampler = model_training.MixedSampler(10, [(25, 0.5)], seed=0)
+        self.assertEqual(len(sampler), 20)
+        seen = []
+        for _ in range(5):
+            epoch = list(sampler)
+            self.assertEqual(sorted(i for i in epoch if i < 10), list(range(10)))
+            seen += [i for i in epoch if i >= 10]
+        self.assertEqual(len(seen), 50)
+        self.assertEqual(len(set(seen[:20])), 20)  # no repeats before every extra item was drawn
+        self.assertEqual(set(seen[:30]), set(range(10, 35)))
+        # A source smaller than its share gives all its items, no more.
+        self.assertEqual(len(model_training.MixedSampler(10, [(3, 0.5)])), 13)
+
+    def test_two_sources_share_the_epoch(self):
+        sampler = model_training.MixedSampler(30, [(50, 0.25), (40, 0.25)], seed=1)
+        epoch = list(sampler)
+        self.assertEqual(sorted(i for i in epoch if i < 30), list(range(30)))
+        self.assertEqual(sum(30 <= i < 80 for i in epoch), 15)
+        self.assertEqual(sum(80 <= i < 120 for i in epoch), 15)
+        with self.assertRaisesRegex(ValueError, "below 1"):
+            model_training.MixedSampler(30, [(50, 0.5), (40, 0.5)])
+
+
 class TrainEndToEndTests(LibraryTestCase):
     def test_one_cpu_epoch_fine_tunes_evaluates_and_writes_the_card(self):
         reports = []
@@ -285,6 +310,33 @@ class TrainEndToEndTests(LibraryTestCase):
         evaluation = library.evaluations(self.libraries, card.ref)["lab:rig-v1"]
         self.assertIsNone(evaluation["head_tail_correct"])
         self.assertIsNotNone(evaluation["iou_mean"])
+
+
+class SyntheticMixTests(LibraryTestCase):
+    def test_synthetic_items_and_fibres_train_and_are_recorded(self):
+        from worm_pose_gen import synthetic_clips
+        from tests.test_synthetic_clips import FakeSource, texture
+
+        items = self.root / "items"
+        items.mkdir()
+        rng = np.random.default_rng(0)
+        for k in range(3):
+            item = None
+            while item is None:
+                item = synthetic_clips.make_item(FakeSource(), [texture()], 35, (1, 2), rng, want_contact=False, tries=200)
+            synthetic_clips.save_item(items / f"item_{k:06d}.npz", item)
+        request = model_training.TrainRequest(
+            setup="lab:rig", dataset="lab:base", start_from="lab:body", name="mixed",
+            params={"max_epochs": 1, "batch_size": 2, "crop_size": 64}, synthetic=str(items), synthetic_fraction=0.5, fiber_share=1.0,
+        )
+        card = model_training.train(self.libraries, request, device="cpu")
+        self.assertEqual(card.hparams["synthetic"], {"items": str(items), "count": 3, "fraction": 0.5})
+        self.assertEqual(card.hparams["fiber_share"], 1.0)
+        self.assertEqual(load_model(self.libraries, "mine:mixed", device="cpu").lags, (1, 2))
+        argv = model_training.command(self.libraries, request, model_training.plan(
+            self.libraries, model_training.TrainRequest(**{**request.__dict__, "name": "again"})))
+        self.assertIn("--synthetic-fraction", argv)
+        self.assertIn("--fiber-share", argv)
 
 
 class EvaluateTests(LibraryTestCase):

@@ -54,7 +54,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -399,33 +399,3 @@ class PseudoLabelDataset:
         inputs = np.concatenate((image, difference_channels(stack, valid, self.lags)), axis=0)
         assert targets.shape[0] == TARGET_ROWS
         return {"key": f"pseudo/{path.stem}", "image": torch.as_tensor(inputs), "targets": torch.as_tensor(targets)}
-
-
-class MixedSampler:
-    """Each epoch: every hand label once (shuffled) plus a random draw of pseudo-labels making up ``fraction`` of the epoch.
-
-    Indices address ``ConcatDataset([hand, pseudo])``: ``0..hand-1`` the hand
-    labels, ``hand..hand+pseudo-1`` the pseudo-labels.  Pseudo-labels are
-    drawn without replacement until each was seen once, so successive epochs
-    cycle through all of them.
-    """
-
-    def __init__(self, hand: int, pseudo: int, fraction: float, seed: int = 0) -> None:
-        if not 0.0 <= fraction < 1.0:
-            raise ValueError("the pseudo-label fraction must lie in [0, 1)")
-        self.hand, self.pseudo, self.fraction = int(hand), int(pseudo), float(fraction)
-        self.per_epoch = min(self.pseudo, int(round(self.hand * self.fraction / (1.0 - self.fraction)))) if self.pseudo else 0
-        self.rng = np.random.default_rng(seed)
-        self._queue: list[int] = []
-
-    def __len__(self) -> int:
-        return self.hand + self.per_epoch
-
-    def __iter__(self) -> Iterator[int]:
-        drawn: list[int] = []
-        while len(drawn) < self.per_epoch:
-            if not self._queue:
-                self._queue = list(self.rng.permutation(self.pseudo))
-            drawn.append(self._queue.pop())
-        order = np.concatenate((np.arange(self.hand), self.hand + np.asarray(drawn, dtype=np.int64))).astype(np.int64)
-        return iter(self.rng.permutation(order).tolist())

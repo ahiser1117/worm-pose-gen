@@ -159,10 +159,16 @@ class TrainRequest:
     encoder: str = "resnet18"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
-    # Self-training (command line only): directories of pseudo-label items
+    # Command line only.  Self-training: directories of pseudo-label items
     # (:mod:`pseudo_labels`) making up ``pseudo_fraction`` of every epoch.
     pseudo_labels: list[str] = field(default_factory=list)
     pseudo_fraction: float = 0.0
+    # Rendered synthetic items (:mod:`synthetic_clips`) making up
+    # ``synthetic_fraction`` of every epoch.
+    synthetic: str = ""
+    synthetic_fraction: float = 0.0
+    # Share of hand-label items that get fibre distractors (synthetic_clips.add_fibers).
+    fiber_share: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainRequest":
@@ -232,6 +238,12 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
             raise ValueError(f"unknown encoder {request.encoder!r}; expected one of {tuple(ENCODERS)}")
         kind, lags, encoder = "body_net", CONTEXTS[request.context], request.encoder
     params = validate_params(kind, request.params)
+    if request.synthetic and kind != "body_net":
+        raise ValueError("synthetic items train body-field models only")
+    if not 0.0 <= request.synthetic_fraction < 1.0:
+        raise ValueError("the synthetic fraction must lie in [0, 1)")
+    if not 0.0 <= request.fiber_share <= 1.0 or (request.fiber_share and kind != "body_net"):
+        raise ValueError("the fibre share must lie in [0, 1] and applies to body-field models only")
     train = library.labels(libraries, request.dataset, "train")
     val = library.labels(libraries, request.dataset, "val")
     if not train:
@@ -240,6 +252,8 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
         raise ValueError(f"{request.dataset} has no validation labels (no labeled recording is in the val split)")
     if request.pseudo_labels and (kind != "body_net" or not 0.0 < float(request.pseudo_fraction) < 1.0):
         raise ValueError("pseudo-labels train a body-field model at a pseudo-label fraction in (0, 1)")
+    if float(request.pseudo_fraction) + float(request.synthetic_fraction) >= 1.0:
+        raise ValueError("the pseudo-label and synthetic fractions together must stay below 1 (hand labels fill the rest)")
     request.name = request.name.strip() if request.name else suggest_name(libraries, request.dataset, len(train), taken)
     check_id(request.name)
     if model_exists(libraries, request.name) or request.name in taken:
@@ -262,7 +276,7 @@ class LabelDataset:
 
     def __init__(
         self, libraries: Libraries, records: Sequence[LabelRecord], *, kind: str, lags: Sequence[int] = (), augment: bool = False,
-        crop_size: int | None = None, seed: int = 0, min_fit_iou: float = 0.9,
+        crop_size: int | None = None, seed: int = 0, min_fit_iou: float = 0.9, fiber_share: float = 0.0,
     ) -> None:
         self.libraries = libraries
         self.records = list(records)
@@ -272,6 +286,7 @@ class LabelDataset:
         self.crop_size = crop_size
         self.seed = seed
         self.min_fit_iou = min_fit_iou
+        self.fiber_share = fiber_share
 
     def __len__(self) -> int:
         return len(self.records)
@@ -300,6 +315,14 @@ class LabelDataset:
             arrays = built[1] if body_used(record, built[0], self.min_fit_iou) else None
             targets = body_target_rows(mask, arrays)
         frames = label.context[needed].astype(np.float32)
+        if self.augment and self.fiber_share > 0:
+            from .synthetic_clips import add_fibers
+
+            fibers = np.random.default_rng((self.seed, index, int(torch.initial_seed()) % (1 << 31), 1))
+            if fibers.random() < self.fiber_share:
+                worm = np.argwhere(mask == 1)
+                near = worm.mean(0)[::-1] if len(worm) else np.array(mask.shape[::-1], dtype=np.float64) / 2
+                frames = add_fibers(frames, needed.index(centre), near, fibers)
         if self.augment:
             rng = np.random.default_rng((self.seed, index, int(torch.initial_seed()) % (1 << 31)))
             frames, targets = _augment(frames, targets, rng, self.crop_size)
@@ -335,6 +358,43 @@ def collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- training
+
+
+class MixedSampler:
+    """Each epoch: every hand label once plus draws from extra item sources (pseudo-labels, synthetic items), shuffled together.
+
+    Indices address ``ConcatDataset([hand, *extras])``.  ``extras`` gives each
+    source's size and its share of the epoch; a source contributes
+    ``hand * share / (1 - total share)`` items, at most its size, drawn
+    without replacement until each was seen once, so successive epochs cycle
+    through all of them.
+    """
+
+    def __init__(self, hand: int, extras: Sequence[tuple[int, float]], seed: int = 0) -> None:
+        total = sum(float(share) for _, share in extras)
+        if any(share < 0 for _, share in extras) or total >= 1.0:
+            raise ValueError("the extra sources' shares must be non-negative and together below 1")
+        self.hand = int(hand)
+        self.sizes = [int(size) for size, _ in extras]
+        self.per_epoch = [min(size, int(round(self.hand * float(share) / (1.0 - total)))) for size, share in extras]
+        self.rng = np.random.default_rng(seed)
+        self._queues: list[list[int]] = [[] for _ in extras]
+
+    def __len__(self) -> int:
+        return self.hand + sum(self.per_epoch)
+
+    def __iter__(self):
+        order = [np.arange(self.hand)]
+        offset = self.hand
+        for k, (size, count) in enumerate(zip(self.sizes, self.per_epoch)):
+            drawn: list[int] = []
+            while len(drawn) < count:
+                if not self._queues[k]:
+                    self._queues[k] = list(self.rng.permutation(size))
+                drawn.append(self._queues[k].pop())
+            order.append(offset + np.asarray(drawn, dtype=np.int64))
+            offset += size
+        return iter(self.rng.permutation(np.concatenate(order).astype(np.int64)).tolist())
 
 
 def build_module(libraries: Libraries, plan_: Plan) -> Any:
@@ -430,27 +490,32 @@ def train(
         torch.set_float32_matmul_precision("high")
         workers = (min(4, os.cpu_count() or 1) if use_cuda else 0) if num_workers is None else int(num_workers)
 
-        def loader(records: list[LabelRecord], training: bool) -> DataLoader:
-            dataset = LabelDataset(libraries, records, kind=plan_.kind, lags=plan_.lags, augment=training,
-                                   crop_size=p["crop_size"] if training else None, seed=p["seed"],
-                                   min_fit_iou=p.get("min_fit_iou", 0.9))
-            sampler = None
-            if training and pseudo is not None:
-                from torch.utils.data import ConcatDataset
-
-                from .pseudo_labels import MixedSampler
-
-                sampler = MixedSampler(len(dataset), len(pseudo), request.pseudo_fraction, seed=p["seed"])
-                dataset = ConcatDataset([dataset, pseudo])
-            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2),
-                              shuffle=training and sampler is None, sampler=sampler,
-                              num_workers=workers, persistent_workers=workers > 0, pin_memory=use_cuda, collate_fn=collate)
-
         pseudo = None
         if request.pseudo_labels:
             from .pseudo_labels import PseudoLabelDataset
 
             pseudo = PseudoLabelDataset(request.pseudo_labels, lags=plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
+        synthetic = None
+        if request.synthetic and request.synthetic_fraction > 0:
+            from .synthetic_clips import SyntheticClipDataset
+
+            synthetic = SyntheticClipDataset(request.synthetic, plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
+        # Item sources mixed into the training epochs beside the hand labels, with their share of each epoch.
+        extras = [(d, f) for d, f in ((pseudo, request.pseudo_fraction), (synthetic, request.synthetic_fraction)) if d is not None]
+
+        def loader(records: list[LabelRecord], training: bool) -> DataLoader:
+            dataset = LabelDataset(libraries, records, kind=plan_.kind, lags=plan_.lags, augment=training,
+                                   crop_size=p["crop_size"] if training else None, seed=p["seed"],
+                                   min_fit_iou=p.get("min_fit_iou", 0.9), fiber_share=request.fiber_share if training else 0.0)
+            sampler = None
+            if training and extras:
+                from torch.utils.data import ConcatDataset
+
+                sampler = MixedSampler(len(dataset), [(len(d), f) for d, f in extras], seed=p["seed"])
+                dataset = ConcatDataset([dataset, *(d for d, _ in extras)])
+            return DataLoader(dataset, batch_size=p["batch_size"] if training else max(1, p["batch_size"] // 2),
+                              shuffle=training and sampler is None, sampler=sampler,
+                              num_workers=workers, persistent_workers=workers > 0, pin_memory=use_cuda, collate_fn=collate)
 
         module = build_module(libraries, plan_)
 
@@ -498,7 +563,10 @@ def train(
             "parent": request.start_from or None,
             "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
                         **({"encoder": plan_.encoder} if plan_.kind == "body_net" else {}),
-                        **({} if pseudo is None else {"pseudo_labels": list(request.pseudo_labels), "pseudo_fraction": request.pseudo_fraction})},
+                        **({} if pseudo is None else {"pseudo_labels": list(request.pseudo_labels), "pseudo_fraction": request.pseudo_fraction}),
+                        **({"synthetic": {"items": request.synthetic, "count": len(synthetic), "fraction": request.synthetic_fraction}}
+                           if synthetic is not None else {}),
+                        **({"fiber_share": request.fiber_share} if request.fiber_share else {})},
             "notes": request.notes,
         }
         run = {
@@ -550,6 +618,10 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
         argv += ["--pseudo-labels", directory]
     if request.pseudo_labels:
         argv += ["--pseudo-fraction", str(request.pseudo_fraction)]
+    if request.synthetic:
+        argv += ["--synthetic", request.synthetic, "--synthetic-fraction", str(request.synthetic_fraction)]
+    if request.fiber_share:
+        argv += ["--fiber-share", str(request.fiber_share)]
     return argv
 
 
@@ -567,6 +639,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pseudo-labels", action="append", default=[],
                         help="a directory of pseudo-label items (pseudo_labels.py) to mix in at --pseudo-fraction; repeatable")
     parser.add_argument("--pseudo-fraction", type=float, default=0.0, help="share of every epoch drawn from the pseudo-labels")
+    parser.add_argument("--synthetic", default="", help="directory of rendered synthetic items (synthetic_clips) to mix in")
+    parser.add_argument("--synthetic-fraction", type=float, default=0.0, help="share of each epoch's items that are synthetic")
+    parser.add_argument("--fiber-share", type=float, default=0.0, help="share of hand-label items given fibre distractors")
     parser.add_argument("--num-workers", type=int, default=None, help="data loader workers (default: 4 on a GPU, 0 on the CPU)")
     for p in PARAMETERS:
         parser.add_argument(f"--{p['name'].replace('_', '-')}", dest=p["name"], type=int if p["type"] == "int" else float,
@@ -581,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
         setup=args.setup, dataset=args.dataset, name=args.name, start_from=args.start_from, context=args.context, encoder=args.encoder,
         params={p["name"]: getattr(args, p["name"]) for p in PARAMETERS if getattr(args, p["name"]) is not None}, notes=args.notes,
         pseudo_labels=list(args.pseudo_labels), pseudo_fraction=args.pseudo_fraction,
+        synthetic=args.synthetic, synthetic_fraction=args.synthetic_fraction, fiber_share=args.fiber_share,
     )
     started = time.monotonic()
 

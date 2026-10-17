@@ -10,7 +10,7 @@ import torch
 from worm_pose_gen import model_training, pseudo_labels
 from worm_pose_gen.body_net import _AP_VALID, _HEAD, _MASK, _TAIL, _VALID, BodyFieldModule
 from worm_pose_gen.pose_run import render_tube
-from worm_pose_gen.pseudo_labels import IGNORE, MixedSampler, PseudoLabelDataset, SelectionParams, select_rows
+from worm_pose_gen.pseudo_labels import IGNORE, PseudoLabelDataset, SelectionParams, select_rows
 
 from tests.test_model_training import SHAPE, LibraryTestCase, straight_worm
 
@@ -157,19 +157,6 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual(dataset.trained_on()["counts"], {"pseudo": 3, "bridged": 1, "clear": 2})
             with self.assertRaisesRegex(ValueError, "offsets"):
                 PseudoLabelDataset([Path(root) / "items"], lags=(2,))
-
-    def test_mixed_sampler_fraction_and_cycling(self):
-        sampler = MixedSampler(hand=10, pseudo=25, fraction=0.5, seed=0)
-        self.assertEqual(len(sampler), 20)
-        seen = []
-        for _ in range(5):
-            epoch = list(sampler)
-            self.assertEqual(sorted(i for i in epoch if i < 10), list(range(10)))
-            seen += [i for i in epoch if i >= 10]
-        self.assertEqual(len(seen), 50)
-        self.assertEqual(len(set(seen[:20])), 20)  # no repeats before every pseudo-label was drawn
-        self.assertEqual(set(seen[:30]), set(range(10, 35)))
-        self.assertEqual(len(MixedSampler(hand=10, pseudo=3, fraction=0.5)), 13)
 
 
 class TrainWithPseudoLabelsTests(LibraryTestCase):
