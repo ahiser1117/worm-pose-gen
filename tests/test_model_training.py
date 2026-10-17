@@ -271,6 +271,32 @@ class TrainEndToEndTests(LibraryTestCase):
         loaded = load_model(self.libraries, "mine:tuned", device="cpu")
         self.assertEqual(loaded.lags, (1, 2))
 
+    def test_semi_supervised_fine_tune_writes_a_plain_body_net(self):
+        import h5py
+
+        from worm_pose_gen.unlabeled_clips import build_store
+
+        recording = self.root / "unlabeled.h5"
+        frames = np.full((60, 64, 96), 200, np.uint8)
+        for t in range(60):
+            frames[t, 28:36, 10 + t // 4 : 70 + t // 4] = 90  # a dark bar creeping right
+        with h5py.File(recording, "w") as handle:
+            handle.create_dataset("/img_nir", data=frames)
+        store = self.root / "clips"
+        build_store(store, [str(recording)], per_recording=1, length=40, excluded=lambda r, f: False, workers=1, log=lambda m: None)
+        semi = {"store": str(store), "crop": 32, "workers": 0, "unlabeled_batch": 2, "min_area": 10, "ramp_epochs": 0}
+        request = model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:body", name="semi",
+                                              params={"max_epochs": 1, "batch_size": 2, "crop_size": 64}, semi=semi)
+        card = model_training.train(self.libraries, request, device="cpu")
+        self.assertEqual(card.hparams["semi"]["store"], str(store))
+        self.assertEqual(card.hparams["semi"]["export"], "teacher")
+        checkpoint = torch.load(self.libraries.personal / "models" / "semi" / "weights.ckpt", map_location="cpu", weights_only=False)
+        self.assertFalse(any(key.startswith("teacher.") for key in checkpoint["state_dict"]))
+        self.assertNotIn("semi", checkpoint["hyper_parameters"])
+        self.assertEqual(load_model(self.libraries, "mine:semi", device="cpu").lags, (1, 2))
+        self.assertIn("--semi", model_training.command(self.libraries, request, model_training.plan(
+            self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:body", semi=semi))))
+
     def test_segmenter_fine_tune(self):
         request = model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:seg",
                                               params={"max_epochs": 1, "batch_size": 2, "crop_size": 64})
