@@ -43,6 +43,9 @@ CACHE_VERSION = 1
 FLAT_FIELD_SAMPLE_COUNT = 64
 HDF5_SUFFIXES = (".h5", ".hdf5")
 VIDEO_FACTS = {"frames": None, "height": None, "width": None, "readable": True, "error": None}
+PENDING_FACTS = {"frames": None, "height": None, "width": None, "readable": False, "error": None}
+# One app process writes the index from several threads (listings and the prober).
+_INDEX_LOCK = threading.Lock()
 
 
 @dataclass
@@ -62,6 +65,8 @@ class RecordingInfo:
     dataset: str = DATASET_PATH
     # A video (``.avi``), converted to an HDF5 recording when it is first opened.
     video: bool = False
+    # Not opened yet: frames and readability are unknown until a prober has looked.
+    pending: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -158,6 +163,8 @@ class RecordingIndex:
     def __init__(self, cache: Path | None) -> None:
         self.cache = None if cache is None else Path(cache)
         self.entries: dict[str, dict[str, Any]] = {}
+        # Facts probed by this instance, which ``save`` adds to the file.
+        self._new: dict[str, dict[str, Any]] = {}
         self._dirty = False
         if self.cache is not None and self.cache.exists():
             try:
@@ -167,26 +174,83 @@ class RecordingIndex:
             except (OSError, ValueError):
                 self.entries = {}
 
-    def facts(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
+    @staticmethod
+    def _key(path: Path, dataset: str) -> str:
+        return str(path) if dataset == DATASET_PATH else f"{path}#{dataset}"
+
+    def cached(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any] | None:
+        """The facts of ``path`` while the file is unchanged since they were probed, else ``None``."""
+
         stamp = _file_stamp(path)
-        key = str(path) if dataset == DATASET_PATH else f"{path}#{dataset}"
-        entry = self.entries.get(key)
+        entry = self.entries.get(self._key(path, dataset))
         if entry is None or entry.get("mtime_ns") != stamp["mtime_ns"] or entry.get("size") != stamp["size"]:
-            entry = {**stamp, **probe_recording(path, dataset)}
-            self.entries[key] = entry
+            return None
+        return entry
+
+    def facts(self, path: Path, dataset: str = DATASET_PATH) -> dict[str, Any]:
+        entry = self.cached(path, dataset)
+        if entry is None:
+            entry = {**_file_stamp(path), **probe_recording(path, dataset)}
+            self.entries[self._key(path, dataset)] = entry
+            self._new[self._key(path, dataset)] = entry
             self._dirty = True
         return entry
 
     def save(self) -> None:
+        """Add the facts probed here to the file, keeping what other listings saved since this one read it."""
+
         if self.cache is None or not self._dirty:
             return
         self.cache.parent.mkdir(parents=True, exist_ok=True)
-        # A unique temporary: concurrent listings (the app serves them from a
-        # thread pool) must not replace or unlink each other's half-written file.
-        with tempfile.NamedTemporaryFile("w", dir=self.cache.parent, prefix=self.cache.name + ".", suffix=".tmp", delete=False) as handle:
-            json.dump({"version": CACHE_VERSION, "entries": self.entries}, handle, indent=1)
-        os.replace(handle.name, self.cache)
+        with _INDEX_LOCK:
+            on_disk = RecordingIndex(self.cache).entries
+            self.entries = {**on_disk, **self._new}
+            # A unique temporary: a reader must never see a half-written file.
+            with tempfile.NamedTemporaryFile("w", dir=self.cache.parent, prefix=self.cache.name + ".", suffix=".tmp", delete=False) as handle:
+                json.dump({"version": CACHE_VERSION, "entries": self.entries}, handle, indent=1)
+            os.replace(handle.name, self.cache)
+        self._new = {}
         self._dirty = False
+
+
+class RecordingProber:
+    """Probes recordings in a background thread, so a listing does not wait for them.
+
+    Probing opens each file and reads three frames, which over network
+    storage takes about a second per recording (longer for a damaged one), so
+    a folder of a hundred recordings would hold the Recordings screen for
+    minutes.  The screen lists the files at once (:func:`list_recordings`
+    with ``probe=False``), hands the unprobed ones here and polls; each
+    probed file is saved to the index as it is done.
+    """
+
+    def __init__(self, cache: Path | None) -> None:
+        self.cache = cache
+        self._queue: list[tuple[Path, str]] = []
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def submit(self, items: Iterable[tuple[Path, str]]) -> None:
+        with self._lock:
+            self._queue.extend(item for item in items if item not in self._queue)
+            if self._queue and (self._thread is None or not self._thread.is_alive()):
+                self._thread = threading.Thread(target=self._run, name="recording-prober", daemon=True)
+                self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                if not self._queue:
+                    return
+                path, dataset = self._queue[0]
+            index = RecordingIndex(self.cache)
+            try:
+                index.facts(path, dataset)
+                index.save()
+            except OSError:  # vanished since it was listed: the next listing drops it
+                pass
+            with self._lock:
+                self._queue.remove((path, dataset))
 
 
 # How many folders below a recording folder are searched: ``<folder>/<day>/<recording>.h5`` is two.
@@ -216,11 +280,13 @@ def find_recordings(roots: Iterable[Path], depth: int = FOLDER_DEPTH) -> list[Pa
     return sorted(found, key=lambda p: (p.stem, str(p)))
 
 
-def list_recordings(roots: Iterable[Path], *, cache: Path | None = None, dataset: str = DATASET_PATH) -> list[RecordingInfo]:
+def list_recordings(roots: Iterable[Path], *, cache: Path | None = None, dataset: str = DATASET_PATH, probe: bool = True) -> list[RecordingInfo]:
     """Catalog the recordings under ``roots`` (directories, or recording files themselves), reusing ``cache`` for unchanged files.
 
     ``dataset`` is the HDF5 dataset holding the frames (a setup's video dataset).
     A video is listed without opening it: it is read once it is converted.
+    With ``probe=False`` a file the cache has no current facts for is not
+    opened either but listed as ``pending`` (for :class:`RecordingProber`).
     """
 
     index = RecordingIndex(cache)
@@ -229,7 +295,7 @@ def list_recordings(roots: Iterable[Path], *, cache: Path | None = None, dataset
         video = _file_kind(path.suffix.lower()) == "video"
         try:
             stamp = _file_stamp(path)
-            entry = VIDEO_FACTS if video else index.facts(path, dataset)
+            entry = VIDEO_FACTS if video else index.facts(path, dataset) if probe else (index.cached(path, dataset) or PENDING_FACTS)
         except OSError as error:
             # Vanished or unstat-able between listing and probing: report it rather than drop it.
             entry = {"frames": None, "height": None, "width": None, "readable": False, "error": f"{type(error).__name__}: {error}"}
@@ -238,7 +304,7 @@ def list_recordings(roots: Iterable[Path], *, cache: Path | None = None, dataset
             RecordingInfo(
                 name=path.stem, path=str(path), frames=entry["frames"], height=entry["height"], width=entry["width"],
                 size_bytes=int(stamp["size"]), modified_at=_iso_utc(stamp["mtime_ns"] / 1e9), readable=bool(entry["readable"]),
-                error=entry["error"], dataset=dataset, video=video,
+                error=entry["error"], dataset=dataset, video=video, pending=entry is PENDING_FACTS,
             )
         )
     index.save()

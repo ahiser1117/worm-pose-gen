@@ -434,7 +434,9 @@ def home(app: AppState, setup_ref: str | None) -> dict[str, Any]:
     setup = library.get_setup(libraries, setup_ref) if setup_ref else setups[0]
     payload["setup"] = setup.to_dict()
     payload["folders"] = [path for path, entry in sorted(library.recording_folders(libraries).items()) if entry["setup"] == setup.ref]
-    infos = library_recordings(app, setup)
+    # The files are listed at once; the ones not probed yet are probed in the background while the screen polls.
+    infos = library_recordings(app, setup, probe=False)
+    app.prober.submit((Path(info.path), info.dataset) for info in infos if info.pending)
     workspaces: dict[str, str] = {}
     for info in reversed(list_workspaces(app.config.workspaces_root)):  # oldest first, so the newest wins
         workspaces[str(Path(info.recording).resolve())] = info.name
@@ -444,21 +446,25 @@ def home(app: AppState, setup_ref: str | None) -> dict[str, Any]:
         name = workspaces.get(str(Path(info.path).resolve()))
         rows.append({
             "id": library.recording_id(info.path), "path": info.path, "frames": info.frames, "readable": info.readable, "error": info.error,
-            "video": info.video,
+            "video": info.video, "pending": info.pending,
             "workspace": name, "status": None if name is None else status(app, name, jobs, opened),
         })
     payload["recordings"] = rows
     return payload
 
 
-def library_recordings(app: AppState, setup: library.Setup) -> list[RecordingInfo]:
+def library_recordings(app: AppState, setup: library.Setup, probe: bool = True) -> list[RecordingInfo]:
     """The setup's recordings (in its folders or registered to it, not registered to another setup).
 
-    A video converted before is listed as its HDF5 recording only.
+    A video converted before is listed as its HDF5 recording only.  With
+    ``probe=False`` files not probed yet are listed as pending
+    (:func:`recordings.list_recordings`).
     """
 
     libraries = app.libraries
-    infos = list_recordings(library.recording_sources(libraries, setup.ref), cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]))
+    infos = list_recordings(
+        library.recording_sources(libraries, setup.ref), cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]), probe=probe,
+    )
     registered = library.setups.registered_recordings(libraries)
     infos = [info for info in infos if registered.get(info.path, {}).get("setup") in (None, setup.ref)]
     converted = {info.name for info in infos if not info.video}

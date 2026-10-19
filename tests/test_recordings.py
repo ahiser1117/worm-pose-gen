@@ -14,6 +14,7 @@ from PIL import Image
 
 from worm_pose_gen.recordings import (
     RecordingInfo,
+    RecordingProber,
     find_recordings,
     list_recordings,
     probe_frames,
@@ -102,6 +103,18 @@ class ListRecordingsTests(RecordingsFixture):
         self.assertTrue(info.video)
         self.assertTrue(info.readable)
         self.assertIsNone(info.frames)
+
+    def test_without_probing_new_files_are_pending_until_a_prober_saves_them(self) -> None:
+        cache = self.root / "index.json"
+        pending = list_recordings([self.data], cache=cache, probe=False)
+        self.assertTrue(all(info.pending and info.frames is None for info in pending))
+        prober = RecordingProber(cache)
+        prober.submit((Path(info.path), info.dataset) for info in pending)
+        prober._thread.join(timeout=30)
+        listed = {info.name: info for info in list_recordings([self.data], cache=cache, probe=False)}
+        self.assertFalse(any(info.pending for info in listed.values()))
+        self.assertEqual(listed["2024-05-28-02"].frames, 4)
+        self.assertFalse(listed["2023-03-30-01"].readable)
 
     def test_a_root_that_links_to_another_lists_each_recording_once(self) -> None:
         link = self.root / "link"

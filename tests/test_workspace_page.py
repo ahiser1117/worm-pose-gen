@@ -103,12 +103,31 @@ class WorkspacePageTests(unittest.TestCase):
             time.sleep(0.2)
         self.fail(f"job {job_id} did not finish")
 
+    def home_when_checked(self, timeout: float = 30.0) -> dict:
+        """The Recordings screen once the server has probed every file (the first listing has them pending)."""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            home = self.call("GET", "/api/home")
+            if not any(r["pending"] for r in home["recordings"]):
+                return home
+            time.sleep(0.1)
+        self.fail("recordings still pending")
+
+    def test_new_files_are_listed_at_once_and_probed_in_the_background(self) -> None:
+        recording = self.recording.with_name("2026-01-02-09.h5")
+        _write_recording(recording)
+        first = next(r for r in self.call("GET", "/api/home")["recordings"] if r["id"] == "2026-01-02-09")
+        self.assertEqual((first["pending"], first["frames"], first["readable"]), (True, None, False))
+        row = next(r for r in self.home_when_checked()["recordings"] if r["id"] == "2026-01-02-09")
+        self.assertEqual((row["pending"], row["frames"], row["readable"]), (False, FRAMES, True))
+
     @slow
     def test_analyse_a_recording_end_to_end(self) -> None:
-        home = self.call("GET", "/api/home")
+        home = self.home_when_checked()
         self.assertEqual(home["setup"]["ref"], "lab:nir")
         row = next(r for r in home["recordings"] if r["id"] == "2026-01-02-03")
-        self.assertEqual((row["frames"], row["workspace"], row["status"]), (FRAMES, None, None))
+        self.assertEqual((row["frames"], row["pending"], row["workspace"], row["status"]), (FRAMES, False, None, None))
 
         # Opening makes the workspace and starts nothing; the analysis starts from the workspace.
         self.call("POST", "/api/recordings/open", {"path": str(self.root / "elsewhere.h5")}, 404)

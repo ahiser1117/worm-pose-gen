@@ -21,7 +21,7 @@ from ..jobs import JobRunner, LocalGPUBackend, SlurmBackend
 from .. import library
 from ..library import Libraries
 from ..pipeline import WorkspaceBusy, workspace_dataset
-from ..recordings import DATASET_PATH, RecordingSource, list_directory, thumbnail_png
+from ..recordings import DATASET_PATH, RecordingProber, RecordingSource, list_directory, thumbnail_png
 from ..workspace import Workspace, list_workspaces, read_recording_shape
 from .config import AppConfig
 from .frame_view import Segmenters
@@ -73,6 +73,8 @@ class AppState:
         self._views: dict[str, WorkspaceView] = {}
         self._lock = threading.Lock()
         self.libraries = Libraries(config.lab_library, config.library)
+        # Probes the Recordings screen's new files in the background (``<workspaces_root>/recordings_index.json``).
+        self.prober = RecordingProber(config.recordings_cache)
         # The Labeling page: its frame services and the queues it walks (``<workspaces_root>/queues``).
         from .labeling import Labeling
         from .queues import QueueStore

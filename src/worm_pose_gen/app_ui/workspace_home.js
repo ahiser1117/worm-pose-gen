@@ -8,7 +8,9 @@
 // (searched two folders deep for .h5 and .avi files) and single files added
 // to a setup; Add recordings adds or removes either. A video is converted to
 // an HDF5 recording when it is first opened. Before the user has any
-// recording the screen says what to do first and where their data goes. The
+// recording the screen says what to do first and where their data goes. New
+// files are listed at once and opened by the server in the background ("Checking
+// the file…") to read their length and whether they can be read. The
 // tables rescan whenever the screen opens and poll while an analysis runs; a
 // poll rebuilds only the rows that changed, so the scroll position stays.
 
@@ -91,7 +93,8 @@ export class RecordingsScreen {
       else { this.renderError(error); return; }
     }
     if (this.tables && this.renderedSetup === this.data.setup?.ref) this.renderRows(); else this.render();
-    const busy = this.data.recordings.some((r) => ["queued", "analysing"].includes(r.status?.state));
+    // Poll while an analysis runs or while the server is still opening new files to read their length.
+    const busy = this.data.recordings.some((r) => r.pending || ["queued", "analysing"].includes(r.status?.state));
     if (busy && !this.node.hidden) this.timer = setTimeout(() => this.refresh(), POLL_MS);
   }
 
@@ -171,7 +174,7 @@ export class RecordingsScreen {
 
   // A row's thumbnail is kept across rebuilds of the row, so a poll does not reload it.
   thumbnail(key, recording) {
-    if (!recording.readable || recording.video) return el("span", {class: "ws-thumb"});
+    if (!recording.readable || recording.video || recording.pending) return el("span", {class: "ws-thumb"});
     const src = `/api/recordings/thumbnail${query({path: recording.path, frame: Math.floor((recording.frames || 1) / 2), scale: 0.12})}`;
     const cached = this.thumbs.get(key);
     if (cached?.dataset.src === src) return cached;
@@ -182,7 +185,8 @@ export class RecordingsScreen {
 
   row(recording, fps, key) {
     const status = recording.status;
-    const [text, kind, progress] = !recording.readable ? ["Cannot be read", "error", null]
+    const [text, kind, progress] = recording.pending ? ["Checking the file…", "info", null]
+      : !recording.readable ? ["Cannot be read", "error", null]
       : recording.video ? ["Video · converted when opened", "", null] : describeStatus(status);
     const thumb = this.thumbnail(key, recording);
     const statusCell = el("td", {class: "ws-status"}, el("span", {class: `badge ${kind}`, title: status?.analysis?.error || recording.error || null}, text));
