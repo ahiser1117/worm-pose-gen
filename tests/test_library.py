@@ -161,6 +161,18 @@ class SetupTests(unittest.TestCase):
         with self.assertRaises(NotADirectoryError):
             library.add_recording_folder(self.libraries, recording, "mine:rig2")
 
+    def test_a_recording_reached_through_a_link_in_the_folder_belongs_to_it(self):
+        elsewhere = self.root / "store" / "prj_x" / "data_raw" / "2025-03-18"
+        elsewhere.mkdir(parents=True)
+        recording = elsewhere / "2025-03-18-16.h5"
+        recording.write_bytes(b"")
+        (self.root / "recordings" / "prj_x").symlink_to(elsewhere.parent)
+        self.assertEqual(library.setup_for_recording(self.libraries, recording), "lab:nir")
+        self.assertEqual(library.setup_for_recording(self.libraries, self.root / "recordings" / "prj_x" / "2025-03-18" / recording.name), "lab:nir")
+        stray = self.root / "store" / "other.h5"
+        stray.write_bytes(b"")
+        self.assertIsNone(library.setup_for_recording(self.libraries, stray))
+
     def test_a_video_is_registered_as_its_converted_recording(self):
         import h5py
         import imageio_ffmpeg

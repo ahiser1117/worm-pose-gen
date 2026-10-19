@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import getpass
 from pathlib import Path
+import threading
+import time
 from typing import Any
 
 from .roots import (
@@ -279,15 +281,47 @@ def _inside(path: Path, root: Path) -> bool:
     return True
 
 
+# Recording folder -> (when searched, the recordings found), for files reached through symbolic links.
+_FOUND: dict[str, tuple[float, frozenset[Path]]] = {}
+_FOUND_LOCK = threading.Lock()
+# A miss rescans a folder searched longer ago than this, so a new file is found.
+FOUND_RESCAN_SECONDS = 10.0
+
+
+def _found_in(folder: str, recording: Path) -> bool:
+    """Whether the folder's search (:func:`recordings.find_recordings`) finds ``recording`` (resolved)."""
+
+    from ..recordings import find_recordings
+
+    with _FOUND_LOCK:
+        searched, found = _FOUND.get(folder, (0.0, frozenset()))
+    if recording in found or time.monotonic() - searched < FOUND_RESCAN_SECONDS:
+        return recording in found
+    found = frozenset(find_recordings([Path(folder)]))
+    with _FOUND_LOCK:
+        _FOUND[folder] = (time.monotonic(), found)
+    return recording in found
+
+
 def setup_for_recording(libraries: Libraries, path: str | Path) -> str | None:
-    """The setup a recording belongs to: its registration, else the setup of the folder that holds it."""
+    """The setup a recording belongs to: its registration, else the setup of the folder that holds it.
+
+    A folder holds the files under it and those its search reaches through
+    symbolic links (``all_data_raw/prj_x -> /store1/prj_x/data_raw``), whose
+    resolved paths lie elsewhere; the folders are searched for those only
+    when no folder holds the path itself.
+    """
 
     resolved = Path(path).expanduser().resolve()
     entry = registered_recordings(libraries).get(str(resolved))
     if entry is not None:
         return str(entry["setup"])
-    for folder, entry in recording_folders(libraries).items():
+    folders = recording_folders(libraries)
+    for folder, entry in folders.items():
         if _inside(resolved, Path(folder)):
+            return str(entry["setup"])
+    for folder, entry in folders.items():
+        if _found_in(folder, resolved):
             return str(entry["setup"])
     return None
 
