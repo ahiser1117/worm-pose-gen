@@ -25,7 +25,7 @@ rules below target that time.
 
 ## Unit tests
 
-- Use `scripts/run_tests.py` (README, Tests). It runs one process per test
+- Use `scripts/run_tests.py` (docs/DEVELOPER.md, Tests). It runs one process per test
   class in parallel, caps OpenMP/MKL threads, and tests the checkout it sits
   in, so call `<worktree>/scripts/run_tests.py` from a worktree.
 - While iterating, run the modules you touch, or `--fast` (about a minute);

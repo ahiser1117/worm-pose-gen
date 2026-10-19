@@ -12,7 +12,7 @@ The loop was:
 `bootstrap labels from the pipeline -> train -> label with the network proposing -> retrain from the last checkpoint -> ...`
 
 Labels and models now live in the library (lab and personal, see the
-README's "Libraries" and [`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md),
+docs/DEVELOPER.md's "Libraries" and [`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md),
 section 1): labels are made on the pose app's Labeling page, and models are
 trained and evaluated on the Training page or with `scripts/train.py` and
 `scripts/evaluate_model.py`. Sections 2 to 7 describe how the first labels
