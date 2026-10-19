@@ -262,7 +262,8 @@ class LabelingApiBase(unittest.TestCase):
         self.recordings.mkdir()
         self.libraries = library.Libraries(lab=None, personal=self.root / "mine")
         library.write_setup(self.libraries.personal, "rig", name="Rig", fps=20.0, pixel_size_um=1.0,
-                            video={"flat_field": False}, recording_roots=[str(self.root)])
+                            video={"flat_field": False})
+        library.add_recording_folder(self.libraries, self.root, "mine:rig")
         self.make_app()
 
     def make_app(self):

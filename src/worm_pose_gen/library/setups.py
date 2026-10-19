@@ -6,7 +6,6 @@ microscope's videos and which models to use on them::
     {"name": ..., "description": ...,
      "video": {"dataset_path": "/img_nir", "flat_field": true},
      "pixel_size_um": 1.0, "fps": 20.0,
-     "recording_roots": ["/store1/..."],
      "defaults": {"mask": "lab:nir-hand284", "body": "lab:nir-body-lags3"}}
 
 ``defaults`` is keyed by role: ``mask`` is the model whose mask the pipeline
@@ -16,9 +15,12 @@ overrides the defaults of a lab setup in the personal
 default is appended to the library's ``setups/defaults_log.jsonl`` with who
 made it, when, and why, as the promotion log did.
 
-A recording belongs to the setup it is registered to in the personal
-``recordings.json`` (recordings added by hand), else to the setup whose
-``recording_roots`` contain it.  A recording's id is its file name without
+Recordings are the user's, not the setup's: the personal
+``recording_folders.json`` names folders, each for one setup, that are
+searched for recordings (``.h5`` and ``.avi`` files at most two folders
+deep), and the personal ``recordings.json`` names single files added by
+hand.  A recording belongs to the setup it is registered to, else to the
+setup of the folder holding it.  A recording's id is its file name without
 the extension (``2023-06-23-01``): the lab's acquisition names files by date
 and index, so the stem is unique within a setup and survives the file being
 mirrored to another store.
@@ -45,6 +47,7 @@ from ..workspace import utc_now
 SETUPS_DIR = "setups"
 DEFAULTS_LOG = "defaults_log.jsonl"
 RECORDINGS_FILE = "recordings.json"
+FOLDERS_FILE = "recording_folders.json"
 VIDEOS_DIR = "videos"
 # What a model must output to fill each default role.
 ROLE_OUTPUTS = {"mask": ("mask",), "body": ("ap", "head", "tail")}
@@ -59,13 +62,12 @@ class Setup:
     video: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_VIDEO))
     pixel_size_um: float | None = None
     fps: float | None = None
-    recording_roots: tuple[str, ...] = ()
     # The effective defaults: the setup's own, overridden by the personal override of a lab setup.
     defaults: dict[str, str] = field(default_factory=dict)
     overridden: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {**asdict(self), "recording_roots": list(self.recording_roots), "overridden": list(self.overridden)}
+        return {**asdict(self), "overridden": list(self.overridden)}
 
 
 def setup_path(root: Path, setup_id: str) -> Path:
@@ -78,8 +80,7 @@ def override_path(libraries: Libraries, setup_id: str) -> Path:
 
 def write_setup(
     root: Path, setup_id: str, *, name: str, description: str = "", video: dict[str, Any] | None = None,
-    pixel_size_um: float | None = None, fps: float | None = None, recording_roots: list[str] | tuple[str, ...] = (),
-    defaults: dict[str, str] | None = None,
+    pixel_size_um: float | None = None, fps: float | None = None, defaults: dict[str, str] | None = None,
 ) -> None:
     """Write a setup file into a library root (the personal one from the app; the lab one only from scripts)."""
 
@@ -94,7 +95,7 @@ def write_setup(
         "name": str(name), "description": str(description), "video": video,
         "pixel_size_um": None if pixel_size_um is None else float(pixel_size_um),
         "fps": None if fps is None else float(fps),
-        "recording_roots": [str(p) for p in recording_roots], "defaults": dict(defaults or {}),
+        "defaults": dict(defaults or {}),
     })
 
 
@@ -123,7 +124,7 @@ def get_setup(libraries: Libraries, ref: str) -> Setup:
     return Setup(
         ref=ref, name=str(data.get("name") or setup_id), description=str(data.get("description") or ""),
         video={**DEFAULT_VIDEO, **(data.get("video") or {})}, pixel_size_um=data.get("pixel_size_um"),
-        fps=data.get("fps"), recording_roots=tuple(data.get("recording_roots") or ()), defaults=defaults,
+        fps=data.get("fps"), defaults=defaults,
         overridden=overridden,
     )
 
@@ -207,7 +208,7 @@ def registered_recordings(libraries: Libraries) -> dict[str, dict[str, Any]]:
 
 
 def register_recording(libraries: Libraries, path: str | Path, setup_ref: str) -> dict[str, Any]:
-    """Assign a recording outside every setup's roots (or move it to another setup) in the personal library.
+    """Assign a recording outside the setup's folders (or move it to another setup) in the personal library.
 
     A video (``.avi``) is converted first, unless its converted recording exists already.
     """
@@ -217,15 +218,57 @@ def register_recording(libraries: Libraries, path: str | Path, setup_ref: str) -
     if not Path(resolved).is_file():
         raise FileNotFoundError(f"{resolved} is not a file")
     if is_video(resolved):
-        converted = libraries.personal / VIDEOS_DIR / f"{recording_id(resolved)}.h5"
-        if not converted.is_file():
-            convert_video(Path(resolved), converted, str(setup.video["dataset_path"]))
-        resolved = str(converted.resolve())
+        resolved = str(converted_recording(libraries, resolved, setup).resolve())
     with locked(libraries.personal):
         registry = registered_recordings(libraries)
         registry[resolved] = {"setup": setup_ref, "registered_at": utc_now()}
         write_json(libraries.personal / RECORDINGS_FILE, registry)
     return {"id": recording_id(resolved), "path": resolved, "setup": setup_ref}
+
+
+def converted_path(libraries: Libraries, video: str | Path) -> Path:
+    """Where a video's converted HDF5 recording goes in the personal library."""
+
+    return libraries.personal / VIDEOS_DIR / f"{recording_id(video)}.h5"
+
+
+def converted_recording(libraries: Libraries, video: str | Path, setup: Setup) -> Path:
+    """A video's HDF5 recording, converted now unless it was before (about a minute per ten minutes of video)."""
+
+    converted = converted_path(libraries, video)
+    if not converted.is_file():
+        convert_video(Path(video), converted, str(setup.video["dataset_path"]))
+    return converted
+
+
+def recording_folders(libraries: Libraries) -> dict[str, dict[str, Any]]:
+    """The personal ``recording_folders.json``: absolute folder -> ``{"setup": ref, "added_at": ...}``."""
+
+    return read_json(libraries.personal / FOLDERS_FILE, {}) or {}
+
+
+def add_recording_folder(libraries: Libraries, path: str | Path, setup_ref: str) -> dict[str, Any]:
+    """Search ``path`` for the setup's recordings from now on (or move the folder to another setup)."""
+
+    get_setup(libraries, setup_ref)
+    folder = Path(path).expanduser().resolve()
+    if not folder.is_dir():
+        raise NotADirectoryError(f"{folder} is not a folder")
+    with locked(libraries.personal):
+        folders = recording_folders(libraries)
+        folders[str(folder)] = {"setup": setup_ref, "added_at": utc_now()}
+        write_json(libraries.personal / FOLDERS_FILE, folders)
+    return {"path": str(folder), "setup": setup_ref}
+
+
+def remove_recording_folder(libraries: Libraries, path: str | Path) -> None:
+    """Stop searching a folder; its workspaces, labels and converted videos stay."""
+
+    with locked(libraries.personal):
+        folders = recording_folders(libraries)
+        if folders.pop(str(Path(path).expanduser().resolve()), None) is None:
+            raise LookupError(f"{path} is not a recording folder")
+        write_json(libraries.personal / FOLDERS_FILE, folders)
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -237,22 +280,22 @@ def _inside(path: Path, root: Path) -> bool:
 
 
 def setup_for_recording(libraries: Libraries, path: str | Path) -> str | None:
-    """The setup a recording belongs to: its registration, else the setup whose root contains it."""
+    """The setup a recording belongs to: its registration, else the setup of the folder that holds it."""
 
     resolved = Path(path).expanduser().resolve()
     entry = registered_recordings(libraries).get(str(resolved))
     if entry is not None:
         return str(entry["setup"])
-    for setup in list_setups(libraries):
-        for root in setup.recording_roots:
-            if _inside(resolved, Path(root).expanduser().resolve()):
-                return setup.ref
+    for folder, entry in recording_folders(libraries).items():
+        if _inside(resolved, Path(folder)):
+            return str(entry["setup"])
     return None
 
 
 def recording_sources(libraries: Libraries, setup_ref: str) -> list[Path]:
-    """The setup's recording roots plus the recording files registered to it (``recordings.find_recordings`` takes both)."""
+    """The setup's recording folders plus the recording files registered to it (``recordings.find_recordings`` takes both)."""
 
-    setup = get_setup(libraries, setup_ref)
+    get_setup(libraries, setup_ref)
+    folders = [Path(p) for p, entry in recording_folders(libraries).items() if entry.get("setup") == setup_ref]
     registered = [Path(p) for p, entry in registered_recordings(libraries).items() if entry.get("setup") == setup_ref]
-    return [Path(root) for root in setup.recording_roots] + registered
+    return folders + registered

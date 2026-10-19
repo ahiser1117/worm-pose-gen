@@ -37,7 +37,7 @@ from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.mask_fit import fill_narrow_holes
 from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.run_records import checkpoint_fingerprint, utc_now
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
     parser.add_argument("--scale", type=float, default=1.0, help="resize factor for the output video")
     parser.add_argument("--quality", type=int, default=5, help="imageio/ffmpeg quality, 0 worst to 10 best")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR, help="where the flat field cache lives")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--device", default=None)
     return parser.parse_args()

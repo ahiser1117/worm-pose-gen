@@ -9,6 +9,7 @@ process is the same ``pipeline --stages`` an app on a GPU starts.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 import sys
@@ -50,14 +51,16 @@ def write_library(root: Path, recordings: Path) -> Libraries:
     """A lab library with setup ``nir`` over ``recordings``, a segmenter (its default mask model) and a body-field net."""
 
     lab, personal = root / "lab", root / "mine"
-    library.write_setup(lab, "nir", name="NIR", fps=20.0, pixel_size_um=2.5, recording_roots=[str(recordings)], defaults={"mask": "lab:seg"})
+    library.write_setup(lab, "nir", name="NIR", fps=20.0, pixel_size_um=2.5, defaults={"mask": "lab:seg"})
     weights = root / "w.ckpt"
     weights.write_bytes(b"w")
     inputs = library.make_inputs([], fps=20.0, pixel_size_um=2.5)
     library.write_model(lab, "seg", {"name": "seg-284", "kind": "segmenter", "setup": "lab:nir", "outputs": ["mask"], "inputs": inputs}, weights)
     library.write_model(lab, "body", {"name": "body-lags3", "kind": "body_net", "setup": "lab:nir",
                                       "outputs": ["mask", "ap", "head", "tail", "overlap"], "inputs": inputs}, weights)
-    return Libraries(lab=lab, personal=personal)
+    libraries = Libraries(lab=lab, personal=personal)
+    library.add_recording_folder(libraries, recordings, "lab:nir")
+    return libraries
 
 
 class WorkspacePageTests(unittest.TestCase):
@@ -190,6 +193,13 @@ class WorkspacePageTests(unittest.TestCase):
         settings = self.call("GET", f"/api/workspaces/{name}")["settings"]
         self.assertEqual((settings["mask_source"], settings["models"], settings["checkpoint"]), ("body_net", {"mask": None, "body": "lab:body"}, None))
         self.assertEqual(self.call("GET", f"/api/workspaces/{name}/status")["mask_source"], "body_net")
+
+    def test_a_body_net_mask_default_takes_the_masks_from_the_body_model(self) -> None:
+        setup = library.get_setup(self.libraries, "lab:nir")
+        self.assertEqual(analysis.default_mask_source(self.libraries, setup), "segmenter")
+        both = dataclasses.replace(setup, defaults={"mask": "lab:body", "body": "lab:body"})
+        self.assertEqual(analysis.default_mask_source(self.libraries, both), "body_net")
+        self.assertEqual(analysis.resolve_models(self.libraries, both, None, "body_net")["mask"], None)
 
     def test_cancel_an_analysis(self) -> None:
         recording = self.recording.with_name("2026-01-02-04.h5")

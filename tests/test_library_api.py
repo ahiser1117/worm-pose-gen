@@ -125,7 +125,7 @@ class LibraryApiTests(unittest.TestCase):
 
     def test_save_from_a_recording_reads_frame_context_and_nose(self):
         recording = self.root / "recordings" / "2024-03-03-03.h5"
-        recording.parent.mkdir()
+        recording.parent.mkdir(exist_ok=True)
         frames = np.random.default_rng(0).integers(40, 200, (40, *SHAPE), dtype=np.uint8)
         features = np.zeros((40, 3, 3), np.float32)
         features[:, 0, 0], features[:, 1, 0], features[:, 2, 0] = 5.0, 9.0, 0.99  # one-based x, y and confidence

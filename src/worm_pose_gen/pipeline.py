@@ -108,7 +108,7 @@ from .propagation import (
 )
 from .recording_prior import RecordingPrior, bootstrap_prior_from_masks
 from .run_records import checkpoint_fingerprint, git_revision, utc_now
-from .segmentation_dataset import DEFAULT_DATASET_ROOT
+from .settings import CACHE_DIR
 from .workspace import MASK_CHUNK_ROWS, pack_mask
 
 
@@ -116,8 +116,7 @@ STAGES = ("segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_b
 DEFAULT_STAGES = tuple(stage for stage in STAGES if stage not in ("fixed_body", "export"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "segmenter" / "best.ckpt"
-EXTERNAL_ROOT = Path(os.environ.get("WORM_POSE_EXTERNAL_ROOT", "/temp_data4/alex/external_artifacts"))
-DEFAULT_PRIOR_CACHE = EXTERNAL_ROOT / "recording_priors"
+DEFAULT_PRIOR_CACHE = CACHE_DIR / "recording_priors"
 HOLE_FILL_RADIUS_PX = 8
 MIN_WORM_PIXELS = 500
 # Where the segment stage's masks come from: the segmenter (``checkpoint``) or the body-field network's mask output (``body_net``).
@@ -219,7 +218,7 @@ class SegmentParams(_Params):
     min_worm_pixels: int = _help("smaller cleaned masks are not fit", default=MIN_WORM_PIXELS)
     batch_size: int = _help("frames per segmenter forward pass", default=16)
     slab: int = _help("frames read from disk together", default=64)
-    dataset_root: str = _help("where the flat field cache lives (<root>/flat_fields)", default=str(DEFAULT_DATASET_ROOT))
+    dataset_root: str = _help("where the flat field cache lives (<root>/flat_fields)", default=str(CACHE_DIR))
     flat_field: bool = _help("flat-field frames with the per-recording correction before segmenting", default=True)
 
 
@@ -242,7 +241,7 @@ class PriorParams(_Params):
     fill_holes: bool = _help("fill narrow holes", default=True)
     min_worm_pixels: int = _help("smaller masks are not fit", default=MIN_WORM_PIXELS)
     batch_size: int = _help("frames per segmenter forward pass", default=16)
-    dataset_root: str = _help("flat field cache root", default=str(DEFAULT_DATASET_ROOT))
+    dataset_root: str = _help("flat field cache root", default=str(CACHE_DIR))
     flat_field: bool = _help("flat-field frames before segmenting", default=True)
 
 
@@ -347,7 +346,7 @@ class Frames:
         self.dataset_path = dataset
         self._handle: h5py.File | None = None
         self._source = (
-            RecordingSource(self.path, Path(dataset_root or DEFAULT_DATASET_ROOT) / "flat_fields", dataset=dataset) if flat_field else None
+            RecordingSource(self.path, Path(dataset_root or CACHE_DIR) / "flat_fields", dataset=dataset) if flat_field else None
         )
         self._field: Any = None
         self._gain: torch.Tensor | None = None  # the flat field's gain on the device of corrected_on

@@ -71,7 +71,6 @@ from worm_pose_gen.workspace import DEFAULT_WORKSPACES_ROOT, utc_now
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SETUP_ID, DATASET_ID, BENCHMARK_ID = "nir-flv", "nir-labels", "nir-v1"
 SETUP, DATASET = f"lab:{SETUP_ID}", f"lab:{DATASET_ID}"
-RECORDING_ROOTS = ("/store1/shared/all_data_raw/prj_aversion", "/storage/fs/data2/prj_aversion/data_raw")
 # The NIR camera (FLIR BFS behind the 10x objective): 791 px per mm, the lab's
 # FLIR_BFS_PIX_SIZE in BehaviorDataNIR.jl (src/unit.jl).
 PIXEL_SIZE_UM = 1000 / 791
@@ -318,7 +317,7 @@ def main(argv: list[str] | None = None) -> None:
     write_setup(
         out, SETUP_ID, name="NIR behaviour camera (flv rigs)",
         description="The 850 nm NIR camera of the lab's tracking rigs; 732x968 frames in /img_nir.",
-        fps=fps, pixel_size_um=PIXEL_SIZE_UM, recording_roots=list(RECORDING_ROOTS),
+        fps=fps, pixel_size_um=PIXEL_SIZE_UM,
         defaults={"mask": f"lab:{args.segmenter_name}", "body": f"lab:{body_id}"},
     )
     log_default(out, SETUP, "mask", f"lab:{args.segmenter_name}", previous=None, who=args.author,

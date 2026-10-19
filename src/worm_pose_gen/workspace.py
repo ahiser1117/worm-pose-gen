@@ -43,8 +43,10 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 
+from .settings import WORKSPACES_DIR
 
-DEFAULT_WORKSPACES_ROOT = Path("/temp_data4/alex/external_artifacts/workspaces")
+
+DEFAULT_WORKSPACES_ROOT = WORKSPACES_DIR
 RECORDING_DATASET = "/img_nir"
 MASK_CHUNK_ROWS = 1024
 HYPOTHESIS_PREFIXES = ("hypotheses_", "path_", "prediction_")

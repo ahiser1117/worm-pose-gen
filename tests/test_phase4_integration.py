@@ -24,7 +24,7 @@ class Phase4ConfigurationTests(unittest.TestCase):
         self.assertTrue(config.dev)
         self.assertEqual(config.library, Path("/tmp/mine"))
         self.assertEqual(args.queue, Path("/tmp/manifest.json"))
-        self.assertIsNone(config.server_device)
+        self.assertIsNone(config.server_device())
 
     def test_segment_and_fit_jobs_use_the_workspace_model(self):
         with tempfile.TemporaryDirectory() as directory:

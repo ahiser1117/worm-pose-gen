@@ -59,7 +59,8 @@ class AppTests(unittest.TestCase):
         cls.recording.parent.mkdir()
         _write_recording(cls.recording)
         # The setup whose recordings the app serves.
-        library.write_setup(root / "lab", "rig", name="Rig", fps=20.0, recording_roots=[str(root / "recordings")])
+        library.write_setup(root / "lab", "rig", name="Rig", fps=20.0)
+        library.add_recording_folder(library.Libraries(root / "lab", root / "mine"), root / "recordings", "lab:rig")
         cls.fitted = _write_workspace(root / "workspaces", "fitted", cls.recording)
         config = AppConfig(
             workspaces_root=root / "workspaces", dataset_root=root / "dataset", gpus=(0,), device="cpu", job_interval=0.1,
@@ -275,3 +276,23 @@ class DevAppTests(AppTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartupTests(unittest.TestCase):
+    def test_a_taken_port_moves_to_the_next_free_one(self) -> None:
+        import socket
+
+        from worm_pose_gen.app import free_port
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen()
+            port = taken.getsockname()[1]
+            self.assertGreater(free_port("127.0.0.1", start=port), port)
+
+    def test_the_tunnel_reaches_the_node_through_the_login_node_on_engaging(self) -> None:
+        from worm_pose_gen.app import tunnel_command
+
+        self.assertEqual(tunnel_command(8770, "flv-c3", "kim"), "ssh -N -L 8770:localhost:8770 kim@flv-c3")
+        self.assertEqual(tunnel_command(8768, "node2433.inband", "kim"), "ssh -N -L 8768:localhost:8768 -J kim@orcd-login.mit.edu kim@node2433")
+        self.assertEqual(tunnel_command(8768, "orcd-login001", "kim"), "ssh -N -L 8768:localhost:8768 kim@orcd-login001.mit.edu")

@@ -78,7 +78,8 @@ from typing import Any
 
 import numpy as np
 
-from worm_pose_gen.pipeline import DEFAULT_PRIOR_CACHE, EXTERNAL_ROOT
+from worm_pose_gen.pipeline import DEFAULT_PRIOR_CACHE
+from worm_pose_gen.settings import RUNS_DIR
 from worm_pose_gen.propagation import continuity_summary
 from worm_pose_gen.run_records import git_revision, timestamp_slug, utc_now
 
@@ -102,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repeat", type=int, default=2, help="runs per clip; every stage reports its minimum")
     parser.add_argument("--baseline", type=Path, default=None, help="baseline report to apply the KEEP rule against")
-    parser.add_argument("--runs-dir", type=Path, default=EXTERNAL_ROOT / "runtime_benchmark", help="fit runs and the held-out output go to a new directory here")
+    parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR / "runtime_benchmark", help="fit runs and the held-out output go to a new directory here")
     parser.add_argument("--output", type=Path, default=None, help="report path (default: benchmark.json in the new runs directory)")
     return parser.parse_args()
 

@@ -46,6 +46,12 @@ class JobGpuTests(unittest.TestCase):
         _wait_until(self.runner, later.id, ('done',))
         self.assertEqual(later.gpu, 0)
 
+    def test_an_automatic_job_takes_the_free_gpu_other_users_load_least(self):
+        self.runner = JobRunner(self.root, self.backend, memory_used=lambda: {0: 30000, 3: 200})
+        record = self.runner.submit(JobSpec('command'), _finishing())
+        self.runner.tick()
+        self.assertEqual(_wait_until(self.runner, record.id, ('done',)).gpu, 3)
+
     def test_reject_invalid_or_disabled_device_without_creating_job(self):
         for gpu in [True, -1, '3', 3.0, 99]:
             with self.subTest(gpu=gpu), self.assertRaises(ValueError):

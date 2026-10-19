@@ -6,10 +6,12 @@ holds everything the app creates.  Items are named ``lab:<id>`` or
 ``mine:<id>`` (:mod:`.roots`)::
 
     <library>/
-      setups/<setup>.json                  a microscope: video settings, pixel size, fps, roots, default models
+      setups/<setup>.json                  a microscope: video settings, pixel size, fps, default models
       setups/<setup>.override.json         (personal) the user's defaults for a lab setup
       setups/defaults_log.jsonl            every default change: who, when, why
+      recording_folders.json               (personal) folders searched for a setup's recordings
       recordings.json                      (personal) recordings registered to a setup by hand
+      videos/<recording>.h5                (personal) videos converted to HDF5 recordings
       labels/<setup>/                      the setup's label collection (this library's part)
         index.json                         every revision of every label, for fast listing
         <recording>/<frame>/<revision>.npz
@@ -71,19 +73,20 @@ from .models import (
     ModelCard, create_model, evaluation_path, evaluations, get_card, list_models, make_inputs, save_evaluation,
     training_dir, weights_path, write_model,
 )
-from .roots import LAB_LIBRARY_BY_HOST, PERSONAL_LIBRARY_BY_HOST, Libraries, make_ref, parse_ref
+from .roots import LAB_LIBRARY_BY_HOST, Libraries, make_ref, parse_ref
 from .setups import (
-    Setup, create_setup, defaults_log, get_setup, list_setups, recording_id, recording_sources, register_recording,
-    set_default, setup_for_recording, write_setup,
+    Setup, add_recording_folder, converted_path, converted_recording, create_setup, defaults_log, get_setup, list_setups,
+    recording_folders, recording_id, recording_sources, register_recording, remove_recording_folder, set_default,
+    setup_for_recording, write_setup,
 )
 from .targets import SETUP_DEFAULT, build_targets, cached_meta, load_targets, target_builder
 
 __all__ = [
     "BENCHMARK_ORIGINS", "Benchmark", "Collection", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "ModelCard",
-    "ORIGINS", "PERSONAL_LIBRARY_BY_HOST", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "benchmark_labels",
-    "build_targets", "cached_meta", "create_dataset", "create_model", "create_setup", "defaults_log", "evaluation_path",
+    "ORIGINS", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "add_recording_folder", "benchmark_labels",
+    "build_targets", "cached_meta", "converted_path", "converted_recording", "create_dataset", "create_model", "create_setup", "defaults_log", "evaluation_path",
     "evaluations", "fingerprint", "freeze_benchmark", "get_benchmark", "get_card", "get_setup", "labels",
     "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_targets", "make_inputs", "make_ref",
-    "parse_ref", "recording_id", "recording_sources", "register_recording", "save_evaluation", "set_default",
+    "parse_ref", "recording_folders", "recording_id", "recording_sources", "register_recording", "remove_recording_folder", "save_evaluation", "set_default",
     "setup_for_recording", "target_builder", "trained_on", "training_dir", "weights_path", "write_benchmark", "write_model", "write_setup",
 ]

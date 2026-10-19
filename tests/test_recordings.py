@@ -71,6 +71,38 @@ class ListRecordingsTests(RecordingsFixture):
         found = find_recordings([self.data, self.root / "missing"])
         self.assertEqual([p.name for p in found], ["2023-03-30-01.h5", "2024-01-31-02.h5", "2024-05-28-02.h5"])
 
+    def test_searches_two_folders_deep_and_lists_videos_unopened(self) -> None:
+        deep = self.data / "2024-01-31" / "day" / "2024-01-31-07.h5"
+        too_deep = self.data / "2024-01-31" / "day" / "more" / "2024-01-31-08.h5"
+        video = self.data / "2024-01-31" / "worm004.avi"
+        for path in (deep, too_deep, video):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x")
+        names = [p.name for p in find_recordings([self.data])]
+        self.assertIn("2024-01-31-07.h5", names)
+        self.assertNotIn("2024-01-31-08.h5", names)
+        info = {i.name: i for i in self.listing()}["worm004"]
+        self.assertTrue(info.video)
+        self.assertTrue(info.readable)
+        self.assertIsNone(info.frames)
+
+    def test_searches_two_folders_deep_and_lists_videos_without_opening_them(self) -> None:
+        deep = self.data / "a" / "b" / "c" / "too-deep.h5"
+        _write_recording(deep)
+        video = self.data / "2024-01-31" / "worm004.avi"
+        video.write_bytes(b"not decoded when listed")
+        hidden = self.data / ".trash" / "old.h5"
+        _write_garbage(hidden)
+        found = [p.name for p in find_recordings([self.data])]
+        self.assertNotIn("too-deep.h5", found)
+        self.assertNotIn("old.h5", found)
+        self.assertIn("worm004.avi", found)
+        self.assertIn("too-deep.h5", [p.name for p in find_recordings([self.data / "a"])])
+        info = {i.name: i for i in self.listing()}["worm004"]
+        self.assertTrue(info.video)
+        self.assertTrue(info.readable)
+        self.assertIsNone(info.frames)
+
     def test_a_root_that_links_to_another_lists_each_recording_once(self) -> None:
         link = self.root / "link"
         link.symlink_to(self.data)

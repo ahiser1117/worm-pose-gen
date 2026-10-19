@@ -70,7 +70,6 @@ from worm_pose_gen.pipeline import (
     CLEANUP_WORKERS,
     DEFAULT_CHECKPOINT,
     DEFAULT_PRIOR_CACHE,
-    EXTERNAL_ROOT,
     MASK_SOURCES,
     PROJECT_ROOT,
     START_SETS,
@@ -105,10 +104,10 @@ from worm_pose_gen.pose_run import (
 )
 from worm_pose_gen.prefetch import prefetched
 from worm_pose_gen.run_records import checkpoint_fingerprint, git_revision, timestamp_slug, utc_now
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR, RUNS_DIR
 
 
-DEFAULT_OUTPUT_DIR = (EXTERNAL_ROOT / "poses") if EXTERNAL_ROOT.exists() else PROJECT_ROOT / "checkpoints" / "poses"
+DEFAULT_OUTPUT_DIR = RUNS_DIR / "poses"
 HOLE_FILL_RADIUS_PX = 8
 MIN_WORM_PIXELS = 500
 
@@ -199,7 +198,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=20.0)
     parser.add_argument("--scale", type=float, default=1.0, help="resize factor for the video")
     parser.add_argument("--quality", type=int, default=5, help="imageio/ffmpeg quality, 0 worst to 10 best")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR, help="where the flat field cache lives")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--name", default=None, help="run name suffix (default: recording stem and frame range)")
     parser.add_argument("--device", default=None)

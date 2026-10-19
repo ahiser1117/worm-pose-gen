@@ -10,9 +10,10 @@ import numpy as np
 
 from worm_pose_gen import library
 from worm_pose_gen.library import Libraries
-from worm_pose_gen.library import Collection
+from worm_pose_gen.library import Collection, roots
 from worm_pose_gen.library.datasets import Dataset
-from worm_pose_gen.library.roots import default_lab_root, default_personal_root, parse_ref, ref_filename, write_json
+from worm_pose_gen.library.roots import LAB_LIBRARY_ENGAGING, LAB_LIBRARY_FLV, default_lab_root, parse_ref, ref_filename, write_json
+from worm_pose_gen.settings import LIBRARY_DIR
 
 
 SHAPE = (24, 32)
@@ -33,8 +34,10 @@ def make_libraries(root: Path) -> Libraries:
     """A lab library with setup ``nir``, two lab labels of ``rec-a`` and dataset ``base`` putting it in train; an empty personal one."""
 
     lab, personal = root / "lab", root / "mine"
-    library.write_setup(lab, "nir", name="NIR", fps=20.0, pixel_size_um=2.5, recording_roots=[str(root / "recordings")])
+    library.write_setup(lab, "nir", name="NIR", fps=20.0, pixel_size_um=2.5)
     libraries = Libraries(lab=lab, personal=personal)
+    (root / "recordings").mkdir()
+    library.add_recording_folder(libraries, root / "recordings", "lab:nir")
     collection = Collection(libraries, "lab:nir")
     collection.save(recording="rec-a", frame=10, origin="spread", scope="lab", saved_at="2026-01-01T00:00:00+00:00", **label_inputs(1))
     collection.save(recording="rec-a", frame=20, origin="spread", orientation="manual", head_xy=[4.0, 11.0], scope="lab",
@@ -50,16 +53,18 @@ class RootTests(unittest.TestCase):
         for bad in ("nir", "other:x", "lab:", "lab:a/b", "mine:a.b", "lab:../x"):
             with self.assertRaises(ValueError):
                 parse_ref(bad)
-        self.assertEqual(default_lab_root("flv-c3"), Path("/storage/fs/store1/shared/worm-pose-models"))
+        self.assertEqual(default_lab_root("flv-c3"), LAB_LIBRARY_FLV)
+        for engaging in ("orcd-login001", "node2433"):
+            self.assertEqual(default_lab_root(engaging), LAB_LIBRARY_ENGAGING)
         self.assertIsNone(default_lab_root("laptop"))
-        self.assertEqual(default_personal_root("flv-c2", "kim"), Path("/temp_data4/kim/worm-pose-library"))
-        self.assertEqual(default_personal_root("laptop", "kim"), Path("~/worm-pose-library").expanduser())
+        self.assertEqual(Libraries.for_host().personal, LIBRARY_DIR)
 
     def test_json_files_take_numpy_scalars(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "a" / "meta.json"
             write_json(path, {"cut": np.bool_(True), "iou": np.float32(0.5)})
             self.assertEqual(json.loads(path.read_text()), {"cut": True, "iou": 0.5})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o666 & ~roots.UMASK)
 
     def test_missing_lab_library_lists_personal_items_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -102,7 +107,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(log[0]["who"], "kim")
         self.assertEqual(log[0]["reason"], "better heads")
 
-    def test_recording_belongs_to_its_registration_else_its_root(self):
+    def test_recording_belongs_to_its_registration_else_its_folder(self):
         recordings = self.root / "recordings" / "day"
         recordings.mkdir(parents=True)
         inside = recordings / "2024-01-01-01.h5"
@@ -119,6 +124,42 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(library.recording_sources(self.libraries, "mine:rig2"), [outside.resolve()])
         with self.assertRaises(LookupError):
             library.register_recording(self.libraries, outside, "mine:nope")
+
+    def test_recording_folders_belong_to_one_setup_and_can_be_removed(self):
+        folder = self.root / "plates"
+        (folder / "day").mkdir(parents=True)
+        recording = folder / "day" / "2024-03-03-03.h5"
+        recording.write_bytes(b"")
+        library.create_setup(self.libraries, "rig2", name="Rig 2")
+        self.assertEqual(library.add_recording_folder(self.libraries, folder, "mine:rig2"), {"path": str(folder.resolve()), "setup": "mine:rig2"})
+        self.assertEqual(library.setup_for_recording(self.libraries, recording), "mine:rig2")
+        self.assertEqual(library.recording_sources(self.libraries, "mine:rig2"), [folder.resolve()])
+        with self.assertRaises(NotADirectoryError):
+            library.add_recording_folder(self.libraries, recording, "mine:rig2")
+        with self.assertRaises(LookupError):
+            library.add_recording_folder(self.libraries, folder, "mine:nope")
+        library.remove_recording_folder(self.libraries, folder)
+        self.assertIsNone(library.setup_for_recording(self.libraries, recording))
+        with self.assertRaises(LookupError):
+            library.remove_recording_folder(self.libraries, folder)
+
+    def test_recording_folders_give_their_setup_and_can_be_removed(self):
+        library.create_setup(self.libraries, "rig2", name="Rig 2")
+        other = self.root / "other"
+        (other / "day").mkdir(parents=True)
+        recording = other / "day" / "2024-03-03-03.h5"
+        recording.write_bytes(b"")
+        self.assertIsNone(library.setup_for_recording(self.libraries, recording))
+        library.add_recording_folder(self.libraries, other, "mine:rig2")
+        self.assertEqual(library.setup_for_recording(self.libraries, recording), "mine:rig2")
+        self.assertEqual(library.recording_sources(self.libraries, "mine:rig2"), [other.resolve()])
+        self.assertEqual(sorted(library.recording_folders(self.libraries)), sorted([str(other.resolve()), str((self.root / "recordings").resolve())]))
+        library.remove_recording_folder(self.libraries, other)
+        self.assertIsNone(library.setup_for_recording(self.libraries, recording))
+        with self.assertRaises(LookupError):
+            library.remove_recording_folder(self.libraries, other)
+        with self.assertRaises(NotADirectoryError):
+            library.add_recording_folder(self.libraries, recording, "mine:rig2")
 
     def test_a_video_is_registered_as_its_converted_recording(self):
         import h5py

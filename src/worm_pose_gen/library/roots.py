@@ -1,10 +1,14 @@
 """Where the two libraries live, and how items in them are named.
 
 The lab library is a shared directory the developer publishes into
-(``scripts/publish.py``); the app only reads it.  The personal library is
-the user's own and holds everything the app creates.  Both are looked up by
-host name, as the lab's other code finds its data, and the app's
-``--lab-library`` / ``--library`` override them.
+(``scripts/publish.py``); the app only reads it.  It is looked up by host
+name, as the lab's other code finds its data: the flv-c machines share one
+on store1, and Engaging (login nodes ``orcd-*``, compute nodes ``node<NNNN>``)
+has a copy in the lab's project storage, kept in step by
+``scripts/sync_lab_library.sh``.  The personal library is the user's own and
+holds everything the app creates; it is ``library/`` in the data directory
+(:mod:`worm_pose_gen.settings`).  The app's ``--lab-library`` / ``--library``
+override either.
 
 An item is named by a reference string, ``lab:<id>`` or ``mine:<id>``; the
 scope says which library holds it.  Ids are plain names (letters, digits,
@@ -16,7 +20,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
-import getpass
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -27,22 +31,22 @@ from typing import Any, Iterator
 
 import numpy as np
 
+from ..settings import LIBRARY_DIR
 
-# The NFS path itself: flv-c2 has no /store1 symlink.
-LAB_ROOT_FLV = Path("/storage/fs/store1/shared/worm-pose-models")
-LAB_LIBRARY_BY_HOST: dict[str, Path] = {
-    "flv-c2": LAB_ROOT_FLV,
-    "flv-c3": LAB_ROOT_FLV,
-    "flv-c4": LAB_ROOT_FLV,
-}
-# Personal libraries on the flv machines go on the large local-network store,
-# not the size-limited home directory; ``{user}`` is the login name.
-PERSONAL_LIBRARY_BY_HOST: dict[str, str] = {
-    "flv-c2": "/temp_data4/{user}/worm-pose-library",
-    "flv-c3": "/temp_data4/{user}/worm-pose-library",
-    "flv-c4": "/temp_data4/{user}/worm-pose-library",
-}
-PERSONAL_LIBRARY_ELSEWHERE = "~/worm-pose-library"
+
+# Hostname glob -> the lab library; the first match wins.  On flv the NFS
+# path itself: flv-c2 has no /store1 symlink.
+LAB_LIBRARY_FLV = Path("/storage/fs/store1/shared/worm-pose-models")
+LAB_LIBRARY_ENGAGING = Path("/orcd/data/flavell/001/shared/worm-pose-models")
+LAB_LIBRARY_BY_HOST: tuple[tuple[str, Path], ...] = (
+    ("flv-c*", LAB_LIBRARY_FLV),
+    ("orcd-*", LAB_LIBRARY_ENGAGING),
+    ("node[0-9]*", LAB_LIBRARY_ENGAGING),
+)
+
+# The process's umask, read once at import (reading it means setting it, which is not thread-safe later).
+UMASK = os.umask(0)
+os.umask(UMASK)
 
 SCOPES = ("lab", "mine")
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -55,12 +59,8 @@ def short_hostname() -> str:
 def default_lab_root(host: str | None = None) -> Path | None:
     """The lab library of this host, or ``None`` where the lab has none."""
 
-    return LAB_LIBRARY_BY_HOST.get(host or short_hostname())
-
-
-def default_personal_root(host: str | None = None, user: str | None = None) -> Path:
-    template = PERSONAL_LIBRARY_BY_HOST.get(host or short_hostname(), PERSONAL_LIBRARY_ELSEWHERE)
-    return Path(template.format(user=user or getpass.getuser())).expanduser()
+    name = host or short_hostname()
+    return next((root for pattern, root in LAB_LIBRARY_BY_HOST if fnmatch.fnmatchcase(name, pattern)), None)
 
 
 def check_id(item_id: str) -> str:
@@ -102,7 +102,7 @@ class Libraries:
     def for_host(cls, lab: Path | None = None, personal: Path | None = None) -> "Libraries":
         """The host's libraries, with either root overridden."""
 
-        return cls(Path(lab) if lab is not None else default_lab_root(), Path(personal) if personal is not None else default_personal_root())
+        return cls(Path(lab) if lab is not None else default_lab_root(), Path(personal) if personal is not None else LIBRARY_DIR)
 
     def root(self, scope: str) -> Path:
         if scope == "mine":
@@ -138,12 +138,17 @@ def read_json(path: Path, default: Any = None) -> Any:
 
 
 def write_json(path: Path, value: Any) -> None:
-    """Write JSON atomically: a unique temporary in the same directory replaces ``path``."""
+    """Write JSON atomically: a unique temporary in the same directory replaces ``path``.
+
+    The temporary is created private (0600); it gets the permissions an
+    ordinary new file would, so the lab library stays readable to the lab.
+    """
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=path.name + ".", suffix=".partial", delete=False) as handle:
         json.dump(value, handle, indent=1, sort_keys=True, default=_plain)
+    os.chmod(handle.name, 0o666 & ~UMASK)
     os.replace(handle.name, path)
 
 

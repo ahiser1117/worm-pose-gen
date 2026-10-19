@@ -4,10 +4,13 @@
 // workspace. While an analysis is queued or running its row also has Cancel.
 // Two tables, each recording in one: those analysed or analysing (or whose
 // analysis failed or was cancelled), most recently opened first, then those
-// not analysed yet. Add recording registers a file to a setup through the
-// library. The tables rescan whenever the screen opens and poll while an
-// analysis runs; a poll rebuilds only the rows that changed, so the scroll
-// position stays.
+// not analysed yet. The recordings are those of the user's recording folders
+// (searched two folders deep for .h5 and .avi files) and single files added
+// to a setup; Add recordings adds or removes either. A video is converted to
+// an HDF5 recording when it is first opened. Before the user has any
+// recording the screen says what to do first and where their data goes. The
+// tables rescan whenever the screen opens and poll while an analysis runs; a
+// poll rebuilds only the rows that changed, so the scroll position stays.
 
 import {api, el, post, query} from "./api.js";
 
@@ -112,13 +115,17 @@ export class RecordingsScreen {
       ? el("label", {class: "inline"}, "Setup", el("select", {onchange: (event) => { remember(SETUP_KEY, event.target.value); this.data.setup = {ref: event.target.value}; this.refresh(); }},
         setups.map((s) => el("option", {value: s.ref, selected: s.ref === setup.ref}, s.name))))
       : el("span", {class: "ws-setup-name", title: setup.ref}, setup.name);
-    const facts = [setup.pixel_size_um ? `${setup.pixel_size_um} µm/px` : null, setup.fps ? `${setup.fps} fps` : null].filter(Boolean).join(" · ");
+    const facts = [setup.pixel_size_um ? `${+setup.pixel_size_um.toPrecision(3)} µm/px` : null, setup.fps ? `${setup.fps} fps` : null].filter(Boolean).join(" · ");
     const toolbar = el("div", {class: "ws-home-bar"},
       setupControl, facts ? el("span", {class: "note"}, facts) : null,
       el("span", {class: "ws-grow"}),
       el("input", {type: "search", class: "ws-filter", placeholder: "Filter recordings", value: this.filter, oninput: (event) => { this.filter = event.target.value; this.renderRows(); }}),
-      el("button", {onclick: () => this.addRecording()}, "Add recording…"),
+      el("button", {onclick: () => this.addRecordings()}, "Add recordings…"),
     );
+    if (!this.data.recordings.length && !this.data.folders.length) {
+      this.node.replaceChildren(toolbar, this.welcome());
+      return;
+    }
     const table = (tbody) => el("div", {class: "ws-table-wrap"}, el("table", {class: "data ws-recordings"},
       el("thead", {}, el("tr", {}, el("th", {class: "ws-thumb-cell"}), el("th", {}, "Recording"), el("th", {class: "num"}, "Length"),
         el("th", {}, "Status"), el("th", {}, "Last opened"), el("th", {class: "ws-action-cell"}))),
@@ -141,7 +148,8 @@ export class RecordingsScreen {
     this.recentSection.hidden = !analysed.length;
     this.restSection.hidden = !rest.length && !!all.length;
     this.fill("recent", analysed.filter(matches), "No analysed recording matches the filter.");
-    this.fill("rest", rest.filter(matches), all.length ? "No recording matches the filter." : "No recordings in this setup yet. Add one with Add recording.");
+    this.fill("rest", rest.filter(matches), all.length ? "No recording matches the filter."
+      : `No .h5 or .avi files in ${this.data.folders.length === 1 ? "the folder" : "the folders"} of this setup (searched two folders deep). Add another with Add recordings.`);
   }
 
   // Put the rows in a table, reusing the row of a recording whose data has not changed since the last poll.
@@ -163,7 +171,7 @@ export class RecordingsScreen {
 
   // A row's thumbnail is kept across rebuilds of the row, so a poll does not reload it.
   thumbnail(key, recording) {
-    if (!recording.readable) return el("span", {class: "ws-thumb"});
+    if (!recording.readable || recording.video) return el("span", {class: "ws-thumb"});
     const src = `/api/recordings/thumbnail${query({path: recording.path, frame: Math.floor((recording.frames || 1) / 2), scale: 0.12})}`;
     const cached = this.thumbs.get(key);
     if (cached?.dataset.src === src) return cached;
@@ -174,14 +182,16 @@ export class RecordingsScreen {
 
   row(recording, fps, key) {
     const status = recording.status;
-    const [text, kind, progress] = recording.readable ? describeStatus(status) : ["Cannot be read", "error", null];
+    const [text, kind, progress] = !recording.readable ? ["Cannot be read", "error", null]
+      : recording.video ? ["Video · converted when opened", "", null] : describeStatus(status);
     const thumb = this.thumbnail(key, recording);
     const statusCell = el("td", {class: "ws-status"}, el("span", {class: `badge ${kind}`, title: status?.analysis?.error || recording.error || null}, text));
     if (progress !== null) statusCell.append(el("progress", {max: 1, value: progress}));
     const running = ["queued", "analysing"].includes(status?.state);
     const actions = el("div", {class: "ws-rec-actions"},
       running ? el("button", {title: "Stop the analysis", onclick: (event) => this.cancel(recording, event.currentTarget)}, "Cancel") : null,
-      el("button", {class: "primary", disabled: !recording.readable, onclick: (event) => this.open(recording, event.currentTarget)}, "Open"));
+      el("button", {class: "primary", disabled: !recording.readable, title: recording.video ? "Converts the video to an HDF5 recording first (about a minute per ten minutes of video)" : null,
+        onclick: (event) => this.open(recording, event.currentTarget)}, "Open"));
     return el("tr", {dataset: {recording: recording.id}},
       el("td", {class: "ws-thumb-cell"}, thumb),
       el("td", {}, el("div", {class: "ws-rec-name"}, recording.id), el("div", {class: "note ws-rec-path", title: recording.path}, recording.path)),
@@ -196,11 +206,13 @@ export class RecordingsScreen {
   async open(recording, button) {
     if (recording.workspace) { this.onOpen(recording.workspace); return; }
     button.disabled = true;
+    if (recording.video) button.textContent = "Converting…";
     try {
       this.onOpen((await post("/api/recordings/open", {path: recording.path})).workspace);
     } catch (error) {
       this.ctx.toast(error.message, "error");
       button.disabled = false;
+      button.textContent = "Open";
     }
   }
 
@@ -215,67 +227,117 @@ export class RecordingsScreen {
     await this.refresh();
   }
 
-  addRecording() {
-    openAddRecording(this.ctx, this.data.setups, this.data.setup.ref).then((added) => {
-      if (!added) return;
-      if (added.setup !== this.data.setup.ref) { remember(SETUP_KEY, added.setup); this.data.setup = {ref: added.setup}; }
-      this.ctx.toast(`Added ${added.id}`, "ok");
+  // The first screen of a new user: what to do first, and where their work is saved.
+  welcome() {
+    const config = this.ctx.config || {}, libraries = config.libraries || {};
+    return el("div", {class: "empty ws-empty"},
+      el("h2", {}, "Add your recordings"),
+      el("p", {}, "Choose the folder your recordings are in. Every .h5 recording and .avi video in it, and in the folders up to two levels below it, is listed here. Videos are converted when you first open them."),
+      el("p", {}, el("button", {class: "primary", onclick: () => this.addRecordings()}, "Add a folder…")),
+      el("p", {class: "note"}, `Your labels, models and analyses are saved in ${config.data_dir || "?"}. To use another folder, run scripts/bootstrap_environment.sh --data-dir <folder> and start the app again.`),
+      el("p", {class: "note"}, libraries.lab_available ? `Lab models and labels: ${libraries.lab} (read-only).`
+        : `The lab library ${libraries.lab ? `at ${libraries.lab} cannot be read from this machine` : "is not known on this machine"}: only your own models and labels are available.`));
+  }
+
+  addRecordings() {
+    openAddRecordings(this.ctx, this.data.setups, this.data.setup.ref).then((changed) => {
+      if (!changed) return;
+      if (changed.setup !== this.data.setup.ref) { remember(SETUP_KEY, changed.setup); this.data.setup = {ref: changed.setup}; }
+      this.tables = null;
       this.refresh();
     });
   }
 }
 
-// Add recording: a path box with a browser of directories, HDF5 files and videos, and the setup it belongs to.
-// The server converts a video (.avi) to an HDF5 recording before registering it, which takes a while.
-function openAddRecording(ctx, setups, current) {
+
+// Add recordings: the recording folders with Remove, a path box with a browser of folders, HDF5 files and videos,
+// and the setup a new folder or file belongs to. "Add this folder" adds the folder shown (searched two folders
+// deep); "Add file" registers one file, and the server converts a video (.avi) first, which takes a while.
+// Resolves to {setup} when anything changed.
+function openAddRecordings(ctx, setups, current) {
   return new Promise((resolve) => {
-    let result = null, listing = null;
+    let changed = null, listing = null;
     const dialog = el("dialog", {class: "ws-dialog ws-add"});
-    const path = el("input", {type: "text", placeholder: "/path/to/recording.h5 or .avi", "aria-label": "Recording path"});
+    const folderTitle = el("h3", {class: "ws-section-title", hidden: true}, "Recording folders");
+    const folders = el("div", {class: "list ws-folders"});
+    const path = el("input", {type: "text", placeholder: "/path/to/folder, recording.h5 or video.avi", "aria-label": "Folder or recording path"});
     const list = el("div", {class: "list ws-browse"});
     const crumbs = el("div", {class: "note ws-browse-at"});
     const error = el("p", {class: "note error", hidden: true});
     const setup = el("select", {"aria-label": "Setup"}, setups.map((s) => el("option", {value: s.ref, selected: s.ref === current}, s.name)));
-    const add = el("button", {class: "primary", type: "button", disabled: true}, "Add");
+    const addFolder = el("button", {type: "button", disabled: true}, "Add this folder");
+    const addFile = el("button", {class: "primary", type: "button", disabled: true}, "Add file");
+    const isFile = (value) => /\.(h5|hdf5|avi)$/i.test(value);
+    const fail = (failure) => { error.textContent = failure.message; error.hidden = false; };
+    const setupName = (ref) => setups.find((s) => s.ref === ref)?.name || ref;
+    const showFolders = async () => {
+      const {folders: rows} = await api("/api/library/recording-folders");
+      folderTitle.hidden = !rows.length;
+      folders.replaceChildren(...rows.map((folder) => el("div", {class: "item ws-folder"},
+        el("span", {class: "ws-folder-path", title: folder.path}, folder.path), el("span", {class: "note"}, setupName(folder.setup)),
+        el("button", {type: "button", title: "Stop listing this folder's recordings; their workspaces and labels stay", onclick: async () => {
+          try {
+            await post("/api/library/recording-folders/remove", {path: folder.path});
+            changed = {setup: setup.value};
+            await showFolders();
+          } catch (failure) { fail(failure); }
+        }}, "Remove"))));
+    };
     const browse = async (at) => {
       try {
         listing = await api(`/api/files${query({path: at})}`);
-      } catch (failure) { error.textContent = failure.message; error.hidden = false; return; }
+      } catch (failure) { fail(failure); return; }
       error.hidden = true;
       crumbs.textContent = listing.path;
+      path.value = listing.path;
+      addFolder.disabled = false; addFile.disabled = true;
       const entries = listing.entries.filter((entry) => ["dir", "h5", "video"].includes(entry.kind));
       list.replaceChildren(
         ...(listing.parent ? [el("div", {class: "item", onclick: () => browse(listing.parent)}, "↑ ..")] : []),
         ...entries.map((entry) => el("div", {class: "item", onclick: () => {
           if (entry.kind === "dir") browse(entry.path);
-          else { path.value = entry.path; add.disabled = false; }
+          else { path.value = entry.path; addFile.disabled = false; addFolder.disabled = true; }
         }}, entry.kind === "dir" ? `▸ ${entry.name}` : entry.name, entry.kind !== "dir" && entry.size_bytes ? el("span", {class: "note"}, ` ${(entry.size_bytes / 1e9).toFixed(1)} GB`) : null)),
       );
     };
-    path.addEventListener("input", () => { add.disabled = !path.value.trim(); });
+    path.addEventListener("input", () => { const value = path.value.trim(); addFile.disabled = !isFile(value); addFolder.disabled = !value || isFile(value); });
     path.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       const value = path.value.trim();
-      if (/\.(h5|hdf5|avi)$/i.test(value)) add.click(); else if (value) browse(value);
+      if (isFile(value)) addFile.click(); else if (value) browse(value);
     });
-    add.addEventListener("click", async () => {
-      add.disabled = true;
-      if (/\.avi$/i.test(path.value.trim())) add.textContent = "Converting…";
+    addFolder.addEventListener("click", async () => {
+      addFolder.disabled = true;
       try {
-        result = await post("/api/library/recordings", {path: path.value.trim(), setup: setup.value});
+        const added = await post("/api/library/recording-folders", {path: path.value.trim(), setup: setup.value});
+        changed = {setup: added.setup};
+        ctx.toast(`Listing the recordings in ${added.path}`, "ok");
         dialog.close();
-      } catch (failure) { error.textContent = failure.message; error.hidden = false; add.disabled = false; add.textContent = "Add"; }
+      } catch (failure) { fail(failure); addFolder.disabled = false; }
+    });
+    addFile.addEventListener("click", async () => {
+      addFile.disabled = true;
+      if (/\.avi$/i.test(path.value.trim())) addFile.textContent = "Converting…";
+      try {
+        const added = await post("/api/library/recordings", {path: path.value.trim(), setup: setup.value});
+        changed = {setup: added.setup};
+        ctx.toast(`Added ${added.id}`, "ok");
+        dialog.close();
+      } catch (failure) { fail(failure); addFile.disabled = false; addFile.textContent = "Add file"; }
     });
     dialog.append(
-      el("h2", {}, "Add a recording"),
+      el("h2", {}, "Add recordings"),
+      folderTitle, folders,
+      el("p", {class: "note"}, "Add a folder to list every .h5 recording and .avi video in it and up to two folders below it, or add a single file."),
       el("div", {class: "ws-form-row"}, path, el("button", {type: "button", onclick: () => browse(path.value.trim() || undefined)}, "Browse")),
       crumbs, list, error,
       el("div", {class: "ws-form-row"}, el("span", {class: "ws-form-label"}, "Setup"), setup),
-      el("div", {class: "ws-dialog-actions"}, el("button", {type: "button", onclick: () => dialog.close()}, "Cancel"), add),
+      el("div", {class: "ws-dialog-actions"}, el("button", {type: "button", onclick: () => dialog.close()}, "Close"), addFolder, addFile),
     );
-    dialog.addEventListener("close", () => { dialog.remove(); resolve(result); });
+    dialog.addEventListener("close", () => { dialog.remove(); resolve(changed); });
     document.body.append(dialog);
     dialog.showModal();
+    showFolders().catch(fail);
     path.focus();
   });
 }

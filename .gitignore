@@ -39,3 +39,7 @@ docs/pose_pipeline_fields/**/*.json
 
 # A separate repository checked out here
 swt_ynet/
+
+# This checkout's settings and the default data directory (src/worm_pose_gen/settings.py)
+settings.json
+user_data/

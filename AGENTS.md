@@ -8,16 +8,20 @@ rules below target that time.
 ## Environment
 
 - Run Python through the wrapper: `scripts/project_env.sh uv run --no-sync --frozen python ...`.
-- In a git worktree, test and run the worktree's code with the main venv:
-  `env PYTHONPATH=<worktree>/src /home/alex/git/worm-pose-gen/scripts/project_env.sh uv run --no-sync --frozen python <worktree>/scripts/...`.
-  Check once that `worm_pose_gen.__file__` resolves inside the worktree.
+- In a git worktree, test and run the worktree's code with the main checkout's venv:
+  `env PYTHONPATH=<worktree>/src <main checkout>/scripts/project_env.sh uv run --no-sync --frozen python <worktree>/scripts/...`.
+  Check once that `worm_pose_gen.__file__` resolves inside the worktree, and
+  copy the main checkout's `settings.json` into the worktree: without it the
+  worktree's data directory is its own empty `user_data/`.
 - This machine is flv-c4: a shared host, often with dozens of users. Never use
   its GPUs. GPU runs go over ssh to flv-c3 first, then flv-c2; `nvidia-smi`
   there and pick an idle GPU. Home and `/temp_data4` are the same NFS paths on
   every host. The remote login shell is fish (`; and`, wrap loops in
-  `bash -c`). `project_env.sh` forces `CUDA_VISIBLE_DEVICES=0`, so set the
-  device after it: `... project_env.sh env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<n> uv run ...`.
-- Run outputs go under `/temp_data4/alex/external_artifacts/`, not in the repo.
+  `bash -c`). `project_env.sh` numbers GPUs as `nvidia-smi` does
+  (`CUDA_DEVICE_ORDER=PCI_BUS_ID`); choose one after it:
+  `... project_env.sh env CUDA_VISIBLE_DEVICES=<n> uv run ...`.
+- Run outputs go under the data directory's `runs/` (`settings.json`,
+  `worm_pose_gen.settings.RUNS_DIR`), not in the repo.
 
 ## Unit tests
 
@@ -43,7 +47,7 @@ rules below target that time.
   minutes on one GPU. Iterate on one or two clips (`--clip <name>`) and run
   the full set once for the final numbers.
 - Compute baseline numbers once and reuse them. Put them under
-  `/temp_data4/alex/external_artifacts/baselines/<base commit>_<checkpoint>_<preset>/`
+  `<data directory>/runs/baselines/<base commit>_<checkpoint>_<preset>/`
   and check for an existing result before running one. In a multi-agent
   workflow, a setup step computes the baseline before the agents fan out;
   each agent does not rerun it.

@@ -32,6 +32,9 @@ from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
+import fnmatch
+import getpass
+import socket
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -42,7 +45,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..compute import local_gpus
 from ..pipeline import WorkspaceBusy
-from ..segmentation_dataset import DEFAULT_DATASET_ROOT
+from ..settings import CACHE_DIR, DATA_DIR
 from ..workspace import DEFAULT_WORKSPACES_ROOT
 from .config import AppConfig
 from .state import AppState, NotFound
@@ -52,6 +55,7 @@ from .routers import labeling as labeling_routes, masks, queues, recordings, sta
 __all__ = ["AppConfig", "AppState", "NotFound", "create_app", "main", "parse_args"]
 
 BAD_REQUEST_ERRORS = (ValueError, KeyError, IndexError, FileExistsError)
+ENGAGING_LOGIN = "orcd-login.mit.edu"
 
 
 def _error(status: int, message: str) -> JSONResponse:
@@ -121,6 +125,38 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     return app
 
 
+DEFAULT_PORT = 8768
+
+
+def free_port(host: str, start: int = DEFAULT_PORT, tries: int = 100) -> int:
+    """``start``, or the first port above it nobody listens on (another user's app may hold it on a shared machine)."""
+
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise OSError(f"no free port in {start}-{start + tries - 1}; pass --port")
+
+
+def tunnel_command(port: int, host: str | None = None, user: str | None = None) -> str:
+    """The ``ssh`` command that forwards ``localhost:<port>`` on the user's computer to this server.
+
+    The server listens on this machine's localhost only, so on an Engaging
+    compute node the tunnel jumps through the login node to the node itself.
+    """
+
+    host = (host or socket.gethostname()).split(".")[0]
+    user = user or getpass.getuser()
+    if fnmatch.fnmatchcase(host, "node[0-9]*"):
+        return f"ssh -N -L {port}:localhost:{port} -J {user}@{ENGAGING_LOGIN} {user}@{host}"
+    if fnmatch.fnmatchcase(host, "orcd-*"):
+        return f"ssh -N -L {port}:localhost:{port} {user}@{host}.mit.edu"
+    return f"ssh -N -L {port}:localhost:{port} {user}@{host}"
+
+
 def _gpu_list(text: str | None) -> tuple[int, ...]:
     if text is None:
         return tuple(gpu.index for gpu in local_gpus())
@@ -130,9 +166,9 @@ def _gpu_list(text: str | None) -> tuple[int, ...]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8768)
+    parser.add_argument("--port", type=int, default=None, help=f"default: {DEFAULT_PORT}, or the next free port above it")
     parser.add_argument("--workspaces-root", type=Path, default=DEFAULT_WORKSPACES_ROOT, help="where workspaces, queues and the job records live")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives (<dataset-root>/flat_fields)")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR, help="where the flat field cache lives (<dataset-root>/flat_fields)")
     parser.add_argument("--gpus", default=None, help="comma-separated GPU ids for jobs (default: all visible)")
     parser.add_argument("--max-concurrent", type=int, default=None, help="jobs running at once (default: one per GPU)")
     parser.add_argument("--device", default=None, help="device of the server's own models (default: the first job GPU)")
@@ -147,7 +183,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def config_from_args(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
-        host=args.host, port=args.port, workspaces_root=args.workspaces_root, dataset_root=args.dataset_root,
+        host=args.host, port=free_port(args.host) if args.port is None else args.port, workspaces_root=args.workspaces_root, dataset_root=args.dataset_root,
         lab_library=args.lab_library, library=args.library, dev=args.dev,
         gpus=_gpu_list(args.gpus), device=args.device, max_concurrent=args.max_concurrent,
     )
@@ -165,9 +201,11 @@ def main(argv: list[str] | None = None) -> None:
         from .queues import manifest_queue
 
         page = f"#labeling/queue/{manifest_queue(state, args.queue)['id']}"
-    print(f"pose app at http://{config.host}:{config.port}/{page}", flush=True)
     slurm = state.compute.slurm
-    print(f"workspaces in {config.workspaces_root}, jobs on gpus {list(config.gpus)}, server device {state.device}", flush=True)
-    print(f"libraries: lab {state.libraries.lab}, personal {state.libraries.personal}", flush=True)
+    print(f"data in {DATA_DIR} (workspaces {config.workspaces_root}), jobs on gpus {list(config.gpus)}, server device {state.device}", flush=True)
+    lab = state.libraries.lab
+    print(f"libraries: lab {lab}{'' if 'lab' in state.libraries.scopes() else ' (not readable from here)'}, personal {state.libraries.personal}", flush=True)
     print(f"SLURM: {'available' if slurm.available else slurm.reason}; defaults {slurm.defaults}", flush=True)
+    print(f"\npose app at http://{config.host}:{config.port}/{page}", flush=True)
+    print(f"From your own computer: {tunnel_command(config.port)}\nthen open http://localhost:{config.port}/{page}\n", flush=True)
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level)

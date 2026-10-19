@@ -99,7 +99,7 @@ def main():
 
     lab, personal = root / "lab", root / "mine"
     video = {"flat_field": False}
-    library.write_setup(lab, "nir", name="NIR test rig", video=video, fps=20.0, pixel_size_um=1.2, recording_roots=[str(recordings)],
+    library.write_setup(lab, "nir", name="NIR test rig", video=video, fps=20.0, pixel_size_um=1.2,
                         defaults={"mask": "lab:nir-mask", "body": "lab:nir-body"})
     weights = root / "stand-in.ckpt"
     weights.write_bytes(b"stand-in")
@@ -108,6 +108,7 @@ def main():
     library.write_model(lab, "nir-body", {"name": "nir-body", "kind": "body_net", "setup": "lab:nir",
                                           "outputs": ["mask", "ap", "head", "tail", "overlap"], "inputs": inputs}, weights)
     libraries = library.Libraries(lab=lab, personal=personal)
+    library.add_recording_folder(libraries, recordings, "lab:nir")
     library.create_dataset(libraries, "nir-labels", setup="lab:nir", name="NIR labels", splits={RECORDING: "train"}, scope="lab")
     collection = library.Collection(libraries, "lab:nir")
     for frame, iou in ((5, 0.71), (15, 0.93), (25, 0.88), (35, None)):

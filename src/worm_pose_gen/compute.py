@@ -42,6 +42,7 @@ class LocalGPU:
     index: int
     name: str
     memory_gb: float
+    uuid: str = ""
 
 
 @dataclass(frozen=True)
@@ -131,8 +132,35 @@ def local_gpus() -> tuple[LocalGPU, ...]:
     gpus = []
     for index in range(torch.cuda.device_count()):
         properties = torch.cuda.get_device_properties(index)
-        gpus.append(LocalGPU(index=index, name=str(properties.name), memory_gb=round(properties.total_memory / 2**30, 1)))
+        gpus.append(LocalGPU(
+            index=index, name=str(properties.name), memory_gb=round(properties.total_memory / 2**30, 1),
+            uuid=str(getattr(properties, "uuid", "")).removeprefix("GPU-"),
+        ))
     return tuple(gpus)
+
+
+def gpu_memory_used(gpus: tuple[LocalGPU, ...]) -> dict[int, int]:
+    """MiB in use on each of ``gpus`` by every process (other users' too), from ``nvidia-smi``; empty when it cannot tell.
+
+    The GPUs are matched to ``nvidia-smi``'s rows by UUID, since torch's
+    indices follow ``CUDA_VISIBLE_DEVICES`` and ``nvidia-smi``'s do not.
+    """
+
+    if shutil.which("nvidia-smi") is None:
+        return {}
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=uuid,memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=SINFO_TIMEOUT_SECONDS, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    used: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        uuid, _, mib = (part.strip() for part in line.partition(","))
+        if mib.isdigit():
+            used[uuid.removeprefix("GPU-")] = int(mib)
+    return {gpu.index: used[gpu.uuid] for gpu in gpus if gpu.uuid in used}
 
 
 def slurm_partitions() -> tuple[SlurmPartition, ...]:

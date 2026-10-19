@@ -42,7 +42,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Any, Iterator, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 from .compute import CONSERVATIVE_SLURM_DEFAULTS, SlurmDefaults, node_local
 
@@ -663,13 +663,17 @@ class JobRunner:
     ``tick`` from a background thread once a second; ``recover`` finishes
     local jobs left running by a dead server from their progress files
     (SLURM jobs are simply polled again).  ``slurm`` is None where SLURM is
-    not available, and a SLURM job is then refused.
+    not available, and a SLURM job is then refused.  ``memory_used`` (GPU
+    index -> MiB in use by every process) puts a job on the free GPU other
+    users load least, as on a shared machine; without it the first free GPU.
     """
 
     def __init__(
         self, root: Path, local: LocalGPUBackend, slurm: SlurmBackend | None = None, max_concurrent: int | None = None,
+        memory_used: Callable[[], dict[int, int]] | None = None,
     ) -> None:
         self.root = Path(root)
+        self.memory_used = memory_used
         self.backends: dict[str, JobBackend] = {"local": local}
         if slurm is not None:
             self.backends["slurm"] = slurm
@@ -868,6 +872,9 @@ class JobRunner:
     def _start_queued(self) -> None:
         queued = sorted((r for r in self._records.values() if r.state == "queued"), key=lambda r: r.id)
         free = self._free_gpus()
+        if self.memory_used is not None and len(free) > 1 and any(r.spec.run_on == "local" and r.spec.gpus > 0 for r in queued):
+            used = self.memory_used()
+            free.sort(key=lambda gpu: used.get(gpu, 0))
         busy = self._busy_workspaces()
         for record in queued:
             local = record.spec.run_on == "local"

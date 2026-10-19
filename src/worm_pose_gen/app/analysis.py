@@ -5,10 +5,12 @@ the setup names the default model of each role (``mask``: the segmenter
 whose masks the pipeline fits; ``body``: the body-field network that scores
 the fits and gives the A-P field).  **Opening** a recording makes its
 workspace if it has none (always the whole recording; a developer may give
-a range) and starts nothing; the analysis starts from the workspace.
+a range) and starts nothing; the analysis starts from the workspace.  A
+video (``.avi``) is converted to an HDF5 recording when it is first opened.
 **Analyse** takes the setup's models, or the ones the user picked instead,
-and where the masks come from (``mask_source``: the mask model, the default,
-or the body model's own mask output, which then needs no mask model),
+and where the masks come from (``mask_source``: the mask model, or the body
+model's own mask output, which then needs no mask model; the default is the
+body model when the setup's mask default is a body-field network),
 resolves each reference to its weights, takes the pipeline settings the
 user changed (``PIPELINE_SETTINGS``), records the setup, the model
 references, the mask source and the pipeline settings in the workspace
@@ -56,6 +58,7 @@ from ..jobs import FINISHED_STATES, JobRecord, JobSpec
 from .images import data_url
 from ..library.setups import ROLE_OUTPUTS
 from ..recordings import RecordingInfo, list_recordings
+from ..videos import is_video
 from ..workspace import Workspace, _write_json_atomic, list_workspaces, utc_now
 from .exporting import list_exports
 from .inspection import cached_issue_summary
@@ -85,6 +88,16 @@ KYMOGRAPH_RANGE = 15.0
 
 # ---------------------------------------------------------------------------
 # Models and the analysis job
+
+
+def default_mask_source(libraries: library.Libraries, setup: library.Setup) -> str:
+    """Where a setup's masks come from unless the user says: its body model when its mask default is a body-field network, else its segmenter."""
+
+    ref = setup.defaults.get("mask")
+    try:
+        return "body_net" if ref and library.get_card(libraries, ref).kind == "body_net" else "segmenter"
+    except LookupError:
+        return "segmenter"
 
 
 def resolve_models(
@@ -212,6 +225,9 @@ def open_recording(app: AppState, payload: dict[str, Any]) -> str:
     """The workspace of the recording at ``payload["path"]``, made when it has none (``first``, ``last`` and ``step`` are a developer's range for a new one)."""
 
     recording = app.recording_path(str(payload.get("path") or ""))
+    if is_video(recording):
+        setup = library.setup_for_recording(app.libraries, recording)
+        recording = Path(library.register_recording(app.libraries, recording, setup)["path"])
     name = app.workspace_of_recording(recording)
     if name is None:
         name = app.create_workspace({key: payload.get(key) for key in ("first", "last", "step")} | {"recording": str(recording)}).name
@@ -235,7 +251,7 @@ def analysis_job(app: AppState, name: str, payload: dict[str, Any]) -> tuple[Job
     recording = workspace.recording
     setup = workspace_setup(app, workspace)
     setup_ref = setup.ref
-    mask_source = str(payload.get("mask_source") or "segmenter")
+    mask_source = str(payload.get("mask_source") or default_mask_source(libraries, setup))
     models = resolve_models(libraries, setup, payload.get("models"), mask_source)
     values = pipeline_values(setup, payload.get("pipeline"))
     stages = _stages(payload)
@@ -368,11 +384,12 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
     settings = workspace.info.settings
     libraries = app.libraries
     setup_ref = settings.get("setup") or library.setup_for_recording(libraries, workspace.recording)
-    setup = None
+    setup, mask_source = None, settings.get("mask_source", "segmenter")
     if setup_ref:
         try:
             found = library.get_setup(libraries, setup_ref)
             setup = {"ref": found.ref, "name": found.name, "pixel_size_um": found.pixel_size_um, "fps": found.fps}
+            mask_source = settings.get("mask_source") or default_mask_source(libraries, found)
         except (LookupError, ValueError):
             setup = {"ref": setup_ref, "name": setup_ref, "pixel_size_um": None, "fps": None, "missing": True}
     records = [r for r in (app.runner.list() if jobs is None else jobs) if r.spec.workspace == name]
@@ -396,7 +413,7 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
         "frames": [int(v) for v in workspace.info.frames], "step": int(workspace.info.step), "frame_count": workspace.n,
         "image_shape": workspace.info.image_shape, "setup": setup,
         "models": _model_names(libraries, settings.get("models") or {}),
-        "mask_source": settings.get("mask_source", "segmenter"), "pipeline": settings.get("pipeline") or {},
+        "mask_source": mask_source, "pipeline": settings.get("pipeline") or {},
         "has_body_model": workspace_body_net(workspace) is not None,
         "has_mask_model": workspace_mask_net(workspace) is not None,
         "state": state, "analysed": analysed, "issues": issues,
@@ -407,15 +424,16 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
 
 
 def home(app: AppState, setup_ref: str | None) -> dict[str, Any]:
-    """The Recordings screen: the setups, and the chosen setup's recordings with their workspace's status (newest workspace per recording)."""
+    """The Recordings screen: the setups, the chosen setup's folders, and its recordings with their workspace's status (newest workspace per recording)."""
 
     libraries = app.libraries
     setups = library.list_setups(libraries)
-    payload: dict[str, Any] = {"setups": [s.to_dict() for s in setups], "setup": None, "recordings": []}
+    payload: dict[str, Any] = {"setups": [s.to_dict() for s in setups], "setup": None, "folders": [], "recordings": []}
     if not setups:
         return payload
     setup = library.get_setup(libraries, setup_ref) if setup_ref else setups[0]
     payload["setup"] = setup.to_dict()
+    payload["folders"] = [path for path, entry in sorted(library.recording_folders(libraries).items()) if entry["setup"] == setup.ref]
     infos = library_recordings(app, setup)
     workspaces: dict[str, str] = {}
     for info in reversed(list_workspaces(app.config.workspaces_root)):  # oldest first, so the newest wins
@@ -426,6 +444,7 @@ def home(app: AppState, setup_ref: str | None) -> dict[str, Any]:
         name = workspaces.get(str(Path(info.path).resolve()))
         rows.append({
             "id": library.recording_id(info.path), "path": info.path, "frames": info.frames, "readable": info.readable, "error": info.error,
+            "video": info.video,
             "workspace": name, "status": None if name is None else status(app, name, jobs, opened),
         })
     payload["recordings"] = rows
@@ -433,12 +452,17 @@ def home(app: AppState, setup_ref: str | None) -> dict[str, Any]:
 
 
 def library_recordings(app: AppState, setup: library.Setup) -> list[RecordingInfo]:
-    """The setup's recordings (under its roots or registered to it, not registered to another setup)."""
+    """The setup's recordings (in its folders or registered to it, not registered to another setup).
+
+    A video converted before is listed as its HDF5 recording only.
+    """
 
     libraries = app.libraries
     infos = list_recordings(library.recording_sources(libraries, setup.ref), cache=app.config.recordings_cache, dataset=str(setup.video["dataset_path"]))
     registered = library.setups.registered_recordings(libraries)
-    return [info for info in infos if registered.get(info.path, {}).get("setup") in (None, setup.ref)]
+    infos = [info for info in infos if registered.get(info.path, {}).get("setup") in (None, setup.ref)]
+    converted = {info.name for info in infos if not info.video}
+    return [info for info in infos if not (info.video and info.name in converted)]
 
 
 # ---------------------------------------------------------------------------

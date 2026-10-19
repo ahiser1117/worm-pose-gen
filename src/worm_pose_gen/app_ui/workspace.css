@@ -199,3 +199,6 @@
 .ws-timeline-canvas { display: block; width: 100%; cursor: crosshair; touch-action: none; }
 .ws-minimap-host { display: inline-flex; }
 .ws-minimap { display: block; width: 240px; height: 26px; border: 1px solid var(--border); border-radius: 3px; touch-action: none; }
+.ws-folders:empty { display: none; }
+.ws-folder { display: flex; align-items: center; gap: 8px; cursor: default; }
+.ws-folder-path { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

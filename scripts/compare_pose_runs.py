@@ -28,7 +28,7 @@ import torch
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, run_label
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         "--checkpoint", type=Path, default=None,
         help="segmenter for every panel's mask (default: each run's own checkpoint from its summary, else the promoted one)",
     )
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR)
     parser.add_argument("--device", default=None)
     return parser.parse_args()
 

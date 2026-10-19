@@ -393,8 +393,10 @@ export class WorkspaceView {
     const defaults = setupCard.defaults || {}, model = (ref) => (ref ? {ref, name: known.get(ref)?.name || ref} : null);
     const chosen = status.models.mask || status.models.body;
     // Masks from the body model leave no mask model; offer the setup's, should the user switch back.
-    const models = chosen ? {mask: status.models.mask || model(defaults.mask), body: status.models.body} : {mask: model(defaults.mask), body: model(defaults.body)};
-    return {setup, models, maskSource: chosen ? status.mask_source : "segmenter", runOn: new RunOn(compute), settings, values: status.pipeline || {}, dev: this.ctx.dev};
+    // A setup whose mask default is a body-field network takes its masks from the body model (status.mask_source says so); it has no segmenter to offer.
+    const segmenter = known.get(defaults.mask)?.kind === "body_net" ? null : model(defaults.mask);
+    const models = chosen ? {mask: status.models.mask || segmenter, body: status.models.body} : {mask: segmenter, body: model(defaults.body)};
+    return {setup, models, maskSource: status.mask_source, runOn: new RunOn(compute), settings, values: status.pipeline || {}, dev: this.ctx.dev};
   }
 
   // The Analyse form of the Issues panel, made once per visit so polls and re-renders keep what the user changed.

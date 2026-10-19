@@ -5,9 +5,8 @@ set -euo pipefail
 export PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # Keep the Python environment and disposable caches with the checkout. They are
-# ignored by Git. Reserve external_artifacts for checkpoints, generated data,
-# profiler traces, and experiment outputs that can accumulate.
-export WORM_POSE_EXTERNAL_ROOT="/temp_data4/alex/external_artifacts"
+# ignored by Git. What the user makes goes to the data directory instead
+# (settings.json, src/worm_pose_gen/settings.py).
 export UV_PROJECT="$PROJECT_ROOT"
 export UV_PROJECT_ENVIRONMENT="$PROJECT_ROOT/.venv"
 export UV_CACHE_DIR="$PROJECT_ROOT/.cache/uv"
@@ -20,9 +19,9 @@ export MPLCONFIGDIR="$PROJECT_ROOT/.cache/matplotlib"
 export TORCH_HOME="$PROJECT_ROOT/.cache/torch"
 export MPLBACKEND="Agg"
 
-# Physical CUDA device 0 is the only GPU this project may expose. It becomes
-# logical cuda:0 inside PyTorch.
-export CUDA_VISIBLE_DEVICES="0"
+# Number GPUs as nvidia-smi does, so a GPU index means the same card to torch,
+# to the app's job runner and to the person reading nvidia-smi.
+export CUDA_DEVICE_ORDER="PCI_BUS_ID"
 
 mkdir -p \
   "$UV_CACHE_DIR" \

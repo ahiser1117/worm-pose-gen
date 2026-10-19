@@ -6,7 +6,7 @@ they are (``/api/library/datasets/lab:nir-labels``).  A setup's labels are
 its collection (``/api/library/setups/<ref>/labels``); a dataset chooses the
 split of each of the collection's recordings.  The writes are the ones the
 pages need: create a personal setup or dataset, set a dataset's splits,
-register a recording to a setup, save a label revision, freeze a benchmark,
+add or remove a recording folder, register a recording to a setup, save a label revision, freeze a benchmark,
 and set a default model.  A write that names a lab item is refused with 403, since
 the app never writes the lab library.
 
@@ -73,7 +73,7 @@ def setups(app: AppState = Depends(get_state)) -> dict[str, Any]:
 
 @router.post("/setups")
 def create_setup(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
-    fields = {key: payload[key] for key in ("name", "description", "video", "pixel_size_um", "fps", "recording_roots") if key in payload}
+    fields = {key: payload[key] for key in ("name", "description", "video", "pixel_size_um", "fps") if key in payload}
     if not fields.get("name"):
         raise ValueError("'name' is required")
     with _found():
@@ -97,7 +97,7 @@ def set_default(ref: str, payload: dict[str, Any] = Body(...), app: AppState = D
 
 @router.get("/setups/{ref}/recordings")
 def setup_recordings(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
-    """The recordings under the setup's roots and those registered to it, with frame counts and readability."""
+    """The HDF5 recordings in the setup's folders and those registered to it, with frame counts and readability (videos are left out until converted)."""
 
     libraries = _libraries(app)
     with _found():
@@ -108,7 +108,9 @@ def setup_recordings(ref: str, app: AppState = Depends(get_state)) -> dict[str, 
     rows = []
     for info in infos:
         owner = registered.get(info.path, {}).get("setup")
-        if owner is None or owner == ref:  # a file under the roots registered to another setup belongs there
+        if info.video:
+            continue
+        if owner is None or owner == ref:  # a file in the folders registered to another setup belongs there
             rows.append({**info.to_dict(), "id": library.recording_id(info.path), "registered": info.path in registered})
     return {"setup": ref, "recordings": rows}
 
@@ -122,6 +124,29 @@ def recording_setup(path: str, app: AppState = Depends(get_state)) -> dict[str, 
 def register_recording(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
     with _found():
         return library.register_recording(_libraries(app), str(payload.get("path") or ""), str(payload.get("setup") or ""))
+
+
+@router.get("/recording-folders")
+def recording_folders(app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The folders searched for recordings, each with its setup."""
+
+    return {"folders": [{"path": path, **entry} for path, entry in sorted(library.recording_folders(_libraries(app)).items())]}
+
+
+@router.post("/recording-folders")
+def add_recording_folder(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    with _found():
+        try:
+            return library.add_recording_folder(_libraries(app), str(payload.get("path") or ""), str(payload.get("setup") or ""))
+        except NotADirectoryError as error:
+            raise ValueError(str(error)) from error
+
+
+@router.post("/recording-folders/remove")
+def remove_recording_folder(payload: dict[str, Any] = Body(...), app: AppState = Depends(get_state)) -> dict[str, Any]:
+    with _found():
+        library.remove_recording_folder(_libraries(app), str(payload.get("path") or ""))
+    return recording_folders(app)
 
 
 # --------------------------------------------------------------------------- datasets

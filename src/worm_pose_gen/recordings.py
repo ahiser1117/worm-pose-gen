@@ -1,7 +1,7 @@
 """The HDF5 recordings: catalog, frame thumbnails, and frames read and flat-fielded.
 
 The Recordings screen and Labeling's New queue need, for every ``.h5`` file
-of a setup (under its roots or registered to it), its frame count and image
+of a setup (in its recording folders or registered to it), its frame count and image
 size and whether it can actually be read (some recordings hold chunks
 compressed with an HDF5 filter plugin that is not installed, and a few
 files are not HDF5 at all).  Opening every file to read its shape is slow
@@ -34,7 +34,7 @@ from numpy.typing import NDArray
 from PIL import Image
 
 from .flat_field import FlatField, apply_flat_field, estimate_flat_field
-from .segmentation_dataset import DEFAULT_DATASET_ROOT
+from .settings import CACHE_DIR
 from .videos import VIDEO_SUFFIXES
 
 
@@ -42,6 +42,7 @@ DATASET_PATH = "/img_nir"
 CACHE_VERSION = 1
 FLAT_FIELD_SAMPLE_COUNT = 64
 HDF5_SUFFIXES = (".h5", ".hdf5")
+VIDEO_FACTS = {"frames": None, "height": None, "width": None, "readable": True, "error": None}
 
 
 @dataclass
@@ -59,6 +60,8 @@ class RecordingInfo:
     error: str | None
     # The HDF5 dataset holding the frames.
     dataset: str = DATASET_PATH
+    # A video (``.avi``), converted to an HDF5 recording when it is first opened.
+    video: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -186,8 +189,12 @@ class RecordingIndex:
         self._dirty = False
 
 
-def find_recordings(roots: Iterable[Path], pattern: str = "*.h5") -> list[Path]:
-    """Every file matching ``pattern`` under the roots that exist, resolved, sorted by name then path.
+# How many folders below a recording folder are searched: ``<folder>/<day>/<recording>.h5`` is two.
+FOLDER_DEPTH = 2
+
+
+def find_recordings(roots: Iterable[Path], depth: int = FOLDER_DEPTH) -> list[Path]:
+    """Every recording (HDF5 or video file) given as a root or under a root at most ``depth`` folders down (hidden ones skipped), resolved, sorted by name then path.
 
     Resolving makes a file reached through two roots (one a symlink to the other) one recording.
     """
@@ -196,27 +203,33 @@ def find_recordings(roots: Iterable[Path], pattern: str = "*.h5") -> list[Path]:
     for root in roots:
         root = Path(root)
         if root.is_file():
-            if root.match(pattern):
+            if _file_kind(root.suffix.lower()):
                 found.add(root.resolve())
             continue
         if not root.is_dir():
             continue
-        found.update(p.resolve() for p in root.rglob(pattern) if p.is_file())
+        for level in range(depth + 1):
+            for path in root.glob("/".join(["*"] * (level + 1))):
+                hidden = any(part.startswith(".") for part in path.relative_to(root).parts)
+                if not hidden and _file_kind(path.suffix.lower()) and path.is_file():
+                    found.add(path.resolve())
     return sorted(found, key=lambda p: (p.stem, str(p)))
 
 
-def list_recordings(roots: Iterable[Path], *, pattern: str = "*.h5", cache: Path | None = None, dataset: str = DATASET_PATH) -> list[RecordingInfo]:
+def list_recordings(roots: Iterable[Path], *, cache: Path | None = None, dataset: str = DATASET_PATH) -> list[RecordingInfo]:
     """Catalog the recordings under ``roots`` (directories, or recording files themselves), reusing ``cache`` for unchanged files.
 
     ``dataset`` is the HDF5 dataset holding the frames (a setup's video dataset).
+    A video is listed without opening it: it is read once it is converted.
     """
 
     index = RecordingIndex(cache)
     infos = []
-    for path in find_recordings(roots, pattern):
+    for path in find_recordings(roots):
+        video = _file_kind(path.suffix.lower()) == "video"
         try:
-            entry = index.facts(path, dataset)
             stamp = _file_stamp(path)
+            entry = VIDEO_FACTS if video else index.facts(path, dataset)
         except OSError as error:
             # Vanished or unstat-able between listing and probing: report it rather than drop it.
             entry = {"frames": None, "height": None, "width": None, "readable": False, "error": f"{type(error).__name__}: {error}"}
@@ -225,7 +238,7 @@ def list_recordings(roots: Iterable[Path], *, pattern: str = "*.h5", cache: Path
             RecordingInfo(
                 name=path.stem, path=str(path), frames=entry["frames"], height=entry["height"], width=entry["width"],
                 size_bytes=int(stamp["size"]), modified_at=_iso_utc(stamp["mtime_ns"] / 1e9), readable=bool(entry["readable"]),
-                error=entry["error"], dataset=dataset,
+                error=entry["error"], dataset=dataset, video=video,
             )
         )
     index.save()
@@ -247,7 +260,7 @@ def _read_frame(path: Path, frame: int, dataset: str = DATASET_PATH) -> NDArray[
         return values
 
 
-def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET_ROOT, dataset: str = DATASET_PATH) -> NDArray[np.uint8]:
+def thumbnail_frame(path: Path, frame: int, dataset_root: Path = CACHE_DIR, dataset: str = DATASET_PATH) -> NDArray[np.uint8]:
     """The frame flat-fielded through the cached field when one exists, else raw."""
 
     path = Path(path)
@@ -263,7 +276,7 @@ def thumbnail_frame(path: Path, frame: int, dataset_root: Path = DEFAULT_DATASET
 
 
 def thumbnail_png(
-    path: Path, frame: int, scale: float = 0.25, dataset_root: Path = DEFAULT_DATASET_ROOT, dataset: str = DATASET_PATH
+    path: Path, frame: int, scale: float = 0.25, dataset_root: Path = CACHE_DIR, dataset: str = DATASET_PATH
 ) -> bytes:
     """PNG bytes of one frame scaled by ``scale`` (at least 1x1 pixel)."""
 

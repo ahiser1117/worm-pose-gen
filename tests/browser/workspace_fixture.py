@@ -109,8 +109,9 @@ def main():
     write_recording(recordings / "2026-03-14-02.h5", 12)
 
     lab = root / "lab"
-    library.write_setup(lab, "nir", name="NIR tracker", fps=20.0, pixel_size_um=2.5, recording_roots=[str(recordings)],
+    library.write_setup(lab, "nir", name="NIR tracker", fps=20.0, pixel_size_um=2.5,
                         defaults={"mask": "lab:nir-hand284", "body": "lab:nir-body-lags3"})
+    library.add_recording_folder(library.Libraries(lab, root / "mine"), recordings, "lab:nir")
     # An untrained segmenter: the frame view runs it for the network layers (analysis uses dark pixels).
     weights = root / "weights.ckpt"
     module = SegmentationModule(pretrained=False)

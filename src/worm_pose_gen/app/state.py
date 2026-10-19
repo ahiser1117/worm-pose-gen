@@ -16,7 +16,7 @@ from typing import Any
 
 import torch
 
-from ..compute import detect_compute
+from ..compute import detect_compute, gpu_memory_used
 from ..jobs import JobRunner, LocalGPUBackend, SlurmBackend
 from .. import library
 from ..library import Libraries
@@ -58,15 +58,18 @@ class AppState:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         config.workspaces_root.mkdir(parents=True, exist_ok=True)
-        device = config.server_device
+        # Where jobs can run, found once at startup (``GET /api/compute``).
+        self.compute = detect_compute()
+        memory_used = lambda: gpu_memory_used(self.compute.gpus)  # noqa: E731 - other users' load, read when a GPU is chosen
+        device = config.server_device(memory_used() if config.device is None and len(config.gpus) > 1 else None)
         self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
         self.segmenters = Segmenters(self.device)
         self._sources: dict[str, tuple[RecordingSource | None, str | None]] = {}
         self._sources_lock = threading.Lock()
-        # Where jobs can run, found once at startup (``GET /api/compute``).
-        self.compute = detect_compute()
         slurm = SlurmBackend(self.compute.slurm.defaults) if self.compute.slurm.available else None
-        self.runner = JobRunner(config.jobs_root, LocalGPUBackend(list(config.gpus)), slurm, max_concurrent=config.max_concurrent)
+        self.runner = JobRunner(
+            config.jobs_root, LocalGPUBackend(list(config.gpus)), slurm, max_concurrent=config.max_concurrent, memory_used=memory_used,
+        )
         self._views: dict[str, WorkspaceView] = {}
         self._lock = threading.Lock()
         self.libraries = Libraries(config.lab_library, config.library)
@@ -191,7 +194,7 @@ class AppState:
     # ---------------------------------------------------------------- recordings
 
     def recording_path(self, path: str) -> Path:
-        """``path`` as a recording of a setup (under its roots or registered to it); ``NotFound`` for anything else."""
+        """``path`` as a recording of a setup (in its folders or registered to it); ``NotFound`` for anything else."""
 
         recording = Path(path).expanduser()
         try:
@@ -209,10 +212,9 @@ class AppState:
         return str(library.get_setup(self.libraries, setup).video["dataset_path"]) if setup is not None else DATASET_PATH
 
     def browse(self, path: str | None, all_files: bool = False) -> dict[str, Any]:
-        """Directories and HDF5 files under ``path`` (the first setup's first root when none is given), with the setups' roots as shortcuts."""
+        """Directories and HDF5 files under ``path`` (the first recording folder when none is given), with the recording folders as shortcuts."""
 
-        roots = [Path(root) for setup in library.list_setups(self.libraries) for root in setup.recording_roots]
-        roots = [root for root in dict.fromkeys(roots) if root.is_dir()]
+        roots = [root for root in map(Path, library.recording_folders(self.libraries)) if root.is_dir()]
         start = Path(path).expanduser() if path else (roots[0] if roots else Path.home())
         try:
             listing = list_directory(start, all_files=all_files)

@@ -4,13 +4,15 @@
     scripts/publish.py setup mine:rig2
     scripts/publish.py labels lab:nir-flv
     scripts/publish.py dataset mine:copper-plates
-    scripts/publish.py model mine:copper-ft --default body --reason "fixes heads on copper plates"
+    scripts/publish.py model mine:copper-ft --default body --default mask --reason "fixes heads on copper plates"
 
 The item is copied, never moved, under the same id (``--as`` renames it),
 and an id the lab already has is refused: a published item is frozen, and a
 new version gets a new id.  References inside it (``setup``, ``parent``,
 ``trained_on``) that name personal items become lab references, so those
-items must be published first; the script says which.
+items must be published first; the script says which.  A ``trained_on``
+entry of pseudo-labels names directories, not library items, and is kept as
+it is.
 
 ``labels`` takes a setup and copies the current personal label of each
 frame of its collection into the lab's part (of the published setup, for a
@@ -21,8 +23,11 @@ current label for everyone.  A dataset holds only its splits, so publish
 the labels of its recordings too.  A model
 keeps its training records and its evaluations on lab benchmarks (stored
 in the personal library, since the app cannot write the lab's), not those on
-personal benchmarks.  ``--default ROLE`` also makes a published model the lab
-setup's default for that role, logged with ``--reason``.
+personal benchmarks.  ``--default ROLE`` (repeatable) also makes a published
+model the lab setup's default for that role, logged with ``--reason``.
+
+The lab library is written on one host; ``scripts/sync_lab_library.sh``
+copies it to the other system's.
 
 The lab root defaults to the host's (``library.LAB_LIBRARY_BY_HOST``) and
 the personal one to the host default; ``--lab`` and ``--library`` override
@@ -56,7 +61,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--as", dest="lab_id", default=None, help="its id in the lab library (default: the same)")
     parser.add_argument("--lab", type=Path, default=None, help="the lab library root")
     parser.add_argument("--library", type=Path, default=None, help="the personal library root")
-    parser.add_argument("--default", choices=tuple(ROLE_OUTPUTS), default=None, help="(model) make it the lab setup's default for this role")
+    parser.add_argument("--default", choices=tuple(ROLE_OUTPUTS), action="append", default=[], help="(model) make it the lab setup's default for this role (repeatable)")
     parser.add_argument("--reason", default="", help="why the default changes (required with --default)")
     return parser.parse_args(argv)
 
@@ -140,7 +145,7 @@ def publish_model(libraries: Libraries, ref: str, lab_id: str) -> str:
     data: dict[str, Any] = read_json(model_dir(libraries.personal, model_id) / "model.json")
     data.update(
         setup=lab_ref(libraries, card.setup), parent=lab_ref(libraries, card.parent),
-        trained_on=[{**entry, "dataset": lab_ref(libraries, entry["dataset"])} for entry in card.trained_on],
+        trained_on=[entry if "pseudo_labels" in entry else {**entry, "dataset": lab_ref(libraries, entry["dataset"])} for entry in card.trained_on],
         published_from=ref,
     )
     staging = staged_copy(model_dir(libraries.personal, model_id), target)
@@ -195,8 +200,8 @@ def main(argv: list[str] | None = None) -> None:
         published = publish_dataset(libraries, args.ref, lab_id)
     else:
         published = publish_model(libraries, args.ref, lab_id)
-        if args.default:
-            set_lab_default(libraries, published, args.default, args.reason)
+        for role in args.default:
+            set_lab_default(libraries, published, role, args.reason)
     print(f"published {args.ref} as {published} in {libraries.lab}")
 
 

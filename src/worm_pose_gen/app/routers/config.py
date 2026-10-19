@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from ...settings import DATA_DIR
 from ..state import AppState
 from . import get_state
 
@@ -21,6 +22,9 @@ def config(app: AppState = Depends(get_state)) -> dict[str, Any]:
         # Whether the server's own models run on a GPU: without one, Labeling proposes bodies only when asked.
         "gpu": app.device.type == "cuda",
         "user": getpass.getuser(),
+        # Where this checkout keeps what the user makes (settings.json); the app's own roots are below.
+        "data_dir": str(DATA_DIR),
+        "workspaces": str(app.config.workspaces_root),
         "libraries": {
             "lab": None if libraries.lab is None else str(libraries.lab),
             "lab_available": "lab" in libraries.scopes(),
