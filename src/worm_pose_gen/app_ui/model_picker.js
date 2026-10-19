@@ -1,7 +1,7 @@
 // The model picker: one table of a setup's models with their inputs, outputs
 // and benchmark numbers (docs/APP_SIMPLIFICATION.md, section 4). The Training
 // page's Models tab shows the same table with row actions; the Workspace
-// opens it as a dialog for "Change model":
+// opens it as a dialog from the Analyse form's Change:
 //
 //   const ref = await openModelPicker(ctx, {setup: "lab:nir-flv", role: "mask", current: "lab:nir-hand284"});
 //   // ref: the chosen model ref, or null when cancelled

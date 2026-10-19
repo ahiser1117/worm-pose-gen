@@ -2,6 +2,13 @@
 // left, the frame in the middle, transport, issue track and kymograph at
 // the bottom (docs/APP_SIMPLIFICATION.md, section 2).
 //
+// A workspace opens before it is analysed: its left panel holds the Analyse
+// form (workspace_analyse.js: the models, the setup's defaults first, Run on
+// and the folded pipeline settings) above the Analyse button; Re-analyse in
+// the header opens the same form, with the last choices, in a dialog. While
+// the analysis is queued or running the panel shows its stages and Cancel
+// stops it (also in the header).
+//
 // The fixes act on a *target*: the selected issue, or a range right-dragged on
 // the timeline (which replaces the issue), or the current frame when there is
 // neither. Refit and Relabel's stitch run as jobs whose result is a preview
@@ -20,7 +27,7 @@
 
 import {api, el, post, query} from "./api.js";
 import {FrameCanvas, drawMidline, maskCanvas} from "./frame_canvas.js";
-import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
+import {AnalyseForm, RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
 import {AP_LUT, KYMOGRAPH_LUT, MASK_LUT, RAW_AP_LUT, colorize, decodeGray, drawCurve, drawOutline, loadImage, probabilityLut} from "./workspace_draw.js";
 import {STAGE_WORDS, describeStatus} from "./workspace_home.js";
 import {MaskEditor} from "./workspace_mask.js";
@@ -190,6 +197,7 @@ export class WorkspaceView {
     clearTimeout(this.statusTimer);
     this.name = name;
     this.base = `/api/workspaces/${encodeURIComponent(name)}`;
+    this.analyseForm = null;
     this.status = null; this.issues = null; this.issuesError = null; this.fixes = []; this.target = null; this.selectedIssue = null;
     this.mode = "idle"; this.pending = null; this.preview = null; this.keyframes = null;
     this.row = 0; this.current = null; this.maskOverlay = null; this.fields = null; this.fieldsCache = new Map();
@@ -241,7 +249,9 @@ export class WorkspaceView {
     const before = this.status?.state;
     await this.loadStatus();
     if (["queued", "analysing"].includes(before) && !["queued", "analysing"].includes(this.status?.state)) {
-      if (this.status.state === "failed") this.ctx.toast(`Analysis failed: ${this.status.analysis?.error?.split("\n").pop() || ""}`, "error");
+      const job = this.status.analysis;
+      if (job?.state === "failed") this.ctx.toast(`Analysis failed: ${job.error?.split("\n").pop() || ""}`, "error");
+      else if (job?.state === "cancelled") this.ctx.toast("Analysis cancelled", "ok");
       else this.ctx.toast("Analysis finished", "ok");
       await this.loadAll();
       if (!this.selectFirstIssue()) this.seek(this.row);
@@ -329,22 +339,26 @@ export class WorkspaceView {
   renderHeader() {
     if (!this.status || this.node.hidden) return;
     const status = this.status, [text, kind, progress] = describeStatus(status);
-    const progressNode = ["queued", "analysing", "failed"].includes(status.state)
+    const busy = ["queued", "analysing"].includes(status.state);
+    const progressNode = busy || ["failed", "cancelled"].includes(status.state)
       ? el("span", {class: `ws-progress ${kind}`, title: status.analysis?.error || status.analysis?.message || null},
         progress !== null ? el("progress", {max: 1, value: progress}) : null, el("span", {}, text),
-        status.state === "failed" && status.analysis ? el("button", {class: "link", onclick: () => this.retryAnalysis()}, "Retry") : null)
+        status.state === "failed" && status.analysis ? el("button", {class: "link", onclick: () => this.retryAnalysis()}, "Retry") : null,
+        busy ? el("button", {class: "link", title: "Stop the analysis", onclick: (event) => this.cancelAnalysis(event.currentTarget)}, "Cancel") : null)
       : null;
     const context = [
       el("button", {class: "ws-back", title: "All recordings", onclick: () => this.leaveTo(() => this.onHome())}, "‹ Recordings"),
       el("strong", {class: "ws-title", title: status.recording}, status.recording_id),
       el("span", {class: "ws-dot"}, "·"),
-      el("span", {class: "ws-models", title: [status.models.mask?.ref, status.models.body?.ref].filter(Boolean).join(" + ") || null}, modelLabel(status.models, status.mask_source)),
+      el("span", {class: "ws-models", title: [status.models.mask?.ref, status.models.body?.ref].filter(Boolean).join(" + ") || null},
+        status.state === "not_analysed" ? "Not analysed" : modelLabel(status.models, status.mask_source)),
       progressNode ? el("span", {class: "ws-dot"}, "·") : null, progressNode,
     ];
-    const busy = ["queued", "analysing"].includes(status.state);
     const actions = [
       this.ctx.dev ? el("button", {class: "dev-only", onclick: () => this.dev.openJobs()}, "Jobs") : null,
-      el("button", {disabled: busy, title: busy ? "Wait for the analysis to finish" : "Analyse again, with these or other models", onclick: () => this.reanalyse()}, "Change model"),
+      status.analysed
+        ? el("button", {disabled: busy, title: busy ? "Wait for the analysis to finish" : "Analyse again, with other models or pipeline settings", onclick: () => this.reanalyse()}, "Re-analyse…")
+        : null,
       el("button", {class: "primary", disabled: !status.analysed || busy, onclick: () => this.export()}, "Export"),
       el("button", {class: "ws-help-button", title: "Keyboard shortcuts (?)", "aria-label": "Help", onclick: () => this.help()}, "?"),
     ];
@@ -361,32 +375,74 @@ export class WorkspaceView {
     } catch (error) { this.ctx.toast(error.message, "error"); }
   }
 
-  async reanalyse(first = false) {
-    const status = this.status;
-    let runOn;
-    try { runOn = new RunOn(await loadCompute()); } catch (error) { this.ctx.toast(error.message, "error"); return; }
-    const models = {mask: status.models.mask, body: status.models.body};
-    if (!models.mask && status.setup) {
-      const known = await modelCards(status.setup.ref).catch(() => new Map());
-      const ref = (await api(`/api/library/setups/${encodeURIComponent(status.setup.ref)}`).catch(() => ({}))).defaults?.mask;
-      if (ref) models.mask = {ref, name: known.get(ref)?.name || ref};
-    }
-    if (!status.setup) { this.ctx.toast("This recording does not belong to a setup; add it to one on the Recordings screen.", "error"); return; }
-    const chosen = await openAnalyseDialog(this.ctx, {
-      title: `${first ? "Analyse" : "Re-analyse"} ${status.recording_id}`, setup: status.setup.ref, models, maskSource: status.mask_source, runOn,
-      submitLabel: first ? "Analyse" : "Re-analyse", dev: this.ctx.dev,
-      warning: first ? null : "Re-analysing replaces every pose, including your fixes. Mask edits are kept.",
-    });
-    if (!chosen) return;
-    const {models: refs, mask, body, ...dev} = chosen;
+  async cancelAnalysis(button) {
+    button.disabled = true;
     try {
-      await post("/api/analyse", {path: status.recording, models: refs, ...runOn.payload(), ...dev});
-      this.ctx.toast(`Analysing ${status.recording_id}`, "ok");
-      this.preview = null; this.mode = "idle"; this.timeline.set("preview", null);
-      await this.loadStatus();
-      await this.loadIssues();
-      this.renderFix();
+      await post(`/api/jobs/${this.status.analysis.id}/cancel`);
     } catch (error) { this.ctx.toast(error.message, "error"); }
+    await this.pollStatus();
+  }
+
+  // The Analyse form's options: the models and settings last chosen (none yet: the setup's default models), Run on and the pipeline settings.
+  async analyseOptions() {
+    const status = this.status, setup = status.setup.ref;
+    const [compute, settings, known, setupCard] = await Promise.all([
+      loadCompute(), api(`${this.base}/pipeline-settings`), modelCards(setup).catch(() => new Map()),
+      api(`/api/library/setups/${encodeURIComponent(setup)}`).catch(() => ({})),
+    ]);
+    const defaults = setupCard.defaults || {}, model = (ref) => (ref ? {ref, name: known.get(ref)?.name || ref} : null);
+    const chosen = status.models.mask || status.models.body;
+    // Masks from the body model leave no mask model; offer the setup's, should the user switch back.
+    const models = chosen ? {mask: status.models.mask || model(defaults.mask), body: status.models.body} : {mask: model(defaults.mask), body: model(defaults.body)};
+    return {setup, models, maskSource: chosen ? status.mask_source : "segmenter", runOn: new RunOn(compute), settings, values: status.pipeline || {}, dev: this.ctx.dev};
+  }
+
+  // The Analyse form of the Issues panel, made once per visit so polls and re-renders keep what the user changed.
+  analysePanel() {
+    if (this.analyseForm) return this.analyseForm;
+    const name = this.name;
+    const node = el("div", {class: "ws-analyse-panel"}, el("p", {class: "note"}, "Loading the analysis settings…"));
+    this.analyseForm = node;
+    this.analyseOptions().then((options) => {
+      if (this.name !== name || this.analyseForm !== node) return;
+      const form = new AnalyseForm(this.ctx, {...options, compact: true});
+      const go = el("button", {class: "primary", type: "button", disabled: !form.canRun, title: form.canRun ? null : form.runOn.reason,
+        onclick: async () => { go.disabled = true; if (!(await this.startAnalysis(form.values()))) go.disabled = false; }}, "Analyse");
+      node.replaceChildren(form.node, el("div", {class: "ws-row-actions"}, go));
+    }).catch((error) => {
+      if (this.analyseForm !== node) return;
+      this.analyseForm = null;
+      node.replaceChildren(el("p", {class: "note error"}, `Could not load the analysis settings: ${error.message}`),
+        el("button", {type: "button", onclick: () => this.renderIssues()}, "Try again"));
+    });
+    return node;
+  }
+
+  // Analyse again from the dialog, with the workspace's last models and settings.
+  async reanalyse() {
+    const status = this.status;
+    if (!status.setup) { this.ctx.toast("This recording does not belong to a setup; add it to one on the Recordings screen.", "error"); return; }
+    let options;
+    try { options = await this.analyseOptions(); } catch (error) { this.ctx.toast(error.message, "error"); return; }
+    const chosen = await openAnalyseDialog(this.ctx, {
+      ...options, title: `Re-analyse ${status.recording_id}`, submitLabel: "Re-analyse",
+      warning: "Re-analysing replaces every pose, including your fixes. Mask edits are kept.",
+    });
+    if (chosen) await this.startAnalysis(chosen);
+  }
+
+  // Submit the analysis (the form's values()); whether it started.
+  async startAnalysis(request) {
+    try {
+      await post(`${this.base}/analyse`, request);
+    } catch (error) { this.ctx.toast(error.message, "error"); return false; }
+    this.ctx.toast(`Analysing ${this.status.recording_id}`, "ok");
+    this.analyseForm = null;
+    this.preview = null; this.mode = "idle"; this.timeline.set("preview", null);
+    await this.loadStatus();
+    await this.loadIssues();
+    this.renderFix();
+    return true;
   }
 
   // ---------------------------------------------------------------- frames
@@ -649,15 +705,18 @@ export class WorkspaceView {
     if (["queued", "analysing"].includes(status.state)) {
       const [text] = describeStatus(status);
       node.replaceChildren(heading("Analysis"), el("div", {class: "ws-analysing"}, el("p", {}, text), stageList(status.analysis),
-        el("p", {class: "note"}, "Issues appear when the analysis finishes. You can close the app meanwhile.")));
+        el("p", {class: "note"}, "Issues appear when the analysis finishes. You can close the app meanwhile."),
+        el("button", {type: "button", onclick: (event) => this.cancelAnalysis(event.currentTarget)}, "Cancel analysis")));
       return;
     }
     if (!status.analysed) {
       const failed = status.state === "failed";
-      node.replaceChildren(heading("Issues"), el("div", {class: "ws-analysing"},
-        el("p", {}, failed ? "The analysis failed." : "This recording has not been analysed yet."),
+      const said = failed ? "The analysis failed." : status.state === "cancelled" ? "The analysis was cancelled." : "This recording has not been analysed yet.";
+      node.replaceChildren(heading("Analyse"), el("div", {class: "ws-analysing"},
+        el("p", {}, said),
         failed && status.analysis?.error ? el("pre", {class: "ws-error"}, status.analysis.error.split("\n").slice(-4).join("\n")) : null,
-        el("button", {class: "primary", onclick: () => (failed ? this.retryAnalysis() : this.reanalyse(true))}, failed ? "Retry" : "Analyse")));
+        failed ? el("div", {class: "ws-row-actions"}, el("button", {onclick: () => this.retryAnalysis()}, "Retry as before")) : null,
+        status.setup ? this.analysePanel() : el("p", {class: "note error"}, "This recording does not belong to a setup; add it to one on the Recordings screen.")));
       return;
     }
     if (this.issuesError) {

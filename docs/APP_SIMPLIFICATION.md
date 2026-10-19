@@ -234,24 +234,37 @@ Everything marked *dev* below is shown only when the app is started with
 | Side panel toggle | **Remove** (the side panel becomes dev-only) |
 | Workspace menu, fit-network badge, active recording | **Merge** into one title: recording · model name |
 | Context strip: frame, selection first/last, Use current frame, Use stretch | **Remove.** An issue defines the range a fix acts on. For a range with no issue, right-drag on the timeline (a left drag scrubs). |
-| — | **New:** analysis progress (stage + %, failure with Retry) |
+| — | **New:** analysis progress (stage + %, Cancel, failure with Retry) |
 | — | **New:** Export button |
 
 ### Recordings screen (replaces Import and Open)
 
 Two tables of recordings for the chosen setup: the ones analysed or
-analysing (including a failed analysis), most recently opened first, then
-the ones not analysed yet; each recording is in one of them. Columns:
-recording, length, status (not analysed / analysing / *N* issues to review /
-reviewed / exported), last opened. One action per row: **Analyse**, or
-**Open** if a workspace already exists. While an analysis runs the tables
-poll; a poll rebuilds only the rows that changed, so the scroll position and
-the thumbnails stay.
+analysing (including a failed or cancelled analysis), most recently opened
+first, then the ones not analysed yet; each recording is in one of them.
+Columns: recording, length, status (not analysed / analysing / *N* issues to
+review / reviewed / exported), last opened. One action per row: **Open**,
+which makes the recording's workspace (the whole recording, not analysed)
+when it has none; while an analysis is queued or running the row also has
+**Cancel**. While an analysis runs the tables poll; a poll rebuilds only the
+rows that changed, so the scroll position and the thumbnails stay.
 
-Analyse uses the setup's default model on the whole recording and opens the
-new workspace, whose left panel shows one progress bar per stage (from the
-analysis job's `stages` in the workspace status). The model is shown with a
-**Change** link that opens the model picker.
+The analysis starts inside the workspace. The left panel of a workspace not
+analysed yet holds the Analyse form: the mask and body models (the setup's
+defaults), Masks from, Run on, and **Pipeline settings**, folded, a short
+list the server defines (`analysis.PIPELINE_SETTINGS`: fitting schedule,
+mask threshold, flat field, recording prior and re-bootstrap, the ambiguity
+score that starts tracking, tracking schedule, length refit), each at its
+stage default (flat field at the setup's) until changed; the fold says how
+many differ and resets them. **Analyse** under the form starts the job with
+the settings that differ, which the workspace records and the next form
+starts from. **Re-analyse…** in the header opens the same form in a dialog
+with the workspace's last models and settings. While the analysis runs the
+left panel shows one progress bar per stage (from the analysis job's
+`stages` in the workspace status) and **Cancel analysis**; the header's
+progress has Cancel too. A cancelled first analysis leaves the workspace not
+analysed, with the form again; a cancelled re-analysis leaves the previous
+analysis's state.
 
 | Today | Proposal |
 |---|---|
@@ -268,7 +281,7 @@ analysis job's `stages` in the workspace status). The model is shown with a
 
 | Today | Proposal |
 |---|---|
-| Stage checklist + Run all | **Remove.** Analysis runs all default stages on Analyse. Re-analyse (for example with another model) is in the model picker. *dev:* the stage checklist. |
+| Stage checklist + Run all | **Remove.** Analysis runs all default stages on Analyse. Re-analyse (another model or pipeline settings) is in the header. *dev:* the stage checklist. |
 | Operation scope (current / selection / whole) | **Remove.** The scope comes from the issue or the timeline selection. |
 | Job GPU | **Remove** (automatic). *dev:* keep. |
 | Regions: Use current stretch / Around frame / Anchors / Clear, first/last/anchor before/after, algorithm picker (8 algorithms), parameter form, Run on region | **Redesign** as the **Refit** fix: anchors are automatic, and the algorithm is chosen from the issue type. *dev:* algorithm picker and parameters. |
@@ -518,7 +531,7 @@ separate places. "Promotion" is a CLI flag that overwrites `best.ckpt`.
 The proposal has three tabs, all for the current setup: **Models**,
 **Datasets** and **Train**.
 
-### The model picker (Models tab, and "Change model" in the Workspace)
+### The model picker (Models tab, and the Workspace's Analyse form)
 
 One table, one row per model. Lab and personal models are mixed together, and
 ★ marks the setup's default:
@@ -585,7 +598,7 @@ dismissed.
 |---|---|
 | 1. Training data: counts, readiness, Add training labels | **Move** to the Datasets tab; Add training labels becomes Labeling's New queue |
 | 2. Fine-tune: epochs, batch, LR, device; advanced crop, patience, workers, seed | **Keep** epochs, LR, batch, and crop / patience / seed under Advanced; **remove** device and workers (automatic); **add** the body-net settings |
-| 3. Use a model: checkpoint select, Refresh, Use in workspace | **Replace** with the picker's Use as default, and the Workspace's Change model |
+| 3. Use a model: checkpoint select, Refresh, Use in workspace | **Replace** with the picker's Use as default, and the Workspace's Analyse form |
 | View training jobs | **Remove** (the running job is shown in the Models table) |
 | `--train-labels` (all / bootstrap / manual) | **Remove** (bootstrap labels are retired) |
 | `--promote` / `--no-promote`, `best.ckpt`, `promotions.jsonl` | **Remove** (Use as default, with a reason) |
@@ -781,15 +794,17 @@ exposed through `/api/config`, and one JS/CSS file set per page. Each page
 agent edits only its own section and files.
 
 - **W. Workspace:** the Recordings screen, one workspace per recording
-  (the whole recording), Analyse with the setup's defaults and Run on, the
+  (the whole recording), opened from the Recordings screen and analysed
+  from inside with the setup's defaults and Run on (and cancelled from
+  either), the
   Issues panel, the four fixes, the Fixes list with Undo, 4 layer toggles,
   the kymograph and issue track, the Export button, and the dev drawer.
 - **L. Labeling:** queues (from Relabel, New queue as a "Find frames" job
   with progress, Browse labels with the fit-IoU sort), mask tools, body
   tools, Save & next into the personal dataset, and the background rebuild
   of body targets.
-- **T. Training:** the model picker (also used by the Workspace's Change
-  model), the Datasets tab with Freeze benchmark, and the Train tab. Both
+- **T. Training:** the model picker (also used by the Workspace's Analyse
+  form), the Datasets tab with Freeze benchmark, and the Train tab. Both
   trainers read library datasets. A training job is: prepare targets →
   train → evaluate on the setup's benchmarks → write the card.
   Evaluation jobs fill in missing evaluations.

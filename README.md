@@ -451,8 +451,9 @@ records, progress and logs live under `<workspaces root>/jobs`.
 `kind: command` runs any command. Both take `run_on`, `slurm` and `gpu`.
 
 Everything the pages do goes through the HTTP API (`/api/home`,
-`/api/analyse`, `/api/workspaces/{name}/…` with `status`, `frame`,
-`issues`, `fixes`, `mask`, `kymograph`, `network-fields` and `export`, then
+`/api/recordings/open`, `/api/workspaces/{name}/…` with `analyse`,
+`status`, `frame`, `issues`, `fixes`, `mask`, `kymograph`,
+`network-fields` and `export`, then
 `/api/labeling`, `/api/queues`, `/api/library`, `/api/training`, `/api/jobs`
 and `/api/compute`), so a script can drive the same work. `/docs` is the
 generated OpenAPI page.

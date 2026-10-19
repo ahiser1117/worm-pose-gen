@@ -3,22 +3,29 @@
 A recording belongs to a setup (:func:`library.setup_for_recording`), and
 the setup names the default model of each role (``mask``: the segmenter
 whose masks the pipeline fits; ``body``: the body-field network that scores
-the fits and gives the A-P field).  **Analyse** takes those models, or the
-ones the user picked instead, and where the masks come from (``mask_source``:
-the mask model, the default, or the body model's own mask output, which then
-needs no mask model), resolves each reference to its weights, makes
-the recording's workspace if it has none (always the whole recording; a
-developer may give a range), records the setup, the model references and
-the mask source in the workspace settings (the header and the export read them back), and
-submits one job of kind ``analyse`` that runs the default stages in one
-process (``pipeline.stages_command``), so its progress spans the whole
-analysis and it survives the browser closing.  Analysing again replaces the
-poses; the user's mask edits stay.
+the fits and gives the A-P field).  **Opening** a recording makes its
+workspace if it has none (always the whole recording; a developer may give
+a range) and starts nothing; the analysis starts from the workspace.
+**Analyse** takes the setup's models, or the ones the user picked instead,
+and where the masks come from (``mask_source``: the mask model, the default,
+or the body model's own mask output, which then needs no mask model),
+resolves each reference to its weights, takes the pipeline settings the
+user changed (``PIPELINE_SETTINGS``), records the setup, the model
+references, the mask source and the pipeline settings in the workspace
+settings (the header, the export and the next Analyse read them back), and
+submits one job of kind ``analyse`` that
+runs the default stages in one process (``pipeline.stages_command``), so its
+progress spans the whole analysis and it survives the browser closing.
+Analysing again replaces the poses; the user's mask edits stay.  The
+analysis is cancelled like any job (``POST /api/jobs/{id}/cancel``).
 
 **Status** answers what the Recordings screen and the Workspace header show
 without loading a workspace's arrays: the models, the analysis job and its
 progress, and the state (``not_analysed``, ``queued``, ``analysing``,
-``failed``, ``analysed``, ``issues``, ``reviewed``, ``exported``).  The issue
+``failed``, ``cancelled``, ``analysed``, ``issues``, ``reviewed``,
+``exported``).  ``failed`` and ``cancelled`` are only for a workspace that
+has never been analysed; a re-analysis that fails or is cancelled leaves
+the state of the previous analysis.  The issue
 counts come from the summary the Issues panel last wrote
 (:func:`inspection.cached_issue_summary`); until the workspace is opened
 after an analysis they are unknown and the state is ``analysed``.
@@ -36,6 +43,7 @@ recording's frame size is unknown.
 
 from __future__ import annotations
 
+from dataclasses import fields as dataclass_fields
 import json
 from pathlib import Path
 from typing import Any
@@ -43,6 +51,7 @@ from typing import Any
 import numpy as np
 
 from .. import library, pipeline
+from ..batch_fit import PRESETS
 from ..jobs import FINISHED_STATES, JobRecord, JobSpec
 from .images import data_url
 from ..library.setups import ROLE_OUTPUTS
@@ -56,6 +65,20 @@ ANALYSE_JOB_KIND = "analyse"
 # The model kind that can fill each role.  Masks come from the segmenter
 # unless the analysis asks for the body model's (``pipeline.MASK_SOURCES``).
 ROLE_KINDS = {"mask": "segmenter", "body": "body_net"}
+# The pipeline settings Analyse offers (the rest keep the stages' defaults).  Each is a
+# parameter of the ``stages`` that read it (``pipeline.STAGE_PARAMS``), all from the one
+# parameter dict of the analysis, so a key means the same in every one of them.  Its type,
+# default and help come from the first stage's field; flat_field's default is the setup's.
+PIPELINE_SETTINGS: tuple[dict[str, Any], ...] = (
+    {"key": "preset", "stages": ("fit",), "label": "Fitting schedule", "choices": tuple(PRESETS)},
+    {"key": "threshold", "stages": ("segment", "prior"), "label": "Mask threshold", "min": 0.05, "max": 0.95},
+    {"key": "flat_field", "stages": ("segment", "prior"), "label": "Flat field"},
+    {"key": "prior", "stages": ("prior", "fit"), "label": "Recording prior", "choices": ("bootstrap", "none")},
+    {"key": "rebootstrap", "stages": ("prior",), "label": "Bootstrap the prior again"},
+    {"key": "min_score", "stages": ("propagate",), "label": "Track from ambiguity score", "min": 1, "max": 8},
+    {"key": "propagate_preset", "stages": ("propagate",), "label": "Tracking schedule", "choices": tuple(PRESETS)},
+    {"key": "track_refit", "stages": ("track",), "label": "Length refit", "choices": ("clipped-deviating", "clipped", "deviating", "all")},
+)
 LAST_OPENED_FILE = "last_opened.json"
 KYMOGRAPH_RANGE = 15.0
 
@@ -119,6 +142,54 @@ def analysis_params(app: AppState, setup: library.Setup, models: dict[str, dict[
     }
 
 
+def pipeline_settings(setup: library.Setup) -> list[dict[str, Any]]:
+    """``PIPELINE_SETTINGS`` with each one's ``type`` (``bool``, ``int``, ``float`` or ``str``), ``default`` and ``help``."""
+
+    out = []
+    for spec in PIPELINE_SETTINGS:
+        field = next(f for f in dataclass_fields(pipeline.STAGE_PARAMS[spec["stages"][0]]) if f.name == spec["key"])
+        default = bool(setup.video.get("flat_field", True)) if spec["key"] == "flat_field" else field.default
+        setting = {**spec, "stages": list(spec["stages"]), "type": type(default).__name__, "default": default, "help": field.metadata["help"]}
+        if "choices" in spec:
+            setting["choices"] = list(spec["choices"])
+        out.append(setting)
+    return out
+
+
+def pipeline_values(setup: library.Setup, values: dict[str, Any] | None) -> dict[str, Any]:
+    """The pipeline settings of an Analyse request, checked against ``pipeline_settings``; a setting left out keeps its default."""
+
+    if values is not None and not isinstance(values, dict):
+        raise ValueError("'pipeline' must be an object of pipeline settings")
+    specs = {spec["key"]: spec for spec in pipeline_settings(setup)}
+    unknown = sorted(set(values or {}) - set(specs))
+    if unknown:
+        raise ValueError(f"unknown pipeline settings {unknown}; expected some of {sorted(specs)}")
+    out: dict[str, Any] = {}
+    for key, value in (values or {}).items():
+        spec, kind = specs[key], specs[key]["type"]
+        number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        valid = {"bool": isinstance(value, bool), "int": number and float(value).is_integer(), "float": number, "str": isinstance(value, str)}[kind]
+        if not valid:
+            raise ValueError(f"pipeline setting {key!r} must be a {kind}, not {value!r}")
+        value = {"int": int, "float": float}.get(kind, lambda v: v)(value)
+        if "choices" in spec and value not in spec["choices"]:
+            raise ValueError(f"pipeline setting {key!r} must be one of {spec['choices']}, not {value!r}")
+        if "min" in spec and not spec["min"] <= value <= spec["max"]:
+            raise ValueError(f"pipeline setting {key!r} must be between {spec['min']} and {spec['max']}, not {value!r}")
+        out[key] = value
+    return out
+
+
+def workspace_setup(app: AppState, workspace: Workspace) -> library.Setup:
+    """The setup of the workspace's recording; ``ValueError`` when it belongs to none."""
+
+    setup_ref = library.setup_for_recording(app.libraries, workspace.recording)
+    if setup_ref is None:
+        raise ValueError(f"{workspace.recording} does not belong to a setup; add it to one first")
+    return library.get_setup(app.libraries, setup_ref)
+
+
 def analysis_command(workspace_path: Path, stages: list[str], params: dict[str, Any]) -> list[str]:
     return pipeline.stages_command(workspace_path, stages, params)
 
@@ -137,32 +208,40 @@ def active_jobs(app: AppState, name: str) -> list[JobRecord]:
     return [record for record in app.runner.list() if record.spec.workspace == name and record.state not in FINISHED_STATES]
 
 
-def analysis_job(app: AppState, payload: dict[str, Any]) -> tuple[str, JobSpec, list[str]]:
-    """Analyse the recording at ``payload["path"]``: its workspace (made when missing), settings and the job; returns ``(workspace, spec, argv)``.
+def open_recording(app: AppState, payload: dict[str, Any]) -> str:
+    """The workspace of the recording at ``payload["path"]``, made when it has none (``first``, ``last`` and ``step`` are a developer's range for a new one)."""
 
-    ``models`` (``{role: ref}``) replaces the setup's defaults and
-    ``mask_source`` (``segmenter``, the default, or ``body_net``) says where
-    the masks come from; ``stages``,
-    and for a new workspace ``first``, ``last`` and ``step``, are the
-    developer's.  A workspace with a queued or running job is busy.
-    """
-
-    libraries = app.libraries
     recording = app.recording_path(str(payload.get("path") or ""))
-    setup_ref = library.setup_for_recording(libraries, recording)
-    if setup_ref is None:
-        raise ValueError(f"{recording} does not belong to a setup; add it to one first")
-    setup = library.get_setup(libraries, setup_ref)
-    mask_source = str(payload.get("mask_source") or "segmenter")
-    models = resolve_models(libraries, setup, payload.get("models"), mask_source)
-    stages = _stages(payload)
     name = app.workspace_of_recording(recording)
     if name is None:
         name = app.create_workspace({key: payload.get(key) for key in ("first", "last", "step")} | {"recording": str(recording)}).name
+    return name
+
+
+def analysis_job(app: AppState, name: str, payload: dict[str, Any]) -> tuple[JobSpec, list[str]]:
+    """Analyse workspace ``name``: its settings and the job; returns ``(spec, argv)``.
+
+    ``models`` (``{role: ref}``) replaces the setup's defaults,
+    ``mask_source`` (``segmenter``, the default, or ``body_net``) says where
+    the masks come from and ``pipeline`` (``{key: value}``) changes the
+    pipeline settings; ``stages`` are the developer's.  A workspace with a
+    queued or running job is busy.
+    """
+
+    libraries = app.libraries
+    if not app.has_workspace(name):
+        raise NotFound(f"unknown workspace {name!r}")
+    workspace = Workspace.open(app.workspace_path(name))
+    recording = workspace.recording
+    setup = workspace_setup(app, workspace)
+    setup_ref = setup.ref
+    mask_source = str(payload.get("mask_source") or "segmenter")
+    models = resolve_models(libraries, setup, payload.get("models"), mask_source)
+    values = pipeline_values(setup, payload.get("pipeline"))
+    stages = _stages(payload)
     busy = active_jobs(app, name)
     if busy:
         raise pipeline.WorkspaceBusy(f"{busy[0].spec.label or busy[0].spec.kind} is {busy[0].state} on {name}; wait for it or cancel it")
-    workspace = Workspace.open(app.workspace_path(name))
     settings = workspace.info.settings
     settings.update({
         "setup": setup_ref,
@@ -170,16 +249,18 @@ def analysis_job(app: AppState, payload: dict[str, Any]) -> tuple[str, JobSpec, 
         "mask_source": mask_source,
         "checkpoint": None if models["mask"] is None else models["mask"]["weights"],
         "body_net": None if models["body"] is None else models["body"]["weights"],
+        "pipeline": values,
     })
     with pipeline.workspace_lock(workspace, timeout=0):
         workspace.save_info()
     app.view(name).invalidate()
-    params = analysis_params(app, setup, models, mask_source)
+    params = {**analysis_params(app, setup, models, mask_source), **values}
     spec = JobSpec(
-        kind=ANALYSE_JOB_KIND, params={"stages": stages, "params": params, "setup": setup_ref, "models": settings["models"], "mask_source": mask_source},
+        kind=ANALYSE_JOB_KIND,
+        params={"stages": stages, "params": params, "setup": setup_ref, "models": settings["models"], "mask_source": mask_source, "pipeline": values},
         workspace=name, frames=[int(v) for v in workspace.info.frames], label=f"Analyse {recording.stem}",
     )
-    return name, spec, analysis_command(workspace.path, stages, params)
+    return spec, analysis_command(workspace.path, stages, params)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +384,7 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
     if analysis is not None and not analysis.finished:
         state = "queued" if analysis.state == "queued" or analysis.slurm_state == "PENDING" else "analysing"
     elif not analysed:
-        state = "failed" if analysis is not None and analysis.state == "failed" else "not_analysed"
+        state = analysis.state if analysis is not None and analysis.state in ("failed", "cancelled") else "not_analysed"
     elif issues is None:
         state = "analysed"
     elif issues["unreviewed"]:
@@ -315,7 +396,7 @@ def status(app: AppState, name: str, jobs: list[JobRecord] | None = None, opened
         "frames": [int(v) for v in workspace.info.frames], "step": int(workspace.info.step), "frame_count": workspace.n,
         "image_shape": workspace.info.image_shape, "setup": setup,
         "models": _model_names(libraries, settings.get("models") or {}),
-        "mask_source": settings.get("mask_source", "segmenter"),
+        "mask_source": settings.get("mask_source", "segmenter"), "pipeline": settings.get("pipeline") or {},
         "has_body_model": workspace_body_net(workspace) is not None,
         "has_mask_model": workspace_mask_net(workspace) is not None,
         "state": state, "analysed": analysed, "issues": issues,

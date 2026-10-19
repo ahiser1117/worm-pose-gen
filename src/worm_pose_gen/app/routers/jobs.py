@@ -47,6 +47,9 @@ def stage_job(app: AppState, payload: dict[str, Any], stage: str) -> tuple[JobSp
     name = str(payload.get("workspace") or "")
     workspace = app.workspace(name)
     params = dict(payload.get("params") or {})
+    # The pipeline settings the workspace was analysed with (Analyse records them).
+    for key, value in (workspace.info.settings.get("pipeline") or {}).items():
+        params.setdefault(key, value)
     if stage in ("segment", "prior", "fit"):
         # The models and mask source the workspace was analysed with (Analyse records them).
         for key, default in (("mask_source", "segmenter"), ("checkpoint", None), ("body_net", None)):

@@ -1,12 +1,14 @@
-// Analyse: which models and where the job runs (docs/APP_SIMPLIFICATION.md,
-// sections 2 and 4). The Recordings screen analyses with the setup's
-// default models in one click; "Change" (there, and "Change model" in a
-// workspace's header) opens the dialog below. With a body model the dialog
-// also asks where the masks come from: the mask model (the default) or the
-// body model's own mask output, which then needs no mask model. Run on is one choice built
-// from GET /api/compute: hidden when only one place can run jobs, and
-// Analyse is disabled with the reason when none can. Developers also get
-// the stage checklist, the GPU and, for a new workspace, a frame range.
+// Analyse: which models, which pipeline settings and where the job runs
+// (docs/APP_SIMPLIFICATION.md, sections 2 and 4). The form below sits in the
+// Issues panel of a workspace not analysed yet (the setup's default models
+// first) and in the Re-analyse dialog (the workspace's last choices). With a
+// body model it also asks where the masks come from: the mask model (the
+// default) or the body model's own mask output, which then needs no mask
+// model. The pipeline settings are the server's short list (fitting schedule,
+// mask threshold, prior, tracking), folded, each starting from the value last
+// used. Run on is one choice built from GET /api/compute: hidden when only
+// one place can run jobs, and Analyse is disabled with the reason when none
+// can. Developers also get the stage checklist and the GPU.
 
 import {api, el} from "./api.js";
 import {openModelPicker} from "./model_picker.js";
@@ -83,23 +85,27 @@ export function modelLabel(models, maskSource = "segmenter") {
   return names.length ? names.join(" + ") : "no model";
 }
 
-// The dialog: resolves {models: {mask, body} (refs), mask_source, stages?, gpu?, first?, last?, step?} or null.
-//   options: {title, setup, models: {mask: {ref, name}, body}, maskSource ("segmenter" | "body_net"),
-//             runOn (RunOn | null), submitLabel, warning, dev, newWorkspace (frames count for the range fields)}
-export function openAnalyseDialog(ctx, options) {
-  const {title, setup, runOn = null, submitLabel = "Done", warning = null, dev = false, newWorkspace = null} = options;
-  const chosen = {mask: options.models.mask ? {...options.models.mask} : null, body: options.models.body ? {...options.models.body} : null};
-  let maskSource = options.maskSource === "body_net" ? "body_net" : "segmenter";
-  return new Promise((resolve) => {
-    let result = null;
-    const dialog = el("dialog", {class: "ws-dialog ws-analyse"});
+// The form: the models, Masks from, Run on, the pipeline settings (folded, with how many
+// differ from their defaults) and, for developers, the stages and the GPU.
+//   options: {setup, models: {mask: {ref, name}, body}, maskSource ("segmenter" | "body_net"),
+//             runOn (RunOn), settings (GET /api/workspaces/<name>/pipeline-settings),
+//             values ({key: value}, the settings last used), dev, compact (narrow, for a side panel)}
+// values() is the Analyse request: {models: {mask, body} (refs), mask_source, pipeline (the
+// settings that differ from their defaults), run_on, slurm?, stages?, gpu?}.
+export class AnalyseForm {
+  constructor(ctx, options) {
+    const {setup, runOn, settings = [], values = {}, dev = false, compact = false} = options;
+    this.runOn = runOn;
+    this.chosen = {mask: options.models.mask ? {...options.models.mask} : null, body: options.models.body ? {...options.models.body} : null};
+    this.maskSource = options.maskSource === "body_net" ? "body_net" : "segmenter";
+    const chosen = this.chosen;
     // Masks from: a choice only while there is a body model to take them from.
-    const source = el("select", {"aria-label": "Masks from", onchange: () => { maskSource = source.value; }},
+    const source = el("select", {"aria-label": "Masks from", onchange: () => { this.maskSource = source.value; }},
       el("option", {value: "segmenter"}, "Mask model"), el("option", {value: "body_net"}, "Body model"));
     const sourceRow = el("div", {class: "ws-form-row ws-mask-source"}, el("span", {class: "ws-form-label"}, "Masks from"), source);
     const renderSource = () => {
-      if (!chosen.body) maskSource = "segmenter";
-      source.value = maskSource;
+      if (!chosen.body) this.maskSource = "segmenter";
+      source.value = this.maskSource;
       sourceRow.hidden = !chosen.body;
     };
     const modelRow = (role, label) => {
@@ -116,20 +122,42 @@ export function openAnalyseDialog(ctx, options) {
       const none = role === "body" ? el("button", {type: "button", class: "link", onclick: () => { chosen.body = null; render(); }}, "None") : null;
       return el("div", {class: "ws-form-row"}, el("span", {class: "ws-form-label"}, label), name, change, none);
     };
-    const rows = [modelRow("mask", "Mask model"), modelRow("body", "Body model"), sourceRow];
-    const runControl = runOn?.control();
-    if (runControl) rows.push(el("div", {class: "ws-form-row"}, runControl));
-    let devFields = null;
-    if (dev) devFields = devOptions(runOn, newWorkspace);
-    const submit = el("button", {class: "primary", type: "button", disabled: runOn && !runOn.canRun, title: runOn && !runOn.canRun ? runOn.reason : null, onclick: () => {
-      result = {models: {mask: chosen.mask?.ref ?? null, body: chosen.body?.ref ?? null}, mask: chosen.mask, body: chosen.body, mask_source: maskSource, ...(devFields?.values() || {})};
+    const runControl = runOn.control();
+    this.pipeline = pipelineFields(settings, values);
+    this.devFields = dev ? devOptions(runOn) : null;
+    this.node = el("div", {class: `ws-analyse-form${compact ? " compact" : ""}`},
+      modelRow("mask", "Mask model"), modelRow("body", "Body model"), sourceRow,
+      runControl ? el("div", {class: "ws-form-row"}, runControl) : null,
+      this.pipeline.node,
+      this.devFields?.node ?? null,
+      runOn.canRun ? null : el("p", {class: "note error"}, runOn.reason));
+  }
+
+  get canRun() { return this.runOn.canRun; }
+
+  values() {
+    return {
+      models: {mask: this.chosen.mask?.ref ?? null, body: this.chosen.body?.ref ?? null}, mask_source: this.maskSource,
+      pipeline: this.pipeline.values(), ...this.runOn.payload(), ...(this.devFields?.values() || {}),
+    };
+  }
+}
+
+// The dialog around the form: resolves the form's values() or null.
+//   options: the form's, and {title, submitLabel, warning}
+export function openAnalyseDialog(ctx, options) {
+  const {title, submitLabel = "Analyse", warning = null} = options;
+  const form = new AnalyseForm(ctx, options);
+  return new Promise((resolve) => {
+    let result = null;
+    const dialog = el("dialog", {class: "ws-dialog ws-analyse"});
+    const submit = el("button", {class: "primary", type: "button", disabled: !form.canRun, title: form.canRun ? null : form.runOn.reason, onclick: () => {
+      result = form.values();
       dialog.close();
     }}, submitLabel);
     dialog.append(
-      el("h2", {}, title), ...rows,
-      devFields?.node ?? null,
+      el("h2", {}, title), form.node,
       warning ? el("p", {class: "note warn"}, warning) : null,
-      runOn && !runOn.canRun ? el("p", {class: "note error"}, runOn.reason) : null,
       el("div", {class: "ws-dialog-actions"}, el("button", {type: "button", onclick: () => dialog.close()}, "Cancel"), submit),
     );
     dialog.addEventListener("close", () => { dialog.remove(); resolve(result); });
@@ -138,24 +166,60 @@ export function openAnalyseDialog(ctx, options) {
   });
 }
 
+// The pipeline settings, folded: one control per setting, starting from the values last used
+// (else the default); values() gives the ones that differ from their defaults.
+function pipelineFields(settings, last) {
+  const value = (setting) => (setting.key in last ? last[setting.key] : setting.default);
+  const fields = settings.map((setting) => {
+    let input;
+    if (setting.choices) input = el("select", {}, setting.choices.map((choice) => el("option", {value: choice, selected: choice === value(setting)}, choice)));
+    else if (setting.type === "bool") input = el("input", {type: "checkbox", checked: !!value(setting)});
+    else input = el("input", {type: "number", min: setting.min, max: setting.max, step: setting.type === "int" ? 1 : 0.05, value: value(setting)});
+    input.setAttribute("aria-label", setting.label);
+    input.dataset.key = setting.key;
+    const read = () => {
+      if (setting.type === "bool") return input.checked;
+      if (setting.type === "str") return input.value;
+      const number = Number(input.value);
+      return input.value === "" || !Number.isFinite(number) ? setting.default : number;
+    };
+    const set = (v) => { if (setting.type === "bool") input.checked = !!v; else input.value = v; };
+    const row = el("label", {class: "ws-setting", title: setting.help}, el("span", {}, setting.label), input);
+    return {setting, input, row, read, set};
+  });
+  const count = el("span", {class: "note ws-pipeline-count"});
+  const changed = () => fields.filter((f) => f.read() !== f.setting.default);
+  const update = () => {
+    const n = changed().length;
+    count.textContent = n ? `${n} changed` : "defaults";
+  };
+  const reset = el("button", {type: "button", class: "link", onclick: () => { for (const f of fields) f.set(f.setting.default); update(); }}, "Reset to defaults");
+  for (const f of fields) f.input.addEventListener("input", update);
+  for (const f of fields) f.input.addEventListener("change", update);
+  update();
+  const node = settings.length
+    ? el("details", {class: "ws-pipeline", open: changed().length > 0},
+      el("summary", {}, "Pipeline settings ", count),
+      fields.map((f) => f.row), el("div", {class: "ws-pipeline-reset"}, reset))
+    : null;
+  return {node, values: () => Object.fromEntries(changed().map((f) => [f.setting.key, f.read()]))};
+}
+
 const DEV_STAGES = ["segment", "prior", "fit", "ambiguity", "propagate", "track", "fixed_body"];
 
-function devOptions(runOn, newWorkspace) {
+function devOptions(runOn) {
   const boxes = DEV_STAGES.map((stage) => el("input", {type: "checkbox", value: stage, checked: stage !== "fixed_body"}));
   const gpus = runOn?.compute.local.gpus || [];
   const gpu = el("select", {"aria-label": "GPU"}, el("option", {value: ""}, "Automatic"), gpus.map((g) => el("option", {value: g.index}, `GPU ${g.index}${g.name ? ` · ${g.name}` : ""}`)));
-  const range = newWorkspace ? ["first", "last", "step"].map((key) => el("input", {type: "number", min: key === "step" ? 1 : 0, placeholder: key === "first" ? "0" : key === "last" ? String(newWorkspace - 1) : "1", "aria-label": key})) : [];
   const node = el("fieldset", {class: "ws-dev-fields"}, el("legend", {}, "Developer"),
     el("div", {class: "ws-form-row ws-stages"}, el("span", {class: "ws-form-label"}, "Stages"), boxes.map((box) => el("label", {class: "inline"}, box, box.value))),
     gpus.length ? el("div", {class: "ws-form-row"}, el("span", {class: "ws-form-label"}, "GPU"), gpu) : null,
-    range.length ? el("div", {class: "ws-form-row"}, el("span", {class: "ws-form-label"}, "Frames"), range.map((input) => el("label", {class: "inline"}, input.getAttribute("aria-label"), input))) : null,
   );
   return {
     node,
     values() {
       const values = {stages: boxes.filter((b) => b.checked).map((b) => b.value)};
       if (gpu.value !== "") values.gpu = Number(gpu.value);
-      for (const input of range) if (input.value !== "") values[input.getAttribute("aria-label")] = Number(input.value);
       return values;
     },
   };

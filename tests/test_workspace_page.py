@@ -1,4 +1,4 @@
-"""The Workspace page's endpoints (``app/routers/analysis.py``): the Recordings screen, Analyse, status, kymograph, and the refit a mask edit keeps.
+"""The Workspace page's endpoints (``app/routers/analysis.py``): the Recordings screen, opening a recording, Analyse and cancelling it, status, kymograph, and the refit a mask edit keeps.
 
 The analysis runs for real on the six-frame synthetic recording of
 ``tests/test_pipeline.py``: ``analysis.analysis_params`` is patched to the
@@ -24,7 +24,6 @@ from worm_pose_gen import edits, fixes, library, pipeline
 from worm_pose_gen.app import AppConfig, analysis, create_app
 from worm_pose_gen.jobs import JobRecord, JobSpec
 from worm_pose_gen.library import Libraries
-from worm_pose_gen.workspace import list_workspaces
 
 from tests.slow import slow
 from tests.test_fixes import posed_workspace
@@ -108,15 +107,20 @@ class WorkspacePageTests(unittest.TestCase):
         row = next(r for r in home["recordings"] if r["id"] == "2026-01-02-03")
         self.assertEqual((row["frames"], row["workspace"], row["status"]), (FRAMES, None, None))
 
-        # Models are checked before anything is made: a mask role needs a segmenter.
-        self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"mask": "lab:body"}}, 400)
-        self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"body": "lab:seg"}}, 400)
-        self.call("POST", "/api/analyse", {"path": str(self.root / "elsewhere.h5")}, 404)
-        self.assertEqual(list_workspaces(self.root / "workspaces"), [])
+        # Opening makes the workspace and starts nothing; the analysis starts from the workspace.
+        self.call("POST", "/api/recordings/open", {"path": str(self.root / "elsewhere.h5")}, 404)
+        opened = self.call("POST", "/api/recordings/open", {"path": str(self.recording)})
+        name = opened["workspace"]
+        self.assertEqual((name, opened["status"]["state"], opened["status"]["analysis"]), ("2026-01-02-03", "not_analysed", None))
+        self.assertFalse([job for job in self.call("GET", "/api/jobs") if job["spec"]["workspace"] == name])
+        self.call("POST", "/api/workspaces/nothing/analyse", {}, 404)
 
-        started = self.call("POST", "/api/analyse", {"path": str(self.recording), "models": {"body": "lab:body"}})
-        name = started["workspace"]
-        self.assertEqual(name, "2026-01-02-03")
+        # Models are checked before the job: a mask role needs a segmenter.
+        self.call("POST", f"/api/workspaces/{name}/analyse", {"models": {"mask": "lab:body"}}, 400)
+        self.call("POST", f"/api/workspaces/{name}/analyse", {"models": {"body": "lab:seg"}}, 400)
+
+        started = self.call("POST", f"/api/workspaces/{name}/analyse", {"models": {"body": "lab:body"}})
+        self.assertEqual(started["workspace"], name)
         job = started["job"]
         self.assertEqual((job["spec"]["kind"], job["spec"]["params"]["stages"]), ("analyse", list(pipeline.DEFAULT_STAGES)))
         self.assertNotIn("export", job["spec"]["params"]["stages"])
@@ -124,7 +128,7 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertEqual(job["spec"]["params"]["params"]["mask_source_seen"], "segmenter")
         self.assertIn(started["status"]["state"], ("queued", "analysing"))
         # One analysis at a time per workspace.
-        self.call("POST", "/api/analyse", {"path": str(self.recording)}, 409)
+        self.call("POST", f"/api/workspaces/{name}/analyse", {}, 409)
 
         record = self.wait_for_job(job["id"])
         self.assertEqual(record["state"], "done", record.get("error"))
@@ -169,23 +173,53 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertTrue(kymograph["image"].startswith("data:image/png;base64,"))
         self.assertTrue(kymograph["off_screen"].startswith("data:image/png;base64,"))
 
-        # Analysing again reuses the workspace.
-        again = self.call("POST", "/api/analyse", {"path": str(self.recording), "stages": ["ambiguity"]})
-        self.assertEqual(again["workspace"], name)
+        # Opening again finds the same workspace; analysing again replaces its poses.
+        self.assertEqual(self.call("POST", "/api/recordings/open", {"path": str(self.recording)})["workspace"], name)
+        again = self.call("POST", f"/api/workspaces/{name}/analyse", {"stages": ["ambiguity"]})
         self.assertEqual(self.wait_for_job(again["job"]["id"])["state"], "done")
         self.assertEqual(self.call("GET", f"/api/workspaces/{name}")["settings"]["models"], {"mask": "lab:seg", "body": None})
-        self.call("POST", "/api/analyse", {"path": str(self.recording), "stages": ["export"]}, 400)
+        self.call("POST", f"/api/workspaces/{name}/analyse", {"stages": ["export"]}, 400)
 
         # Masks from the body model: it is required, and the workspace records that no mask model was used.
-        self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "body_net", "stages": ["ambiguity"]}, 400)
-        self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "network", "models": {"body": "lab:body"}}, 400)
-        net = self.call("POST", "/api/analyse", {"path": str(self.recording), "mask_source": "body_net", "models": {"body": "lab:body"}, "stages": ["ambiguity"]})
+        self.call("POST", f"/api/workspaces/{name}/analyse", {"mask_source": "body_net", "stages": ["ambiguity"]}, 400)
+        self.call("POST", f"/api/workspaces/{name}/analyse", {"mask_source": "network", "models": {"body": "lab:body"}}, 400)
+        net = self.call("POST", f"/api/workspaces/{name}/analyse", {"mask_source": "body_net", "models": {"body": "lab:body"}, "stages": ["ambiguity"]})
         self.assertEqual(net["job"]["spec"]["params"]["params"]["models_seen"], {"mask": None, "body": "lab:body"})
         self.assertEqual(net["job"]["spec"]["params"]["params"]["mask_source_seen"], "body_net")
         self.assertEqual(self.wait_for_job(net["job"]["id"])["state"], "done")
         settings = self.call("GET", f"/api/workspaces/{name}")["settings"]
         self.assertEqual((settings["mask_source"], settings["models"], settings["checkpoint"]), ("body_net", {"mask": None, "body": "lab:body"}, None))
         self.assertEqual(self.call("GET", f"/api/workspaces/{name}/status")["mask_source"], "body_net")
+
+    def test_cancel_an_analysis(self) -> None:
+        recording = self.recording.with_name("2026-01-02-04.h5")
+        _write_recording(recording)
+        name = self.call("POST", "/api/recordings/open", {"path": str(recording)})["workspace"]
+        # The pipeline settings Analyse offers, with the stages' defaults; a request changes some of them.
+        settings = {s["key"]: s for s in self.call("GET", f"/api/workspaces/{name}/pipeline-settings")}
+        self.assertEqual(list(settings), [s["key"] for s in analysis.PIPELINE_SETTINGS])
+        self.assertEqual((settings["preset"]["default"], settings["preset"]["choices"]), ("fast", ["fast", "balanced", "reference"]))
+        self.assertEqual((settings["min_score"]["type"], settings["min_score"]["default"]), ("int", 2))
+        self.assertEqual(settings["flat_field"]["type"], "bool")
+        for bad in ({"preset": "slow"}, {"min_score": 0}, {"threshold": "0.4"}, {"epochs": 3}):
+            self.call("POST", f"/api/workspaces/{name}/analyse", {"pipeline": bad}, 400)
+        sleeping = [sys.executable, "-c", "import time; time.sleep(120)"]
+        with mock.patch.object(analysis, "analysis_command", lambda *args: sleeping):
+            job = self.call("POST", f"/api/workspaces/{name}/analyse", {"pipeline": {"preset": "balanced", "min_score": 3}})["job"]
+        params = job["spec"]["params"]
+        self.assertEqual((params["pipeline"], params["params"]["preset"], params["params"]["min_score"]), ({"preset": "balanced", "min_score": 3}, "balanced", 3))
+        self.assertEqual(self.call("GET", f"/api/workspaces/{name}")["settings"]["pipeline"], {"preset": "balanced", "min_score": 3})
+        deadline = time.monotonic() + 30
+        while self.call("GET", f"/api/jobs/{job['id']}")["state"] != "running":
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.1)
+        self.assertEqual(self.call("GET", f"/api/workspaces/{name}/status")["state"], "analysing")
+        self.assertEqual(self.call("POST", f"/api/jobs/{job['id']}/cancel")["state"], "cancelled")
+        status = self.call("GET", f"/api/workspaces/{name}/status")
+        self.assertEqual((status["state"], status["analysis"]["state"], status["active_jobs"]), ("cancelled", "cancelled", []))
+        self.assertEqual(status["pipeline"], {"preset": "balanced", "min_score": 3})
+        row = next(r for r in self.call("GET", "/api/home")["recordings"] if r["id"] == "2026-01-02-04")
+        self.assertEqual((row["workspace"], row["status"]["state"]), (name, "cancelled"))
 
     def test_analysis_params_of_each_mask_source(self) -> None:
         setup = library.get_setup(self.libraries, "lab:nir")

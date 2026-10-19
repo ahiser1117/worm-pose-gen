@@ -1,20 +1,20 @@
 // The Recordings screen (docs/APP_SIMPLIFICATION.md, section 2): the chosen
-// setup's recordings with their status, and one action per row, Analyse or
-// Open. Two tables, each recording in one: those analysed or analysing,
-// most recently opened first, then those not analysed yet. Analyse uses the setup's default
-// models (Change picks others for this session) on the whole recording,
-// where Run on says, and opens its workspace to follow the analysis. Add
-// recording registers a file to a setup through the library. The tables
-// rescan whenever the screen opens and poll while an analysis runs; a poll
-// rebuilds only the rows that changed, so the scroll position stays.
+// setup's recordings with their status, and Open on every row (it makes the
+// recording's workspace when it has none); the analysis starts inside the
+// workspace. While an analysis is queued or running its row also has Cancel.
+// Two tables, each recording in one: those analysed or analysing (or whose
+// analysis failed or was cancelled), most recently opened first, then those
+// not analysed yet. Add recording registers a file to a setup through the
+// library. The tables rescan whenever the screen opens and poll while an
+// analysis runs; a poll rebuilds only the rows that changed, so the scroll
+// position stays.
 
 import {api, el, post, query} from "./api.js";
-import {RunOn, loadCompute, modelCards, modelLabel, openAnalyseDialog} from "./workspace_analyse.js";
 
 const POLL_MS = 3000;
 const SETUP_KEY = "workspace.setup";
 // The states of the "Analysed and analysing" table: every state an analysis leads to.
-const RECENT_STATES = new Set(["queued", "analysing", "failed", "analysed", "issues", "reviewed", "exported"]);
+const RECENT_STATES = new Set(["queued", "analysing", "failed", "cancelled", "analysed", "issues", "reviewed", "exported"]);
 
 function remembered(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 function remember(key, value) { try { localStorage.setItem(key, value); } catch { /* storage blocked */ } }
@@ -40,6 +40,7 @@ export function describeStatus(status) {
     case "queued": return [job?.slurm_state === "PENDING" ? "Waiting for SLURM" : "Queued", "info", null];
     case "analysing": return [`Analysing · ${stageOf(job)}`, "info", job?.progress ?? 0];
     case "failed": return ["Analysis failed", "error", null];
+    case "cancelled": return ["Analysis cancelled", "", null];
     case "not_analysed": return ["Not analysed", "", null];
     case "analysed": return ["Analysed · open to review", "ok", null];
     case "issues": return [`${status.issues.unreviewed} issue${status.issues.unreviewed === 1 ? "" : "s"} to review`, "warn", null];
@@ -60,8 +61,6 @@ export class RecordingsScreen {
     this.ctx = ctx;
     this.onOpen = onOpen;
     this.data = null;
-    this.models = null; // the models chosen for this session per setup: {setup, mask, body}
-    this.maskSource = "segmenter"; // where the masks come from: "segmenter" (the mask model) or "body_net"
     this.filter = "";
     this.timer = null;
     this.node = el("div", {class: "ws-home", hidden: true});
@@ -71,9 +70,6 @@ export class RecordingsScreen {
   async show() {
     this.node.hidden = false;
     this.ctx.setHeader("workspace", {context: [el("span", {class: "ws-title"}, "Recordings")]});
-    if (!this.runOn) {
-      try { this.runOn = new RunOn(await loadCompute()); } catch (error) { this.ctx.toast(`Could not check where jobs can run: ${error.message}`, "error"); }
-    }
     await this.refresh();
   }
 
@@ -91,19 +87,9 @@ export class RecordingsScreen {
       if (setup && error.status === 404) { remember(SETUP_KEY, ""); this.data = await api("/api/home"); }
       else { this.renderError(error); return; }
     }
-    if (this.data.setup && this.models?.setup !== this.data.setup.ref) await this.defaultModels();
     if (this.tables && this.renderedSetup === this.data.setup?.ref) this.renderRows(); else this.render();
     const busy = this.data.recordings.some((r) => ["queued", "analysing"].includes(r.status?.state));
     if (busy && !this.node.hidden) this.timer = setTimeout(() => this.refresh(), POLL_MS);
-  }
-
-  async defaultModels() {
-    const setup = this.data.setup, defaults = setup.defaults || {};
-    let known = new Map();
-    try { known = await modelCards(setup.ref); } catch { /* names fall back to refs */ }
-    const model = (ref) => (ref ? {ref, name: known.get(ref)?.name || ref} : null);
-    this.models = {setup: setup.ref, mask: model(defaults.mask), body: model(defaults.body)};
-    this.maskSource = "segmenter";
   }
 
   renderError(error) {
@@ -129,15 +115,10 @@ export class RecordingsScreen {
     const facts = [setup.pixel_size_um ? `${setup.pixel_size_um} µm/px` : null, setup.fps ? `${setup.fps} fps` : null].filter(Boolean).join(" · ");
     const toolbar = el("div", {class: "ws-home-bar"},
       setupControl, facts ? el("span", {class: "note"}, facts) : null,
-      el("span", {class: "ws-sep"}),
-      el("span", {class: "ws-analyse-with"}, "Analyse with ", el("strong", {}, modelLabel(this.models, this.maskSource)), " ",
-        el("button", {class: "link", onclick: () => this.changeModels()}, "Change")),
-      this.runOn?.control() ?? null,
       el("span", {class: "ws-grow"}),
       el("input", {type: "search", class: "ws-filter", placeholder: "Filter recordings", value: this.filter, oninput: (event) => { this.filter = event.target.value; this.renderRows(); }}),
       el("button", {onclick: () => this.addRecording()}, "Add recording…"),
     );
-    if (this.runOn && !this.runOn.canRun) toolbar.append(el("p", {class: "note error ws-home-reason"}, `Analysis is unavailable: ${this.runOn.reason}`));
     const table = (tbody) => el("div", {class: "ws-table-wrap"}, el("table", {class: "data ws-recordings"},
       el("thead", {}, el("tr", {}, el("th", {class: "ws-thumb-cell"}), el("th", {}, "Recording"), el("th", {class: "num"}, "Length"),
         el("th", {}, "Status"), el("th", {}, "Last opened"), el("th", {class: "ws-action-cell"}))),
@@ -197,43 +178,41 @@ export class RecordingsScreen {
     const thumb = this.thumbnail(key, recording);
     const statusCell = el("td", {class: "ws-status"}, el("span", {class: `badge ${kind}`, title: status?.analysis?.error || recording.error || null}, text));
     if (progress !== null) statusCell.append(el("progress", {max: 1, value: progress}));
-    const analysed = status && !["not_analysed", "failed"].includes(status.state);
-    const action = analysed
-      ? el("button", {class: "primary", onclick: () => this.onOpen(status.name)}, "Open")
-      : el("button", {class: "primary", disabled: !recording.readable || !this.runOn?.canRun || !this.models?.mask,
-          title: !this.models?.mask ? "This setup has no default mask model; Change to choose one" : this.runOn && !this.runOn.canRun ? this.runOn.reason : null,
-          onclick: (event) => this.analyse(recording, event.currentTarget)}, status?.state === "failed" ? "Analyse again" : "Analyse");
+    const running = ["queued", "analysing"].includes(status?.state);
+    const actions = el("div", {class: "ws-rec-actions"},
+      running ? el("button", {title: "Stop the analysis", onclick: (event) => this.cancel(recording, event.currentTarget)}, "Cancel") : null,
+      el("button", {class: "primary", disabled: !recording.readable, onclick: (event) => this.open(recording, event.currentTarget)}, "Open"));
     return el("tr", {dataset: {recording: recording.id}},
       el("td", {class: "ws-thumb-cell"}, thumb),
       el("td", {}, el("div", {class: "ws-rec-name"}, recording.id), el("div", {class: "note ws-rec-path", title: recording.path}, recording.path)),
       el("td", {class: "num"}, recording.frames ? `${recording.frames.toLocaleString()} fr` : "—", fps && recording.frames ? el("div", {class: "note"}, formatDuration(recording.frames, fps)) : null),
       statusCell,
       el("td", {class: "note"}, formatWhen(status?.last_opened)),
-      el("td", {class: "ws-action-cell"}, action),
+      el("td", {class: "ws-action-cell"}, actions),
     );
   }
 
-  async analyse(recording, button, extra = {}) {
+  // Open the recording's workspace, making it first when the recording has none.
+  async open(recording, button) {
+    if (recording.workspace) { this.onOpen(recording.workspace); return; }
     button.disabled = true;
     try {
-      const answer = await post("/api/analyse", {path: recording.path, models: {mask: this.models.mask?.ref ?? null, body: this.models.body?.ref ?? null}, mask_source: this.maskSource, ...this.runOn.payload(), ...this.devOptions, ...extra});
-      this.ctx.toast(`Analysing ${recording.id}`, "ok");
-      this.onOpen(answer.workspace);
+      this.onOpen((await post("/api/recordings/open", {path: recording.path})).workspace);
     } catch (error) {
       this.ctx.toast(error.message, "error");
       button.disabled = false;
     }
   }
 
-  async changeModels() {
-    const chosen = await openAnalyseDialog(this.ctx, {
-      title: "Analyse with", setup: this.data.setup.ref, models: this.models, maskSource: this.maskSource, submitLabel: "Use these models", dev: this.ctx.dev, newWorkspace: null,
-    });
-    if (!chosen) return;
-    this.models = {setup: this.data.setup.ref, mask: chosen.mask, body: chosen.body};
-    this.maskSource = chosen.mask_source;
-    this.devOptions = chosen.stages ? {stages: chosen.stages, ...(chosen.gpu !== undefined ? {gpu: chosen.gpu} : {})} : null;
-    this.render();
+  async cancel(recording, button) {
+    button.disabled = true;
+    try {
+      await post(`/api/jobs/${recording.status.analysis.id}/cancel`);
+      this.ctx.toast(`Cancelled the analysis of ${recording.id}`, "ok");
+    } catch (error) {
+      this.ctx.toast(error.message, "error");
+    }
+    await this.refresh();
   }
 
   addRecording() {

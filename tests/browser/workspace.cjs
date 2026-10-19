@@ -1,5 +1,5 @@
 // The Workspace page end to end on a synthetic CPU app (tests/browser/workspace_fixture.py):
-// Recordings -> Analyse -> issues (and the left panel's layout with many of them) -> Looks OK ->
+// Recordings -> Open -> Analyse form (models, pipeline settings) -> Cancel -> Analyse -> issues -> Re-analyse dialog (and the left panel's layout with many of them) -> Looks OK ->
 // Flip -> Refit (preview, Keep) -> Undo -> Edit mask (Save refits and keeps) -> Relabel round trip -> Model outputs (raw layers) ->
 // timeline scrub and right-drag selection -> Export.
 // Run from the repository root: node tests/browser/workspace.cjs
@@ -53,41 +53,65 @@ const WS = '2026-03-14-01';
       assert.fail(`timed out waiting for ${what}`);
     };
 
-    // Recordings: both recordings of the setup, not analysed, with the setup's models.
+    // Recordings: both recordings of the setup, not analysed, each with Open and nothing to analyse from the list.
     await page.goto(base + '/#workspace');
     await page.waitForSelector('tr[data-recording]');
     assert.equal(await page.locator('tr[data-recording]').count(), 2);
-    assert.match(await page.locator('.ws-analyse-with').textContent(), /nir-hand284 \+ nir-body-lags3/);
-    assert.equal(await page.locator('.ws-run-on').count(), 0, 'one place to run jobs: no Run on choice');
-    await shot('01-recordings');
-    // With a body model, Change offers the masks from it; the mask model stays the default.
-    const masksFrom = async (value, label) => {
-      await page.locator('.ws-analyse-with button:has-text("Change")').click();
-      const source = page.locator('dialog.ws-analyse select[aria-label="Masks from"]');
-      assert.ok(await source.isVisible(), 'a body model offers its masks');
-      await source.selectOption(value);
-      await page.locator('dialog.ws-analyse button:has-text("Use these models")').click();
-      await page.waitForFunction((text) => document.querySelector('.ws-analyse-with strong')?.textContent === text, label);
-    };
-    await masksFrom('body_net', 'nir-body-lags3 (masks and body)');
-    await masksFrom('segmenter', 'nir-hand284 + nir-body-lags3');
-
+    assert.equal(await page.locator('tr[data-recording] button:has-text("Open")').count(), 2);
+    assert.equal(await page.locator('tr[data-recording] button:has-text("Analyse")').count(), 0);
     // Nothing analysed yet: no "Analysed and analysing" table.
     assert.equal(await page.locator('.ws-section:not([hidden]) tr[data-recording]').count(), 2);
-    // Analyse runs every default stage as one job and opens the workspace, with one bar per stage.
-    await page.locator(`tr[data-recording="${WS}"] button:has-text("Analyse")`).click();
+    await shot('01-recordings');
+
+    // Open makes the workspace without analysing it; its panel holds the Analyse form.
+    await page.locator(`tr[data-recording="${WS}"] button:has-text("Open")`).click();
     await page.waitForFunction(() => location.hash === '#workspace/2026-03-14-01');
+    const form = page.locator('.ws-analyse-panel .ws-analyse-form');
+    await form.waitFor();
+    assert.equal((await get('/api/jobs')).filter((j) => j.spec.kind === 'analyse').length, 0, 'opening starts nothing');
+    // The form starts from the setup's models; with a body model it offers the masks from it.
+    assert.deepEqual(await form.locator('.ws-model-name').allTextContents(), ['nir-hand284', 'nir-body-lags3']);
+    assert.equal(await form.locator('.ws-run-on').count(), 0, 'one place to run jobs: no Run on choice');
+    const source = form.locator('select[aria-label="Masks from"]');
+    assert.ok(await source.isVisible(), 'a body model offers its masks');
+    assert.equal(await source.inputValue(), 'segmenter');
+    // The pipeline settings are folded at their defaults; a change is counted, sent and remembered.
+    const settings = form.locator('details.ws-pipeline');
+    assert.equal(await settings.getAttribute('open'), null);
+    assert.equal(await settings.locator('.ws-pipeline-count').textContent(), 'defaults');
+    await settings.locator('summary').click();
+    await settings.locator('select[aria-label="Fitting schedule"]').selectOption('balanced');
+    await settings.locator('input[aria-label="Track from ambiguity score"]').fill('3');
+    assert.equal(await settings.locator('.ws-pipeline-count').textContent(), '2 changed');
+    await shot('01b-analyse-form');
+    await page.locator('.ws-analyse-panel button.primary:has-text("Analyse")').click();
+    // One job of every default stage, with one bar per stage; Cancel stops it and the form comes back with those choices.
     await page.waitForSelector('.ws-analysing .ws-stage progress');
-    const job = (await get('/api/jobs')).find((j) => j.spec.kind === 'analyse');
-    assert.deepEqual(job.spec.params.stages, ['segment', 'prior', 'fit', 'ambiguity', 'propagate', 'track']);
+    const first = (await get('/api/jobs')).find((j) => j.spec.kind === 'analyse');
+    assert.deepEqual(first.spec.params.stages, ['segment', 'prior', 'fit', 'ambiguity', 'propagate', 'track']);
+    assert.deepEqual(first.spec.params.pipeline, {preset: 'balanced', min_score: 3});
     assert.equal(await page.locator('.ws-stage').count(), 6);
     assert.match(await page.locator('#header-context').textContent(), /2026-03-14-01.*nir-hand284/);
+    assert.equal(await page.locator('#header-context button:has-text("Cancel")').count(), 1);
     await shot('02-analysing');
-    // Back on Recordings while it runs: it heads the "Analysed and analysing" table, and the polls keep the scroll.
+    await page.locator('.ws-analysing button:has-text("Cancel analysis")').click();
+    await page.waitForSelector('.ws-analysing p:has-text("The analysis was cancelled.")');
+    assert.equal((await get(`/api/jobs/${first.id}`)).state, 'cancelled');
+    await form.waitFor();
+    assert.equal(await settings.getAttribute('open'), '', 'changed settings show unfolded');
+    assert.equal(await settings.locator('select[aria-label="Fitting schedule"]').inputValue(), 'balanced');
+    await settings.locator('button:has-text("Reset to defaults")').click();
+    assert.equal(await settings.locator('.ws-pipeline-count').textContent(), 'defaults');
+    await page.locator('.ws-analyse-panel button.primary:has-text("Analyse")').click();
+    await page.waitForSelector('.ws-analysing .ws-stage progress');
+    const job = (await get('/api/jobs')).find((j) => j.spec.kind === 'analyse' && j.id !== first.id);
+    assert.deepEqual(job.spec.params.pipeline, {});
+    // Back on Recordings while it runs: it heads the "Analysed and analysing" table with Cancel beside Open, and the polls keep the scroll.
     await page.locator('.ws-back').click();
     await page.waitForSelector(`.ws-section:first-child tr[data-recording="${WS}"] .badge.info`);
     assert.equal(await page.locator('.ws-section:first-child tr[data-recording]').count(), 1);
     assert.equal(await page.locator(`tr[data-recording="${WS}"]`).count(), 1, 'each recording is listed once');
+    assert.equal(await page.locator(`tr[data-recording="${WS}"] button:has-text("Cancel")`).count(), 1);
     await page.evaluate(() => { const lists = document.querySelector('.ws-lists'); lists.style.maxHeight = '120px'; lists.scrollTop = 60; });
     await sleep(3500);
     assert.equal(await page.evaluate(() => document.querySelector('.ws-lists').scrollTop), 60, 'a poll must not reset the scroll');
@@ -99,6 +123,12 @@ const WS = '2026-03-14-01';
     await page.waitForSelector('.ws-issue', {timeout: 30000});
     await sleep(1500);
     await shot('03-issues');
+    // Re-analyse opens the same form in a dialog, with the workspace's models.
+    await page.locator('#header-actions button:has-text("Re-analyse")').click();
+    await page.waitForSelector('dialog.ws-analyse details.ws-pipeline');
+    assert.deepEqual(await page.locator('dialog.ws-analyse .ws-model-name').allTextContents(), ['nir-hand284', 'nir-body-lags3']);
+    await page.locator('dialog.ws-analyse button:has-text("Cancel")').click();
+    await page.waitForSelector('dialog.ws-analyse', {state: 'detached'});
 
     // A real recording has dozens of issues: the list scrolls inside its panel, and the fix panel (here the
     // mask tools) and the Fixes list stay in view in a smaller window, with no scrolling of the panel or page.
