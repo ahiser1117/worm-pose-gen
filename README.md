@@ -1,324 +1,211 @@
-# Worm Pose Geometry
+# Worm pose
 
-Research code for a conservative 2D *C. elegans* pose pipeline on NIR video.
-The repository is organized around one geometric algorithm:
+The pose app finds the body of a *C. elegans* in every frame of a behaviour
+recording (NIR video): its midline from head to tail, its width, and which
+end is the head. It flags the stretches it is unsure of so you can check and
+fix them, and exports one table per recording with the midline, curvature,
+width, head and tail, centroid and velocity of every frame. You can also
+label frames and train your own models on the lab's labels plus yours.
 
-`local-darkness mask -> skeleton pose -> smooth containing body -> narrow-notch repair -> curvature-aware endpoint extension`
+It runs on the flv-c machines and on Engaging. The lab's models and labels
+come from a shared, read-only lab library; everything you make (labels,
+models, analyses) stays in your own data directory.
 
-and, as of September 2026, its intended replacement: a generative body model
-fit directly to the segmentation mask
-(`flat field -> local-darkness mask -> render tube model -> optimize pose against the mask`),
-documented in [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md).
+## Install
 
-The canonical description, evidence boundary, current results, and limitations
-are in
-[`docs/POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md`](docs/POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md).
-
-This remains research code. The algorithm has been exercised on one annotated
-development frame and an annotation-free 30-frame stress set; it is not
-deployment-authorized, and the protected holdout remains unopened. The
-annotation-matched 30-frame audit is permanently retired: the exact source
-frames behind 21 of the 30 manual traces were lost with their corrupted
-recordings, and substituting other frames under those traces would be invalid.
-
-## Algorithm stages
-
-The integrated document above is the main entry point. These focused reports
-and their adjacent generated assets retain the evidence for each stage:
-
-1. [`docs/POSE_ESTIMATION_EXPLAINER.md`](docs/POSE_ESTIMATION_EXPLAINER.md) —
-   conservative classical extraction from a real frame.
-2. [`docs/SMOOTH_BODY_PRIOR_EXPERIMENT.md`](docs/SMOOTH_BODY_PRIOR_EXPERIMENT.md) —
-   smooth midline and containing-width model.
-3. [`docs/BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md`](docs/BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md) —
-   geometry-only narrow-notch repair.
-4. [`docs/ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md`](docs/ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md) —
-   local constant-curvature continuation to the completed-body boundary.
-5. [`docs/final_algorithm_unannotated30/FRAME_STEPS.md`](docs/final_algorithm_unannotated30/FRAME_STEPS.md) —
-   per-frame diagnostics for the 30-frame operational stress run.
-6. Section 8 of the integrated document — three follow-on runs on the same 30
-   frames: recording-level flat-fielding with field-of-view completion
-   (`docs/final_algorithm_edge_aware_unannotated30/`), visible-only
-   edge-censored repair (`docs/final_algorithm_edge_censored_unannotated30/`),
-   and the rejected interactively tuned segmentation setting
-   (`docs/final_algorithm_tuned_local_darkness_unannotated30/`).
-7. [`docs/MASK_FIT_EXPERIMENT.md`](docs/MASK_FIT_EXPERIMENT.md) — the first
-   generative-model step: the frame is flat-fielded, segmented, and the
-   20-value body model plus a width scale is rendered as a soft tube and fit
-   directly to the mask by gradient descent, producing a pose on all 27 worm
-   frames of the stress set.
-8. [`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md) — the
-   learned-segmentation loop: bootstrap labels from the pipeline, fine-tune a
-   pretrained ResNet-18 U-Net with Lightning, and refine labels in the
-   browser app with the network proposing.
-
-## Setup
-
-Python 3.13 and `uv` are required. The checked-in wrapper keeps the environment
-and caches local to the checkout.
+You need read access to this GitHub repository and
+[`uv`](https://docs.astral.sh/uv/). If `uv --version` fails, install it with
+`curl -LsSf https://astral.sh/uv/install.sh | sh` and open a new shell.
 
 ```bash
+git clone git@github.com:ahiser1117/worm-pose-gen.git
+cd worm-pose-gen
+scripts/bootstrap_environment.sh --data-dir /temp_data4/$USER/worm-pose-data
+```
+
+The checkout can go anywhere; with its Python environment it takes about
+5 GB. `--data-dir` is where your work will be saved. An analysed recording
+takes about 2 GB, so choose a folder on large storage: on the flv machines
+your folder in `/temp_data4` if you have one, on Engaging a folder in the
+lab's project storage under `/orcd/data/flavell/001/` rather than your home
+directory. Without `--data-dir` it is `user_data/` inside the checkout.
+
+Bootstrap installs Python and the dependencies into the checkout (a couple of
+minutes), saves the data directory in `settings.json`, and finishes with a
+check of the install that should end in `OK`, like this (shortened):
+
+```
+ok    Python 3.13.15 (3.13 required)
+ok    lab library /storage/fs/store1/shared/worm-pose-models
+ok    lab:nir-flv default lab:arch-combo-self-fib
+ok    data directory /temp_data4/you/worm-pose-data (from .../settings.json)
+ok    612 GB free for the data directory (an analysed recording takes about 2 GB)
+ok    GPUs: 0: NVIDIA RTX A6000, ...
+OK
+```
+
+A `warn` line is something the app works without (no GPU on this machine,
+little free space); a `FAIL` line has to be fixed first.
+
+## Start the app
+
+On an flv machine, from the checkout:
+
+```bash
+./worm-pose-app
+```
+
+It prints where it is and how to open it from your own computer:
+
+```
+pose app at http://127.0.0.1:8768/
+From your own computer: ssh -N -L 8768:localhost:8768 you@flv-c3
+then open http://localhost:8768/
+```
+
+Run that `ssh` command in a terminal on your computer, leave it open, and
+open the address in your browser. The app listens only on the machine it
+runs on and has no login, so it is reachable through such a tunnel, or by
+anyone logged in to that same machine. If someone else's app has port 8768
+the next free port is taken, and the printed commands say which. Stop the
+app with Ctrl-C.
+
+On **Engaging**, start the app inside an interactive GPU job rather than on
+the login node:
+
+```bash
+srun -p ou_bcs_normal --gres=gpu:1 -c 8 --mem=32G -t 08:00:00 --pty bash
+cd worm-pose-gen
+./worm-pose-app
+```
+
+The printed `ssh` command goes through the login node to your job's node.
+From the app you can also send analyses and training to SLURM (**Run on**),
+so they keep running after your interactive job ends.
+
+The app uses the GPUs of the machine it runs on, choosing the least busy one
+for each analysis; `./worm-pose-app --gpus 2,3` limits it to some.
+`./worm-pose-app --help` lists the other options.
+
+## First steps
+
+1. **Add your recordings.** The first screen asks for the folder your
+   recordings are in. Every `.h5` recording and `.avi` video in it, and in
+   the folders up to two levels below it, is listed: a folder of days, each
+   holding recordings, works. The app checks each new file in the
+   background; a file that cannot be read says so. **Add recordings…** adds
+   more folders or single files later, or removes a folder.
+2. **Open a recording.** This makes its workspace. A video is first
+   converted to an HDF5 recording (about a minute per ten minutes of video).
+3. **Analyse.** The form on the left uses the lab's default models; press
+   **Analyse**. A progress bar per stage follows the analysis, which takes
+   roughly a minute per thousand frames on one GPU. You can close the browser
+   and come back.
+4. **Review the issues.** The list on the left holds the stretches the app is
+   unsure of, each with a reason ("head/tail uncertain", "coiled", "mask fits
+   poorly", "leaves the view"). Mark one **Looks OK** (O) or fix it, and go
+   to the next. Press `?` for the keyboard shortcuts.
+5. **Export.** **Export** in the header writes the table of the recording
+   (see [Exports](#exports)).
+
+## The Workspace page
+
+The **Recordings** screen lists the recordings of a setup (a microscope; the
+lab's NIR tracking rigs are `NIR behaviour camera (flv rigs)`): first the
+ones you have analysed, most recently opened first, then the rest. Each
+shows its length and status: not analysed, analysing, *N* issues to review,
+reviewed or exported.
+
+A recording's workspace shows the frame with four layers (keys 1–4: mask,
+midline with the head a square and the tail a circle, outline, and the A-P
+field from head to tail), the issues on the left, and at the bottom the
+transport, the issue track and the curvature kymograph. Drag on the
+kymograph to scrub; right-drag to select a range for a fix. The fixes are:
+
+- **Flip** swaps head and tail, for the whole issue or one frame.
+- **Refit** fits the stretch again with a method chosen from the issue's
+  reasons, and shows before and after so you keep or discard it.
+- **Edit mask** paints the worm on one frame; saving refits around it.
+- **Relabel** sends keyframes of the stretch to Labeling; once they are
+  labeled the stretch is rebuilt from them.
+
+Every fix is listed under the fixes, with Undo. **Re-analyse…** in the
+header runs the analysis again, for example with another model.
+
+### Exports
+
+**Export** writes `exports/<recording>_<time>/` in the recording's workspace
+(in your data directory): a Parquet table with one row per frame, and
+`export.json` with the units, the models and the setup. Columns: frame,
+time, the frame's status (automatic, reviewed, fixed or unresolved), the
+midline from head to tail, its curvature, the width profile, head and tail
+positions, centroid and velocity. Lengths are in µm and positions in image
+coordinates (origin at the top left, y down). Each column's unit and
+description are also stored in the Parquet file itself.
+
+## The Labeling page
+
+Labels teach the models. A label is one frame's mask (which pixels are
+worm) and its body (the midline from head to tail). Draw the mask with the
+Worm and Background brushes, or start from the model's proposal; then trace
+the midline from the head, or use the proposal; **Save & next** (Enter).
+Frames come from queues: a workspace's Relabel keyframes, **New queue** (a
+spread of frames over chosen recordings, favouring the ones the model is
+least sure of), or **Browse labels**. Your labels are saved in your data
+directory; the lab's labels stay as they are, and editing one saves your own
+newer version.
+
+## The Training page
+
+**Models** lists the lab's models and yours with their scores on a
+benchmark (mask IoU, head/tail correct, A-P error); ★ marks the setup's
+defaults. **Use as default** makes a model your default for a setup (only
+for you). **Train from this** starts a training run from a model.
+**Datasets** shows the labels by recording and split: a dataset says which
+recordings train, validate or test a model, so it can combine the lab's
+labels with yours. A trained model is evaluated on the setup's benchmarks
+and appears in Models.
+
+## Where things are
+
+| | |
+|---|---|
+| Your data directory (`settings.json`) | `library/` your labels, datasets, models and recording folders; `workspaces/` one per opened recording, with its exports; `cache/` flat fields and body-size priors, rebuilt when missing; `runs/` outputs of command-line scripts |
+| Lab library (read-only) | `/storage/fs/store1/shared/worm-pose-models` on flv, `/orcd/data/flavell/001/shared/worm-pose-models` on Engaging |
+| The checkout | the code, `.venv` (Python environment), `settings.json` |
+
+To change the data directory, move its contents if you want to keep them,
+run `scripts/bootstrap_environment.sh --data-dir <new folder>` and start the
+app again.
+
+## Updating
+
+```bash
+git pull
 scripts/bootstrap_environment.sh
-scripts/project_env.sh uv run --no-sync --frozen python -m unittest \
-  tests.test_classical tests.test_anchors tests.test_annotation tests.test_latent
 ```
 
-The default one-frame builders expect the cached proxy HDF5 and annotation JSON
-at the paths declared in `scripts/build_smooth_body_prior_experiment.py`.
-Equivalent paths can be supplied through each script's command-line options.
+Bootstrap keeps the data directory named in `settings.json`.
 
-## Rebuild the documented one-frame progression
+## Troubleshooting
 
-Run the stages in order because the endpoint builder consumes the notch-repair
-arrays:
+- **A recording shows "Cannot be read".** Hover over it for the reason. Some
+  older recordings are damaged on disk, and some need an HDF5 compression
+  plugin that is not installed.
+- **The check says the lab library is not readable.** The lab library is
+  known on the flv-c machines and Engaging only; elsewhere you have only your
+  own models.
+- **Analyse or Train says there is no GPU.** The machine has none the app can
+  use: start it on a machine with a GPU, or choose SLURM under Run on.
+  Labeling works without a GPU, but the model's proposal then takes 15–20 s
+  per frame and is only made when you ask (**Propose**).
+- **The browser shows nothing.** Check that the `ssh` command is still
+  running and that the port in the address is the one the app printed.
 
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_pose_estimation_explainer.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_smooth_body_prior_experiment.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_boundary_notch_repair_experiment.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_endpoint_curve_extension_experiment.py
-```
+## For developers
 
-## Tune the local-darkness segmentation
-
-Launch the local browser app against the cached proxy frames:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m \
-  worm_pose_gen.heuristic_tuner
-```
-
-Then open `http://127.0.0.1:8766`. The controls recompute the same local
-background, denoising, threshold, closing, and largest-component stages used by
-the classical extractor, starting from the frozen `ClassicalConfig` defaults
-(`31 px` background radius, `2 px` denoise radius, `2.6 z` cutoff, hysteresis
-disabled, `2 px` closing). Optional connected hysteresis admits a lower cutoff
-only where it remains connected to the high-confidence worm component; the
-downloaded JSON maps directly to `ClassicalConfig`.
-
-Settings that look clean in the tuner must be evaluated on the 30-frame stress
-run before promotion. The one setting promoted so far (`61 / 3 / 4.25 / 2.05 /
-8`) cut acceptance from 11 to 3 of 30 frames and was reverted; its run is kept
-under `docs/final_algorithm_tuned_local_darkness_unannotated30/`.
-
-Use `--proxy-hdf5 /path/to/proxy_labels.h5` or `--port PORT` to override the
-defaults. The app binds to localhost and does not modify the source HDF5.
-
-## Segment with a fine-tuned network
-
-Bootstrap labels, train, evaluate, and label interactively:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/bootstrap_segmentation_labels.py --frames-per-recording 40
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
-scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
-scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
-```
-
-Labels are stored under
-`/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
-on flv-c4 with an 80/10/10 train/val/test assignment; checkpoints go to the
-git-ignored `checkpoints/segmenter/` directory. The bootstrap step only
-matters for a fresh store: the bootstrapped labels of this one were retired
-on 2026-09-05 (`scripts/retire_bootstrap_labels.py`), every label is
-hand-refined, and the promoted model is `r2-hand165` (see
-`docs/segmenter_model_names.json` for the model names the plots use). The labeling app runs at
-`http://127.0.0.1:8767`, proposes masks from the current checkpoint and the
-classical pipeline, refines them with pipeline elements, and saves edited
-labels back into the store. Details and keyboard shortcuts are in
-[`docs/SEGMENTATION_LABELING.md`](docs/SEGMENTATION_LABELING.md).
-
-A targeted round (coils, self-contact, holes, fragments, camera-edge frames
-across 13 recordings, with some animals held out for validation or test only)
-is queued in `docs/labeling_round_2/manifest.json`, built by
-`scripts/build_labeling_manifest.py` from the clip-candidate scans. Open it
-with:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app \
-  --queue docs/labeling_round_2/manifest.json
-```
-
-The "Queue (manifest)" next mode walks the frames in order; each save
-pledges the recording's split.
-
-## Fit poses over a recording
-
-Segment, clean, and fit the body model to every frame of a stretch, in GPU
-batches, with an optional overlay video:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/fit_recording.py \
-  --recording /store1/shared/all_data_raw/prj_aversion/2024-05-28/2024-05-28-02.h5 \
-  --start 0 --frames 1200 --video --scale 0.5
-```
-
-Each run writes `summary.json`, `poses.npz`, and `overlay.mp4` to a
-timestamped directory under `/temp_data4/alex/external_artifacts/poses/`.
-`--preset fast` (default, about 0.25 s/frame) trades 0.008 median IoU against
-`--preset reference`, which reproduces the single-frame fitter exactly at
-about 5 s/frame. The width of the tube is a scale times a symmetric template
-times a smooth log-space correction (`--width-coefficients`, default 6, 0 for
-the symmetric model; `--width-prior` pulls it toward zero), so the two ends
-may taper differently; every stored pose is oriented with the thinner end,
-the tail, last (`--no-orient` keeps the fitted orientation). In the overlay
-the head is a square and the tail a circle. Each run also writes residual
-images (mask the tube misses in blue, tube outside the mask in red) for its
-`--residual-frames` worst frames and any `--dump-frames`;
-`scripts/render_pose_run.py` produces the video and residual images for a
-stored run without refitting, and `scripts/compare_pose_runs.py` puts
-several runs side by side on the same frames.
-
-The pose viewer is the interactive way to look at a run:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.pose_viewer
-# every run under /temp_data4/alex/external_artifacts/poses/; --run <dir> adds
-# others, --only-runs serves just those; then open http://127.0.0.1:8768/
-```
-
-It scrubs through a run's frames (arrow keys, play, click or drag on the
-timeline, wheel to zoom the timeline range; the image, tube and statistics
-follow the cursor at once and the mask layers arrive once it rests) and
-composites every layer the pipeline produced on the flat-fielded frame,
-each with its own toggle and opacity: the segmenter's probability heat map, the thresholded mask, the
-pixels a hole fill adds and the pixels the largest-component rule drops,
-the mask the fit was scored against, the fitted tube's outline and
-centerline with head and tail markers, the residual (mask the tube misses
-in blue, tube outside the mask in red), the independent fit that
-propagation replaced (runs fit after 2026-09-07 store it), the pose of a
-second run of the same recording, the fitter's skeleton and moment starts,
-and the crop window. The right panel lists every per-frame statistic the
-run tracks, the nine ambiguity flags with the value each tested against its
-threshold, a classification of the frame (clean, watch, or ambiguous;
-coil, camera edge, fragmented mask, or suspected fit failure; propagated
-forward or backward), the width profile along the body against the
-symmetric template and the recording prior's shape, the body's curvature,
-and the mask statistics recomputed on the spot next to the stored ones.
-The timeline shows IoU (with the independent fit's), body length with the
-prior's two-sigma band, mask and visible tube area, the ambiguity score, a
-selectable extra series (pose jump, self-contact, width, energy, ...), the
-flag raster, and a class/source strip, with propagation stretches shaded.
-"Jump to" walks flagged or low-IoU frames, stretches, jumps and edge
-frames; review notes (tags and a comment per frame) are appended to the
-file named by `--notes`, `docs/pose_review/notes.json` by default. The
-three panels around the frame resize by dragging their splitters and
-collapse from the splitter buttons (double-click resets); the layout is
-remembered by the browser.
-
-By default the run first bootstraps a recording prior: frames spread over
-the whole recording are fit with the hard bounds opened, whole worms (mask
-clear of the image border) are kept, and robust medians of body length,
-width scale and width profile become Gaussian priors that replace the hard
-bounds (`recording_prior.json` in the run directory, cached under
-`/temp_data4/alex/external_artifacts/recording_priors/`). A body that
-leaves the camera is started at the prior length, extended off camera
-through the point where the mask meets the border, and its off-camera part
-is censored; the in-view fraction reports how much was seen. Every frame is
-started in both orientations and the energy gap between them is stored.
-`--prior none` restores the hard bounds, `--prior-file` reuses a stored
-prior, `--rebootstrap` ignores the cache. Every frame also gets an
-ambiguity score (`worm_pose_gen.ambiguity`: low overlap, self-overlap or
-missed body by area, self-contact, enclosed holes, fragments, length far
-from the prior, a jump since the previous frame); a score of 2 or more marks
-a frame whose single-frame answer should not be trusted without its
-neighbours. `scripts/ambiguity_report.py` recomputes it for stored runs.
-Stretches of such frames are then refit by temporal propagation: the good
-pose before the stretch is carried forward through it and the good pose
-after it backward, each frame warm-started from its neighbour, all
-stretches in lockstep, and per frame the lowest total energy among
-independent, forward and backward wins (`source` in `poses.npz`;
-`--no-propagate` skips it). Inside a chain each frame is also started from
-a first-order prediction of the pose (the last change of shape, rotation
-and centroid carried on with damping 0.6, `--prediction-damping`) and the
-fit is pulled toward that prediction by a temporal prior
-(`--temporal-prior-weight`, default 0.01, sigma half a width). The
-propagation pass is the second pass over the ambiguous stretches: it
-keeps up to three distinct chain states per direction (`--beam`), refits
-each stretch frame's independent pose under the chain schedule with the
-stretch's anchor length, and chooses one candidate per frame along the
-stretch by dynamic programming over all candidates and their mirrors
-(energy over `--path-temperature` plus the squared pose distance in
-widths times `--path-distance-weight`, the in-view change times
-`--path-inview-weight`, and the squared log length change times
-`--path-length-weight`; `--no-path` restores the lowest energy per frame).
-`--propagate-preset balanced` runs that preset's steps in the pass; it
-was slower and worse on the raw spiral, so the default stays `fast`.
-Stretches are also seeded by jumps of the track (a pose jump of more
-than a width, or the body entering or leaving the camera at the border;
-`--no-jump-seeds`, `--seed-length-fraction` adds length jumps). After
-propagation a track length pass refits the frames outside the stretches
-whose mask reaches the border and whose length departs from the track
-(the median length of the whole bodies within `--track-window` frames)
-with that length as their prior (`--track-refit`, `--track-sigma`,
-`--track-tolerance`, `--no-track-length`); run before propagation it
-disturbed the stretch anchors. The fitter's energy penalises bends tighter than a
-radius of `--min-bend-radius` body widths (default 0.5; 0 disables). Each
-frame also stores the fraction of the tube covered by mask
-(`tube_coverage`), which stays high when a low IoU comes from mask the
-tube does not claim, such as a plate streak segmented as worm; the viewer
-tags such frames "mask has extra body (segmentation)". Every candidate is stored (`hypotheses_*`
-arrays, `path_*`, `prediction_xy`) and the viewer draws them, ranked by
-energy, with the path's choice and where it overrode the lowest energy.
-
-The sequence evaluation set, seven 300-frame clips with coils, self-contact,
-fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;
-`scripts/find_sequence_clips.py` proposes such clips from a mask-only scan
-and `scripts/evaluate_sequence_set.py` fits and scores the set. The plan
-this belongs to, with measurements, is
-[`docs/POSE_PIPELINE_PLAN.md`](docs/POSE_PIPELINE_PLAN.md);
-`scripts/evaluate_width_model_unannotated30.py` and
-`scripts/evaluate_recording_prior_unannotated30.py` compare width models and
-priors on the 30-frame set.
-
-## Evaluate the frozen pipeline
-
-The annotation-free stress run accepts exactly three `--recording` arguments
-when the documented default recordings are unavailable:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_final_geometry_unannotated30.py \
-  --recording /path/to/first.h5 \
-  --recording /path/to/second.h5 \
-  --recording /path/to/third.h5 \
-  --workers 3
-```
-
-The mask fit and the two follow-on comparisons use the same three recordings
-and frame positions:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_mask_fit_unannotated30.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_edge_aware_geometry_unannotated30.py --workers 3
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_edge_censored_geometry_unannotated30.py --workers 3
-```
-
-`scripts/evaluate_final_geometry_primary30.py` is the annotation-matched audit.
-It requires readable copies of the exact source frames, which no longer exist,
-so it cannot run to completion. It is kept because the unannotated evaluators
-import its per-frame fitting code.
-
-## Repository layout
-
-- `src/worm_pose_gen/` contains reusable geometry, classical extraction, the
-  mask fitter, the segmenter and its dataset store, the labeling app, and
-  supporting research modules.
-- `scripts/` contains only environment setup and the builders/evaluators for
-  the current geometric pipeline.
-- `docs/` contains the current algorithm narrative and its generated evidence.
-- `tests/` contains focused geometry tests plus reusable-library coverage.
-- `experiments/` retains machine-readable research outputs. The primary audit
-  consumes the frozen selection manifest and baseline metrics stored there;
-  historical narrative notes and embedded runners have been removed.
-- `artifacts/` and `configs/` remain as data from the earlier research program;
-  they are not part of the current documentation or script workflow.
+[`docs/DEVELOPER.md`](docs/DEVELOPER.md) covers the tests, training and
+evaluating from the command line, publishing models and labels to the lab
+library, the HTTP API, developer mode (`--dev`), and the research history of
+the pipeline. The app's design is
+[`docs/APP_SIMPLIFICATION.md`](docs/APP_SIMPLIFICATION.md).

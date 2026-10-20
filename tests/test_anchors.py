@@ -1,13 +1,14 @@
 import unittest
 
 import numpy as np
+from scipy import ndimage
 
 from worm_pose_gen.anchors import (
     AnchorConfig,
+    estimate_width_along_normals,
     extend_centerline_to_mask_boundary,
     extract_mask_anchor,
 )
-from worm_pose_gen.segmentation import fill_small_enclosed_holes
 
 
 def easy_tube() -> np.ndarray:
@@ -151,9 +152,7 @@ class AnchorTests(unittest.TestCase):
         porous = easy_tube()
         porous[38:41, 45:48] = False
         porous[39:42, 82:84] = False
-        cleaned, count, area = fill_small_enclosed_holes(porous, max_hole_area=12)
-        self.assertEqual(count, 2)
-        self.assertEqual(area, 15)
+        cleaned = ndimage.binary_fill_holes(porous)
         result = extract_mask_anchor(cleaned, config=self.config())
         self.assertTrue(result.accepted, result.rejection_reasons)
         self.assertGreater(float(result.qc["mask_render_iou"]), 0.75)
@@ -228,6 +227,36 @@ class AnchorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "did not reach"):
             extend_centerline_to_mask_boundary(line, mask, max_extension=1.0)
 
+
+    def test_width_walk_matches_a_step_by_step_walk(self) -> None:
+        # A curved tube cut by the image edge, its centerline, the same shifted
+        # off the body, and a step that does not divide a pixel.
+        yy, xx = np.mgrid[:80, :140]
+        mask = (np.hypot(xx - 70, yy - 90) - 60) ** 2 <= 7**2
+        angle = np.linspace(np.pi * 1.05, np.pi * 1.95, 40)
+        curve = np.column_stack((70 + 60 * np.cos(angle), 90 + 60 * np.sin(angle)))
+
+        def walked(points: np.ndarray, step: float) -> np.ndarray:
+            derivative = np.gradient(points, axis=0)
+            normal = np.column_stack((-derivative[:, 1], derivative[:, 0])) / np.linalg.norm(derivative, axis=1)[:, None]
+            widths = []
+            for point, direction in zip(points, normal):
+                sides = []
+                for sign in (-1.0, 1.0):
+                    distance = 0.0
+                    while distance <= np.hypot(*mask.shape):
+                        x, y = (int(round(v)) for v in point + sign * direction * distance)
+                        if not (0 <= y < mask.shape[0] and 0 <= x < mask.shape[1] and mask[y, x]):
+                            break
+                        distance += step
+                    sides.append(max(0.0, distance - step))
+                widths.append(sides[0] + sides[1] + 1.0)
+            return np.array(widths)
+
+        for points in (curve, curve + [0.0, 9.0]):
+            for step in (0.25, 0.3):
+                np.testing.assert_array_equal(estimate_width_along_normals(mask, points, step=step), walked(points, step))
+        self.assertGreater(float(np.median(estimate_width_along_normals(mask, curve))), 12.0)
 
 if __name__ == "__main__":
     unittest.main()

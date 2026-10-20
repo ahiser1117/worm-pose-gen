@@ -10,8 +10,8 @@ frame before it and backward from the first good frame after it, each frame
 warm-started from its neighbour's fit.  Every stretch of a recording is
 propagated at the same time, one lockstep batch per step, so wall-clock is
 sequential only over the longest stretch.  Per frame the candidate with the
-lowest total energy (overlap plus priors) wins: independent, forward, or
-backward.
+lowest total energy (overlap plus priors, plus the body-field network's
+evidence when there is any) wins: independent, forward, or backward.
 """
 
 from __future__ import annotations
@@ -19,15 +19,16 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, replace
 import math
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
 
-from .batch_fit import BatchFitConfig, fit_masks
+from .batch_fit import BatchFitConfig, BodyFieldEvidence, field_energies, fit_masks, prepare_fit, run_fit
 from .latent import decode_centerline, unwrap_latent_rotation
-from .mask_fit import Initialization, MaskFitConfig, MaskFitResult, redirect_start_through_exit
+from .mask_fit import Initialization, MaskFitConfig, MaskFitResult, redirect_start_through_exit, reverse_result
 from .pose_run import touches_border
+from .prefetch import prefetched
 
 
 FloatArray = NDArray[np.float64]
@@ -134,10 +135,12 @@ def warm_schedule(
     against 60 and 100) could not keep up with the change between two frames
     of a forming coil and lost to the poor independent fit on energy.
     ``length_sigma`` tightens the length prior when one is set.
+    Whole-energy compilation is disabled for these sequential refits.
     """
 
     warm = replace(
-        config, stage_steps=tuple(max(minimum_steps, int(round(fraction * steps))) for steps in config.stage_steps)
+        config, stage_steps=tuple(max(minimum_steps, int(round(fraction * steps))) for steps in config.stage_steps),
+        compile_energy=False,
     )
     if length_sigma is not None and config.length_prior_px is not None:
         warm = replace(warm, length_prior_log_sigma=min(config.length_prior_log_sigma, length_sigma))
@@ -282,6 +285,30 @@ class Candidate:
     distance_to_prediction_px: float = float("nan")
     # Rank of the chain state that produced this candidate within its direction's beam.
     beam: int = 0
+    # Body-field evidence energy of the candidate traversed from the other
+    # end; ``None`` when the frame has no evidence (the mirror then costs the same).
+    mirror_field_energy: float | None = None
+
+    def energy(self, mirrored: bool = False) -> float:
+        """The comparable energy as fit, or traversed from the other end (the mirror's evidence energy in place of its own)."""
+
+        if not mirrored or self.mirror_field_energy is None:
+            return self.total_energy
+        return self.total_energy - float(self.result.records[self.result.best_index]["final_field_energy"]) + self.mirror_field_energy
+
+    def oriented(self, mirrored: bool, config: MaskFitConfig) -> MaskFitResult:
+        """The candidate's fit, or its mirror (``mask_fit.reverse_result``) whose winning record carries the mirror's evidence energy."""
+
+        if not mirrored:
+            return self.result
+        result = reverse_result(self.result, config=config)
+        if self.mirror_field_energy is None:
+            return result
+        records = [dict(record) for record in result.records]
+        best = records[result.best_index]
+        best["final_energy"] = float(best["final_energy"]) - float(best["final_field_energy"]) + self.mirror_field_energy
+        best["final_field_energy"] = self.mirror_field_energy
+        return replace(result, records=records)
 
 
 def predict_latent(
@@ -342,12 +369,14 @@ def slow_schedule(config: BatchFitConfig, preset: BatchFitConfig, length_sigma: 
     Only the step counts, learning-rate scales and decay are taken from
     ``preset``; the stage rasters and point strides stay the fit's, so the
     candidates' energies are measured where the independent fits' were.
+    Whole-energy compilation is disabled for these second-pass refits.
     """
 
     if preset.stage_downsample != config.stage_downsample or preset.stage_point_stride != config.stage_point_stride:
         raise ValueError("the refit preset must share the fit's stage rasters and point strides")
     slow = replace(
-        config, stage_steps=preset.stage_steps, stage_lr_scale=preset.stage_lr_scale, within_stage_decay=preset.within_stage_decay
+        config, stage_steps=preset.stage_steps, stage_lr_scale=preset.stage_lr_scale, within_stage_decay=preset.within_stage_decay,
+        compile_energy=False,
     )
     if length_sigma is not None and config.length_prior_px is not None:
         slow = replace(slow, length_prior_log_sigma=min(config.length_prior_log_sigma, length_sigma))
@@ -379,6 +408,9 @@ def propagate(
     width_template: NDArray[np.generic] | None = None,
     propagation: PropagationConfig = PropagationConfig(),
     warm_config: BatchFitConfig | None = None,
+    progress: Callable[[float, str], None] | None = None,
+    evidence: dict[int, BodyFieldEvidence] | None = None,
+    network_starts: dict[int, Initialization] | None = None,
 ) -> tuple[dict[int, list[Candidate]], dict[str, Any]]:
     """Carry the anchor poses through every stretch in lockstep; returns candidates per row and diagnostics.
 
@@ -392,6 +424,15 @@ def propagate(
     row to its cleaned mask; rows without a mask are skipped and the chain
     keeps its pose.  A stretch without a good frame on a side gets no chain
     from that side.
+
+    ``evidence`` maps a row to the body-field network's evidence, which
+    every fit of that row (anchor refits, stored-pose refits, chain steps) is
+    scored against under the config's ``field_*`` weights; each candidate
+    also gets the evidence energy of its mirror (``Candidate.energy``).
+    ``network_starts`` maps a row to the network's trace start
+    (``body_proposal.trace_start``), which each chain fits once per frame as
+    one more start of its best state, so it competes in the beam under that
+    state's temporal prior like the state's own starts.
     """
 
     fitted = np.asarray(arrays["fitted"], dtype=bool)
@@ -400,7 +441,15 @@ def propagate(
     for a, b in stretches:
         in_stretch[a : b + 1] = True
     warm = warm_schedule(config, length_sigma=propagation.chain_length_sigma) if warm_config is None else warm_config
+    # Also cover callers providing their own warm schedule: independent refits
+    # inside a chain need the same stable renderer path as its temporal fits.
+    warm = replace(warm, compile_energy=False)
     beam = max(1, int(propagation.beam))
+    evidence = evidence or {}
+    network_starts = network_starts or {}
+
+    def fields_of(rows: Sequence[int]) -> list[BodyFieldEvidence | None] | None:
+        return [evidence.get(r) for r in rows] if evidence else None
 
     def anchor_length(row: int) -> float | None:
         if not propagation.chain_length_from_anchor or warm.length_prior_px is None:
@@ -437,6 +486,8 @@ def propagate(
     redirects = 0
     predictions_offered = 0
     predictions_won = 0
+    network_offered = 0
+    network_won = 0
     independent_refits = 0
     anchor_refits = 0
     second_starts = 0
@@ -462,12 +513,15 @@ def propagate(
                 reference = decode_centerline(predicted, config.coefficients)
             jobs.append((chain, anchor, starts, reference))
         if jobs:
+            if progress is not None:
+                progress(0.0, f"propagation: refitting {len(jobs)} anchors")
             sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([j[0]["states"][0]["pose"][1] for j in jobs]))
             anchor_config = _chain_config(warm, None, sigma_px, propagation.temporal_prior_weight)
             results = fit_masks(
                 [np.asarray(masks[anchor], dtype=bool) for _, anchor, _, _ in jobs], [starts for _, _, starts, _ in jobs],
                 width_template=width_template, config=anchor_config, device=device,
                 references=[reference if propagation.temporal_prior_weight > 0 else None for _, _, _, reference in jobs],
+                fields=fields_of([anchor for _, anchor, _, _ in jobs]),
             )
             for (chain, anchor, _, _), result in zip(jobs, results, strict=True):
                 anchor_refits += 1
@@ -480,7 +534,11 @@ def propagate(
     # schedule with the stretch's anchor length prior (the anchors know the
     # body's length; the recording prior at 5% let these refits step the
     # length where the path switched to them).  One batch per stretch.
-    if propagation.refit_independent:
+    if progress is not None:
+        progress(0.1, f"propagation: {anchor_refits} anchor refits complete; refitting stored poses")
+    def refit_jobs() -> Any:
+        """Each stretch's stored-pose refits, a chunk at a time, prepared on the host (``prepare_fit``)."""
+
         for a, b in stretches:
             rows = [r for r in range(a, b + 1) if fitted[r] and r in masks and np.asarray(masks[r]).any()]
             if not rows:
@@ -492,10 +550,73 @@ def propagate(
             for chunk_start in range(0, len(rows), max(1, config.max_rows)):
                 chunk = rows[chunk_start : chunk_start + max(1, config.max_rows)]
                 starts = [[warm_initialization(*_pose_of(arrays, r), "independent_refit")] for r in chunk]
-                results = fit_masks([np.asarray(masks[r], dtype=bool) for r in chunk], starts, width_template=width_template, config=independent_config, device=device)
-                for r, result in zip(chunk, results, strict=True):
-                    candidates[int(r)].append(Candidate("independent", result, comparable_energy(config, result), None, "independent_refit", float("nan")))
-                    independent_refits += 1
+                yield chunk, prepare_fit(
+                    [np.asarray(masks[r], dtype=bool) for r in chunk], starts, width_template=width_template, config=independent_config,
+                    fields=fields_of(chunk),
+                )
+
+    if propagation.refit_independent:
+        # The next chunk is prepared while the device fits this one; the refits do not depend on each other.
+        for chunk, inputs in prefetched(refit_jobs()):
+            if progress is not None:
+                progress(0.1 + 0.2 * independent_refits / max(int(in_stretch.sum()), 1),
+                         f"propagation: {independent_refits} stored poses refit; fitting frames {chunk[0]}–{chunk[-1]}")
+            for r, result in zip(chunk, run_fit(inputs, device), strict=True):
+                candidates[int(r)].append(Candidate("independent", result, comparable_energy(config, result), None, "independent_refit", float("nan")))
+                independent_refits += 1
+
+    def step_jobs(groups: dict[int | None, list[tuple[dict[str, Any], int]]]) -> Any:
+        """Per length group of a chain step: its members, the owner of each fit row, the row count and the prepared fit."""
+
+        nonlocal predictions_offered, redirects, network_offered
+        for key, members in groups.items():
+            sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([s["pose"][1] for c, _ in members for s in c["states"]]))
+            group_config = _chain_config(
+                warm, None if key is None else float(np.exp(np.mean([math.log(c["length"]) for c, _ in members]))),
+                sigma_px, propagation.temporal_prior_weight,
+            )
+            # One fit row per (chain, state, start), so every start's result
+            # survives to the beam selection.
+            batch_masks = []
+            batch_starts = []
+            batch_references: list[np.ndarray | None] = []
+            batch_rows: list[int] = []
+            owners: list[tuple[dict[str, Any], int, dict[str, Any], np.ndarray | None]] = []
+            for chain, row in members:
+                binary = np.asarray(masks[row], dtype=bool)
+                at_border = propagation.redirect_at_border and touches_border(binary, 2)
+                for rank, state in enumerate(chain["states"]):
+                    latent, width_px, shape = state["pose"]
+                    starts = [warm_initialization(latent, width_px, shape, f"warm_{chain['source']}")]
+                    prediction_xy: np.ndarray | None = None
+                    if state["previous"] is not None and propagation.prediction_damping > 0:
+                        predicted = predict_latent(latent, state["previous"], propagation.prediction_damping, config.coefficients)
+                        prediction_xy = decode_centerline(predicted, config.coefficients)
+                        if pose_distance_px(prediction_xy, decode_centerline(latent, config.coefficients), None) > 0.5:
+                            starts.append(warm_initialization(predicted, width_px, shape, f"predicted_{chain['source']}"))
+                            predictions_offered += 1
+                    if at_border:
+                        redirected = redirect_start_through_exit(starts[0], binary, config=group_config)
+                        if redirected is not None:
+                            starts.append(redirected)
+                            redirects += 1
+                    # The network's trace of the frame: once per chain, as a start of its best state.
+                    if rank == 0 and row in network_starts:
+                        starts.append(replace(network_starts[row], name=f"network_trace_{chain['source']}"))
+                        network_offered += 1
+                    # The temporal prior pulls toward the prediction, or toward
+                    # the copied pose when the state has no velocity yet.
+                    reference = prediction_xy if prediction_xy is not None else decode_centerline(latent, config.coefficients)
+                    for start in starts:
+                        batch_masks.append(binary)
+                        batch_starts.append([start])
+                        batch_references.append(reference if propagation.temporal_prior_weight > 0 else None)
+                        batch_rows.append(row)
+                        owners.append((chain, row, state, prediction_xy))
+            yield members, owners, len(batch_masks), prepare_fit(
+                batch_masks, batch_starts, width_template=width_template, config=group_config, references=batch_references,
+                fields=fields_of(batch_rows),
+            )
 
     longest = max((len(c["rows"]) for c in chains), default=0)
     for k in range(longest):
@@ -514,53 +635,21 @@ def propagate(
         if not groups:
             continue
         steps += 1
-        for key, members in groups.items():
-            sigma_px = propagation.temporal_prior_sigma_widths * float(np.mean([s["pose"][1] for c, _ in members for s in c["states"]]))
-            group_config = _chain_config(
-                warm, None if key is None else float(np.exp(np.mean([math.log(c["length"]) for c, _ in members]))),
-                sigma_px, propagation.temporal_prior_weight,
-            )
-            # One fit row per (chain, state, start), so every start's result
-            # survives to the beam selection.
-            batch_masks = []
-            batch_starts = []
-            batch_references: list[np.ndarray | None] = []
-            owners: list[tuple[dict[str, Any], int, dict[str, Any], np.ndarray | None]] = []
-            for chain, row in members:
-                binary = np.asarray(masks[row], dtype=bool)
-                at_border = propagation.redirect_at_border and touches_border(binary, 2)
-                for state in chain["states"]:
-                    latent, width_px, shape = state["pose"]
-                    starts = [warm_initialization(latent, width_px, shape, f"warm_{chain['source']}")]
-                    prediction_xy: np.ndarray | None = None
-                    if state["previous"] is not None and propagation.prediction_damping > 0:
-                        predicted = predict_latent(latent, state["previous"], propagation.prediction_damping, config.coefficients)
-                        prediction_xy = decode_centerline(predicted, config.coefficients)
-                        if pose_distance_px(prediction_xy, decode_centerline(latent, config.coefficients), None) > 0.5:
-                            starts.append(warm_initialization(predicted, width_px, shape, f"predicted_{chain['source']}"))
-                            predictions_offered += 1
-                    if at_border:
-                        redirected = redirect_start_through_exit(starts[0], binary, config=group_config)
-                        if redirected is not None:
-                            starts.append(redirected)
-                            redirects += 1
-                    # The temporal prior pulls toward the prediction, or toward
-                    # the copied pose when the state has no velocity yet.
-                    reference = prediction_xy if prediction_xy is not None else decode_centerline(latent, config.coefficients)
-                    for start in starts:
-                        batch_masks.append(binary)
-                        batch_starts.append([start])
-                        batch_references.append(reference if propagation.temporal_prior_weight > 0 else None)
-                        owners.append((chain, row, state, prediction_xy))
-            results = fit_masks(
-                batch_masks, batch_starts, width_template=width_template, config=group_config, device=device, references=batch_references
-            )
+        # The groups of a step hold different chains, so the next group's
+        # starts and targets are prepared while the device fits this one; the
+        # next step waits for this step's results.
+        for members, owners, batch_count, inputs in prefetched(step_jobs(groups)):
+            if progress is not None:
+                progress(0.3 + 0.7 * k / max(longest, 1),
+                         f"propagation: chain step {k + 1}/{longest}; {rows_fit} fits complete; fitting {batch_count} starts")
+            results = run_fit(inputs, device)
             rows_fit += len(results)
             # Pool each chain's results and keep the beam.  States are ranked
             # by the fit's full energy, temporal prior included, so the chain
             # keeps the states consistent with its own motion; the candidate
             # handed to the path carries the comparable energy (overlap plus
-            # the fit's priors), which every candidate of a frame shares.
+            # the fit's priors and the evidence), which every candidate of a
+            # frame shares.
             pooled: dict[int, list[tuple[MaskFitResult, float, Any]]] = defaultdict(list)
             for (chain, row, state, prediction_xy), result in zip(owners, results, strict=True):
                 pooled[id(chain)].append((result, float(result.records[result.best_index]["final_energy"]), (chain, row, state, prediction_xy)))
@@ -575,12 +664,21 @@ def propagate(
                     start_name = str(result.initializations[result.best_index].name)
                     if start_name.startswith("predicted_"):
                         predictions_won += 1
+                    if start_name.startswith("network_trace_"):
+                        network_won += 1
                     distance = float("nan") if prediction_xy is None else pose_distance_px(result.centerline_xy, prediction_xy, image_shape)
                     candidates[row].append(
                         Candidate(chain["source"], result, comparable_energy(config, result), prediction_xy, start_name, distance, beam=index)
                     )
                     new_states.append({"pose": (result.latent, result.width_px, result.width_shape), "previous": state["pose"][0]})
                 chain["states"] = new_states
+    # The path can take any candidate mirrored; the mirror's evidence energy prices that.
+    scored = [(row, candidate) for row, options in candidates.items() if row in evidence for candidate in options]
+    mirrored = field_energies([c.result.centerline_xy[::-1] for _, c in scored], [evidence[row] for row, _ in scored], config)
+    for (_, candidate), value in zip(scored, mirrored, strict=True):
+        candidate.mirror_field_energy = float(value)
+    if progress is not None:
+        progress(1.0, f"propagation: {rows_fit} chain fits and {independent_refits} stored-pose refits complete")
     info = {
         "stretches": [[int(a), int(b)] for a, b in stretches],
         "frames_in_stretches": int(in_stretch.sum()),
@@ -600,6 +698,9 @@ def propagate(
         "temporal_prior_sigma_widths": propagation.temporal_prior_sigma_widths,
         "predicted_starts_offered": predictions_offered,
         "predicted_starts_won": predictions_won,
+        "frames_with_evidence": sum(r in evidence for r in range(n) if in_stretch[r]),
+        "network_starts_offered": network_offered,
+        "network_starts_won": network_won,
         "beam": beam,
         "schedule_steps": list(warm.stage_steps),
         "anchor_refits": anchor_refits,
@@ -626,6 +727,43 @@ def _oriented_curve(candidate: Candidate, mirrored: bool) -> np.ndarray:
     return curve[::-1] if mirrored else curve
 
 
+_PathGeometry = tuple[np.ndarray, int, float, float]
+
+
+def _path_edge_costs(
+    previous: Sequence[_PathGeometry],
+    current: Sequence[_PathGeometry],
+    propagation: PropagationConfig,
+    n_points: int,
+    image_shape: tuple[int, int] | None,
+) -> np.ndarray:
+    """All edges between two rows, sharing camera tests and NumPy reductions."""
+
+    a = np.stack([node[0] for node in previous])
+    b = np.stack([node[0] for node in current])
+    distance = np.linalg.norm(a[:, None] - b[None, :], axis=-1)
+    if image_shape is None:
+        distance = distance.mean(axis=-1) if a.shape[1] >= 2 else np.zeros(distance.shape[:2])
+    else:
+        height, width = image_shape
+        a_inside = (a[..., 0] >= 0) & (a[..., 0] < width) & (a[..., 1] >= 0) & (a[..., 1] < height)
+        b_inside = (b[..., 0] >= 0) & (b[..., 0] < width) & (b[..., 1] >= 0) & (b[..., 1] < height)
+        inside = a_inside[:, None] & b_inside[None, :]
+        count = inside.sum(axis=-1)
+        distance = np.where(inside, distance, 0.0).sum(axis=-1) / np.maximum(count, 1)
+        distance[count < 2] = 0.0
+    distance[~np.isfinite(distance)] = 0.0
+    a_stats = np.asarray([node[1:] for node in previous], dtype=np.float64)
+    b_stats = np.asarray([node[1:] for node in current], dtype=np.float64)
+    width = np.maximum(0.5 * (a_stats[:, None, 1] + b_stats[None, :, 1]), 1.0)
+    length_change = np.log(np.maximum(b_stats[None, :, 2], 1.0) / np.maximum(a_stats[:, None, 2], 1.0)) / propagation.path_length_sigma
+    return (
+        propagation.path_distance_weight * (distance / width) ** 2
+        + propagation.path_inview_weight * np.abs(a_stats[:, None, 0] - b_stats[None, :, 0]) / n_points
+        + propagation.path_length_weight * length_change**2
+    )
+
+
 def select_path(
     candidates: dict[int, list[Candidate]],
     arrays: dict[str, np.ndarray],
@@ -637,7 +775,8 @@ def select_path(
     """One candidate per frame along each stretch, chosen by dynamic programming (plan step 6c).
 
     Nodes are a frame's candidates and, with ``path_mirrors``, their exact
-    mirrors; a frame without candidates keeps its stored pose as its only
+    mirrors (``Candidate.energy``: a mirror pays its own body-field evidence
+    energy); a frame without candidates keeps its stored pose as its only
     node.  Node cost is the comparable energy over ``path_temperature``; the
     edge cost between consecutive frames is ``path_distance_weight`` times
     the squared oriented pose distance in widths plus
@@ -653,7 +792,8 @@ def select_path(
     n_points = int(arrays["centerline_xy"].shape[1])
     chosen: dict[int, PathChoice] = {}
 
-    Geometry = tuple[np.ndarray, int, float, float]  # centerline, points in view, width, body length
+    Geometry = _PathGeometry  # centerline, points in view, width, body length
+    orientations = (False, True) if propagation.path_mirrors else (False,)
 
     def stored_node(row: int) -> Geometry | None:
         if not fitted[row]:
@@ -683,20 +823,21 @@ def select_path(
             options = candidates.get(row, [])
             row_nodes = []
             if options:
-                best_energy = min(c.total_energy for c in options)
                 for candidate in options:
                     geometry = (
                         np.asarray(candidate.result.centerline_xy, dtype=np.float64), int(candidate.result.points_in_fov),
                         float(candidate.result.width_px), float(candidate.result.body_length_px),
                     )
-                    row_nodes.append((geometry, candidate.total_energy / propagation.path_temperature, (candidate, False)))
+                    row_nodes.append((geometry, candidate.energy() / propagation.path_temperature, (candidate, False)))
                     if propagation.path_mirrors:
                         mirrored = (_oriented_curve(candidate, True), geometry[1], geometry[2], geometry[3])
-                        row_nodes.append((mirrored, candidate.total_energy / propagation.path_temperature, (candidate, True)))
+                        row_nodes.append((mirrored, candidate.energy(True) / propagation.path_temperature, (candidate, True)))
             else:
                 stored = stored_node(row)
                 if stored is not None:
-                    row_nodes.append((stored, float(arrays["total_energy"][row]) / propagation.path_temperature, None))
+                    # The row's only node, on the candidates' footing; its cost shifts every path equally.
+                    energy = independent_energy(config, arrays, row)
+                    row_nodes.append((stored, (energy if math.isfinite(energy) else 0.0) / propagation.path_temperature, None))
             nodes.append(row_nodes)
         # Anchors: the fitted frames outside the stretch, fixed and free.
         before = stored_node(a - 1) if a - 1 >= 0 and fitted[a - 1] else None
@@ -719,19 +860,18 @@ def select_path(
             costs.append(first)
             back.append([-1] * len(piece[0]))
             for k in range(1, len(piece)):
-                current = []
-                pointers = []
-                for node in piece[k]:
-                    best_cost = math.inf
-                    best_j = -1
-                    for j, prev_node in enumerate(piece[k - 1]):
-                        total = costs[k - 1][j] + edge_cost(prev_node[0], node[0])
-                        if total < best_cost:
-                            best_cost, best_j = total, j
-                    current.append(best_cost + node[1])
-                    pointers.append(best_j)
-                costs.append(current)
-                back.append(pointers)
+                edges = _path_edge_costs(
+                    [node[0] for node in piece[k - 1]], [node[0] for node in piece[k]],
+                    propagation, n_points, image_shape,
+                )
+                totals = np.asarray(costs[k - 1])[:, None] + edges
+                # Match the scalar strict comparison: ignore NaNs and keep
+                # the first predecessor in a tie (or -1 if none is finite).
+                totals = np.where(totals < math.inf, totals, math.inf)
+                pointers = np.argmin(totals, axis=0)
+                best = totals[pointers, np.arange(len(piece[k]))]
+                costs.append((best + np.asarray([node[1] for node in piece[k]])).tolist())
+                back.append(np.where(best < math.inf, pointers, -1).tolist())
             final = [c + (edge_cost(node[0], anchor_after) if anchor_after is not None else 0.0) for c, node in zip(costs[-1], piece[-1], strict=True)]
             j = int(np.argmin(final))
             for k in range(len(piece) - 1, -1, -1):
@@ -739,12 +879,10 @@ def select_path(
                 geometry, _, choice = piece[k][j]
                 if choice is not None:
                     candidate, mirrored = choice
-                    options = candidates[row]
-                    best_energy = min(c.total_energy for c in options)
+                    best_energy = min(c.energy(m) for c in candidates[row] for m in orientations)
+                    energy = candidate.energy(mirrored)
                     # An override is a choice measurably above the frame's lowest energy, not a tie broken the other way.
-                    chosen[row] = PathChoice(
-                        candidate, mirrored, candidate.total_energy > best_energy + OVERRIDE_ENERGY, candidate.total_energy - best_energy, float(costs[k][j])
-                    )
+                    chosen[row] = PathChoice(candidate, mirrored, energy > best_energy + OVERRIDE_ENERGY, energy - best_energy, float(costs[k][j]))
                 j = back[k][j]
             start = end + 1
     return chosen
@@ -790,18 +928,20 @@ def continuity_summary(arrays: dict[str, np.ndarray], *, length_jump_fraction: f
 
 
 def comparable_energy(config: MaskFitConfig, result: MaskFitResult) -> float:
-    """Overlap energy plus the size and profile priors of ``config``, without the crop-escape term."""
+    """Overlap energy plus the size and profile priors of ``config`` and the body-field evidence energy, without the crop-escape term."""
 
-    dice = float(result.records[result.best_index]["final_soft_dice_energy"])
-    return dice + prior_penalty(config, result.body_length_px, result.width_px, result.width_shape)
+    best = result.records[result.best_index]
+    return float(best["final_soft_dice_energy"]) + float(best["final_field_energy"]) + prior_penalty(
+        config, result.body_length_px, result.width_px, result.width_shape
+    )
 
 
 def independent_energy(config: MaskFitConfig, arrays: dict[str, np.ndarray], row: int) -> float:
-    """The stored independent fit's energy on the same footing as ``comparable_energy``."""
+    """The stored independent fit's energy on the same footing as ``comparable_energy`` (its stored evidence energy included)."""
 
     if not arrays["fitted"][row]:
         return float("inf")
-    return float(arrays["energy"][row]) + prior_penalty(
+    return float(arrays["energy"][row]) + float(arrays["field_energy"][row]) + prior_penalty(
         config, float(arrays["body_length_px"][row]), float(arrays["width_px"][row]), arrays["width_shape"][row]
     )
 

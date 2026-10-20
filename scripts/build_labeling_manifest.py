@@ -13,13 +13,13 @@ the easy cases of every animal.
 Recordings are assigned a split policy: ``auto`` (the store's balanced
 per-frame assignment, as before) or one of ``train``, ``val``, ``test`` for
 recordings whose animal should appear in that split only.  The manifest is
-read by ``worm_pose_gen.label_app --queue``.
+opened as a Labeling queue by ``worm-pose-app --queue <manifest>``.
 
 Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/build_labeling_manifest.py \\
         --val-only 2023-09-07-13 --val-only 2024-02-01-07 --test-only 2024-06-18-12 --test-only 2024-05-28-02 \\
-        --output docs/labeling_round_2/manifest.json
+        --output <data dir>/runs/labeling_round/manifest.json
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT, SegmentationStore
+from worm_pose_gen.settings import RUNS_DIR
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,7 @@ AMBIGUOUS_REASONS = ("short_skeleton", "holes", "fragments")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--candidates-dir", type=Path, default=PROJECT_ROOT / "docs" / "pose_pipeline_step4" / "clip_candidates")
+    parser.add_argument("--candidates-dir", type=Path, default=RUNS_DIR / "clip_candidates")
     parser.add_argument("--recording", action="append", dest="recordings", help="recording names to include (default: every scan in the directory)")
     parser.add_argument("--val-only", action="append", default=[], help="recording whose new labels are all validation")
     parser.add_argument("--test-only", action="append", default=[], help="recording whose new labels are all test")
@@ -50,9 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--border-frames", type=int, default=6, help="border-touching samples per recording")
     parser.add_argument("--ordinary-frames", type=int, default=6, help="evenly spread ordinary frames per recording")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
-    parser.add_argument("--name", default="labeling_round_2")
+    parser.add_argument("--name", default="labeling_round")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "docs" / "labeling_round_2" / "manifest.json")
+    parser.add_argument("--output", type=Path, default=RUNS_DIR / "labeling_round" / "manifest.json")
     return parser.parse_args()
 
 

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Start the pose app from this checkout (after scripts/bootstrap_environment.sh).
+# It prints the address and the ssh command that opens it from your computer;
+# `./worm-pose-app --help` lists the options.
+set -euo pipefail
+root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ ! -x "$root/.venv/bin/python" ]]; then
+  printf 'not installed yet: run %s/scripts/bootstrap_environment.sh first\n' "$root" >&2
+  exit 1
+fi
+exec "$root/scripts/project_env.sh" uv run --no-sync --frozen python -m worm_pose_gen.app "$@"

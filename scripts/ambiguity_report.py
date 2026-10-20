@@ -9,7 +9,7 @@ JSON with an entry per run.
 Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/ambiguity_report.py \\
-        /temp_data4/alex/external_artifacts/poses/<run> --output docs/pose_pipeline_step4/ambiguity_report.json
+        <data dir>/runs/poses/<run> --output <data dir>/runs/ambiguity_report.json
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import h5py
 import numpy as np
 
 from worm_pose_gen.ambiguity import FLAG_NAMES, AmbiguityThresholds, compute_ambiguity, summarize_ambiguity
-from worm_pose_gen.label_app import DATASET_PATH
+from worm_pose_gen.recordings import DATASET_PATH
 
 
 def parse_args() -> argparse.Namespace:

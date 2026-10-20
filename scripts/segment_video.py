@@ -5,8 +5,8 @@ Frames are read from the HDF5 recording in slabs, flat-fielded with the same
 correction the labeling app uses (estimated once per recording and cached
 under the dataset root), pushed through the network in batches, and stitched
 into an MP4: the flat-fielded frame in gray, the worm mask (probability at or
-above ``--threshold``, then narrow holes filled and the largest component
-kept unless ``--raw-mask``) filled in magenta with a green outline, and, with
+above ``--threshold``, then the narrow holes it encloses filled unless
+``--no-fill-holes``; every component is kept) filled in magenta with a green outline, and, with
 ``--show-uncertain``, the band between ``0.2`` and ``0.8`` tinted yellow.
 A JSON file beside the video records per-frame worm and uncertain pixel
 counts, component counts and pixels outside the largest component before
@@ -35,9 +35,9 @@ import torch
 from worm_pose_gen.classical import _erode, _largest_component
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.mask_fit import fill_narrow_holes
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.run_records import checkpoint_fingerprint, utc_now
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -62,11 +62,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slab", type=int, default=64, help="frames read from disk at once")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--show-uncertain", action="store_true", help="tint the 0.2-0.8 probability band yellow")
-    parser.add_argument("--raw-mask", action="store_true", help="skip hole filling and largest-component selection")
+    parser.add_argument("--fill-holes", action=argparse.BooleanOptionalAction, default=True, help="fill the narrow holes the mask encloses")
     parser.add_argument("--hole-radius", type=int, default=HOLE_FILL_RADIUS_PX, help="largest hole width to fill, in pixels")
     parser.add_argument("--scale", type=float, default=1.0, help="resize factor for the output video")
     parser.add_argument("--quality", type=int, default=5, help="imageio/ffmpeg quality, 0 worst to 10 best")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR, help="where the flat field cache lives")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--device", default=None)
     return parser.parse_args()
@@ -79,16 +79,6 @@ def component_stats(mask: np.ndarray) -> tuple[int, int]:
         return 0, 0
     largest, _, count = _largest_component(mask)
     return int(count), int(mask.sum() - largest.sum())
-
-
-def clean_mask(worm: np.ndarray, hole_radius: int, device: torch.device) -> tuple[np.ndarray, int]:
-    """Fill narrow holes and keep the largest component; returns (mask, pixels added by filling)."""
-
-    if not worm.any():
-        return worm, 0
-    filled, added = fill_narrow_holes(worm, hole_radius, device=device)
-    largest, _, _ = _largest_component(filled)
-    return largest, int(added)
 
 
 def render(frame: np.ndarray, probability: np.ndarray, worm: np.ndarray, caption: str, *, show_uncertain: bool, scale: float) -> np.ndarray:
@@ -154,11 +144,11 @@ def main() -> int:
                     raw_mask = prob >= args.threshold
                     uncertain_pixels = int(((prob > UNCERTAIN_BAND[0]) & (prob < UNCERTAIN_BAND[1])).sum())
                     components, extra_pixels = component_stats(raw_mask)
-                    worm, filled_pixels = (raw_mask, 0) if args.raw_mask else clean_mask(raw_mask, args.hole_radius, module.device)
+                    worm, filled_pixels = fill_narrow_holes(raw_mask, args.hole_radius, device=module.device) if args.fill_holes else (raw_mask, 0)
                     worm_pixels = int(worm.sum())
                     caption = (
                         f"{args.recording.stem} frame {index}  worm {worm_pixels} px  raw components {components}  "
-                        f"dropped {extra_pixels} px  filled {filled_pixels} px"
+                        f"outside largest {extra_pixels} px  filled {filled_pixels} px"
                     )
                     writer.append_data(render(frame, prob, worm, caption, show_uncertain=args.show_uncertain, scale=args.scale))
                     rows.append({
@@ -185,7 +175,7 @@ def main() -> int:
         "frame_count": n,
         "checkpoint": checkpoint_fingerprint(args.checkpoint),
         "threshold": args.threshold,
-        "mask_cleanup": None if args.raw_mask else {"fill_holes_radius_px": args.hole_radius, "largest_component": True},
+        "mask_cleanup": {"fill_holes": args.fill_holes, "fill_holes_radius_px": args.hole_radius},
         "batch_size": args.batch_size,
         "device": str(module.device),
         "flat_field_seconds": field_seconds,

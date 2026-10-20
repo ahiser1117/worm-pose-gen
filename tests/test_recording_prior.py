@@ -18,6 +18,7 @@ from worm_pose_gen.mask_fit import (
     default_width_template,
     extend_start_to_length,
     fit_mask,
+    head_first,
     init_from_skeleton,
     orientation_pair,
     render_tube_segments,
@@ -30,6 +31,8 @@ from worm_pose_gen.recording_prior import (
     bootstrap_prior_from_masks,
     estimate_recording_prior,
 )
+
+from tests.slow import slow
 
 
 TAIL_LAST = np.array([0.25, 0.2, 0.1, -0.05, -0.35, -0.9])
@@ -96,6 +99,18 @@ class RecordingPriorTests(unittest.TestCase):
         np.testing.assert_array_equal(pair[1].width_shape, TAIL_LAST)
         np.testing.assert_allclose(decode_centerline(pair[1].latent), decode_centerline(pair[0].latent)[::-1], atol=1e-9)
 
+    def test_head_first_orients_a_start_by_the_ends(self) -> None:
+        _, mask = _worm(1)
+        start = init_from_skeleton(mask, config=SMALL)
+        assert start is not None
+        start = replace(start, width_shape=TAIL_LAST)
+        curve = decode_centerline(start.latent)
+        self.assertIs(head_first(start, curve[0] + 3.0, curve[-1] - 3.0, config=SMALL), start)
+        flipped = head_first(start, curve[-1], curve[0], config=SMALL)
+        np.testing.assert_allclose(decode_centerline(flipped.latent), curve[::-1], atol=1e-9)
+        self.assertTrue(flipped.name.endswith("_reversed"))
+        np.testing.assert_array_equal(flipped.width_shape, TAIL_LAST)
+
     def test_asymmetric_prior_picks_the_true_orientation(self) -> None:
         curve, mask = _worm(2)
         config = replace(SMALL, length_bounds_px=None, width_bounds_px=None, width_shape_prior_mean=tuple(TAIL_LAST))
@@ -109,6 +124,7 @@ class RecordingPriorTests(unittest.TestCase):
         energies = [r["final_soft_dice_energy"] for r in result.records]
         self.assertLess(min(energies), max(energies) - 1e-3)
 
+    @slow
     def test_estimate_prior_and_round_trip(self) -> None:
         masks = []
         results = []
@@ -138,6 +154,7 @@ class RecordingPriorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             prior.apply(replace(SMALL, width_coefficients=8))
 
+    @slow
     def test_bootstrap_opens_the_bounds_and_length_prior_completes_a_clipped_body(self) -> None:
         # A worm longer than the default bound would allow; bootstrapping must recover its length.
         long_config = replace(SMALL, length_bounds_px=(60.0, 120.0))

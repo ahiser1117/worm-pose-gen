@@ -11,7 +11,7 @@ images re-run the segmenter on the few frames they need.
 Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/render_pose_run.py \\
-        /temp_data4/alex/external_artifacts/poses/<run> --scale 0.5 --residual-frames 6 --frames 451,1052
+        <data dir>/runs/poses/<run> --scale 0.5 --residual-frames 6 --frames 451,1052
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ import numpy as np
 import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, residual_caption, residual_rows, write_overlay_video
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--residual-frames", type=int, default=5, help="residual images for this many lowest-IoU frames")
     parser.add_argument("--frames", default="", help="comma-separated frame indices that also get residual images")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="segmenter used for the residual masks")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="where the flat field cache lives")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR, help="where the flat field cache lives")
     parser.add_argument("--device", default=None)
     return parser.parse_args()
 

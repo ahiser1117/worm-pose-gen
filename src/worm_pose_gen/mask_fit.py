@@ -27,10 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import math
-from typing import Sequence
+from typing import Collection, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import ndimage
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
@@ -80,7 +81,7 @@ class MaskFitConfig:
     # symmetric template.  A recording prior (``recording_prior.py``) sets it.
     width_shape_prior_mean: tuple[float, ...] | None = None
     # Hard bounds, ``None`` to remove them.  Recording priors replace them.
-    length_bounds_px: tuple[float, float] | None = (250.0, 750.0)
+    length_bounds_px: tuple[float, float] | None = (250.0, 800.0)
     width_bounds_px: tuple[float, float] | None = (15.0, 90.0)
     # Gaussian priors on log body length and log width scale, centered on a
     # recording's values; ``None`` disables them.  ``prior_weight`` converts a
@@ -88,6 +89,11 @@ class MaskFitConfig:
     # deviation cost 0.01, about the energy gap between a good and a poor fit.
     length_prior_px: float | None = None
     length_prior_log_sigma: float = 0.05
+    # Hold the length of every start fixed instead (``batch_fit.fit_masks``
+    # first lays every start to ``length_prior_px``,
+    # ``lay_start_to_length``).  The fit stage sets it with a prior and the
+    # body-field network: a body does not change its length between frames.
+    length_fixed: bool = False
     width_prior_px: float | None = None
     width_prior_log_sigma: float = 0.05
     prior_weight: float = 0.0025
@@ -110,6 +116,28 @@ class MaskFitConfig:
     # summed over the body.  Zero weight disables it.
     min_bend_radius_widths: float = 0.5
     bend_weight: float = 0.002
+    # Non-interpenetration (``separation_penalty``): two parts of the body more
+    # than ``separation_arc_widths`` body widths apart along it may not come
+    # closer than ``separation_fraction`` of the sum of their radii.  A rendered
+    # union covers a pixel twice at no cost, so without it an end touching the
+    # body can slide onto it.  Pairs the fit's reference pose (a traced
+    # midline, the previous frame) itself puts on top of each other are a real
+    # crossing and exempt.  Zero weight disables it; only ``batch_fit`` uses it.
+    separation_weight: float = 0.0
+    separation_fraction: float = 0.9
+    separation_arc_widths: float = 2.0
+    # Body-field evidence (``batch_fit.fit_masks(fields=...)``): every midline
+    # point of the front half should sit where the body-field network's A-P
+    # field equals the point's own position along the body (in units of
+    # ``field_ap_sigma``), and the first point at the network's head (in
+    # units of ``field_end_sigma_px``).  At a contact the A-P field changes
+    # across the contact line, so a pose routed onto the wrong limb pays for
+    # it even where the overlap with the mask is the same.  Zero weights
+    # disable it.
+    field_ap_weight: float = 0.0
+    field_ap_sigma: float = 0.05
+    field_end_weight: float = 0.0
+    field_end_sigma_px: float = 10.0
     default_length_px: float = 600.0
     default_width_px: float = 45.0
     # Constant-curvature arcs (rad/px) used by the moment-based starts.
@@ -233,14 +261,20 @@ def init_from_centerline(
     mask: NDArray[np.generic],
     *,
     name: str = "centerline",
+    width_px: float | None = None,
     config: MaskFitConfig = MaskFitConfig(),
 ) -> Initialization:
-    """Encode an existing centerline (any point count) as a starting state."""
+    """Encode an existing centerline (any point count) as a starting state.
+
+    The width is measured across the mask along the centerline's normals
+    unless ``width_px`` (a known width, such as the recording prior's) is given.
+    """
 
     points = resample_centerline(np.asarray(centerline_xy, dtype=np.float64), config.n_points)
     latent = encode_centerline(points, config.coefficients)
-    width = _measured_width_px(np.asarray(mask, dtype=bool), points, config.default_width_px)
-    return Initialization(name, latent, width)
+    if width_px is None:
+        width_px = _measured_width_px(np.asarray(mask, dtype=bool), points, config.default_width_px)
+    return Initialization(name, latent, float(width_px))
 
 
 def init_from_skeleton(
@@ -301,27 +335,36 @@ def init_from_moments(
     wlow, whigh = config.width_bounds_px or (3.0, float("inf"))
     if np.isfinite(area_width) and wlow < area_width < whigh:
         width = area_width
-    name = "moments_straight" if curvature == 0 else f"moments_arc_{curvature:+.4f}"
-    return Initialization(name, latent, width)
+    return Initialization(moments_name(curvature), latent, width)
+
+
+def moments_name(curvature: float) -> str:
+    """The name of the moment-arc start of this curvature (:func:`init_from_moments`)."""
+
+    return "moments_straight" if curvature == 0 else f"moments_arc_{curvature:+.4f}"
 
 
 def standard_initializations(
     mask: NDArray[np.generic],
     *,
     reference_centerline_xy: NDArray[np.generic] | None = None,
+    names: Collection[str] | None = None,
     config: MaskFitConfig = MaskFitConfig(),
 ) -> list[Initialization]:
-    """Reference curve (if any), longest skeleton path, and moment-based arcs."""
+    """Reference curve (if any), longest skeleton path, and moment-based arcs; only those in ``names`` when given (none computed otherwise)."""
 
     starts: list[Initialization] = []
     if reference_centerline_xy is not None:
         starts.append(
             init_from_centerline(reference_centerline_xy, mask, name="reference", config=config)
         )
-    skeleton = init_from_skeleton(mask, config=config)
-    if skeleton is not None:
-        starts.append(skeleton)
+    if names is None or "skeleton_longest_path" in names:
+        skeleton = init_from_skeleton(mask, config=config)
+        if skeleton is not None:
+            starts.append(skeleton)
     for curvature in config.moment_arc_curvatures:
+        if names is not None and moments_name(curvature) not in names:
+            continue
         start = init_from_moments(mask, curvature=curvature, config=config)
         if start is not None:
             starts.append(start)
@@ -341,6 +384,40 @@ def reverse_initialization(
     latent = encode_centerline(curve, config.coefficients)
     shape = None if start.width_shape is None else np.asarray(start.width_shape, dtype=np.float64)[::-1].copy()
     return Initialization(f"{start.name}_reversed", latent, start.width_px, shape)
+
+
+def _border_pixels(mask: BoolArray) -> NDArray[np.float64]:
+    """(x, y) of the mask pixels on the image border (two pixels deep): where the body leaves the camera."""
+
+    edge = np.zeros_like(mask)
+    edge[:2] = edge[-2:] = True
+    edge[:, :2] = edge[:, -2:] = True
+    yy, xx = np.nonzero(mask & edge)
+    return np.column_stack((xx, yy)).astype(np.float64)
+
+
+def _off_camera(
+    end: NDArray[np.float64], inner: NDArray[np.float64], border_xy: NDArray[np.float64], extra: float, border_margin: float,
+) -> list[NDArray[np.float64]]:
+    """Points continuing a body ``extra`` px past ``end`` toward where it leaves the camera.
+
+    Head for the border pixels nearest this end, then keep going straight; a
+    skeleton's last segment inside a wide exit blob is not a reliable
+    direction.
+    """
+
+    distance = np.linalg.norm(border_xy - end, axis=1)
+    exit_xy = border_xy[distance <= distance.min() + 0.5 * border_margin].mean(0)
+    to_exit = exit_xy - end
+    reach = float(np.linalg.norm(to_exit))
+    if reach < 2.0:
+        direction = end - inner
+        direction /= max(float(np.linalg.norm(direction)), 1e-6)
+        return [(end + direction * extra)[None, :]]
+    direction = to_exit / reach
+    if reach >= extra:
+        return [(end + direction * extra)[None, :]]
+    return [exit_xy[None, :], (exit_xy + direction * (extra - reach))[None, :]]
 
 
 def extend_start_to_length(
@@ -365,18 +442,13 @@ def extend_start_to_length(
 
     binary = np.asarray(mask, dtype=bool)
     curve = decode_centerline(start.latent, config.coefficients)
-    height, width = binary.shape[:2]
     length = float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum())
     missing = float(target_length_px) - length
     if missing <= 1.0:
         return start
-    edge = np.zeros_like(binary)
-    edge[:2] = edge[-2:] = True
-    edge[:, :2] = edge[:, -2:] = True
-    yy, xx = np.nonzero(binary & edge)
-    if not len(yy):
+    border_xy = _border_pixels(binary)
+    if not len(border_xy):
         return start
-    border_xy = np.column_stack((xx, yy)).astype(np.float64)
 
     def at_border(point: NDArray[np.float64]) -> bool:
         return bool(np.linalg.norm(border_xy - point, axis=1).min() <= border_margin)
@@ -393,31 +465,143 @@ def extend_start_to_length(
     if not any(ends):
         return start
     share = missing / sum(ends)
-
-    def continuation(end: NDArray[np.float64], inner: NDArray[np.float64]) -> list[NDArray[np.float64]]:
-        # Head for the border pixels nearest this end (where the body leaves
-        # the camera), then keep going straight; a skeleton's last segment
-        # inside a wide exit blob is not a reliable direction.
-        distance = np.linalg.norm(border_xy - end, axis=1)
-        exit_xy = border_xy[distance <= distance.min() + 0.5 * border_margin].mean(0)
-        to_exit = exit_xy - end
-        reach = float(np.linalg.norm(to_exit))
-        if reach < 2.0:
-            direction = end - inner
-            direction /= max(float(np.linalg.norm(direction)), 1e-6)
-            return [(end + direction * share)[None, :]]
-        direction = to_exit / reach
-        if reach >= share:
-            return [(end + direction * share)[None, :]]
-        return [exit_xy[None, :], (exit_xy + direction * (share - reach))[None, :]]
-
     pieces = [curve]
     if ends[0]:
-        pieces = continuation(curve[0], curve[1])[::-1] + pieces
+        pieces = _off_camera(curve[0], curve[1], border_xy, share, border_margin)[::-1] + pieces
     if ends[1]:
-        pieces = pieces + continuation(curve[-1], curve[-2])
+        pieces = pieces + _off_camera(curve[-1], curve[-2], border_xy, share, border_margin)
     extended = resample_centerline(np.vstack(pieces), config.n_points)
     return replace(start, latent=encode_centerline(extended, config.coefficients))
+
+
+def _along_mask(points: FloatArray, mask: BoolArray, extra: float, width_px: float) -> FloatArray:
+    """Points continuing the polyline ``points`` by ``extra`` px, along the mask's midline while it lasts.
+
+    Each step of a quarter width turns at most 60 degrees, toward the
+    deepest mask out to one width ahead (by distance to the mask edge, with
+    a small cost per radian of turn), and never comes within half a width of
+    the body laid so far (but its last one and a half widths): the walk
+    follows the body's ridge to its end instead of running back along it.
+    Where no step is on the mask, it goes straight; after one and a half
+    widths off the mask (a contracted body's tip, a crossing it cannot pass)
+    or once off camera it goes straight for the rest.
+    """
+
+    height, width = mask.shape
+    # The walk stays within ``extra`` of the end and looks one width ahead.
+    reach = int(np.ceil(extra + 2.0 * width_px))
+    x, y = int(round(points[-1, 0])), int(round(points[-1, 1]))
+    window = (slice(max(y - reach, 0), max(min(y + reach + 1, height), 0)), slice(max(x - reach, 0), max(min(x + reach + 1, width), 0)))
+    depth = np.zeros(mask.shape, dtype=np.float64)
+    if mask[window].size:
+        depth[window] = ndimage.distance_transform_edt(mask[window])
+    step = max(width_px / 4.0, 2.0)
+    turns = np.deg2rad(np.arange(-60.0, 61.0, 10.0))
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))))
+    # The heading of the last two widths: a trace's last band points can step back and forth.
+    back = np.array([np.interp(arc[-1] - 2.0 * width_px, arc, points[:, axis]) for axis in (0, 1)])
+    heading = points[-1] - back
+    heading /= max(float(np.linalg.norm(heading)), 1e-6)
+    # The body so far at about one point per step, so the clearance test sees all of it.
+    laid = list(resample_centerline(points, max(int(arc[-1] / step) + 1, 5))[:-1]) + [points[-1]]
+    given = len(laid)
+    walked = off_mask = 0.0
+    while extra - walked > 1e-6:
+        size = min(step, extra - walked)
+        here = laid[-1]
+        if off_mask >= 1.5 * width_px or not (0 <= here[0] < width and 0 <= here[1] < height):
+            laid.append(here + heading * (extra - walked))
+            break
+        directions = np.stack((
+            heading[0] * np.cos(turns) - heading[1] * np.sin(turns), heading[0] * np.sin(turns) + heading[1] * np.cos(turns),
+        ), 1)
+        candidates = here + size * directions
+        # Depth along each direction out to one width ahead: one step alone cannot see a bend coming.
+        ahead = here + step * np.arange(1, 5)[:, None, None] * directions[None]
+        col, row = np.round(ahead[..., 0]).astype(int), np.round(ahead[..., 1]).astype(int)
+        inside = (col >= 0) & (col < width) & (row >= 0) & (row < height)
+        sampled = np.zeros(ahead.shape[:2])
+        sampled[inside] = depth[row[inside], col[inside]]
+        on = np.where(sampled[0] > 0, sampled.mean(0), 0.0)
+        history = np.asarray(laid)
+        along = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(history, axis=0), axis=1))))
+        earlier = history[along < along[-1] - 1.5 * width_px]
+        if len(earlier):
+            clear = np.linalg.norm(candidates[:, None, :] - earlier[None, :, :], axis=-1).min(1) >= 0.5 * width_px
+        else:
+            clear = np.ones(len(candidates), dtype=bool)
+        valid = (on > 0) & clear
+        if valid.any():
+            score = np.where(valid, on - 0.15 * width_px * np.abs(turns), -np.inf)
+            heading = directions[int(np.argmax(score))]
+            off_mask = 0.0
+        else:
+            off_mask += size
+        laid.append(here + heading * size)
+        walked += size
+    return np.asarray(laid[given:])
+
+
+def lay_centerline(
+    points: NDArray[np.generic], mask: NDArray[np.generic], length_px: float, width_px: float, *, border_margin: float = 80.0,
+) -> FloatArray:
+    """The polyline ``points`` from its first point, exactly ``length_px`` long along it.
+
+    A longer one is cut where its arc length reaches ``length_px`` (the rest
+    of it is not body); a shorter one continues past its last point: off
+    camera as in :func:`extend_start_to_length` where that end lies within
+    ``border_margin`` pixels of mask pixels on the image border, else along
+    the mask's midline (:func:`_along_mask`).  The first point never moves,
+    and the shape is never scaled.
+    """
+
+    curve = np.asarray(points, dtype=np.float64)
+    target = float(length_px)
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(curve, axis=0), axis=1))))
+    if arc[-1] >= target:
+        stop = int(np.searchsorted(arc, target))
+        fraction = (target - arc[stop - 1]) / max(arc[stop] - arc[stop - 1], 1e-9)
+        return np.vstack((curve[:stop], curve[stop - 1] + fraction * (curve[stop] - curve[stop - 1])))
+    extra = target - float(arc[-1])
+    binary = np.asarray(mask, dtype=bool)
+    border_xy = _border_pixels(binary)
+    if len(border_xy) and float(np.linalg.norm(border_xy - curve[-1], axis=1).min()) <= border_margin:
+        inner = curve[int(np.clip(np.searchsorted(arc, arc[-1] - 10.0), 0, len(curve) - 1))]
+        return np.vstack([curve, *_off_camera(curve[-1], inner, border_xy, extra, border_margin)])
+    return np.vstack((curve, _along_mask(curve, binary, extra, width_px)))
+
+
+def lay_start_to_length(
+    start: Initialization,
+    mask: NDArray[np.generic],
+    length_px: float,
+    *,
+    config: MaskFitConfig = MaskFitConfig(),
+) -> Initialization:
+    """The start laid from its first point to exactly ``length_px`` (:func:`lay_centerline`)."""
+
+    k = config.coefficients
+    target = float(length_px)
+    if abs(float(start.latent[k + 1]) - target) <= 1.0:
+        return start
+    curve = decode_centerline(start.latent, k)
+    body = lay_centerline(curve, mask, target, start.width_px)
+    laid = replace(start, latent=encode_centerline(resample_centerline(body, config.n_points), k))
+    return at_length(laid, target, curve[0], config=config)
+
+
+def at_length(start: Initialization, length_px: float, first_xy: NDArray[np.generic], *, config: MaskFitConfig = MaskFitConfig()) -> Initialization:
+    """The start's shape at exactly ``length_px`` with its first point at ``first_xy``.
+
+    For the few pixels a laid centerline loses to the latent's smoothing
+    when it is encoded, not for changing a body's length.
+    """
+
+    k = config.coefficients
+    latent = np.array(start.latent, dtype=np.float64)
+    latent[k + 1] = float(length_px)
+    latent[k + 2 :] += np.asarray(first_xy, dtype=np.float64) - decode_centerline(latent, k)[0]
+    return replace(start, latent=latent)
 
 
 def redirect_start_through_exit(
@@ -490,6 +674,18 @@ def orientation_pair(start: Initialization, *, config: MaskFitConfig = MaskFitCo
     return [start, replace(reversed_start, width_shape=start.width_shape)]
 
 
+def head_first(
+    start: Initialization, head_xy: NDArray[np.generic], tail_xy: NDArray[np.generic], *, config: MaskFitConfig = MaskFitConfig()
+) -> Initialization:
+    """The orientation of ``start`` (of :func:`orientation_pair`) whose first and last points lie nearer ``head_xy`` and ``tail_xy``."""
+
+    curve = decode_centerline(start.latent, config.coefficients)
+    head, tail = np.asarray(head_xy, dtype=np.float64), np.asarray(tail_xy, dtype=np.float64)
+    forward = np.linalg.norm(curve[0] - head) + np.linalg.norm(curve[-1] - tail)
+    backward = np.linalg.norm(curve[0] - tail) + np.linalg.norm(curve[-1] - head)
+    return start if forward <= backward else orientation_pair(start, config=config)[1]
+
+
 def taper_asymmetry(width_profile: NDArray[np.generic], fraction: float = 0.3) -> float:
     """Mean log width over the last ``fraction`` of the body minus the first.
 
@@ -541,13 +737,17 @@ def fill_narrow_holes(
     radius: int,
     *,
     device: torch.device | str | None = None,
-    max_iterations: int = 4096,
 ) -> tuple[BoolArray, int]:
-    """Fill enclosed background that cannot contain a ``(2r+1)`` square.
+    """Fill each enclosed hole that cannot contain a ``(2r+1)`` square, entirely.
 
-    Segmentation texture holes inside the body are narrow; the interior of a
-    coiled worm is not.  Background connected to the image border is never
-    filled.  Returns the filled mask and the number of pixels added.
+    A hole is a component of background that the mask outlines on all sides:
+    it is not 8-connected to the background outside the mask's box, so a gap
+    of one pixel, diagonal ones included, leaves it open.  Segmentation
+    texture holes inside the body are narrow and filled whole; the interior
+    of a coiled worm holds a square somewhere and is left open whole, its
+    narrow corners included.  Nothing is filled in part.  Returns the filled
+    mask and the number of pixels added. Cleanup runs on the CPU; ``device``
+    is retained for compatibility with fit callers.
     """
 
     binary = np.asarray(mask, dtype=bool)
@@ -557,39 +757,22 @@ def fill_narrow_holes(
         raise ValueError("radius must be non-negative")
     if radius == 0 or not binary.any():
         return binary.copy(), 0
-    resolved = torch.device(
-        device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    # Inputs and outputs are NumPy arrays even when the fit runs on CUDA.
     yy, xx = np.nonzero(binary)
     height, width = binary.shape
     y0, y1 = max(0, int(yy.min()) - 1), min(height, int(yy.max()) + 2)
     x0, x1 = max(0, int(xx.min()) - 1), min(width, int(xx.max()) + 2)
-    local = torch.as_tensor(binary[y0:y1, x0:x1], device=resolved)
-    background = ~local
-    reached = torch.zeros_like(background)
-    reached[0, :] = background[0, :]
-    reached[-1, :] = background[-1, :]
-    reached[:, 0] = background[:, 0]
-    reached[:, -1] = background[:, -1]
-
-    def dilate(values: Tensor, size: int) -> Tensor:
-        pooled = F.max_pool2d(values.to(torch.float32)[None, None], size, stride=1, padding=size // 2)
-        return pooled[0, 0] > 0
-
-    for _ in range(max_iterations):
-        grown = dilate(reached, 3) & background
-        if bool(torch.equal(grown, reached)):
-            break
-        reached = grown
-    enclosed = background & ~reached
-    if not bool(enclosed.any()):
+    labels, count = ndimage.label(~binary[y0:y1, x0:x1], structure=np.ones((3, 3), dtype=bool))
+    # Background on the box's edge reaches the outside; what it connects to is not a hole.
+    outside = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    enclosed = (labels > 0) & ~np.isin(labels, outside)
+    if not enclosed.any():
         return binary.copy(), 0
-    size = 2 * radius + 1
-    eroded = ~dilate(~enclosed, size)
-    survivors = dilate(eroded, size) & enclosed
-    addition = enclosed & ~survivors
+    # A square of enclosed pixels is 8-connected, so it lies in one hole; that hole stays open.
+    fits = ndimage.minimum_filter(enclosed, size=2 * radius + 1, mode="constant", cval=0)
+    addition = enclosed & ~np.isin(labels, np.unique(labels[fits]))
     filled = binary.copy()
-    filled[y0:y1, x0:x1] |= addition.cpu().numpy()
+    filled[y0:y1, x0:x1] |= addition
     return filled, int(addition.sum())
 
 
@@ -598,13 +781,14 @@ def crop_window(mask: NDArray[np.generic], padding: int, multiple: int) -> CropW
 
     binary = np.asarray(mask, dtype=bool)
     height, width = binary.shape
-    yy, xx = np.nonzero(binary)
-    if not len(yy):
+    # The occupied rows and columns: a twentieth of the cost of listing every pixel.
+    rows, cols = np.flatnonzero(binary.any(1)), np.flatnonzero(binary.any(0))
+    if not len(rows):
         raise ValueError("mask is empty")
-    x0 = max(0, int(xx.min()) - padding)
-    y0 = max(0, int(yy.min()) - padding)
-    x1 = min(width, int(xx.max()) + padding + 1)
-    y1 = min(height, int(yy.max()) + padding + 1)
+    x0 = max(0, int(cols[0]) - padding)
+    y0 = max(0, int(rows[0]) - padding)
+    x1 = min(width, int(cols[-1]) + padding + 1)
+    y1 = min(height, int(rows[-1]) + padding + 1)
     # Grow toward the origin if the far side is clipped, then trim to a multiple.
     span_x = x1 - x0
     span_y = y1 - y0
@@ -620,37 +804,25 @@ def signed_edge_distance(mask: Tensor, *, chunk_pixels: int = 4096) -> Tensor:
 
     Positive inside.  A pixel adjacent to the edge reads ``0.5``, so a soft
     target ``sigmoid(distance / softness)`` crosses one half exactly where the
-    renderer's tube boundary does.  Distances are measured to the opposite
-    side's boundary pixels, which keeps the computation small.
+    renderer's tube boundary does. Exact Euclidean transforms measure distance
+    to the opposite class in linear time. ``chunk_pixels`` is retained for API
+    compatibility; no pairwise distance chunks are allocated.
     """
 
     values = mask.to(dtype=torch.bool)
     if values.ndim != 2:
         raise ValueError("mask must have shape [H,W]")
-    if not bool(values.any()) or bool(values.all()):
+    binary = values.cpu().numpy()
+    if not binary.any() or binary.all():
         raise ValueError("mask must contain foreground and background")
-    floating = values.to(dtype=torch.float32)
-    dilated = F.max_pool2d(floating[None, None], 3, stride=1, padding=1)[0, 0] > 0
-    eroded = -F.max_pool2d(-floating[None, None], 3, stride=1, padding=1)[0, 0] > 0
-    outer_boundary = dilated & ~values
-    inner_boundary = values & ~eroded
-    height, width = values.shape
-    yy, xx = torch.meshgrid(
-        torch.arange(height, device=values.device),
-        torch.arange(width, device=values.device),
-        indexing="ij",
-    )
-    pixels = torch.stack((yy, xx), -1).reshape(-1, 2).to(dtype=torch.float32)
-    result = torch.empty(height * width, dtype=torch.float32, device=values.device)
-    flat_inside = values.reshape(-1)
-    for side, targets in ((True, outer_boundary), (False, inner_boundary)):
-        target_yx = torch.nonzero(targets, as_tuple=False).to(dtype=torch.float32)
-        rows = torch.nonzero(flat_inside == side, as_tuple=False).squeeze(1)
-        for start in range(0, len(rows), chunk_pixels):
-            index = rows[start : start + chunk_pixels]
-            distance = torch.cdist(pixels[index], target_yx).min(1).values - 0.5
-            result[index] = distance if side else -distance
-    return result.reshape(height, width)
+    # The closest opposite-class pixel is necessarily on its boundary, so
+    # Euclidean distance transforms give the same distances as the pairwise
+    # boundary search in linear time and without pixel-by-edge matrices.
+    # Targets are static: one host transfer also avoids large CUDA workspaces.
+    inside = ndimage.distance_transform_edt(binary)
+    outside = ndimage.distance_transform_edt(~binary)
+    distance = np.where(binary, inside - 0.5, 0.5 - outside).astype(np.float32)
+    return torch.from_numpy(distance).to(device=values.device)
 
 
 def _downsample(values: Tensor, factor: int) -> Tensor:
@@ -668,7 +840,7 @@ class _MaskFitState(nn.Module):
         k = config.coefficients
         self.shape = nn.Parameter(latents[:, :k].clone())
         self.rotation = nn.Parameter(latents[:, k].clone())
-        self.log_length = nn.Parameter(latents[:, k + 1].clamp_min(1.0).log())
+        self.log_length = nn.Parameter(latents[:, k + 1].clamp_min(1.0).log(), requires_grad=not config.length_fixed)
         self.centroid = nn.Parameter(latents[:, k + 2 :].clone())
         self.log_width = nn.Parameter(widths.clamp_min(1.0).log())
         kw = config.width_coefficients
@@ -727,18 +899,21 @@ class _MaskFitState(nn.Module):
 
         return (self.log_width[:, None] + self.log_width_correction()).exp() * template[None, :]
 
-    def optimizer(self) -> torch.optim.Optimizer:
+    def optimizer(self, capturable: bool = False) -> torch.optim.Optimizer:
+        """Adam over the parameter groups; ``capturable`` (CUDA) is the fused form a CUDA graph can record."""
+
         c = self.config
         groups = [
             {"params": [self.centroid], "lr": c.translation_lr},
             {"params": [self.rotation], "lr": c.rotation_lr},
-            {"params": [self.log_length], "lr": c.log_length_lr},
             {"params": [self.shape], "lr": c.shape_lr},
             {"params": [self.log_width], "lr": c.log_width_lr},
         ]
+        if not c.length_fixed:
+            groups.append({"params": [self.log_length], "lr": c.log_length_lr})
         if self.width_shape.shape[1]:
             groups.append({"params": [self.width_shape], "lr": c.width_shape_lr})
-        return torch.optim.Adam(groups)
+        return torch.optim.Adam(groups, fused=capturable or None, capturable=capturable)
 
     def width_prior(self) -> Tensor:
         """Gaussian pull of the width correction toward its prior mean."""
@@ -798,15 +973,19 @@ def render_tube_segments(
     image_width: int,
     *,
     edge_softness: float = 0.8,
+    pixel_origin_xy: tuple[int, int] = (0, 0),
 ) -> Tensor:
     """Soft tube occupancy from distance to the centerline *polyline*.
 
-    ``worm_pose_gen.renderer.render_worm`` measures distance to the nearest
-    centerline sample.  That makes occupancy between samples depend on sample
-    spacing, so lengthening the body shrinks the rendered tube everywhere and
-    the length gradient carries a consistent shortening bias.  Distance to the
-    polyline segments removes that bias.  Diameter is interpolated along the
-    nearest segment.  Shapes: ``[B,N,2]`` points, ``[B,N]`` diameters.
+    Disks at the centerline samples (an earlier renderer) make occupancy
+    between samples depend on sample spacing, so lengthening the body shrinks
+    the rendered tube everywhere and the length gradient carries a consistent
+    shortening bias.  Distance to the polyline segments removes that bias. Diameter is interpolated along each
+    segment, and occupancy is their union. A narrow nose or tail can therefore
+    touch or overlap the wider body without cutting into its silhouette.
+    Shapes: ``[B,N,2]`` points, ``[B,N]`` diameters. ``pixel_origin_xy``
+    renders a subwindow in the original coordinate system without rounding
+    the centerline again when translating it to a smaller raster.
     """
 
     if centerline_xy.ndim != 3 or centerline_xy.shape[-1] != 2 or centerline_xy.shape[1] < 2:
@@ -817,25 +996,39 @@ def render_tube_segments(
         raise ValueError("positive image dimensions and edge_softness are required")
     dtype, device = centerline_xy.dtype, centerline_xy.device
     yy, xx = torch.meshgrid(
-        torch.arange(image_height, dtype=dtype, device=device),
-        torch.arange(image_width, dtype=dtype, device=device),
+        torch.arange(image_height, dtype=dtype, device=device) + pixel_origin_xy[1],
+        torch.arange(image_width, dtype=dtype, device=device) + pixel_origin_xy[0],
         indexing="ij",
     )
-    pixels = torch.stack((xx, yy), -1).reshape(1, -1, 1, 2)
-    start = centerline_xy[:, None, :-1, :]
-    segment = (centerline_xy[:, 1:, :] - centerline_xy[:, :-1, :])[:, None, :, :]
-    segment_length_sq = segment.square().sum(-1).clamp_min(1e-6)
-    to_pixel = pixels - start
-    t = ((to_pixel * segment).sum(-1) / segment_length_sq).clamp(0.0, 1.0)
-    closest = start + t[..., None] * segment
-    distance_sq = (pixels - closest).square().sum(-1)
-    min_distance_sq, nearest = distance_sq.min(-1)
-    t_nearest = torch.gather(t, 2, nearest[..., None]).squeeze(-1)
-    diameter_start = torch.gather(diameter[:, :-1], 1, nearest)
-    diameter_end = torch.gather(diameter[:, 1:], 1, nearest)
-    local_diameter = (1.0 - t_nearest) * diameter_start + t_nearest * diameter_end
-    distance = torch.sqrt(min_distance_sq + torch.finfo(dtype).eps)
-    mask = torch.sigmoid((0.5 * local_diameter - distance) / edge_softness)
+    if centerline_xy.is_cuda:
+        # Keep the established vector form on CUDA. With the scalar form,
+        # compiled amax backward can produce non-finite gradients on ordinary
+        # worm geometry even when occupancy and eager gradients are finite.
+        pixels = torch.stack((xx, yy), -1).reshape(1, -1, 1, 2)
+        start = centerline_xy[:, None, :-1, :]
+        segment = (centerline_xy[:, 1:, :] - centerline_xy[:, :-1, :])[:, None, :, :]
+        segment_length_sq = segment.square().sum(-1).clamp_min(1e-6)
+        to_pixel = pixels - start
+        t = ((to_pixel * segment).sum(-1) / segment_length_sq).clamp(0.0, 1.0)
+        closest = start + t[..., None] * segment
+        distance_sq = (pixels - closest).square().sum(-1)
+    else:
+        # Separate CPU coordinates avoid the huge trailing size-two dimension
+        # in eager autograd's allocations and reductions.
+        pixel_x, pixel_y = xx.reshape(1, -1, 1), yy.reshape(1, -1, 1)
+        start_x = centerline_xy[:, None, :-1, 0]
+        start_y = centerline_xy[:, None, :-1, 1]
+        segment_x = centerline_xy[:, None, 1:, 0] - start_x
+        segment_y = centerline_xy[:, None, 1:, 1] - start_y
+        segment_length_sq = (segment_x.square() + segment_y.square()).clamp_min(1e-6)
+        t = (((pixel_x - start_x) * segment_x + (pixel_y - start_y) * segment_y) / segment_length_sq).clamp(0.0, 1.0)
+        distance_sq = (pixel_x - (start_x + t * segment_x)).square() + (pixel_y - (start_y + t * segment_y)).square()
+    local_diameter = (1.0 - t) * diameter[:, None, :-1] + t * diameter[:, None, 1:]
+    distance = torch.sqrt(distance_sq + torch.finfo(dtype).eps)
+    # Union the tube surfaces, not the centerline distances: the nearest
+    # centerline may be a thin tip beside a wider segment covering this pixel.
+    signed_coverage = (0.5 * local_diameter - distance).amax(-1)
+    mask = torch.sigmoid(signed_coverage / edge_softness)
     return mask.reshape(centerline_xy.shape[0], image_height, image_width)
 
 
@@ -873,6 +1066,53 @@ def bend_penalty(centerline: Tensor, length: Tensor, width: Tensor, config: Mask
     limit = 1.0 / (config.min_bend_radius_widths * width.clamp_min(1e-6))
     excess = (curvature / limit[:, None] - 1.0).clamp_min(0.0)
     return config.bend_weight * excess.square().sum(1)
+
+
+def separation_penalty(
+    centerline: Tensor, diameter: Tensor, config: MaskFitConfig, reference: Tensor | None = None, reach: int | None = None,
+) -> Tensor:
+    """Penalty for parts of the body far apart along it sitting inside each other, per row.
+
+    ``centerline`` is ``[B, N, 2]`` and ``diameter`` ``[B, N]``.  Point pairs
+    more than ``config.separation_arc_widths`` median diameters apart in arc
+    length pay the squared shortfall of their distance below
+    ``config.separation_fraction`` times the sum of their radii, in units of
+    the median diameter, summed over pairs and divided by the point count.
+    With ``reference`` (``[B, N, 2]``), pairs that the reference places
+    within half that distance of each other are a deliberate crossing, and
+    they and every pair within one median diameter of them along both runs
+    pay nothing.  That neighbourhood spans ``reach`` points each way;
+    without it the reach comes from the pose itself (a median diameter in
+    median point spacings), which reads it back to the host.
+    """
+
+    if config.separation_weight <= 0:
+        return torch.zeros(centerline.shape[0], dtype=centerline.dtype, device=centerline.device)
+    step = (centerline[:, 1:] - centerline[:, :-1]).norm(dim=-1)
+    arc = torch.cat((torch.zeros_like(step[:, :1]), step.cumsum(1)), dim=1)
+    scale = diameter.median(dim=1).values.clamp_min(1e-6)
+    far = (arc[:, :, None] - arc[:, None, :]).abs() > config.separation_arc_widths * scale[:, None, None]
+    needed = config.separation_fraction * 0.5 * (diameter[:, :, None] + diameter[:, None, :])
+    distance = (centerline[:, :, None, :] - centerline[:, None, :, :]).square().sum(-1).add(1e-9).sqrt()
+    if reference is not None:
+        crossed = (reference[:, :, None, :] - reference[:, None, :, :]).norm(dim=-1) < 0.5 * needed
+        # A crossing exempts its neighbourhood too: pairs within one body width
+        # along both runs, which approach each other just before and after it.
+        if reach is None:
+            reach = crossing_reach(centerline, diameter)
+        if reach > 0:
+            crossed = F.max_pool2d(crossed[:, None].to(centerline.dtype), 2 * reach + 1, stride=1, padding=reach)[:, 0] > 0
+        far = far & ~crossed
+    shortfall = ((needed - distance) / scale[:, None, None]).clamp_min(0.0) * far
+    return config.separation_weight * shortfall.square().sum((1, 2)) / centerline.shape[1]
+
+
+def crossing_reach(centerline: Tensor, diameter: Tensor) -> int:
+    """Points along the body in one median diameter, the most of any row (:func:`separation_penalty`)."""
+
+    step = (centerline[:, 1:] - centerline[:, :-1]).norm(dim=-1)
+    scale = diameter.median(dim=1).values.clamp_min(1e-6)
+    return int(torch.ceil((scale / step.median(dim=1).values.clamp_min(1e-6)).max()).item())
 
 
 def max_bend_widths(centerline_xy: NDArray[np.generic], width_px: float) -> float:
@@ -941,17 +1181,18 @@ def fit_mask(
     template_t = torch.as_tensor(template, dtype=torch.float32, device=resolved_device)
 
     crop = crop_window(binary, config.crop_padding, max(config.stage_downsample))
-    target_full = torch.as_tensor(
-        binary[crop.y0 : crop.y1, crop.x0 : crop.x1], dtype=torch.float32, device=resolved_device
-    )
+    local_mask = binary[crop.y0 : crop.y1, crop.x0 : crop.x1]
     # The renderer produces a sigmoid of distance at ``edge_softness`` pixels of
-    # the stage raster.  Blurring the observed mask with the same sigmoid of
+    # the stage raster. Blurring the observed mask with the same sigmoid of
     # its signed distance keeps the optimum consistent across stages; a hard
-    # target would bias a coarse stage toward a shorter, wider tube.
-    if bool(target_full.all()):
-        signed_distance = torch.full_like(target_full, float("inf"))
+    # target would bias a coarse stage toward a shorter, wider tube. Compute
+    # from the original CPU mask and transfer only the completed distance map.
+    if local_mask.all():
+        signed_distance = torch.full(
+            local_mask.shape, float("inf"), dtype=torch.float32, device=resolved_device
+        )
     else:
-        signed_distance = signed_edge_distance(target_full >= 0.5)
+        signed_distance = signed_edge_distance(torch.from_numpy(local_mask)).to(device=resolved_device)
 
     def stage_target(factor: int) -> Tensor:
         soft = torch.sigmoid(signed_distance / (config.edge_softness * factor))

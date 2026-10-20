@@ -9,7 +9,14 @@ from worm_pose_gen.observation import (
     signed_distance_from_mask,
     soft_dice_energy,
 )
-from worm_pose_gen.renderer import render_worm
+from worm_pose_gen.mask_fit import render_tube_segments
+
+
+
+def _tube(centerline, diameter, height, width):
+    """One worm's soft tube mask, ``[height, width]``."""
+
+    return render_tube_segments(centerline[None], torch.full((1, len(centerline)), diameter), height, width)[0]
 
 
 class ObservationEnergyTests(unittest.TestCase):
@@ -65,9 +72,9 @@ class ObservationEnergyTests(unittest.TestCase):
         base = torch.tensor(
             [[5.0, 12.0], [10.0, 12.0], [15.0, 12.0], [20.0, 12.0]]
         )
-        target = render_worm(base, 5.0, 24, 28)["tube_mask"].detach()
+        target = _tube(base, 5.0, 24, 28).detach()
         translation = torch.tensor([0.25, -0.1], requires_grad=True)
-        prediction = render_worm(base + translation, 5.0, 24, 28)["tube_mask"]
+        prediction = _tube(base + translation, 5.0, 24, 28)
         soft_dice_energy(prediction, target).backward()
         self.assertTrue(bool(torch.isfinite(translation.grad).all()))
         self.assertGreater(float(translation.grad.norm()), 0)
@@ -83,9 +90,9 @@ class ObservationEnergyTests(unittest.TestCase):
                 [22.0, 12.0],
             ]
         )
-        target = render_worm(base, 4.0, 24, 24)["tube_mask"].detach()
+        target = _tube(base, 4.0, 24, 24).detach()
         shift = torch.tensor([0.2, -0.15], requires_grad=True)
-        prediction = render_worm(base + shift, 4.0, 24, 24)["tube_mask"]
+        prediction = _tube(base + shift, 4.0, 24, 24)
         soft_dice_energy(prediction, target).backward()
         self.assertTrue(bool(torch.isfinite(shift.grad).all()))
         self.assertGreater(float(shift.grad.norm()), 0)

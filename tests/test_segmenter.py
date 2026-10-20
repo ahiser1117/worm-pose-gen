@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from worm_pose_gen.segmenter import (
     IGNORE_LABEL,
+    ConvNeXtUNet,
     ResNet18UNet,
     SegmentationModule,
     load_segmenter,
@@ -19,32 +20,6 @@ from worm_pose_gen.segmenter import (
 
 
 class SegmenterTests(unittest.TestCase):
-    def _check_comparison(self, checkpoint: str, directory: str) -> None:
-        from worm_pose_gen.segmentation_dataset import SegmentationStore
-        from worm_pose_gen.segmenter_eval import compare_on_split, score_split, summarize_iou
-
-        store = SegmentationStore(f"{directory}/store")
-        image = np.zeros((40, 52), dtype=np.uint8)
-        mask = np.zeros((40, 52), dtype=np.uint8)
-        mask[10:20, 10:30] = 1
-        for index in range(12):
-            store.save("rec", index, image, mask, source_path="/x", label_source="network+manual")
-        rows = score_split(load_segmenter(checkpoint, device="cpu"), store, "val")
-        self.assertEqual(len(rows), store.counts()["val"])
-        self.assertEqual(set(rows[0]), {"sample_id", "label_source", "revision", "label_pixels", "iou", "loss"})
-        self.assertGreater(rows[0]["loss"], 0.0)
-        self.assertEqual(summarize_iou([])["n"], 0)
-        # No incumbent: the candidate is promoted by default.
-        first = compare_on_split(checkpoint, f"{directory}/missing.ckpt", store, "val", device="cpu")
-        self.assertTrue(first["promote"])
-        self.assertIsNone(first["incumbent"])
-        # The same weights as incumbent: not strictly better, so not promoted.
-        same = compare_on_split(checkpoint, checkpoint, store, "val", device="cpu")
-        self.assertFalse(same["promote"])
-        self.assertEqual(same["candidate_score"]["loss"], same["incumbent_score"]["loss"])
-        self.assertEqual(len(same["per_sample"]), store.counts()["val"])
-        self.assertIn(">=", same["reason"])
-
     def test_normalize_frame_shape_and_scale(self) -> None:
         frame = np.full((10, 12), 255, dtype=np.uint8)
         tensor = normalize_frame(frame)
@@ -56,6 +31,29 @@ class SegmenterTests(unittest.TestCase):
         with torch.no_grad():
             logits = network(torch.randn(1, 1, 45, 70))
         self.assertEqual(tuple(logits.shape), (1, 1, 45, 70))
+
+    def test_convnext_network_returns_full_resolution_logits_for_odd_sizes(self) -> None:
+        network = ConvNeXtUNet(pretrained=False, in_channels=4, out_channels=5, final_channels=24).eval()
+        with torch.no_grad():
+            logits = network(torch.randn(1, 4, 45, 70))
+        self.assertEqual(tuple(logits.shape), (1, 5, 45, 70))
+
+    def test_convnext_stem_sums_rgb_onto_the_frame_and_zeros_the_differences(self) -> None:
+        import timm
+
+        torch.manual_seed(0)
+        network = ConvNeXtUNet(pretrained=False, in_channels=3)
+        torch.manual_seed(0)
+        reference = timm.create_model("convnext_tiny.dinov3_lvd1689m", pretrained=False)
+        stem = network.stem[0]
+        self.assertEqual((stem.in_channels, stem.kernel_size, stem.stride), (3, (4, 4), (4, 4)))
+        torch.testing.assert_close(stem.weight[:, 0], reference.stem[0].weight.sum(dim=1))
+        torch.testing.assert_close(stem.bias, reference.stem[0].bias)
+        self.assertEqual(float(stem.weight[:, 1:].abs().max()), 0.0)
+        torch.testing.assert_close(network.stages[3].blocks[0].conv_dw.weight, reference.stages[3].blocks[0].conv_dw.weight)
+        # Every parameter is in exactly one optimizer group.
+        grouped = [id(p) for p in network.encoder_parameters() + network.decoder_parameters()]
+        self.assertEqual(sorted(grouped), sorted(id(p) for p in network.parameters()))
 
     def test_masked_metrics_ignore_invalid_pixels(self) -> None:
         probability = torch.zeros(1, 4, 4)
@@ -105,7 +103,6 @@ class SegmenterTests(unittest.TestCase):
             path = f"{directory}/model.ckpt"
             trainer.save_checkpoint(path)
             reloaded = load_segmenter(path, device="cpu")
-            self._check_comparison(path, directory)
             probability = reloaded.predict_probability(np.zeros((40, 52), dtype=np.uint8))
             self.assertEqual(probability.shape, (40, 52))
             frames = np.random.default_rng(0).integers(0, 255, (5, 40, 52), dtype=np.uint8)

@@ -1,0 +1,704 @@
+"""Body-field targets of one labeled frame (:func:`fit_targets`), and the records of the old segmentation store.
+
+The library's target cache (:mod:`library.targets`) builds each label's
+targets with :func:`fit_targets`.  The rest of this module is the old
+store's record format, which ``scripts/migrate_to_library.py`` reads the
+human body fields from and ``scripts/build_body_fields.py`` and
+``scripts/evaluate_field_fitting.py`` still build and read.
+
+For each hand-labeled frame ``<root>/body_fields/<sample_id>.npz`` holds:
+
+``context`` / ``context_valid``
+    the flat-fielded frames ``t - max_lag .. t + max_lag`` from the source
+    recording (:func:`temporal_context.read_context`); the centre frame is
+    checked against the stored sample image.
+``centerline_xy`` / ``width_profile`` / ``fit_iou``
+    the tube fitted to the hand mask with the ``reference`` schedule and every
+    standard start, oriented head first.  A single-frame fit cannot find a
+    coiled or self-touching body (the starts have the wrong topology), so a
+    frame fitting below :data:`CHAIN_IOU` or touching itself is also fitted
+    by a chain (:func:`chain_fit`): from the nearest clear context frame on
+    each side, frame by frame toward it, as the head-tracked fit does.  The
+    better of the fits is kept; ``fit_method`` is ``independent`` or
+    ``chain``, with ``chain_anchor_offset`` and ``independent_fit_iou``.
+``ap`` / ``overlap`` / ``head_xy`` / ``tail_xy`` / ``diameter_px``
+    the targets rendered from that tube (:mod:`body_targets`).
+``orientation``
+    how the head was chosen: ``nose`` (acquisition nose landmark on this
+    frame), ``nose_nearby`` (the nearest valid landmark within the context;
+    ``nose_offset`` says which frame), ``taper`` (no landmark; the thinner
+    end is the tail), or ``manual`` (flipped by hand in the old Body fields
+    screen).
+    ``orientation_margin`` is ``(d_tail - d_head) / diameter`` for the nose
+    cases.
+
+``meta`` is a JSON string.  Besides the build fields it may hold ``review``
+(:data:`REVIEW_STATES`; absent means ``unreviewed``) and ``reviewed_at``
+(UTC ISO), written by the old Body fields screen.  A rejected sample trains the mask
+only.  The record is *stale* when the store's mask revision differs from
+``meta["mask_revision"]``: the mask was edited after the targets were built,
+and :func:`build` must refit it.  Building replaces the whole record, so a
+rebuild starts unreviewed and re-derives the orientation.
+
+A frame whose label holds no worm stores the context only (``has_body``
+false).  Every write goes to a temporary file that replaces the record, so a
+reader never sees a partial file; edits hold ``body_fields/.lock`` across
+their read-modify-write.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import replace
+import fcntl
+import json
+import os
+from pathlib import Path
+from typing import Any, Callable, Iterator, Sequence
+
+import numpy as np
+from numpy.typing import NDArray
+from PIL import Image
+import torch
+
+from .batch_fit import PRESETS, BatchFitConfig, fit_masks
+from .body_targets import render_body_targets, self_contact
+from .classical import resample_centerline
+from .head_fit import HeadConstraint
+from .head_tracking import HeadTracking, read_head_tracking
+from .recordings import RecordingSource
+from .mask_fit import (
+    MaskFitResult, decode_centerline, default_width_template, hard_iou, init_from_centerline, orient_tail_last,
+    reverse_initialization, reverse_result,
+)
+from .pipeline import initializations_for
+from .pose_run import clean_mask, render_tube
+from .propagation import warm_initialization, warm_schedule
+from .segmenter import SegmentationModule
+from .segmentation_dataset import SampleRecord, SegmentationStore
+from .temporal_context import MAX_LAG, read_context
+from .workspace import utc_now
+
+
+FloatArray = NDArray[np.float64]
+
+FIELDS_DIR = "body_fields"
+REVIEW_DIR = "review"
+FIT_PRESET = "reference"
+# The fitter's default length bounds once ended at 750 px and cut off the
+# longest animals (in 2023-08-22-01 most whole-body fits sat at 751 px with
+# their tails short).  Targets must follow the label, so the bound here only
+# rules out absurd fits.
+FIT_LENGTH_BOUNDS_PX = (250.0, 1000.0)
+
+
+def fit_config() -> BatchFitConfig:
+    """The schedule body-field fits use: the reference preset with wider length bounds."""
+
+    return replace(PRESETS[FIT_PRESET], length_bounds_px=FIT_LENGTH_BOUNDS_PX)
+REVIEW_STATES = ("unreviewed", "accepted", "rejected")
+
+
+def fields_dir(root: str | Path) -> Path:
+    return Path(root) / FIELDS_DIR
+
+
+def field_path(root: str | Path, sample_id: str) -> Path:
+    return fields_dir(root) / f"{sample_id}.npz"
+
+
+def read_meta(path: Path) -> dict[str, Any]:
+    with np.load(path) as archive:
+        return json.loads(str(archive["meta"]))
+
+
+def load(path: Path, names: Sequence[str] | None = None) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """The arrays of a record (all of them, or only ``names`` that it has) and its meta."""
+
+    with np.load(path) as archive:
+        wanted = [n for n in archive.files if n != "meta" and (names is None or n in names)]
+        arrays = {name: np.asarray(archive[name]) for name in wanted}
+        meta = json.loads(str(archive["meta"]))
+    return arrays, meta
+
+
+def save(path: Path, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+    """Write a record atomically: a temporary file in the same directory replaces ``path``."""
+
+    temporary = path.with_suffix(".npz.partial")
+    with open(temporary, "wb") as handle:
+        np.savez_compressed(handle, meta=json.dumps(meta), **arrays)
+    os.replace(temporary, path)
+
+
+@contextmanager
+def locked(root: str | Path) -> Iterator[None]:
+    directory = fields_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def review_status(meta: dict[str, Any]) -> str:
+    return str(meta.get("review", "unreviewed"))
+
+
+def is_stale(meta: dict[str, Any], record: SampleRecord) -> bool:
+    """Whether the hand mask changed after these targets were built."""
+
+    return meta.get("mask_revision") != record.revision
+
+
+def is_current(path: Path, revision: int, max_lag: int) -> bool:
+    if not path.exists():
+        return False
+    meta = read_meta(path)
+    return meta.get("mask_revision") == revision and meta.get("max_lag") == max_lag
+
+
+# --------------------------------------------------------------------------- build
+
+
+def choose_nose(nose_xy: np.ndarray, nose_valid: np.ndarray, max_lag: int) -> tuple[np.ndarray | None, int | None]:
+    """The landmark of the centre frame, else the valid one nearest in time."""
+
+    for distance in range(max_lag + 1):
+        for offset in ((0,) if distance == 0 else (-distance, distance)):
+            if nose_valid[max_lag + offset]:
+                return nose_xy[max_lag + offset], offset
+    return None, None
+
+
+def body_box(mask: NDArray[np.bool_], pad: int = 40) -> tuple[int, int, int, int]:
+    """``(x0, x1, y0, y1)`` around the mask, padded and clipped to the image."""
+
+    yy, xx = np.nonzero(mask)
+    return (max(0, xx.min() - pad), min(mask.shape[1], xx.max() + pad + 1),
+            max(0, yy.min() - pad), min(mask.shape[0], yy.max() + pad + 1))
+
+
+def review_image(image: np.ndarray, ap: np.ndarray, overlap: np.ndarray, head: np.ndarray, tail: np.ndarray, box: tuple[int, int, int, int]) -> Image.Image:
+    """A-P coloured over the frame, overlap in white, head green, tail red; cropped to ``box`` and doubled."""
+
+    import matplotlib
+
+    rgb = np.repeat(image[..., None], 3, axis=2).astype(np.float32) / 255.0
+    body = np.isfinite(ap)
+    colours = matplotlib.colormaps["viridis"](np.nan_to_num(ap))[..., :3]
+    rgb[body] = 0.35 * rgb[body] + 0.65 * colours[body]
+    rgb[overlap] = 1.0
+    for point, colour in ((head, (0.0, 1.0, 0.0)), (tail, (1.0, 0.0, 0.0))):
+        if not np.all(np.isfinite(point)):
+            continue  # an end off camera has no marker
+        x, y = int(round(point[0])), int(round(point[1]))
+        if not (0 <= x < rgb.shape[1] and 0 <= y < rgb.shape[0]):
+            continue  # an end off camera has no marker
+        y0, y1, x0, x1 = max(0, y - 3), min(rgb.shape[0], y + 4), max(0, x - 3), min(rgb.shape[1], x + 4)
+        rgb[y0:y1, x0:x1] = colour
+    x0, x1, y0, y1 = box
+    crop = rgb[y0:y1, x0:x1]
+    picture = Image.fromarray((np.clip(crop, 0, 1) * 255).astype(np.uint8))
+    return picture.resize((picture.width * 2, picture.height * 2), Image.NEAREST)
+
+
+CHAIN_IOU = 0.93
+# A context frame anchors a chain when its independent fit is this good and untangled.
+ANCHOR_IOU = 0.93
+MIN_WORM_PIXELS = 500
+# The head-tracked fit's defaults (algorithms.HeadTrackedFit).
+CHAIN_TRACKING_WEIGHT = 0.2
+CHAIN_PREVIOUS_HEAD_WEIGHT = 0.5
+CHAIN_HEAD_SIGMA_PX = 6.0
+CHAIN_MAX_HEAD_STEP_PX = 8.0
+CHAIN_PREVIOUS_POSE_WEIGHT = 0.005
+
+
+def _nose_first(result: MaskFitResult, nose: NDArray[np.generic], config: BatchFitConfig) -> MaskFitResult:
+    if np.linalg.norm(result.centerline_xy[-1] - nose) < np.linalg.norm(result.centerline_xy[0] - nose):
+        return reverse_result(result, config=config)
+    return result
+
+
+def chain_fit(
+    centre_mask: NDArray[np.bool_],
+    context: NDArray[np.uint8],
+    valid: NDArray[np.bool_],
+    tracking: HeadTracking,
+    segmenter: SegmentationModule,
+    *,
+    config: BatchFitConfig,
+    template: NDArray[np.generic],
+    device: torch.device,
+) -> tuple[MaskFitResult, int] | None:
+    """Fit the centre frame by tracking the body in from the nearest clear context frame.
+
+    The context frames are segmented, fitted independently (fast schedule,
+    starts oriented to that frame's nose), and the nearest frame on each side
+    that fits at :data:`ANCHOR_IOU` without touching itself anchors a chain.
+    Each step starts from the previous pose under the head-tracked fit's
+    penalties (nose, previous head, bounded head step, weak pull toward the
+    previous pose); the last step fits ``centre_mask``.  Returns the better
+    centre fit of the two sides and its anchor offset, or ``None`` when
+    neither side has an anchor.
+    """
+
+    centre = len(context) // 2
+    probability = segmenter.predict_probability_batch(context, batch_size=8)
+    masks = [clean_mask(p, 0.5, 2, device, fill_holes=False)[0] for p in probability]
+    masks[centre] = centre_mask
+    usable = [
+        k for k in range(len(context))
+        if k != centre and valid[k] and tracking.valid[k] and masks[k].sum() >= MIN_WORM_PIXELS
+    ]
+    if not usable:
+        return None
+    fast = replace(PRESETS["fast"], length_bounds_px=FIT_LENGTH_BOUNDS_PX)
+
+    def oriented(start, nose):
+        curve = decode_centerline(start.latent, config.coefficients)
+        return reverse_initialization(start, config=config) if np.linalg.norm(curve[-1] - nose) < np.linalg.norm(curve[0] - nose) else start
+
+    independent = fit_masks(
+        [masks[k] for k in usable],
+        [[oriented(s, tracking.xy[k]) for s in initializations_for(masks[k], config)] for k in usable],
+        width_template=template, config=fast, device=device,
+    )
+    anchors = [
+        k for k, r in zip(usable, independent, strict=True)
+        if r.records[r.best_index]["final_iou"] >= ANCHOR_IOU and not self_contact(r.centerline_xy, r.width_profile)
+    ]
+    fits = {k: _nose_first(r, tracking.xy[k], config) for k, r in zip(usable, independent, strict=True)}
+    warm = warm_schedule(config)
+    best: tuple[MaskFitResult, int] | None = None
+    for side in (-1, 1):
+        candidates = [k for k in anchors if (k - centre) * side > 0]
+        if not candidates:
+            continue
+        anchor = min(candidates, key=lambda k: abs(k - centre))
+        previous, previous_k = fits[anchor], anchor
+        path = [k for k in range(anchor - side, centre, -side) if valid[k] and masks[k].sum() >= MIN_WORM_PIXELS] + [centre]
+        for k in path:
+            step_config = replace(
+                warm, temporal_prior_weight=CHAIN_PREVIOUS_POSE_WEIGHT,
+                temporal_prior_sigma_px=max(1.0, 0.5 * previous.width_px), length_prior_px=previous.body_length_px,
+            )
+            head = HeadConstraint(
+                tracking_xy=tracking.xy[k] if tracking.valid[k] else None, previous_xy=previous.centerline_xy[0],
+                tracking_weight=CHAIN_TRACKING_WEIGHT, previous_weight=CHAIN_PREVIOUS_HEAD_WEIGHT,
+                sigma_px=CHAIN_HEAD_SIGMA_PX, max_step_px=CHAIN_MAX_HEAD_STEP_PX * abs(k - previous_k),
+            )
+            start = warm_initialization(previous.latent, previous.width_px, previous.width_shape, "previous_pose")
+            previous = fit_masks(
+                [masks[k]], [[start]], width_template=template, config=step_config, device=device,
+                references=[previous.centerline_xy], head_constraints=[head],
+            )[0]
+            previous_k = k
+        if best is None or previous.records[previous.best_index]["final_iou"] > best[0].records[best[0].best_index]["final_iou"]:
+            best = (previous, anchor - centre)
+    return best
+
+
+# A traced midline: the clicked points, head first, become the start and a
+# per-point pull of the fit, and its first and last clicks the body's ends
+# (:func:`trace_fit`).  Asked to, a trace ending within TRACE_BORDER_PX of the
+# border or past it continues off camera (:func:`extend_trace`).
+TRACE_BORDER_PX = 8.0
+TRACE_SIGMA_WIDTHS = 0.5
+TRACE_POSE_WEIGHT = 0.02
+TRACE_END_WEIGHT = 0.2
+TRACE_END_SIGMA_PX = 6.0
+# Non-interpenetration for trace fits (``MaskFitConfig.separation_*``): on 25
+# traced records, weight 1 at full separation cut the median overlap from 263
+# to 99 px (mean 438 to 116) for 0.002 median IoU; weight 5 cost up to 0.06.
+TRACE_SEPARATION_WEIGHT = 1.0
+TRACE_SEPARATION_FRACTION = 1.0
+
+
+def extend_trace(trace_xy: NDArray[np.generic], image_shape: tuple[int, int], length_px: float | None) -> FloatArray:
+    """The trace, continued straight to ``length_px`` when its last point is within ``TRACE_BORDER_PX`` of the border or past it.
+
+    For a body whose tail is far off camera: the person traces to where the
+    body leaves the view (or a little past it) and the recording's typical
+    length sets how far it goes on.  Unchanged without a length, or when the
+    trace is already that long.
+    """
+
+    points = np.asarray(trace_xy, dtype=np.float64)
+    height, width = image_shape
+    end = points[-1]
+    at_border = min(end[0], end[1], width - 1 - end[0], height - 1 - end[1]) <= TRACE_BORDER_PX
+    length = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+    if not at_border or length_px is None or length_px <= length:
+        return points
+    direction = points[-1] - points[-2]
+    direction /= max(float(np.linalg.norm(direction)), 1e-9)
+    return np.vstack((points, end + direction * (length_px - length)))
+
+
+def trace_fit(
+    mask: NDArray[np.bool_],
+    trace_xy: NDArray[np.generic],
+    *,
+    config: BatchFitConfig,
+    template: NDArray[np.generic],
+    device: torch.device,
+    as_drawn: bool = False,
+    extend_to_px: float | None = None,
+) -> tuple[FloatArray, FloatArray, float]:
+    """Centerline, width profile, and mask IoU of the body along a traced midline.
+
+    The trace (head first) is the body from end to end: its first click is
+    the head and its last the tail, in view or off camera, so a trace that
+    stops at the border ends the body there (the targets then treat it as
+    cut off by the camera, :func:`mark_exits`).  With ``extend_to_px`` (the
+    recording's typical body length, when the person asked for it) a trace
+    ending at or past the border continues off camera to that length
+    (:func:`extend_trace`); the continuation is a guess, so the tail is then
+    free and only the length and the spread of points along the body follow
+    from it.  By default the tube starts
+    on the trace and is fit to ``mask`` while each point is pulled toward
+    the trace at half a body width and both ends toward their clicks, so the
+    fit keeps the traced route through a crossing, puts the ends where the
+    person did, and finds the body's edges and width itself.  The length
+    bounds do not apply, since the trace sets the length.  ``as_drawn``
+    keeps the trace as the midline, with a template width scaled to the mask.
+    """
+
+    points = np.asarray(trace_xy, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
+        raise ValueError("a trace needs at least two (x, y) points")
+    clicked = len(points)
+    points = extend_trace(points, mask.shape, extend_to_px)
+    start = init_from_centerline(points, mask, name="trace", config=config)
+    reference = resample_centerline(points, config.n_points)
+    if as_drawn:
+        profile = template * start.width_px
+        tube = render_tube(reference, profile, *mask.shape, device=device)
+        return reference, profile, hard_iou(tube, mask)
+    # The trace sets the length; no bound may shorten it.
+    traced_config = replace(
+        config, length_bounds_px=None, separation_weight=TRACE_SEPARATION_WEIGHT,
+        separation_fraction=TRACE_SEPARATION_FRACTION, temporal_prior_weight=TRACE_POSE_WEIGHT,
+        temporal_prior_sigma_px=max(1.0, TRACE_SIGMA_WIDTHS * start.width_px),
+    )
+    height, width = mask.shape
+    head_in_view = bool(0 <= points[0, 0] <= width - 1 and 0 <= points[0, 1] <= height - 1)
+    ends = HeadConstraint(
+        tracking_xy=points[0], tail_xy=points[-1] if len(points) == clicked else None, tracking_weight=TRACE_END_WEIGHT,
+        previous_weight=0.0, sigma_px=TRACE_END_SIGMA_PX, keep_in_frame=head_in_view,
+    )
+    result = fit_masks(
+        [mask], [[start]], width_template=template, config=traced_config, device=device,
+        references=[reference], head_constraints=[ends],
+    )[0]
+    return result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"])
+
+
+TRACE_METHODS = ("traced", "trace_as_drawn")
+# Whole bodies this well fit set a recording's typical length (for traces that leave the camera).
+LENGTH_REFERENCE_IOU = 0.95
+
+
+def _inside(points: NDArray[np.generic], shape: tuple[int, int]) -> bool:
+    height, width = shape
+    return bool(np.all((points[:, 0] >= 0) & (points[:, 0] <= width - 1) & (points[:, 1] >= 0) & (points[:, 1] <= height - 1)))
+
+
+def recording_length(store: SegmentationStore, record: SampleRecord) -> float | None:
+    """Median length of the whole, well-fit, automatically fitted bodies from the same recording file.
+
+    Records count when their fit covers the mask well (fit IoU at least
+    ``LENGTH_REFERENCE_IOU``), the whole body is in view, and the record is
+    current.  Recordings are matched by file name, since the store holds
+    labels of one recording under more than one path and recording id.
+    ``None`` without any such record.
+    """
+
+    name = Path(record.source_path).name
+    lengths = []
+    for other in store.records():
+        path = field_path(store.root, other.sample_id)
+        if Path(other.source_path).name != name or not path.exists():
+            continue
+        arrays, meta = load(path, ("centerline_xy",))
+        if (not meta.get("has_body") or meta.get("fit_iou", 0.0) < LENGTH_REFERENCE_IOU
+                or meta.get("fit_method") in TRACE_METHODS or is_stale(meta, other)):
+            continue
+        curve = arrays["centerline_xy"]
+        if _inside(curve, (other.image_height, other.image_width)):
+            lengths.append(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()))
+    return float(np.median(lengths)) if lengths else None
+
+
+def _set_body(
+    meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_],
+    centerline: NDArray[np.generic], width_profile: NDArray[np.generic], fit_iou: float,
+) -> Any:
+    """Render the targets of a head-first tube into the record; returns them."""
+
+    targets = render_body_targets(mask, centerline, width_profile)
+    meta["fit_iou"] = float(fit_iou)
+    meta["overlap_px"] = int(targets.overlap.sum())
+    arrays.update(
+        centerline_xy=np.asarray(centerline, dtype=np.float64), width_profile=np.asarray(width_profile, dtype=np.float64),
+        ap=targets.ap.astype(np.float16), overlap=targets.overlap,
+        head_xy=targets.head_xy, tail_xy=targets.tail_xy, diameter_px=np.float64(targets.diameter_px),
+    )
+    if "nose_xy" in arrays:
+        d_head = float(np.linalg.norm(targets.head_xy - arrays["nose_xy"]))
+        d_tail = float(np.linalg.norm(targets.tail_xy - arrays["nose_xy"]))
+        meta["orientation_margin"] = (d_tail - d_head) / targets.diameter_px
+    return targets
+
+
+# An end of a fit within this many body widths of mask pixels on the image
+# edge stops where the camera cuts the body off, not at the animal's end.
+EXIT_REACH_WIDTHS = 1.0
+
+
+def camera_exits(mask: NDArray[np.bool_], centerline: NDArray[np.generic], width_profile: NDArray[np.generic]) -> tuple[bool, bool]:
+    """Whether the head end and the tail end of a fit are where the body leaves the camera.
+
+    The fitter, given only the visible mask, ends a body that leaves the
+    camera at the image edge: stopping and continuing off camera cost about
+    the same.  An end inside the image within ``EXIT_REACH_WIDTHS`` median
+    widths of a mask pixel on the image border is such a cut.  An end already
+    off camera is not a cut (the fit continued the body).
+    """
+
+    height, width = mask.shape
+    ring = np.zeros_like(mask)
+    ring[[0, -1], :] = True
+    ring[:, [0, -1]] = True
+    edge = np.argwhere(mask & ring)[:, ::-1].astype(np.float64)  # (x, y)
+    if not len(edge):
+        return False, False
+    reach = EXIT_REACH_WIDTHS * float(np.median(width_profile))
+    curve = np.asarray(centerline, dtype=np.float64)
+
+    def cut(point: NDArray[np.float64]) -> bool:
+        inside = 0 <= point[0] <= width - 1 and 0 <= point[1] <= height - 1
+        return inside and float(np.min(np.linalg.norm(edge - point, axis=1))) <= reach
+
+    return cut(curve[0]), cut(curve[-1])
+
+
+def mark_exits(meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], length_px: float | None) -> bool:
+    """Make the targets of a fit cut off by the camera describe the whole animal; returns whether it was.
+
+    A cut end has no end in view: its point becomes NaN, which the network
+    trains as an all-zero heatmap (no head or tail in this frame).  With the
+    recording's length longer than the visible fit, the A-P field is
+    rescaled so the visible body covers only its share of the animal, the
+    missing share at the cut end (split between both when both are cut).
+    """
+
+    head_cut, tail_cut = camera_exits(mask, arrays["centerline_xy"], arrays["width_profile"])
+    meta["head_off_camera"], meta["tail_off_camera"] = head_cut, tail_cut
+    if not (head_cut or tail_cut):
+        return False
+    visible = float(np.linalg.norm(np.diff(arrays["centerline_xy"], axis=0), axis=1).sum())
+    share = min(1.0, visible / length_px) if length_px else 1.0
+    offset = (1.0 - share) * (0.5 if head_cut and tail_cut else 1.0 if head_cut else 0.0)
+    ap = arrays["ap"].astype(np.float32)
+    arrays["ap"] = (offset + share * ap).astype(np.float16)
+    meta["visible_share"] = share
+    if head_cut:
+        arrays["head_xy"] = np.full(2, np.nan)
+    if tail_cut:
+        arrays["tail_xy"] = np.full(2, np.nan)
+    return True
+
+
+def _traced_body(
+    meta: dict[str, Any], arrays: dict[str, np.ndarray], mask: NDArray[np.bool_], trace_xy: NDArray[np.generic],
+    *, as_drawn: bool, extend_to_px: float | None, config: BatchFitConfig, template: NDArray[np.generic], device: torch.device,
+) -> Any:
+    centerline, profile, iou = trace_fit(
+        mask, trace_xy, config=config, template=template, device=device, as_drawn=as_drawn, extend_to_px=extend_to_px,
+    )
+    meta.update(
+        fit_method="trace_as_drawn" if as_drawn else "traced", orientation="manual",
+    )
+    arrays["trace_xy"] = np.asarray(trace_xy, dtype=np.float64)
+    return _set_body(meta, arrays, mask, centerline, profile, iou)
+
+
+def fit_targets(
+    mask: NDArray[np.bool_],
+    context: NDArray[np.uint8],
+    valid: NDArray[np.bool_],
+    tracking: HeadTracking,
+    *,
+    config: BatchFitConfig,
+    template: NDArray[np.generic],
+    device: torch.device,
+    length_px: Callable[[], float | None],
+    independent: MaskFitResult | None = None,
+    trace: tuple[NDArray[np.generic], bool, float | None] | None = None,
+    head_xy: NDArray[np.generic] | None = None,
+    segmenter: SegmentationModule | None = None,
+) -> tuple[dict[str, Any], dict[str, np.ndarray], Any]:
+    """The body-field targets of one labeled frame from its hand mask, context frames and nose landmarks.
+
+    The body is, in order: the refit along a traced midline (``trace``: the
+    points, head first, whether to keep them as drawn, and the body length
+    to extend them off camera to or ``None``, :func:`trace_fit`); else the
+    independent fit (``independent``, fitted here when not given) or, for a
+    tangled frame when a ``segmenter`` is given, the chain fit when it is
+    better.  An untraced body's head is the end nearest ``head_xy`` (a
+    person's choice: orientation ``manual``), else the acquisition nose
+    (``nose``, ``nose_nearby``), else the thinner end is the tail
+    (``taper``).  ``length_px`` gives the recording's typical body length,
+    which :func:`mark_exits` reads for a body the camera cuts off.
+
+    Returns the meta (build fields only, no store keys), the target arrays
+    (no context), and the rendered targets, or ``None`` for a label without
+    a worm (``has_body`` false).
+    """
+
+    meta: dict[str, Any] = {"has_body": False}
+    arrays: dict[str, np.ndarray] = {}
+    if not mask.any():
+        return meta, arrays, None
+    max_lag = len(context) // 2
+    nose, offset = choose_nose(tracking.xy, tracking.valid, max_lag)
+    if nose is not None:
+        arrays["nose_xy"] = np.asarray(nose, dtype=np.float64)
+        meta["nose_offset"] = offset
+    if trace is not None:
+        points, as_drawn, extend_to_px = trace
+        targets = _traced_body(
+            meta, arrays, mask, points, as_drawn=as_drawn, extend_to_px=extend_to_px, config=config, template=template, device=device,
+        )
+        # A trace that stops where the body leaves the view is cut off by the camera like any fit.
+        if mark_exits(meta, arrays, mask, length_px()):
+            targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
+        meta["has_body"] = True
+        return meta, arrays, targets
+    result = independent if independent is not None else fit_masks(
+        [mask], [initializations_for(mask, config)], width_template=template, config=config, device=device,
+    )[0]
+    meta["fit_method"] = "independent"
+    independent_iou = float(result.records[result.best_index]["final_iou"])
+    tangled = independent_iou < CHAIN_IOU or self_contact(result.centerline_xy, result.width_profile)
+    if segmenter is not None and tangled:
+        chained = chain_fit(mask, context, valid, tracking, segmenter, config=config, template=template, device=device)
+        if chained is not None and chained[0].records[chained[0].best_index]["final_iou"] > independent_iou:
+            result = chained[0]
+            meta.update(fit_method="chain", chain_anchor_offset=chained[1], independent_fit_iou=independent_iou)
+    if head_xy is not None:
+        result = _nose_first(result, np.asarray(head_xy, dtype=np.float64), config)
+        meta["orientation"] = "manual"
+    elif nose is not None:
+        result = _nose_first(result, nose, config)
+        meta["orientation"] = "nose" if offset == 0 else "nose_nearby"
+    else:
+        result, _ = orient_tail_last(result, config=config)
+        meta["orientation"] = "taper"
+    targets = _set_body(
+        meta, arrays, mask, result.centerline_xy, result.width_profile, float(result.records[result.best_index]["final_iou"]),
+    )
+    if mark_exits(meta, arrays, mask, length_px()):
+        targets = replace(targets, ap=arrays["ap"].astype(np.float32), head_xy=arrays["head_xy"], tail_xy=arrays["tail_xy"])
+    meta["has_body"] = True
+    return meta, arrays, targets
+
+
+def build(
+    store: SegmentationStore,
+    records: Sequence[SampleRecord],
+    *,
+    max_lag: int = MAX_LAG,
+    device: Any = None,
+    review: bool = False,
+    segmenter: SegmentationModule | None = None,
+    on_built: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, int]:
+    """Build the records of ``records`` (all of them; skipping current ones is the caller's choice).
+
+    Frames are read and fitted per source recording, so each recording opens
+    once and its independent fits run as one batch (:func:`fit_targets` does
+    the rest of each record).  Without ``segmenter`` no chain fits are tried.
+    ``on_built`` receives each written meta.  Returns how many samples took
+    each orientation (``traced`` for refits along a stored trace, ``no_body``
+    for empty labels).
+    """
+
+    device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
+    config = fit_config()
+    template = default_width_template(config.n_points)
+    out_dir = fields_dir(store.root)
+    review_dir = out_dir / REVIEW_DIR
+    out_dir.mkdir(exist_ok=True)
+    if review:
+        review_dir.mkdir(exist_ok=True)
+
+    by_source: dict[str, list[SampleRecord]] = defaultdict(list)
+    for record in records:
+        by_source[record.source_path].append(record)
+    summary: dict[str, int] = defaultdict(int)
+    for source_path, group in sorted(by_source.items()):
+        source = RecordingSource(Path(source_path), store.root / "flat_fields")
+        try:
+            pending = []
+            for record in group:
+                image, label, _ = store.load(record.sample_id)
+                context, valid = read_context(source, record.frame_index, max_lag)
+                if not np.array_equal(context[max_lag], image):
+                    raise RuntimeError(f"{record.sample_id}: recording frame differs from the stored sample image")
+                frames = np.clip(np.arange(-max_lag, max_lag + 1) + record.frame_index, 0, source.frame_count - 1)
+                tracking = read_head_tracking(source_path, frames, image.shape)
+                pending.append((record, image, label == 1, context, valid, tracking))
+        finally:
+            source.close()
+
+        # A stored trace is a human correction: the rebuild refits along it.
+        traces: dict[str, tuple[np.ndarray, bool]] = {}
+        for record, *_ in pending:
+            path = field_path(store.root, record.sample_id)
+            if path.exists():
+                previous, previous_meta = load(path, ("trace_xy",))
+                if "trace_xy" in previous and previous_meta.get("fit_method") in TRACE_METHODS:
+                    traces[record.sample_id] = (previous["trace_xy"], previous_meta["fit_method"] == "trace_as_drawn", None)
+        bodies = [p for p in pending if p[2].any() and p[0].sample_id not in traces]
+        results = fit_masks(
+            [p[2] for p in bodies],
+            [initializations_for(p[2], config) for p in bodies],
+            width_template=template, config=config, device=device,
+        ) if bodies else []
+        fitted = {p[0].sample_id: r for p, r in zip(bodies, results, strict=True)}
+
+        for record, image, mask, context, valid, tracking in pending:
+            trace = traces.get(record.sample_id)
+            built, arrays, targets = fit_targets(
+                mask, context, valid, tracking, config=config, template=template, device=device,
+                length_px=lambda record=record: recording_length(store, record),
+                independent=fitted.get(record.sample_id), trace=trace, segmenter=segmenter,
+            )
+            meta: dict[str, Any] = {
+                "sample_id": record.sample_id, "mask_revision": record.revision, "max_lag": max_lag,
+                "fit_preset": FIT_PRESET, **built,
+            }
+            arrays = {"context": context, "context_valid": valid, **arrays}
+            if targets is None:
+                summary["no_body"] += 1
+            elif trace is not None:
+                meta.update(review="accepted", reviewed_at=utc_now())
+                summary["traced"] += 1
+            else:
+                summary[meta["orientation"]] += 1
+            if review and targets is not None:
+                review_image(image, targets.ap, targets.overlap, targets.head_xy, targets.tail_xy, body_box(mask)).save(
+                    review_dir / f"{record.sample_id}.png"
+                )
+            with locked(store.root):
+                save(field_path(store.root, record.sample_id), meta, arrays)
+            if on_built is not None:
+                on_built(meta)
+    return dict(summary)

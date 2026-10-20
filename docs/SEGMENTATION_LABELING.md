@@ -1,18 +1,22 @@
 # Learned segmentation: bootstrap, label, fine-tune, repeat
 
-The mask fit in [`MASK_FIT_EXPERIMENT.md`](MASK_FIT_EXPERIMENT.md) made the
+The mask fit (`MASK_FIT_EXPERIMENT.md`, in the git history) made the
 segmentation mask the only evidence for the pose, so mask defects (clipped
 thin tails, debris fused to the body, interior texture) now show up directly
 as pose errors. This document describes the loop that replaces the
 local-darkness threshold with a small fine-tuned network, and the tooling
 that keeps labeling throughput high.
 
-The loop is:
+The loop was:
 
 `bootstrap labels from the pipeline -> train -> label with the network proposing -> retrain from the last checkpoint -> ...`
 
-Everything lives in this repository. Labels live on flv-c4's local disk.
-Checkpoints live in a git-ignored local directory.
+Labels and models now live in the library (lab and personal, see the
+docs/DEVELOPER.md's "Libraries" and [`APP_SIMPLIFICATION.md`](APP_SIMPLIFICATION.md),
+section 1): labels are made on the pose app's Labeling page, and models are
+trained and evaluated on the Training page or with `scripts/train.py` and
+`scripts/evaluate_model.py`. Sections 2 to 7 describe how the first labels
+and models were made, with the old store and scripts.
 
 ## 1. Model
 
@@ -36,6 +40,8 @@ bootstrapped labels be honest about what they do not know.
 
 ## 2. Dataset store
 
+The old store (migrated into the lab dataset `nir-labels` by
+`scripts/migrate_to_library.py`, which reads it directly):
 `src/worm_pose_gen/segmentation_dataset.py` keeps one `.npz` per labeled
 frame under the dataset root (default
 `/temp_data4/alex/external_artifacts/datasets/worm_pose_gen/segmentation_v1`
@@ -55,7 +61,8 @@ enters the training set. New pledges are balanced against every pledge ever
 made, not just the samples present. All frames come from the same
 recordings, so the test split measures generalization across frames, not
 across recordings; a held-out recording is the stronger test when more
-recordings become readable.
+recordings become readable. The library assigns splits per recording
+instead, for that reason.
 
 `SegmentationDataModule` serves training crops (`512 px`, half of them
 centered on the worm) with flips, right-angle rotations, brightness and
@@ -63,12 +70,10 @@ contrast jitter, and noise, and serves validation and test frames whole.
 
 ## 3. Bootstrap labels
 
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/bootstrap_segmentation_labels.py --frames-per-recording 40
-```
-
-For uniformly spaced frames of each readable recording, the script
+The first labels were bootstrapped from the pipeline by
+`scripts/bootstrap_segmentation_labels.py` (removed with the bootstrap
+labels, see round 2). For uniformly spaced frames of each readable
+recording, the script
 flat-fields the frame, runs the frozen local-darkness threshold, keeps the
 largest component, fills narrow holes, and then marks as **ignore** every
 pixel the evidence disagrees about: a two-pixel band around the boundary and
@@ -84,87 +89,28 @@ skipped, in about `0.3 s` per frame.
 
 ## 4. Train and evaluate
 
+Training and evaluation now read the library's datasets and benchmarks
+(docs/APP_SIMPLIFICATION.md, sections 1 and 4); this store was migrated into
+the lab dataset `nir-labels`:
+
 ```bash
-scripts/project_env.sh uv run --no-sync --frozen python scripts/train_segmenter.py --name hand_labels
-scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_segmenter.py
-scripts/project_env.sh uv run --no-sync --frozen python scripts/plot_segmenter_history.py
+scripts/project_env.sh uv run --no-sync --frozen python scripts/train.py \
+  --setup lab:nir-flv --dataset lab:nir-labels --start-from lab:nir-hand284
+scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_model.py --model lab:nir-hand284
 ```
 
-Each training run gets its own directory under `checkpoints/segmenter/runs/`,
-named by start time and `--name`, holding `best.ckpt` (lowest validation
-loss), `last.ckpt` (final epoch), `metrics.csv` (per-epoch curves), and
-`run.json`: arguments, git revision, the fingerprint of the checkpoint it
-started from, the exact train, validation, and test membership (sample id,
-label source, revision, save time), the checkpoint fingerprints, epochs run,
-and the final metrics. The directory is git-ignored. Mixed precision and a
-test pass with the best checkpoint are on by default.
-
-A run ends when the validation loss (masked BCE plus soft Dice) has not
-improved for `--patience 5` epochs, and the learning rate halves whenever
-the loss stalls for `--plateau-patience 2` epochs, so the stop means the
-model has converged rather than that a schedule tied to an epoch cap ran
-out (`--epochs 300` is only a cap). Checkpoint selection uses the same
+The stopping rule below is unchanged: a run ends when the validation loss
+(masked BCE plus soft Dice) has not improved for `--patience` epochs (5 for
+the segmenter), the learning rate halves whenever the loss stalls for
+`--plateau-patience` epochs, and the model is the checkpoint with the lowest
 validation loss, not the thresholded IoU: IoU saturates within ten epochs
 while the loss keeps falling, and runs selected on IoU produced models whose
-background probability sat near `0.3`. The masks at threshold `0.5` were
-fine, but nearly every pixel fell in the app's uncertain band. Selecting on
-loss picks a calibrated model with the same or better masks.
-
-`--train-labels manual|bootstrap|all` picks the training labels, hand-refined
-by default; validation and test always use every label they hold. Without
-`--init` the model starts from ImageNet weights with no worm exposure; with
-`--init <checkpoint>` it warm-starts from that model (the optimizer and
-schedule restart either way).
-
-After training, the run's best checkpoint is scored against the currently
-promoted `checkpoints/segmenter/best.ckpt` on the validation split, and
-replaces it when its mean validation loss over the hand-refined validation
-labels is lower. That is the quantity training selects and stops on, so a
-better-calibrated model wins even when the thresholded masks tie; the mean
-IoU of both is recorded alongside. The labeling app loads the promoted
-file, so it always proposes from the best validated model.
-`--promote` forces the copy, `--no-promote` skips the comparison, and every
-decision, with both scores and checkpoint fingerprints, is appended to
-`checkpoints/segmenter/promotions.jsonl` and stored in the run record.
-
-Evaluation runs **every** `best.ckpt` and `last.ckpt` under `runs/`
-(`--checkpoint` picks files instead). One invocation is a session, kept
-under `checkpoints/segmenter/evaluations/<session time>/<run>__<best|last>/`.
-Each `evaluation.json` holds the time, git revision, checkpoint fingerprint
-(path, size, modification time, SHA-256), the run record it came from, a
-fingerprint of the labels used, the split membership at that moment, the
-summary, and per-sample IoU, Dice, precision, and recall against both the
-network and the classical threshold, with label and predicted pixel counts.
-The worst-sample overlay sheets sit beside it, and one summary line per
-checkpoint is appended to `evaluations/history.jsonl`. `--note` stores a
-free-text reason with every record of the session. Bootstrapped labels are
-not truth, so the number that matters is the hand-refined subset; since
-every validation and test label has been hand-refined, that is now the
-whole held-out set.
-
-A frame labeled as all background scores 1 when the prediction is also
-empty and 0 when the network paints anything, and the summary reports the
-false-positive pixels on empty-label frames separately.
-
-### Plots
-
-`scripts/plot_segmenter_history.py` writes seven figures to
-`checkpoints/segmenter/plots/`. Models are named by
-`docs/segmenter_model_names.json`: a short display name per run directory
-(`r1-hand100`, `r2-hand165`, ...: labeling round, training-label source,
-number of training labels) and a `headline` list of the models drawn in
-colour and with a fixed marker in every figure; other runs are grey. The
-last headline model is the newest and the one before it its reference.
-
-| Figure | Content |
-|---|---|
-| `training_curves.png` | training and validation loss (log scale) and validation IoU per epoch, selected epoch starred |
-| `checkpoint_comparison.png` | per best checkpoint of the newest session: median (dot), interquartile range (bar), and a line down to the lowest non-empty frame; the promoted model is marked |
-| `evaluation_history.png` | median IoU of every model across evaluation sessions (the labels grow between sessions) |
-| `latest_evaluation.png` | per-frame IoU of the headline models, frames grouped by recording and sorted by the newest model |
-| `model_delta.png` | per-frame IoU of the newest model minus its reference, so a regression on one frame is visible next to the gains |
-| `iou_ecdf.png` | cumulative distribution of per-frame IoU per headline model, validation and test pooled |
-| `dataset_growth.png` | labels over time, and labels per recording by split |
+background probability sat near `0.3`. Promotion, `best.ckpt`,
+`promotions.jsonl`, the `--train-labels` filter and the
+`evaluations/history.jsonl` sessions are gone: a model becomes a setup's
+default with **Use as default** (with a reason), and each evaluation is
+stored with its model per benchmark. The comparisons below were made with
+the old scripts.
 
 ### Three-way comparison (September 3, 2026)
 
@@ -195,62 +141,37 @@ thousands of pixels on empty frames that its best checkpoint leaves clean,
 so `best.ckpt` is the one to use. The hand-only best checkpoint was
 promoted to `checkpoints/segmenter/best.ckpt` for the app.
 
-The bootstrap training labels are now the weakest data in the store, and
-either revising them in the app or training with `--train-labels manual` is
-the better use of them.
+The bootstrap training labels were the weakest data in the store; they
+were retired in round 2 (below), and every label since is hand-refined.
 
 ## 5. Label with the app
 
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m worm_pose_gen.label_app
-```
+Labels are made on the pose app's **Labeling** page
+(`python -m worm_pose_gen.app`, then `http://127.0.0.1:8768/#labeling`). It
+labels one frame at a time, mask first, then body, then **Save & next**
+(Enter), into the setup's label collection (your part of it, in your
+personal library). A newly labeled recording is in no dataset's splits
+until you choose them in the Training page's Datasets tab. Frames come from
+queues:
 
-Then open `http://127.0.0.1:8767`. The app opens the three default
-recordings read-only (`--recording` overrides), loads
-`checkpoints/segmenter/best.ckpt` if it exists, and caches one flat field
-per recording under the dataset root.
+- a workspace's **Relabel** keyframes (the Workspace page's fix), which are
+  stitched back into the workspace when the queue is done;
+- **New queue**: a job that picks frames spread over the chosen recordings,
+  favouring those the current model is least sure of, optionally only frames
+  of some image types (self-contact, at the edge, in pieces, no worm, clear);
+- **Browse labels**: existing labels by recording, split and status, lowest
+  body fit IoU first;
+- a labeling manifest (`scripts/build_labeling_manifest.py`), opened
+  with `worm-pose-app --queue <manifest>` (its split policies are not used:
+  splits are per recording in the library).
 
-Each frame arrives with proposals: the network mask (thresholded in the
-browser at an adjustable cutoff), the classical component, and the raw
-threshold, plus the saved label if the frame was labeled before. The editor
-starts from the saved label, else the network, else the classical mask.
-
-Throughput comes from keeping the hands on the keyboard:
-
-| Keys | Action |
-|---|---|
-| `1` `2` `4` `5` | Replace the mask with the network, classical, threshold, or saved proposal. `Shift` unions, `Alt` intersects, `Ctrl` subtracts. |
-| `3` | Replace with the mask-fit tube rendered from the current mask (about 20 s). |
-| `H` `L` `D` `S` | Fill narrow holes, keep the largest component, grow, shrink. |
-| `B` `E` `I` | Worm, erase, and ignore brushes. `[` `]` change size. |
-| `Z` | Undo (40 steps). |
-| `Space` or `Enter` | Save and move to the next frame. |
-| `N` `P` | Next without saving; previous in history. |
-| `F` `O` `0` | Toggle raw/flat-fielded view, cycle overlay opacity, fit view. |
-| Wheel; right or `Shift` drag | Zoom; pan. |
-
-The next-frame mode decides what you label. **Network-uncertain** draws a
-handful of random unlabeled frames, runs the network on each, and picks the
-one with the most pixels between `0.2` and `0.8` probability. That is the
-frame the current model needs most. Random and sequential (with a stride)
-are also available. A frame with no worm can be saved as all background
-(the browser asks for confirmation), which teaches the network that debris
-is not worm; the bootstrap skips such frames, so they only enter through
-the app.
-
-The **Saved labels** panel lists every sample in the store, filtered by
-source (bootstrap or hand-labeled), split, and recording. Clicking a row
-opens that frame with its saved label in the editor, and the fourth
-next-frame mode, **Browse saved labels**, makes Next and Save + next walk
-the filtered list in order. Revising a bootstrap label this way is the
-intended fix for the bootstrap's systematic errors: the frame keeps its
-split, its revision goes up, and its source becomes `network+manual`, so it
-leaves the bootstrap filter and counts as hand-refined in evaluation. The
-held-out bootstrap samples are the most valuable to revise first, since
-they grow the part of the evaluation that measures agreement with a human.
-
-Saving records `label_source` as `network+manual` or `classical+manual`, so
-evaluation can separate hand-refined labels from bootstrapped ones.
+The mask tools are the Worm and Background brush, the Network and Threshold
+proposals (one slider; Apply takes the preview), Fill holes, Largest, Grow,
+Shrink, Undo and Revert. The body tools are Use proposal (G), Flip (H),
+Trace midline (T) and Mask only. `?` lists every key. A frame with no worm
+can be saved as all background, which teaches the network that debris is
+not worm. Migrated labels keep their ignore pixels, which training still
+excludes from the loss. New labels have none.
 
 ## 6. Run on an unseen recording
 
@@ -264,11 +185,11 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/segment_video.py
 flat-fields it with the cached per-recording correction, runs the promoted
 checkpoint in batches (`--batch-size 16`, about `27 ms` per frame on the
 project GPU including padding to full resolution), thresholds at `0.5`,
-fills narrow holes and keeps the largest component (`--raw-mask` skips
-that), and writes an MP4 under `checkpoints/segmenter/videos/` with the
-mask filled in magenta and outlined in green, plus a JSON file of per-frame
-worm pixels, raw component counts, pixels dropped by the component
-selection, and pixels added by hole filling. `--scale 0.5` halves the
+fills the narrow holes the mask encloses (`--no-fill-holes` skips that;
+every component is kept), and writes an MP4 under
+`checkpoints/segmenter/videos/` with the mask filled in magenta and outlined
+in green, plus a JSON file of per-frame worm pixels, raw component counts,
+pixels outside the largest component, and pixels added by hole filling. `--scale 0.5` halves the
 output for sharing; `--show-uncertain` tints the `0.2` to `0.8` probability
 band yellow.
 
@@ -298,12 +219,14 @@ pixels in the uncertain band and the same masks.
 
 ## 7. The loop
 
-1. Bootstrap, train, evaluate. The first model learns the threshold's
-   behavior with its systematic errors masked out.
-2. Label in network-uncertain mode. Correct thin tails, cut fused debris,
-   paint ignore over anything ambiguous. Save.
-3. Retrain, evaluate, plot, and restart the app; the new model is promoted
-   to the app automatically when its validation loss beats the previous one.
+1. Train and evaluate on the library datasets (Training page, or
+   `scripts/train.py`): the run keeps the checkpoint with the lowest
+   validation loss and scores it on every benchmark of the setup.
+2. Label a New queue, which favours the frames the model is least sure of.
+   Correct thin tails and cut fused debris. Save.
+3. Retrain from the current model and compare it with the others in the
+   model picker. **Use as default** (with a reason) makes it the setup's
+   mask or body model.
 4. Once the hand-refined validation IoU is high and stable, feed the
    network's probability map to the mask fit as its soft target and return
    to evaluating pose estimation.
@@ -331,24 +254,23 @@ out of training entirely.
    --stride 20` runs the segmenter over a recording and flags samples with a
    short skeleton for a whole worm (a coil), filled holes, fragments, or a
    mask on the image border, grouped into windows with a montage per
-   recording under `docs/pose_pipeline_step4/clip_candidates/`. Frames whose
+   recording under `runs/clip_candidates/` in the data directory. Frames whose
    HDF5 chunks need a compression plugin that is not installed are skipped
    and counted.
-2. **Manifest.** `scripts/build_labeling_manifest.py` turns the scans into
-   `docs/labeling_round_2/manifest.json`: per recording, the peak, first and
+2. **Manifest.** `scripts/build_labeling_manifest.py` turns the scans into a
+   manifest (round 2's, `docs/labeling_round_2/manifest.json`, is in the git
+   history): per recording, the peak, first and
    last frame of each candidate window (coils and holes first, up to 30),
    six border-touching samples, and six ordinary frames spread over the
    recording; frames already in the store are skipped. Each recording
    carries a split policy: `auto` keeps the store's balanced per-frame
    assignment, `train`, `val` or `test` pledge every new label of that
    recording to one split, so an animal can be unique to validation or test.
-3. **Labeling.** `python -m worm_pose_gen.label_app --queue
-   docs/labeling_round_2/manifest.json` opens the manifest's recordings,
-   selects the "Queue (manifest)" next mode, and walks the queued frames in
-   order, skipping labeled ones; the frame info shows the queue position,
-   the reasons the frame was picked, and the split its label will get. Saves
-   pledge the recording's split (`SegmentationStore.save(..., split=...)`).
-   Progress is in `/api/queue` and in the status line after each save.
+3. **Labeling.** The standalone labeler of the time (since removed) walked
+   the manifest's queued frames in order, skipping labeled ones, and each
+   save pledged the recording's split (`SegmentationStore.save(...,
+   split=...)`). Today `./worm-pose-app --queue <manifest>` opens a
+   manifest as a Labeling queue.
 4. **Retrain and re-evaluate.** After the round, retrain and re-evaluate;
    then re-evaluate hole filling and the largest-component rule on the
    sequence set (`scripts/evaluate_sequence_set.py`), since a segmenter that
@@ -367,9 +289,9 @@ Alex labeled the first 65 frames of the manifest (all 24 queued frames of
 `2023-06-23-01`, all 21 of `2023-06-29-12`, and 20 of 29 of
 `2023-07-14-08`; 41 of them coil, hole, or fragment windows, 8 border
 frames, 16 ordinary). The 91 bootstrap labels were then retired with
-`scripts/retire_bootstrap_labels.py`, which copies their `.npz` files and
+`scripts/retire_bootstrap_labels.py` (since removed), which copied their `.npz` files and
 index rows to `<dataset root>/retired/<time>_bootstrap_classical/` and
-deletes them from the store (split pledges stay), leaving 165 train, 28
+deleted them from the store (split pledges stay), leaving 165 train, 28
 validation, and 26 test labels, all hand-refined; the two new recordings are
 training-only, so validation and test still cover the three round-1 animals.
 
@@ -399,9 +321,7 @@ frame are better. The remaining 328 manifest frames, including every frame
 of the held-out animals, are still to be labeled, so the test split does
 not yet measure a new animal.
 
-The seven figures of this session are copied to
-`pose_pipeline_step5c/segmenter_plots/`. The pose pipeline's view of the
-new model, including a held-out plate on which it paints a dark streak as
-worm, is in `POSE_PIPELINE_PLAN.md`, step 5c.
-
-![Per-frame IoU of the headline models](pose_pipeline_step5c/segmenter_plots/iou_ecdf.png)
+The seven figures of this session, and the pose pipeline's view of the new
+model (including a held-out plate on which it paints a dark streak as worm),
+were in `docs/pose_pipeline_step5c/` and `POSE_PIPELINE_PLAN.md`, step 5c,
+now in the git history.

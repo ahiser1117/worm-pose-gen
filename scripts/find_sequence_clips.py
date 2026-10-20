@@ -28,10 +28,10 @@ from PIL import Image, ImageDraw
 import torch
 
 from worm_pose_gen.flat_field import apply_flat_field
-from worm_pose_gen.label_app import DATASET_PATH, RecordingSource
+from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.mask_fit import MaskFitConfig, init_from_skeleton
 from worm_pose_gen.pose_run import boundary, clean_mask, touches_border
-from worm_pose_gen.segmentation_dataset import DEFAULT_DATASET_ROOT
+from worm_pose_gen.settings import CACHE_DIR, RUNS_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fragments-px", type=int, default=500)
     parser.add_argument("--gap", type=int, default=3, help="samples of quiet allowed inside one window")
     parser.add_argument("--min-window-samples", type=int, default=2)
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "docs" / "pose_pipeline_step4" / "clip_candidates")
-    parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
+    parser.add_argument("--output-dir", type=Path, default=RUNS_DIR / "clip_candidates")
+    parser.add_argument("--dataset-root", type=Path, default=CACHE_DIR)
     parser.add_argument("--device", default=None)
     return parser.parse_args()
 

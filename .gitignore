@@ -19,7 +19,6 @@ checkpoints/
 *.ckpt
 *.pt
 *.pth
-!artifacts/checkpoints/exp_0007_rejected_diagnostic.ckpt
 
 # Incomplete streamed outputs
 *.partial
@@ -27,3 +26,18 @@ checkpoints/
 
 # Project-owned external artifact convenience link
 external_artifacts
+
+# Agent skills installed by tooling, not project code
+.agents/
+skills-lock.json
+
+# Agent scratch stays out of the repository
+.claude/tmp/
+
+# A separate repository checked out here
+swt_ynet/
+
+# This checkout's settings and the default data directory (src/worm_pose_gen/settings.py)
+settings.json
+user_data/
+.claude/worktrees/

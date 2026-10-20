@@ -1,10 +1,10 @@
-"""Small helpers for leaving a durable record of training and evaluation runs.
+"""Small helpers for leaving a durable record of pipeline runs and evaluation scripts.
 
-Every training run and every evaluation writes one JSON file named by its UTC
-start time.  The record carries enough to reproduce the number later: the
-git revision of the code, a fingerprint of the checkpoint (path, size,
-modification time, SHA-256), and the exact validation and test membership at
-the time of the run (sample id, label source, revision, save time).
+Such a run writes one JSON file named by its UTC start time, carrying enough
+to reproduce the number later: the git revision of the code and a
+fingerprint of the checkpoint (path, size, modification time, SHA-256).
+Library models record their training on the model card instead
+(:mod:`model_training`).
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ import hashlib
 from pathlib import Path
 import subprocess
 from typing import Any
-
-from .segmentation_dataset import SPLITS, SegmentationStore
 
 
 def utc_now() -> str:
@@ -62,20 +60,3 @@ def checkpoint_fingerprint(path: str | Path | None) -> dict[str, Any] | None:
         "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds"),
         "sha256": digest.hexdigest(),
     }
-
-
-def split_manifest(store: SegmentationStore, splits: tuple[str, ...] = SPLITS) -> dict[str, list[dict[str, Any]]]:
-    """The exact membership of each split, for the run record."""
-
-    manifest: dict[str, list[dict[str, Any]]] = {}
-    for split in splits:
-        manifest[split] = [
-            {
-                "sample_id": record.sample_id,
-                "label_source": record.label_source,
-                "revision": record.revision,
-                "saved_at": record.saved_at,
-            }
-            for record in store.records(split)
-        ]
-    return manifest

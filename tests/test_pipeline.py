@@ -1,0 +1,932 @@
+"""Pipeline stages over a workspace on a synthetic recording (CPU, no network).
+
+A dark tube on a bright background is written as an HDF5 recording; with
+``checkpoint=None`` the segment stage thresholds dark pixels, so the stored
+masks are exactly the rendered tube and the fit stage can recover it with
+the small schedule of ``tests/test_propagation.py``.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import asdict
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest import mock
+
+import h5py
+import numpy as np
+import torch
+
+from worm_pose_gen.ambiguity import FLAG_NAMES
+from worm_pose_gen.batch_fit import BatchFitConfig, fit_masks, prepare_fit
+from worm_pose_gen.body_proposal import FIELD_AP_WEIGHT, FieldPrediction
+from worm_pose_gen.body_targets import point_heatmap, render_body_targets
+from worm_pose_gen.latent import decode_centerline
+from worm_pose_gen.mask_fit import default_width_template, render_tube_segments
+from worm_pose_gen import pipeline
+from worm_pose_gen.pipeline import (
+    DarkPixelSegmenter,
+    FitParams,
+    Frames,
+    PriorParams,
+    PropagateParams,
+    SegmentParams,
+    TrackParams,
+    build_fit_config,
+    config_from_dict,
+    fit_setup,
+    independent_copies,
+    new_arrays,
+    read_summary,
+    restore_independent_rows,
+    run_stage,
+    workspace_setup,
+    segment_frames,
+    segment_slabs,
+    stage_command,
+    submit_starts,
+)
+from worm_pose_gen.prefetch import prefetched
+from worm_pose_gen.recording_prior import RecordingPrior
+from worm_pose_gen.workspace import Workspace
+
+from tests.slow import slow
+
+
+HEIGHT, WIDTH, FRAMES = 160, 220, 6
+# The SMALL schedule of tests/test_propagation.py as fit overrides: two short
+# stages, no bounds, priors on the synthetic body's size.
+SMALL_OVERRIDES = {
+    "stage_downsample": [2, 1],
+    "stage_steps": [60, 60],
+    "stage_lr_scale": [1.0, 0.3],
+    "stage_point_stride": [2, 1],
+    "crop_padding": 16,
+    "crop_multiple": 8,
+    "length_bounds_px": None,
+    "width_bounds_px": None,
+    "length_prior_px": 150.0,
+    "width_prior_px": 12.0,
+    "default_length_px": 150.0,
+    "default_width_px": 12.0,
+    "width_shape_prior_mean": [0.0] * 6,
+}
+FIT_PARAMS = {
+    "prior": "none", "compile": False, "init_workers": 0, "min_worm_pixels": 200, "orient": True, "overrides": SMALL_OVERRIDES,
+}
+SEGMENT_PARAMS = {"checkpoint": None, "flat_field": False, "min_worm_pixels": 200, "slab": 4}
+
+
+def _body_curve(k: int) -> np.ndarray:
+    """The head-first midline of frame ``k``: a worm whose second half bends progressively, as in tests/test_propagation.py."""
+
+    shape = np.zeros(16)
+    shape[10:] = 0.25 * k
+    return decode_centerline(np.concatenate((shape, [0.2, 150.0], [WIDTH / 2, HEIGHT / 2])))
+
+
+def _body_mask(curve: np.ndarray) -> np.ndarray:
+    template = default_width_template()
+    rendered = render_tube_segments(
+        torch.as_tensor(curve, dtype=torch.float32)[None], torch.as_tensor(12.0 * template, dtype=torch.float32)[None], HEIGHT, WIDTH
+    )[0]
+    return (rendered >= 0.5).numpy()
+
+
+def _bodies(n: int = FRAMES) -> list[np.ndarray]:
+    """Masks of the bodies of ``_body_curve``."""
+
+    return [_body_mask(_body_curve(k)) for k in range(n)]
+
+
+class _StubPredictor:
+    """A perfect body-field network for the synthetic recording: each frame's fields from its known midline."""
+
+    def __init__(self, frames: Frames) -> None:
+        self.frames = frames
+        self.requested: list[list[int]] = []
+
+    def predict(self, frame_indices) -> list[FieldPrediction]:
+        self.requested.append([int(f) for f in frame_indices])
+        out = []
+        for frame in self.requested[-1]:
+            curve = _body_curve(frame)
+            mask = _body_mask(curve)
+            targets = render_body_targets(mask, curve, 12.0 * default_width_template())
+            out.append(FieldPrediction(
+                mask=mask.astype(np.float32), ap=np.nan_to_num(targets.ap, nan=0.5).astype(np.float32),
+                head=point_heatmap((HEIGHT, WIDTH), curve[0], 3.0), tail=point_heatmap((HEIGHT, WIDTH), curve[-1], 3.0),
+                overlap=targets.overlap.astype(np.float32),
+            ))
+        return out
+
+
+def _write_recording(path: Path, n: int = FRAMES) -> list[np.ndarray]:
+    """A recording of dark bodies (value 60) on a bright background (200) with mild noise; returns the masks."""
+
+    rng = np.random.default_rng(0)
+    masks = _bodies(n)
+    stack = np.empty((n, HEIGHT, WIDTH), dtype=np.uint8)
+    for k, mask in enumerate(masks):
+        image = np.where(mask, 60.0, 200.0) + rng.normal(0, 3, (HEIGHT, WIDTH))
+        stack[k] = np.clip(image, 0, 255).astype(np.uint8)
+    with h5py.File(path, "w") as handle:
+        handle.create_dataset("/img_nir", data=stack)
+    return masks
+
+
+class ParamTests(unittest.TestCase):
+    def test_from_dict_ignores_unknown_keys_and_keeps_defaults(self) -> None:
+        params = FitParams.from_dict({"preset": "balanced", "threshold": 0.7, "not_a_field": 1})
+        self.assertEqual(params.preset, "balanced")
+        self.assertEqual(params.init_workers, FitParams().init_workers)
+        segment = SegmentParams.from_dict({"threshold": 0.7, "preset": "balanced"})
+        self.assertEqual(segment.threshold, 0.7)
+        self.assertEqual(SegmentParams.from_dict(None), SegmentParams())
+        # One dict drives every stage.
+        shared = {"threshold": 0.6, "beam": 5, "track_window": 10, "prior": "none"}
+        self.assertEqual(PropagateParams.from_dict(shared).beam, 5)
+        self.assertEqual(TrackParams.from_dict(shared).track_window, 10)
+        self.assertEqual(PriorParams.from_dict(shared).prior, "none")
+
+    def test_defaults_match_the_script_flags(self) -> None:
+        segment = SegmentParams()
+        self.assertEqual((segment.threshold, segment.hole_radius, segment.fill_holes, segment.min_worm_pixels), (0.5, 8, True, 500))
+        self.assertTrue(segment.checkpoint.endswith("checkpoints/segmenter/best.ckpt"))
+        self.assertEqual(FitParams().preset, "fast")
+        self.assertEqual(PriorParams().prior, "bootstrap")
+        propagate = PropagateParams()
+        self.assertEqual((propagate.min_score, propagate.pad, propagate.max_gap, propagate.beam, propagate.path_inview_weight), (2, 2, 3, 3, 2.0))
+        self.assertEqual(TrackParams().track_refit, "clipped-deviating")
+
+    def test_fit_config_from_params_and_back(self) -> None:
+        config = build_fit_config(FitParams(compile=False, padding=48, overrides=SMALL_OVERRIDES))
+        self.assertEqual(config.crop_padding, 16)  # overrides win over the flags
+        self.assertEqual(config.stage_steps, (60, 60))
+        self.assertIsNone(config.length_bounds_px)
+        again = config_from_dict(json.loads(json.dumps(asdict(config))))
+        self.assertEqual(again, config)
+        with self.assertRaisesRegex(ValueError, "unknown BatchFitConfig field"):
+            build_fit_config(FitParams(overrides={"no_such": 1}))
+
+    def test_the_network_and_a_prior_fix_the_length(self) -> None:
+        coefficients = BatchFitConfig().width_coefficients
+        prior = RecordingPrior(
+            length_px=700.0, log_length_sigma=0.05, width_px=24.0, log_width_sigma=0.05,
+            width_shape=(0.0,) * coefficients, width_shape_sigma=(0.1,) * coefficients, frames_used=12, frames_candidates=12, selection={},
+        )
+        fixed = fit_setup(FitParams(body_net="net.ckpt"), prior).config
+        self.assertEqual((fixed.length_fixed, fixed.length_prior_px), (True, 700.0))
+        self.assertFalse(fit_setup(FitParams(), prior).config.length_fixed)
+        self.assertFalse(fit_setup(FitParams(body_net="net.ckpt"), None).config.length_fixed)
+        self.assertTrue(config_from_dict(json.loads(json.dumps(asdict(fixed)))).length_fixed)
+
+    def test_stage_command_round_trips_the_parameters(self) -> None:
+        params = {"preset": "fast", "overrides": {"stage_steps": [1, 2]}, "threshold": 0.4}
+        command = stage_command(Path("/tmp/ws"), "fit", params)
+        self.assertEqual(command[:3], [sys.executable, "-m", "worm_pose_gen.pipeline"])
+        self.assertEqual(command[command.index("--workspace") + 1], "/tmp/ws")
+        self.assertEqual(command[command.index("--stage") + 1], "fit")
+        self.assertEqual(json.loads(command[command.index("--params") + 1]), params)
+        self.assertEqual(json.loads(stage_command("/tmp/ws", "export", None)[-1]), {})
+
+
+class SegmentationTests(unittest.TestCase):
+    def test_dark_pixel_segmenter_and_segment_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "rec.h5"
+            masks = _write_recording(recording)
+            frames = Frames(recording, flat_field=False)
+            try:
+                self.assertEqual((frames.total, frames.shape), (FRAMES, (HEIGHT, WIDTH)))
+                self.assertEqual(frames.read([1, 2, 3]).shape, (3, HEIGHT, WIDTH))
+                self.assertEqual(frames.read([0, 2]).shape, (2, HEIGHT, WIDTH))
+                model = DarkPixelSegmenter("cpu")
+                probability = model.predict_probability_batch(frames.read([0]))
+                self.assertGreater(probability[0][masks[0]].min(), 0.5)
+                self.assertLess(probability[0][~masks[0]].max(), 0.5)
+                found, stats, timing = segment_frames(frames, model, [0, 1], SegmentParams(**SEGMENT_PARAMS), torch.device("cpu"))
+                self.assertEqual(len(found), 2)
+                self.assertTrue(np.array_equal(found[0], masks[0]))
+                self.assertEqual(stats[0]["worm_pixels"], int(masks[0].sum()))
+                self.assertEqual(stats[0]["components"], 1)
+                self.assertEqual(stats[0]["mask_on_border"], 0)
+                self.assertEqual(set(timing), {"read", "flat_field", "network", "cleanup"})
+            finally:
+                frames.close()
+
+    def test_pipelined_segmentation_matches_segment_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "rec.h5"
+            _write_recording(recording)
+            frames = Frames(recording, flat_field=False)
+            try:
+                model, params, device = DarkPixelSegmenter("cpu"), SegmentParams(**SEGMENT_PARAMS), torch.device("cpu")
+                slabs = [[0, 1], [2, 3], [4]]
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    pipelined = list(segment_slabs(frames, model, slabs, params, device, pool=pool))
+                self.assertEqual(len(pipelined), len(slabs))
+                for slab, (masks, stats, timing, predictions) in zip(slabs, pipelined, strict=True):
+                    expected_masks, expected_stats, _ = segment_frames(frames, model, slab, params, device)
+                    self.assertTrue(all(np.array_equal(a, b) for a, b in zip(masks, expected_masks, strict=True)))
+                    self.assertEqual(stats, expected_stats)
+                    self.assertEqual(set(timing), {"read", "flat_field", "network", "cleanup"})
+                    self.assertIsNone(predictions)
+            finally:
+                frames.close()
+
+
+class PipeliningTests(unittest.TestCase):
+    def test_prefetched_produces_the_next_item_while_the_caller_works(self) -> None:
+        produced = [threading.Event() for _ in range(3)]
+
+        def items():
+            for k in range(3):
+                produced[k].set()
+                yield k
+
+        seen = []
+        for k in prefetched(items()):
+            if k + 1 < len(produced):
+                # The next item is produced without the caller asking for it.
+                self.assertTrue(produced[k + 1].wait(timeout=10))
+            seen.append(k)
+        self.assertEqual(seen, [0, 1, 2])
+        self.assertEqual(list(prefetched([])), [])
+
+    def test_prefetched_raises_the_producer_error(self) -> None:
+        def items():
+            yield 0
+            raise ValueError("bad slab")
+
+        with self.assertRaisesRegex(ValueError, "bad slab"):
+            list(prefetched(items()))
+
+    def test_starts_on_a_pool_match_inline_starts(self) -> None:
+        setup = fit_setup(FitParams.from_dict(FIT_PARAMS), None)
+        masks = _bodies(3)
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            pooled = list(submit_starts(masks, setup, pool))
+        inline = list(submit_starts(masks, setup))
+        self.assertEqual(len(pooled), len(masks))
+        for (a, trace_a), (b, trace_b) in zip(pooled, inline, strict=True):
+            self.assertIsNone(trace_a)
+            self.assertIsNone(trace_b)
+            self.assertEqual([s.name for s in a], [s.name for s in b])
+            self.assertTrue(all(np.array_equal(x.latent, y.latent) and x.width_px == y.width_px for x, y in zip(a, b, strict=True)))
+
+
+class TraceFirstFitTests(unittest.TestCase):
+    """With the body-field network, the trace is fit first and the standard starts only where its fit falls short of TRACE_FIT_IOU."""
+
+    def _fit(self, threshold: float) -> tuple[dict[str, np.ndarray], list]:
+        from worm_pose_gen.body_proposal import crop_fields
+
+        n = 2
+        masks = _bodies(n)
+        predictions = [crop_fields(p, m) for p, m in zip(_StubPredictor(None).predict(range(n)), masks, strict=True)]
+        setup = fit_setup(FitParams.from_dict(FIT_PARAMS), None)
+        arrays = new_arrays(np.arange(n), setup.config)
+        calls: list = []
+
+        def recording(masks, starts, **kwargs):
+            calls.append([[s.name for s in frame_starts] for frame_starts in starts])
+            return fit_masks(masks, starts, **kwargs)
+
+        with mock.patch.object(pipeline, "TRACE_FIT_IOU", threshold), mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=recording):
+            pipeline.fit_frames(masks, list(range(n)), setup, arrays, torch.device("cpu"), submit_starts(masks, setup, None, predictions), predictions=predictions)
+        return arrays, calls
+
+    @slow
+    def test_a_good_trace_fit_is_the_only_one(self) -> None:
+        arrays, calls = self._fit(0.0)
+        self.assertEqual(calls, [[["network_trace"]] * 2])
+        np.testing.assert_array_equal(arrays["n_starts"], [1, 1])
+        self.assertEqual(arrays["best_start"].tolist(), ["network_trace"] * 2)
+
+    @slow
+    def test_a_short_trace_fit_adds_the_standard_starts(self) -> None:
+        trace_only, _ = self._fit(0.0)
+        arrays, calls = self._fit(1.01)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], [["network_trace"]] * 2)
+        # Both ends in view: each standard start once, head first.
+        standard = [name for name in fit_setup(FitParams.from_dict(FIT_PARAMS), None).start_names if not name.endswith("_reversed")]
+        self.assertEqual([[name.removesuffix("_reversed") for name in names] for names in calls[1]], [standard] * 2)
+        np.testing.assert_array_equal(arrays["n_starts"], [1 + len(standard)] * 2)
+        # The winner of both batches by energy: never worse than the trace alone.
+        self.assertTrue(np.all(arrays["total_energy"] <= trace_only["total_energy"] + 1e-6))
+        self.assertTrue(np.isfinite(arrays["iou"]).all())
+
+
+class StageTests(unittest.TestCase):
+    """The stages in pipeline order over one workspace on the synthetic recording."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.directory = tempfile.TemporaryDirectory()
+        root = Path(cls.directory.name)
+        cls.recording = root / "rec.h5"
+        cls.masks = _write_recording(cls.recording)
+        cls.workspace = Workspace.create(root / "workspaces", "synthetic", cls.recording, 0, FRAMES - 1)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.directory.cleanup()
+
+    @slow
+    def test_stages_in_order(self) -> None:
+        self._segment()
+        self._fit()
+        self._ambiguity()
+        self._propagate()
+        self._propagate_again_restores_the_independent_fit()
+        self._refit_replaces_stale_ambiguity_and_hypotheses()
+        self._track()
+        self._export()
+        self._cli()
+        self._fit_scores_override_masks()
+        self._stages_wait_for_the_workspace_lock()
+
+    def _segment(self) -> None:
+        messages: list[tuple[float, str]] = []
+        result = run_stage(self.workspace, "segment", SEGMENT_PARAMS, device="cpu", progress=lambda p, m: messages.append((p, m)))
+        self.assertEqual(result["frames"], FRAMES)
+        self.assertEqual(result["frames_with_worm"], FRAMES)
+        self.assertEqual(messages[-1][0], 1.0)
+        self.assertEqual(self.workspace.mask_rows().tolist(), list(range(FRAMES)))
+        self.assertTrue(np.array_equal(self.workspace.get_mask(3), self.masks[3]))
+        state = self.workspace.load_state()
+        for key in ("worm_pixels", "raw_worm_pixels", "pixels_filled", "components", "pixels_outside_largest", "mask_on_border"):
+            self.assertIn(key, state)
+        self.assertEqual(state["worm_pixels"].tolist(), [int(m.sum()) for m in self.masks])
+        self.assertFalse(state["mask_on_border"].any())
+        summary = json.loads((self.workspace.path / "summary.json").read_text())
+        self.assertEqual(summary["mask_cleanup"]["min_worm_pixels"], 200)
+        self.assertEqual(summary["threshold"], 0.5)
+        self.assertIsNone(summary["checkpoint"])
+        # Segmentation says nothing about poses, so no provenance yet.
+        self.assertEqual(self.workspace.provenance_counts(), {})
+
+    def _fit(self) -> None:
+        result = run_stage(self.workspace, "fit", FIT_PARAMS, device="cpu", job="j00000001")
+        self.assertEqual(result["frames_fit"], FRAMES)
+        self.assertEqual(result["frames_skipped"], {"empty_mask": 0, "small_mask": 0, "no_starts": 0, "fit_error": 0})
+        state = self.workspace.load_state()
+        self.assertTrue(state["fitted"].all())
+        self.assertEqual(state["centerline_xy"].shape, (FRAMES, 100, 2))
+        self.assertGreater(float(np.min(state["iou"])), 0.8)
+        self.assertTrue(np.all(np.abs(state["body_length_px"] - 150.0) < 15.0))
+        self.assertTrue(np.all(state["source"] == 0))
+        self.assertTrue(all(state["best_start"]))
+        for key in ("iou_independent", "centerline_xy_independent", "width_profile_independent", "body_length_independent"):
+            self.assertIn(key, state)
+        self.assertTrue(np.array_equal(state["iou_independent"], state["iou"]))
+        provenance = self.workspace.load_provenance()
+        self.assertEqual(set(provenance["algorithm"].tolist()), {"independent_fit"})
+        self.assertEqual(set(provenance["job"].tolist()), {"j00000001"})
+        self.assertTrue(np.isfinite(provenance["time"]).all())
+        self.assertFalse((self.workspace.path / "recording_prior.json").exists())
+        summary = json.loads((self.workspace.path / "summary.json").read_text())
+        self.assertEqual(summary["starts"], "skeleton+straight")
+        self.assertEqual(config_from_dict(summary["fit_config"]).stage_steps, (60, 60))
+        self.assertGreater(summary["iou"]["median"], 0.8)
+        self.assertEqual(summary["frames_fitted"], FRAMES)
+        self.assertIn("continuity", summary)
+        # No body-field network: no evidence energy.
+        self.assertFalse(state["field_energy"].any())
+        self.assertIn("field_energy_independent", state)
+
+    def _ambiguity(self) -> None:
+        result = run_stage(self.workspace, "ambiguity", {}, device="cpu")
+        self.assertIsNotNone(result["ambiguity"])
+        state = self.workspace.load_state()
+        for name in FLAG_NAMES:
+            self.assertEqual(state[f"flag_{name}"].dtype, np.bool_)
+        for key in ("ambiguity_score", "score_independent", "area_ratio", "self_contact_px", "pose_jump_px"):
+            self.assertIn(key, state)
+        self.assertTrue(np.array_equal(state["score_independent"], state["ambiguity_score"]))
+        self.assertTrue(np.isfinite(state["area_ratio"]).all())
+        self.assertTrue(np.all(np.abs(state["area_ratio"] - 1.0) < 0.3))
+        # A whole body far from the border trips neither the edge nor the fragment flags.
+        self.assertFalse(state["flag_edge_inside"].any())
+        self.assertFalse(state["flag_fragments"].any())
+
+    def _propagate(self) -> None:
+        # No frame reaches the seed score, so the pass finds no stretch and replaces nothing;
+        # it still writes the (empty) hypotheses arrays and records itself in the summary.
+        result = run_stage(self.workspace, "propagate", {"min_score": 9, "jump_seeds": False, "beam": 2}, device="cpu")
+        self.assertEqual(result["stretches"], [])
+        self.assertEqual(result["frames_replaced"], 0)
+        hypotheses = self.workspace.load_hypotheses()
+        self.assertEqual(hypotheses["hypotheses_centerline_xy"].shape, (FRAMES, 5, 100, 2))
+        self.assertTrue(np.all(hypotheses["hypotheses_count"] == 0))
+        self.assertTrue(np.all(hypotheses["path_index"] == -1))
+        state = self.workspace.load_state()
+        self.assertNotIn("hypotheses_count", state)
+        self.assertTrue(state["fitted"].all())
+        summary = json.loads((self.workspace.path / "summary.json").read_text())
+        self.assertEqual(summary["propagation"]["stretches"], [])
+        self.assertEqual(summary["propagation"]["frames_replaced"], 0)
+        self.assertEqual(self.workspace.provenance_counts(), {"independent_fit": FRAMES})
+        for key in ("latent_independent", "width_shape_independent", "crop_independent", "best_start_independent"):
+            self.assertIn(key, state)
+        self.assertTrue(np.array_equal(state["latent_independent"], state["latent"]))
+
+    def _propagate_again_restores_the_independent_fit(self) -> None:
+        # Pretend a previous pass replaced row 3 with a chain pose: a rerun starts from the independent fit again.
+        state = self.workspace.load_state()
+        original = {key: state[key][3].copy() for key in ("latent", "centerline_xy", "iou", "width_px", "crop", "best_start")}
+        state["centerline_xy"][3] += 7.0
+        state["latent"][3, -2:] += 7.0
+        state["iou"][3] = 0.5
+        state["width_px"][3] += 2.0
+        state["source"][3] = 1
+        state["reversed"][3] = True
+        self.workspace.save_state(state)
+        self.workspace.set_provenance([3], "chain_forward", "jtest")
+        result = run_stage(self.workspace, "propagate", {"min_score": 9, "jump_seeds": False, "beam": 2}, device="cpu", job="j00000002")
+        self.assertEqual(result["restored_rows"], 1)
+        self.assertEqual(result["stretches"], [])
+        state = self.workspace.load_state()
+        for key, value in original.items():
+            self.assertTrue(np.array_equal(state[key][3], value), key)
+        self.assertEqual(int(state["source"][3]), 0)
+        self.assertFalse(state["reversed"][3])
+        self.assertEqual(state["score_independent"][3], state["ambiguity_score"][3])
+        provenance = self.workspace.load_provenance()
+        self.assertEqual((str(provenance["algorithm"][3]), str(provenance["job"][3])), ("independent_fit", "j00000002"))
+        self.assertEqual(json.loads((self.workspace.path / "summary.json").read_text())["propagation"]["restored_rows"], 1)
+
+    def _refit_replaces_stale_ambiguity_and_hypotheses(self) -> None:
+        # Scores and candidates of a previous fit describe poses a refit throws away.
+        state = self.workspace.load_state()
+        before = state["ambiguity_score"].copy()
+        state["ambiguity_score"][2:4] = 3
+        state["score_independent"][2:4] = 3
+        self.workspace.save_state(state)
+        hypotheses = self.workspace.load_hypotheses()
+        hypotheses["hypotheses_count"][2:4] = 7
+        hypotheses["path_index"][2:4] = 1
+        hypotheses["hypotheses_energy"][2:4, 0] = 1.0
+        self.workspace.save_hypotheses(hypotheses)
+        run_stage(self.workspace, "fit", FIT_PARAMS, device="cpu", job="j00000003")
+        state = self.workspace.load_state()
+        self.assertTrue(np.array_equal(state["ambiguity_score"], before))
+        self.assertTrue(np.array_equal(state["score_independent"], before))
+        hypotheses = self.workspace.load_hypotheses()
+        self.assertEqual(hypotheses["hypotheses_count"][2:4].tolist(), [0, 0])
+        self.assertEqual(hypotheses["path_index"][2:4].tolist(), [-1, -1])
+        self.assertTrue(np.isnan(hypotheses["hypotheses_energy"][2:4]).all())
+        # A propagate pass over the refit finds nothing to fix at the default seed score.
+        result = run_stage(self.workspace, "propagate", {"jump_seeds": False, "beam": 2}, device="cpu")
+        self.assertEqual(result["stretches"], [])
+
+    def _track(self) -> None:
+        result = run_stage(self.workspace, "track", {"track_refit": "clipped-deviating"}, device="cpu")
+        self.assertEqual(result["frames_clipped"], 0)
+        self.assertEqual(result["frames_refit"], 0)
+        state = self.workspace.load_state()
+        self.assertIn("track_length_px", state)
+        self.assertIn("length_refit", state)
+        self.assertTrue(np.isfinite(state["track_length_px"]).all())
+
+    def _export(self) -> None:
+        # The stage over a fitted workspace (tests/test_export.py covers the table itself).
+        import pyarrow.parquet as pq
+
+        result = run_stage(self.workspace, "export", {"pixel_size_um": 1.5}, device="cpu")
+        path = Path(result["path"])
+        self.assertEqual(path.parent.parent, self.workspace.path / "exports")
+        self.assertTrue((path.parent / "export.json").is_file())
+        rows = pq.read_table(path).to_pylist()
+        self.assertEqual(len(rows), FRAMES)
+        self.assertEqual(rows[0]["frame"], 0)
+        self.assertEqual(len(rows[0]["midline_x"]), 100)
+        self.assertTrue(all(r["status"] in ("auto", "unresolved") for r in rows))
+        fitted = [r for r in rows if r["head_x"] is not None]
+        self.assertTrue(fitted)
+        self.assertTrue(all(np.isfinite(r["curvature"]).all() and min(r["width"]) > 0 for r in fitted))
+        self.assertEqual(result["length_unit"], "um")
+
+    def _cli(self) -> None:
+        # The job command re-runs the ambiguity stage through the module's entry point and reports progress.
+        progress_file = self.workspace.path / "progress.json"
+        command = stage_command(self.workspace.path, "ambiguity", {})
+        previous = os.environ.get("WORM_POSE_PROGRESS_FILE")
+        os.environ["WORM_POSE_PROGRESS_FILE"] = str(progress_file)
+        try:
+            code = pipeline.main(command[command.index("--workspace") :])
+        finally:
+            if previous is None:
+                del os.environ["WORM_POSE_PROGRESS_FILE"]
+            else:
+                os.environ["WORM_POSE_PROGRESS_FILE"] = previous
+        self.assertEqual(code, 0)
+        report = json.loads(progress_file.read_text())
+        self.assertEqual(report["progress"], 1.0)
+        self.assertIsNotNone(report["result"]["ambiguity"])
+
+    def _fit_scores_override_masks(self) -> None:
+        # The fit scores against the mask the user drew, not the stored one, and counts its pixels.
+        shift = 12
+        stored = self.workspace.get_mask(2)
+        override = np.roll(stored, shift, axis=1)
+        self.workspace.set_override_mask(2, override)
+        centroid_before = float(np.mean(self.workspace.load_state()["centerline_xy"][2, :, 0]))
+        result = run_stage(self.workspace, "fit", FIT_PARAMS, device="cpu", job="j00000004")
+        self.assertEqual(result["frames_fit"], FRAMES)
+        state = self.workspace.load_state()
+        self.assertEqual(int(state["worm_pixels"][2]), int(override.sum()))
+        self.assertAlmostEqual(float(np.mean(state["centerline_xy"][2, :, 0])) - centroid_before, shift, delta=3.0)
+        self.assertGreater(float(state["iou"][2]), 0.8)
+        # An override on a row is all the fit needs: no stored mask required.
+        self.workspace.clear_override_mask(2)
+        run_stage(self.workspace, "fit", FIT_PARAMS, device="cpu")
+        state = self.workspace.load_state()
+        self.assertEqual(int(state["worm_pixels"][2]), int(stored.sum()))
+        self.assertAlmostEqual(float(np.mean(state["centerline_xy"][2, :, 0])), centroid_before, delta=3.0)
+
+    def _stages_wait_for_the_workspace_lock(self) -> None:
+        # Another process holding the workspace's lock (a running stage) delays the stage until it lets go.
+        handle = open(self.workspace.path / ".lock", "w")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        finished: list[float] = []
+        thread = threading.Thread(target=lambda: (run_stage(self.workspace, "export", {}, device="cpu"), finished.append(time.monotonic())))
+        thread.start()
+        time.sleep(0.4)
+        self.assertEqual(finished, [])
+        released = time.monotonic()
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+        thread.join(timeout=30)
+        self.assertEqual(len(finished), 1)
+        self.assertGreaterEqual(finished[0], released)
+        self.assertEqual(len(list((self.workspace.path / "exports").glob("*/export.json"))), 2)
+
+
+class BodyFieldStageTests(unittest.TestCase):
+    """The stages of a workspace fit with the body-field network (a stub that knows the bodies): its evidence reaches every fit."""
+
+    @slow
+    def test_evidence_reaches_the_fit_propagate_and_track_stages(self) -> None:
+        predictors: list[_StubPredictor] = []
+
+        def field_predictor(checkpoint, frames, device):
+            self.assertEqual(checkpoint, "stub.ckpt")
+            predictors.append(_StubPredictor(frames))
+            return predictors[-1]
+
+        calls: list = []
+
+        def recording(masks, starts, **kwargs):
+            calls.append(kwargs.get("fields"))
+            return fit_masks(masks, starts, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pipeline, "field_predictor", side_effect=field_predictor):
+            root = Path(directory)
+            recording_path = root / "rec.h5"
+            _write_recording(recording_path)
+            workspace = Workspace.create(root / "workspaces", "fields", recording_path, 0, FRAMES - 1)
+            run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
+            fit_starts: list = []
+
+            def fit_recording(masks, starts, **kwargs):
+                fit_starts.append(starts)
+                return fit_masks(masks, starts, **kwargs)
+
+            with mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=fit_recording):
+                run_stage(workspace, "fit", {**FIT_PARAMS, "body_net": "stub.ckpt"}, device="cpu")
+            self.assertEqual(config_from_dict(read_summary(workspace)["fit_config"]).field_ap_weight, FIELD_AP_WEIGHT)
+            state = workspace.load_state()
+            # Every fit is scored against the evidence, which also decides the orientation: heads first.
+            self.assertTrue((state["field_energy"] > 0).all())
+            np.testing.assert_array_equal(state["field_energy_independent"], state["field_energy"])
+            for row in range(FRAMES):
+                self.assertLess(float(np.linalg.norm(state["centerline_xy"][row, 0] - _body_curve(row)[0])), 6.0)
+            # Both ends are in view on every frame, so each standard start is fit once, head first, and no orientation gap is measured.
+            self.assertTrue(np.isnan(state["orientation_gap"]).all())
+            # The trace alone first; the standard starts only for frames whose trace fit falls short.
+            self.assertIn(len(fit_starts), (1, 2))
+            self.assertEqual([[s.name for s in frame_starts] for frame_starts in fit_starts[0]], [["network_trace"]] * FRAMES)
+            for frame_starts in fit_starts[1:]:
+                for starts in frame_starts:
+                    names = [s.name.removesuffix("_reversed") for s in starts]
+                    self.assertEqual(len(names), len(set(names)))
+                    self.assertNotIn("network_trace", names)
+            run_stage(workspace, "ambiguity", {}, device="cpu")
+            # A pose two body widths off its mask seeds a stretch around row 3 (as in HypothesisArrayTests).
+            state = workspace.load_state()
+            state["centerline_xy"][3, :, 0] += 25.0
+            state["latent"][3, -2] += 25.0
+            state["iou"][3] = 0.5
+            workspace.save_state(state)
+            # Anchor refits go through fit_masks; stored-pose refits and chain steps are prepared ahead (prepare_fit).
+            def preparing(masks, starts, **kwargs):
+                calls.append(kwargs.get("fields"))
+                return prepare_fit(masks, starts, **kwargs)
+
+            with mock.patch("worm_pose_gen.propagation.fit_masks", side_effect=recording), \
+                    mock.patch("worm_pose_gen.propagation.prepare_fit", side_effect=preparing):
+                result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1}, device="cpu")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
+            # The workspace's fit used the network, so the pass scores every fit against the fields the fit
+            # stored for the stretch and its anchors, without running the network again.
+            self.assertEqual(len(predictors), 1)
+            self.assertEqual(read_summary(workspace)["propagation"]["fields"], {"stored": 5, "predicted": 0})
+            self.assertTrue(calls)
+            for fields in calls:
+                self.assertIsNotNone(fields)
+                self.assertTrue(all(f is not None for f in fields))
+            info = read_summary(workspace)["propagation"]
+            self.assertEqual(info["frames_with_evidence"], 3)
+            # The pass offers the chains no network trace start (the region algorithms do).
+            self.assertEqual(info["network_starts_offered"], 0)
+            state = workspace.load_state()
+            self.assertTrue((state["field_energy"][2:5] > 0).all())
+            hypotheses = workspace.load_hypotheses()
+            for row in (2, 3, 4):
+                count = int(hypotheses["hypotheses_count"][row])
+                self.assertTrue(np.all(hypotheses["hypotheses_energy"][row, :count] > hypotheses["hypotheses_soft_dice"][row, :count]))
+            # The track pass refits off the stretch, scored against the evidence too.
+            calls.clear()
+            with mock.patch("worm_pose_gen.pipeline.fit_masks", side_effect=recording):
+                track = run_stage(workspace, "track", {"track_refit": "deviating", "track_tolerance": 0.0}, device="cpu")
+            self.assertGreater(track["frames_refit"], 0)
+            self.assertEqual(track["frames_with_evidence"], track["frames_refit"])
+            self.assertTrue(calls)
+            for fields in calls:
+                self.assertTrue(fields is not None and all(f is not None for f in fields))
+            refit = np.nonzero(workspace.load_state()["length_refit"])[0]
+            self.assertTrue(set(refit.tolist()).isdisjoint({2, 3, 4}))
+            self.assertEqual(len(predictors), 1)
+            self.assertTrue((workspace.load_state()["field_energy"][refit] > 0).all())
+
+    def test_masks_from_the_body_net(self) -> None:
+        predictors: list[_StubPredictor] = []
+
+        def field_predictor(checkpoint, frames, device):
+            self.assertEqual(checkpoint, "stub.ckpt")
+            predictors.append(_StubPredictor(frames))
+            return predictors[-1]
+
+        # A segmenter checkpoint that does not exist: loading it would fail, so the masks must be the network's.
+        params = {**SEGMENT_PARAMS, "checkpoint": "missing.ckpt", "mask_source": "body_net", "body_net": "stub.ckpt"}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pipeline, "field_predictor", side_effect=field_predictor):
+            root = Path(directory)
+            recording_path = root / "rec.h5"
+            bodies = _write_recording(recording_path)
+            workspace = Workspace.create(root / "workspaces", "net-masks", recording_path, 0, FRAMES - 1)
+            result = run_stage(workspace, "segment", params, device="cpu")
+            self.assertEqual(result["frames_with_worm"], FRAMES)
+            self.assertEqual(sorted(f for request in predictors[-1].requested for f in request), list(range(FRAMES)))
+            for row in range(FRAMES):
+                np.testing.assert_array_equal(workspace.get_mask(row), bodies[row])
+            # The network's fields of every frame are kept for the stages that score fits with them.
+            stored = pipeline.workspace_field_store(workspace, "stub.ckpt", SegmentParams.from_dict(params)).get(range(FRAMES))
+            self.assertEqual(sorted(stored), list(range(FRAMES)))
+            self.assertTrue(all(stored[row].covers(bodies[row]) for row in range(FRAMES)))
+            summary = read_summary(workspace)
+            self.assertEqual((summary["mask_source"], summary["checkpoint"]["path"]), ("body_net", "stub.ckpt"))
+            # The region algorithms segment rows the way the workspace was segmented.
+            from worm_pose_gen.algorithms import _segment_params, segment_rows
+
+            recorded = _segment_params(workspace)
+            self.assertEqual((recorded.mask_source, recorded.body_net), ("body_net", "stub.ckpt"))
+            np.testing.assert_array_equal(segment_rows(workspace, [2], torch.device("cpu"))[2], bodies[2])
+            # The prior's bootstrap takes the same masks; the network is required and the source must be known.
+            frames = Frames(recording_path, flat_field=False)
+            try:
+                model = pipeline.load_mask_model(PriorParams.from_dict(params), frames, torch.device("cpu"))
+                self.assertIsInstance(model, pipeline.BodyNetMasks)
+                masks, _, timing = segment_frames(frames, model, [1, 4], PriorParams.from_dict(params), torch.device("cpu"))
+                np.testing.assert_array_equal(masks[1], bodies[4])
+                self.assertEqual(len(model.last), 2)
+                self.assertEqual((timing["read"], timing["flat_field"]), (0.0, 0.0))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="body_net"), frames, torch.device("cpu"))
+                with self.assertRaises(ValueError):
+                    pipeline.load_mask_model(SegmentParams(mask_source="network"), frames, torch.device("cpu"))
+            finally:
+                frames.close()
+
+
+class IndependentCopyTests(unittest.TestCase):
+    def test_copies_and_restore_by_provenance(self) -> None:
+        config = BatchFitConfig()
+        arrays = new_arrays(np.arange(4), config)
+        arrays["fitted"][:] = True
+        arrays["latent"][:] = np.arange(4)[:, None]
+        arrays["iou"][:] = 0.9
+        arrays["best_start"][:] = "skeleton_longest_path"
+        independent_copies(arrays)
+        self.assertTrue(np.array_equal(arrays["latent_independent"], arrays["latent"]))
+        # Rows 1 and 2 get chain poses; a refit of row 3 updates only its copy.
+        arrays["latent"][1:3] = -1.0
+        arrays["iou"][1:3] = 0.4
+        arrays["source"][1:3] = (1, 2)
+        arrays["latent"][3] = 30.0
+        independent_copies(arrays, np.array([3]))
+        self.assertEqual(arrays["latent_independent"][3, 0], 30.0)
+        self.assertEqual(arrays["latent_independent"][1, 0], 1.0)
+        algorithm = np.array(["independent_fit", "chain_forward", "independent_refit", "independent_fit"])
+        self.assertEqual(restore_independent_rows(arrays, algorithm), [1, 2])
+        self.assertEqual(arrays["latent"][1:3, 0].tolist(), [1.0, 2.0])
+        self.assertEqual(arrays["iou"][1:3].tolist(), [0.9, 0.9])
+        self.assertEqual(arrays["source"][1:3].tolist(), [0, 0])
+        # Nothing to restore: no such provenance, or a workspace predating the full copies.
+        self.assertEqual(restore_independent_rows(arrays, np.array(["independent_fit"] * 4)), [])
+        del arrays["latent_independent"]
+        self.assertEqual(restore_independent_rows(arrays, algorithm), [])
+
+    def test_placed_rows_and_split_stretches_keep_manual_poses_out_of_a_pass(self) -> None:
+        config = BatchFitConfig()
+        arrays = new_arrays(np.arange(8), config)
+        arrays["fitted"][:] = True
+        arrays["fitted"][7] = False
+        algorithm = np.array(["independent_fit", "manual:pick", "chain_forward", "manual:flip", "mirror", "track_length_refit", "", "manual:pick"])
+        placed = pipeline.placed_rows(arrays, algorithm)
+        # Flips and kept fixes are placed; the stages' rows and unfitted rows are not.
+        self.assertEqual(placed.tolist(), [False, True, False, True, True, False, False, False])
+        self.assertEqual(pipeline.split_stretches([(0, 6)], placed), [(0, 0), (2, 2), (5, 6)])
+        self.assertEqual(pipeline.split_stretches([(1, 1), (3, 4)], placed), [])
+        self.assertEqual(pipeline.split_stretches([(5, 7)], placed), [(5, 7)])
+        self.assertEqual(pipeline.split_stretches([(0, 2), (4, 6)], None), [(0, 2), (4, 6)])
+        # The kept rows' hypotheses come over into the pass's fresh arrays, slots permitting.
+        old = pipeline.empty_hypotheses(8, config, 2)
+        old["hypotheses_count"][1] = 5
+        old["hypotheses_energy"][1, :5] = np.arange(5)
+        old["hypotheses_source"][1, :5] = "forward"
+        old["path_index"][1] = 4
+        fresh = pipeline.empty_hypotheses(8, config, 1)
+        pipeline.keep_hypotheses(fresh, old, [1])
+        self.assertEqual(int(fresh["hypotheses_count"][1]), 3)
+        self.assertEqual(fresh["hypotheses_energy"][1].tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(fresh["hypotheses_source"][1].tolist(), ["forward"] * 3)
+        self.assertEqual(int(fresh["path_index"][1]), 4)
+        self.assertEqual(int(fresh["hypotheses_count"][2]), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class HypothesisArrayTests(unittest.TestCase):
+    """The richer hypotheses arrays (Phase 2): every name, its shape, blanking, and what a propagate pass stores."""
+
+    def test_empty_hypotheses_has_every_array_with_the_contract_shapes(self) -> None:
+        config = BatchFitConfig()
+        empty = pipeline.empty_hypotheses(7, config, beam=2)
+        self.assertEqual(set(empty), set(pipeline.HYPOTHESIS_ARRAYS))
+        H = 1 + 2 * 2
+        self.assertEqual(empty["hypotheses_latent"].shape, (7, H, config.coefficients + 4))
+        self.assertEqual(empty["hypotheses_width_px"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_width_shape"].shape, (7, H, config.width_coefficients))
+        self.assertEqual(empty["hypotheses_width_profile"].shape, (7, H, config.n_points))
+        self.assertEqual(empty["hypotheses_body_length_px"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_points_in_fov"].shape, (7, H))
+        self.assertEqual(empty["hypotheses_crop"].shape, (7, H, 4))
+        self.assertEqual(empty["hypotheses_soft_dice"].shape, (7, H))
+        for key in ("hypotheses_latent", "hypotheses_width_px", "hypotheses_width_shape", "hypotheses_width_profile", "hypotheses_body_length_px", "hypotheses_soft_dice"):
+            self.assertTrue(np.isnan(empty[key]).all(), key)
+        self.assertEqual(empty["hypotheses_points_in_fov"].dtype, np.int64)
+        self.assertEqual(empty["hypotheses_crop"].dtype, np.int64)
+        self.assertFalse(empty["hypotheses_points_in_fov"].any())
+        self.assertFalse(empty["hypotheses_crop"].any())
+
+    def test_blank_hypotheses_blanks_the_richer_arrays_too(self) -> None:
+        class _Store:
+            def __init__(self, arrays: dict[str, np.ndarray]) -> None:
+                self.arrays = arrays
+
+            def load_hypotheses(self) -> dict[str, np.ndarray]:
+                return self.arrays
+
+            def save_hypotheses(self, arrays: dict[str, np.ndarray]) -> None:
+                self.arrays = arrays
+
+        config = BatchFitConfig()
+        arrays = pipeline.empty_hypotheses(4, config, beam=1)
+        for row in (1, 2):
+            arrays["hypotheses_count"][row] = 1
+            arrays["hypotheses_latent"][row, 0] = 1.0
+            arrays["hypotheses_width_px"][row, 0] = 9.0
+            arrays["hypotheses_crop"][row, 0] = (1, 2, 3, 4)
+            arrays["hypotheses_points_in_fov"][row, 0] = 100
+            arrays["hypotheses_soft_dice"][row, 0] = 0.1
+        store = _Store(arrays)
+        pipeline.blank_hypotheses(store, [2], config)
+        blanked = store.arrays
+        self.assertEqual(blanked["hypotheses_count"].tolist(), [0, 1, 0, 0])
+        self.assertTrue(np.isnan(blanked["hypotheses_latent"][2]).all())
+        self.assertFalse(np.isnan(blanked["hypotheses_latent"][1, 0]).any())
+        self.assertTrue(np.isnan(blanked["hypotheses_soft_dice"][2]).all())
+        self.assertFalse(blanked["hypotheses_crop"][2].any())
+        self.assertEqual(blanked["hypotheses_crop"][1, 0].tolist(), [1, 2, 3, 4])
+        self.assertFalse(blanked["hypotheses_points_in_fov"][2].any())
+
+    @slow
+    def test_propagate_stores_the_candidates_fields_and_a_placed_candidate_survives(self) -> None:
+        # A forced stretch around row 3 makes the pass produce real candidates on the synthetic recording.
+        from worm_pose_gen import edits
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "rec.h5"
+            _write_recording(recording)
+            workspace = Workspace.create(root / "workspaces", "stretch", recording, 0, FRAMES - 1)
+            run_stage(workspace, "segment", SEGMENT_PARAMS, device="cpu")
+            run_stage(workspace, "fit", FIT_PARAMS, device="cpu", job="jfit")
+            run_stage(workspace, "ambiguity", {}, device="cpu")
+            # The pass recomputes the scores from the stored poses, so the ambiguity has to be real:
+            # a pose shifted by two body widths with a poor stored overlap trips low_iou and pose_jump.
+            state = workspace.load_state()
+            state["centerline_xy"][3, :, 0] += 25.0
+            state["latent"][3, -2] += 25.0
+            state["iou"][3] = 0.5
+            workspace.save_state(state)
+            result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1, "propagate_preset": "fast"}, device="cpu", job="jprop")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 4]])
+            hyps = workspace.load_hypotheses()
+            for key in pipeline.HYPOTHESIS_ARRAYS:
+                self.assertIn(key, hyps)
+            state = workspace.load_state()
+            config = workspace_setup(workspace).config
+            for row in (2, 3, 4):
+                count = int(hyps["hypotheses_count"][row])
+                self.assertGreater(count, 0)
+                for j in range(count):
+                    latent = hyps["hypotheses_latent"][row, j]
+                    self.assertTrue(np.isfinite(latent).all())
+                    np.testing.assert_allclose(decode_centerline(latent, config.coefficients), hyps["hypotheses_centerline_xy"][row, j], atol=1e-3)
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_px"][row, j]))
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_shape"][row, j]).all())
+                    self.assertTrue(np.isfinite(hyps["hypotheses_width_profile"][row, j]).all())
+                    self.assertGreater(float(hyps["hypotheses_body_length_px"][row, j]), 0.0)
+                    self.assertGreater(int(hyps["hypotheses_points_in_fov"][row, j]), 0)
+                    x0, x1, y0, y1 = hyps["hypotheses_crop"][row, j].tolist()
+                    self.assertTrue(0 <= x0 < x1 <= WIDTH and 0 <= y0 < y1 <= HEIGHT)
+                    self.assertTrue(np.isfinite(hyps["hypotheses_soft_dice"][row, j]))
+                    self.assertLessEqual(float(hyps["hypotheses_soft_dice"][row, j]), float(hyps["hypotheses_energy"][row, j]) + 1e-9)
+                # Slots beyond the count stay blank.
+                self.assertTrue(np.isnan(hyps["hypotheses_latent"][row, count:]).all())
+                self.assertFalse(hyps["hypotheses_crop"][row, count:].any())
+                # The path's choice is what the state holds (the path did not mirror a symmetric body's candidates).
+                chosen = int(hyps["path_index"][row])
+                self.assertGreaterEqual(chosen, 0)
+                if not hyps["path_mirrored"][row]:
+                    np.testing.assert_allclose(state["latent"][row], hyps["hypotheses_latent"][row, chosen], atol=1e-9)
+                    self.assertEqual(float(state["width_px"][row]), float(hyps["hypotheses_width_px"][row, chosen]))
+                    self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, chosen].tolist())
+                    self.assertEqual(float(state["energy"][row]), float(hyps["hypotheses_soft_dice"][row, chosen]))
+            # Placing another candidate (as a kept fix does) writes exactly the stored fields, and undo puts the path's choice back.
+            row = 3
+            before = {k: v[row].copy() for k, v in workspace.load_arrays().items() if v.ndim >= 1 and v.shape[0] == FRAMES}
+            other = next(j for j in range(int(hyps["hypotheses_count"][row])) if j != int(hyps["path_index"][row]))
+
+            def place() -> edits.EditResult:
+                pose = edits.pose_from_hypothesis(workspace.load_state(), workspace.load_hypotheses(), row, other, False, image_shape=(HEIGHT, WIDTH))
+                return edits.set_poses(workspace, {row: pose}, algorithm="mirror", job="fix:p000001", note="place a candidate")
+
+            edit = place()
+            state = workspace.load_state()
+            np.testing.assert_array_equal(state["latent"][row], hyps["hypotheses_latent"][row, other])
+            np.testing.assert_array_equal(state["centerline_xy"][row], hyps["hypotheses_centerline_xy"][row, other])
+            np.testing.assert_array_equal(state["width_profile"][row], hyps["hypotheses_width_profile"][row, other])
+            self.assertEqual(state["crop"][row].tolist(), hyps["hypotheses_crop"][row, other].tolist())
+            self.assertEqual(int(state["points_in_fov"][row]), int(hyps["hypotheses_points_in_fov"][row, other]))
+            self.assertEqual(str(workspace.load_provenance()["algorithm"][row]), "mirror")
+            edits.undo(workspace, edit.edit_id)
+            after = workspace.load_arrays()
+            for key, value in before.items():
+                if key.startswith(("hypotheses_", "prediction_")) or key in ("ambiguity_score",):
+                    continue
+                np.testing.assert_array_equal(after[key][row], value, err_msg=key)
+            self.assertEqual(str(workspace.load_provenance()["job"][row]), "jprop")
+            # A placed pose that stands when the pass runs again is kept: the row anchors the stretch's two halves,
+            # its hypotheses and provenance survive, and the edit log still describes what is in the arrays.
+            edit = place()
+            picked = workspace.load_state()
+            result = run_stage(workspace, "propagate", {"min_score": 2, "pad": 1, "jump_seeds": False, "beam": 1, "propagate_preset": "fast"}, device="cpu", job="jprop2")
+            self.assertEqual([list(s) for s in result["stretches"]], [[2, 2], [4, 4]])
+            state = workspace.load_state()
+            np.testing.assert_array_equal(state["centerline_xy"][row], picked["centerline_xy"][row])
+            np.testing.assert_array_equal(state["latent"][row], picked["latent"][row])
+            provenance = workspace.load_provenance()
+            self.assertEqual((str(provenance["algorithm"][row]), str(provenance["job"][row])), ("mirror", "fix:p000001"))
+            self.assertEqual(str(provenance["job"][2]), "jprop2")
+            kept = workspace.load_hypotheses()
+            self.assertEqual(int(kept["hypotheses_count"][row]), int(hyps["hypotheses_count"][row]))
+            self.assertEqual(int(kept["path_index"][row]), -1)
+            np.testing.assert_array_equal(kept["hypotheses_centerline_xy"][row], hyps["hypotheses_centerline_xy"][row])
+            self.assertEqual(pipeline.read_summary(workspace)["propagation"]["fixed_rows"], 1)
+            self.assertTrue(edits.edited_rows(workspace, FRAMES)[row])
+            self.assertEqual(edits.edit_of_row(workspace, row)["id"], edit.edit_id)

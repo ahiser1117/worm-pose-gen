@@ -1,0 +1,220 @@
+"""Body fields: the old store's records (staleness, nose choice), traces and camera exits."""
+
+from pathlib import Path
+import tempfile
+import unittest
+
+import numpy as np
+
+from worm_pose_gen import body_fields
+from worm_pose_gen.body_targets import render_body_targets
+from worm_pose_gen.head_tracking import HeadTracking
+from worm_pose_gen.segmentation_dataset import SegmentationStore
+
+from tests.slow import slow
+
+
+SHAPE = (64, 96)
+MAX_LAG = 2
+
+
+def straight_worm():
+    centerline = np.stack((np.linspace(10, 90, 50), np.full(50, 32.0)), 1)
+    yy, xx = np.mgrid[: SHAPE[0], : SHAPE[1]]
+    mask = (np.abs(yy - 32) <= 4) & (xx >= 10) & (xx <= 90)
+    return centerline, np.linspace(6.0, 9.0, 50), mask
+
+
+def write_record(root, record, *, fit_iou=0.97, has_body=True):
+    """A record as the builder writes it, from a straight worm (head at x=10)."""
+
+    centerline, widths, mask = straight_worm()
+    image = np.where(mask, 60, 200).astype(np.uint8)
+    context = np.stack([np.roll(image, shift, axis=1) for shift in range(-MAX_LAG, MAX_LAG + 1)])
+    meta = {"sample_id": record.sample_id, "mask_revision": record.revision, "max_lag": MAX_LAG,
+            "fit_preset": "reference", "has_body": has_body}
+    arrays = {"context": context, "context_valid": np.array([False, True, True, True, True])}
+    if has_body:
+        targets = render_body_targets(mask, centerline, widths)
+        meta.update(orientation="nose", nose_offset=0, orientation_margin=3.5, fit_iou=fit_iou, overlap_px=0)
+        arrays.update(nose_xy=np.array([8.0, 32.0]), centerline_xy=centerline, width_profile=widths,
+                      ap=targets.ap.astype(np.float16), overlap=targets.overlap, head_xy=targets.head_xy,
+                      tail_xy=targets.tail_xy, diameter_px=np.float64(targets.diameter_px))
+    body_fields.fields_dir(root).mkdir(parents=True, exist_ok=True)
+    body_fields.save(body_fields.field_path(root, record.sample_id), meta, arrays)
+    return image, mask
+
+
+class BodyFieldRecordTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.store = SegmentationStore(self.root)
+        *_, mask = straight_worm()
+        self.record = self.store.save("rec", 3, np.full(SHAPE, 100, np.uint8), mask.astype(np.uint8),
+                                      source_path="rec.h5", label_source="manual", split="train")
+        write_record(self.root, self.record)
+        self.path = body_fields.field_path(self.root, self.record.sample_id)
+
+    def test_mask_edit_makes_the_record_stale(self):
+        meta = body_fields.read_meta(self.path)
+        self.assertFalse(body_fields.is_stale(meta, self.record))
+        self.assertTrue(body_fields.is_current(self.path, self.record.revision, MAX_LAG))
+        *_, mask = straight_worm()
+        edited = self.store.save("rec", 3, np.full(SHAPE, 100, np.uint8), np.roll(mask, 1, axis=0).astype(np.uint8),
+                                 source_path="rec.h5", label_source="manual")
+        self.assertEqual(edited.revision, self.record.revision + 1)
+        self.assertTrue(body_fields.is_stale(meta, edited))
+        self.assertFalse(body_fields.is_current(self.path, edited.revision, MAX_LAG))
+        self.assertFalse(body_fields.is_current(self.path, self.record.revision, MAX_LAG + 1))
+
+    def test_choose_nose_prefers_the_centre_then_the_nearest(self):
+        xy = np.arange(10, dtype=float)[:, None].repeat(2, 1)
+        valid = np.zeros(5, bool)
+        self.assertEqual(body_fields.choose_nose(xy[:5], valid, 2), (None, None))
+        valid[[0, 3]] = True
+        nose, offset = body_fields.choose_nose(xy[:5], valid, 2)
+        self.assertEqual((offset, nose[0]), (1, 3.0))
+        valid[2] = True
+        self.assertEqual(body_fields.choose_nose(xy[:5], valid, 2)[1], 0)
+
+
+LOOP_SHAPE = (300, 420)
+# Right along y=150, down, back left, then up through the first run at (240, 150).
+LOOP_CORNERS = np.array([[80, 150], [340, 150], [340, 250], [240, 250], [240, 60]], float)
+
+
+def looped_worm():
+    pieces = [np.linspace(a, b, 60, endpoint=False) for a, b in zip(LOOP_CORNERS[:-1], LOOP_CORNERS[1:])]
+    centerline = np.concatenate(pieces + [LOOP_CORNERS[-1:]])
+    yy, xx = np.mgrid[: LOOP_SHAPE[0], : LOOP_SHAPE[1]]
+    points = np.stack((xx.ravel(), yy.ravel()), 1).astype(float)
+    distance = np.full(len(points), np.inf)
+    for a, b in zip(centerline[:-1], centerline[1:]):
+        t = np.clip(((points - a) @ (b - a)) / max(float((b - a) @ (b - a)), 1e-9), 0, 1)
+        distance = np.minimum(distance, np.linalg.norm(points - (a + t[:, None] * (b - a)), axis=1))
+    return centerline, (distance <= 14).reshape(LOOP_SHAPE)
+
+
+def no_tracking() -> HeadTracking:
+    return HeadTracking(
+        xy=np.full((1, 2), np.nan, np.float32), valid=np.zeros(1, bool), confidence=np.full(1, np.nan, np.float32),
+        frame_indices=np.zeros(1, np.int64), source_frame_ids=np.full(1, -1), source_timestamps=np.full(1, -1), provenance={},
+    )
+
+
+class TraceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.centerline, cls.mask = looped_worm()
+
+    @slow
+    def test_the_trace_ends_are_the_body_ends(self):
+        import torch
+        from worm_pose_gen.classical import resample_centerline
+        from worm_pose_gen.mask_fit import default_width_template
+        from worm_pose_gen.pose_run import render_tube
+
+        # A worm leaving the right edge of a 320 px wide view, its tail 40 px off camera.
+        config = body_fields.fit_config()
+        template = default_width_template(config.n_points)
+        x = np.linspace(150, 360, 400)
+        truth = resample_centerline(np.stack([x, 120 + 30 * np.sin((x - 150) / 40)], 1), config.n_points)
+        mask = render_tube(truth, template * 12.0, 240, 320, device="cpu")
+        context = np.where(mask, 60, 200).astype(np.uint8)[None]
+
+        def fit(trace, extend=False):
+            return body_fields.fit_targets(
+                mask, context, np.array([True]), no_tracking(), config=config, template=template,
+                device=torch.device("cpu"), length_px=lambda: 300.0, trace=(trace, False, 300.0 if extend else None),
+            )[:2]
+
+        # Clicked off camera, the tail stays where it was put: the body is whole, not cut off.
+        clicks = resample_centerline(truth, 12)
+        self.assertGreater(clicks[-1, 0], 319)
+        meta, arrays = fit(clicks)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][0] - clicks[0]), 2.0)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][-1] - clicks[-1]), 3.0)
+        self.assertFalse(meta["tail_off_camera"])
+        # Stopped at the border, the body ends there, and the camera cuts it off (no tail in view).
+        border = np.vstack((clicks[clicks[:, 0] < 300], [[319.0, float(np.interp(319.0, truth[:, 0], truth[:, 1]))]]))
+        meta, arrays = fit(border)
+        self.assertLess(np.linalg.norm(arrays["centerline_xy"][-1] - border[-1]), 3.0)
+        self.assertTrue(meta["tail_off_camera"])
+        self.assertTrue(np.isnan(arrays["tail_xy"]).all())
+        # Asked to extend, it continues off camera to the recording's length instead, and is whole.
+        meta, arrays = fit(border, extend=True)
+        curve = arrays["centerline_xy"]
+        self.assertGreater(curve[-1, 0], 340)
+        self.assertAlmostEqual(float(np.linalg.norm(np.diff(curve, axis=0), axis=1).sum()), 300.0, delta=15.0)
+        self.assertFalse(meta["tail_off_camera"])
+        # An extension continues only a trace that ends at the border.
+        inside = clicks[clicks[:, 0] < 280]
+        np.testing.assert_array_equal(body_fields.extend_trace(inside, mask.shape, 300.0), inside)
+        np.testing.assert_array_equal(body_fields.extend_trace(border, mask.shape, None), border)
+
+    @slow
+    def test_trace_through_the_crossing_sets_the_ap_field(self):
+        import torch
+        from worm_pose_gen.mask_fit import default_width_template
+
+        # Rough clicks along the loop, a few pixels off the midline.
+        trace = np.array([[82, 148], [180, 153], [290, 147], [337, 175], [336, 245],
+                          [290, 253], [243, 247], [238, 180], [244, 110], [240, 63]], float)
+        config = body_fields.fit_config()
+        context = np.where(self.mask, 60, 200).astype(np.uint8)[None]
+        tracking = no_tracking()
+        meta, arrays, _ = body_fields.fit_targets(
+            self.mask, context, np.array([True]), tracking, config=config, template=default_width_template(config.n_points),
+            device=torch.device("cpu"), length_px=lambda: None, trace=(trace, False, None),
+        )
+        self.assertEqual((meta["fit_method"], meta["orientation"]), ("traced", "manual"))
+        # Square corners and flat ends that a smooth tube cannot match cap the overlap.
+        self.assertGreater(meta["fit_iou"], 0.75)
+        np.testing.assert_array_equal(arrays["trace_xy"], trace)
+        self.assertLess(np.linalg.norm(arrays["head_xy"] - LOOP_CORNERS[0]), 15.0)
+        # Before the crossing on the first run, and after it on the last.
+        self.assertLess(float(arrays["ap"][150, 150]), 0.2)
+        self.assertGreater(float(arrays["ap"][90, 240]), 0.85)
+        # As drawn, the trace is the midline.
+        meta, arrays, _ = body_fields.fit_targets(
+            self.mask, context, np.array([True]), tracking, config=config, template=default_width_template(config.n_points),
+            device=torch.device("cpu"), length_px=lambda: None, trace=(LOOP_CORNERS.copy(), True, None),
+        )
+        self.assertEqual(meta["fit_method"], "trace_as_drawn")
+        np.testing.assert_allclose(arrays["centerline_xy"][[0, -1]], LOOP_CORNERS[[0, -1]], atol=1e-6)
+
+
+class CameraExitTests(unittest.TestCase):
+    def body(self, x_end):
+        centerline = np.stack((np.linspace(20, x_end, 50), np.full(50, 32.0)), 1)
+        yy, xx = np.mgrid[: SHAPE[0], : SHAPE[1]]
+        mask = (np.abs(yy - 32) <= 4) & (xx >= 20) & (xx <= min(x_end, SHAPE[1] - 1))
+        widths = np.full(50, 8.0)
+        targets = render_body_targets(mask, centerline, widths)
+        meta = {"has_body": True, "fit_iou": 0.97}
+        arrays = {"centerline_xy": centerline, "width_profile": widths, "ap": targets.ap.astype(np.float16),
+                  "head_xy": targets.head_xy, "tail_xy": targets.tail_xy}
+        return mask, meta, arrays
+
+    def test_a_tail_ending_at_the_edge_the_mask_reaches_is_cut(self):
+        mask, meta, arrays = self.body(95.0)
+        self.assertEqual(body_fields.camera_exits(mask, arrays["centerline_xy"], arrays["width_profile"]), (False, True))
+        self.assertTrue(body_fields.mark_exits(meta, arrays, mask, 150.0))
+        self.assertTrue(np.isnan(arrays["tail_xy"]).all())
+        self.assertFalse(np.isnan(arrays["head_xy"]).any())
+        # 75 px visible of a 150 px animal: the visible body spans A-P 0 to 0.5.
+        self.assertAlmostEqual(meta["visible_share"], 0.5, places=2)
+        self.assertLess(float(np.nanmax(arrays["ap"].astype(np.float32))), 0.52)
+
+    def test_a_whole_body_inside_the_image_is_not_cut(self):
+        mask, meta, arrays = self.body(80.0)
+        ap_before = arrays["ap"].copy()
+        self.assertFalse(body_fields.mark_exits(meta, arrays, mask, 150.0))
+        self.assertEqual((meta["head_off_camera"], meta["tail_off_camera"]), (False, False))
+        np.testing.assert_array_equal(arrays["ap"], ap_before)
+
+
+if __name__ == "__main__":
+    unittest.main()

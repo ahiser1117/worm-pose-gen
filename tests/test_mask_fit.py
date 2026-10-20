@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
 
 from worm_pose_gen.latent import decode_centerline
 from worm_pose_gen.mask_fit import (
+    separation_penalty,
     MaskFitConfig,
     crop_window,
     default_width_template,
@@ -16,10 +18,14 @@ from worm_pose_gen.mask_fit import (
     init_from_centerline,
     init_from_moments,
     init_from_skeleton,
+    lay_centerline,
+    lay_start_to_length,
     measure_width_template,
     render_tube_segments,
     standard_initializations,
 )
+
+from tests.slow import slow
 
 
 def _synthetic_case(seed: int = 0, height: int = 160, width: int = 220):
@@ -138,6 +144,15 @@ class MaskFitTests(unittest.TestCase):
             self.assertTrue(np.isfinite(start.latent).all())
             self.assertGreater(start.width_px, 0)
 
+    def test_initializations_compute_only_the_named_starts(self) -> None:
+        _, _, _, mask = _synthetic_case()
+        with mock.patch("worm_pose_gen.mask_fit.init_from_moments", wraps=init_from_moments) as moments:
+            starts = standard_initializations(mask, names=("skeleton_longest_path",), config=SMALL)
+        self.assertEqual([s.name for s in starts], ["skeleton_longest_path"])
+        moments.assert_not_called()
+        straight = standard_initializations(mask, names=("moments_straight",), config=SMALL)
+        self.assertEqual([s.name for s in straight], ["moments_straight"])
+
     def test_moment_start_uses_principal_axis(self) -> None:
         mask = np.zeros((80, 200), dtype=bool)
         mask[35:45, 20:180] = True
@@ -154,6 +169,7 @@ class MaskFitTests(unittest.TestCase):
         mask[20:22, 20:24] = True
         self.assertIsNone(init_from_skeleton(mask, config=SMALL))
 
+    @slow
     def test_fit_recovers_synthetic_pose_from_crude_starts(self) -> None:
         latent, curve, template, mask = _synthetic_case(seed=1)
         starts = standard_initializations(mask, config=SMALL)
@@ -198,6 +214,34 @@ class MaskFitTests(unittest.TestCase):
         self.assertEqual(none_added, 0)
         self.assertTrue(np.array_equal(untouched, mask))
 
+    def test_fill_narrow_holes_fills_a_hole_whole_or_not_at_all(self) -> None:
+        mask = np.zeros((60, 80), dtype=bool)
+        mask[10:50, 10:70] = True
+        mask[25:45, 20:40] = False  # wide enclosed cavity, like a coil interior...
+        mask[30:32, 40:60] = False  # ...with a narrow arm, which a partial fill would close
+        mask[15:18, 50:53] = False  # narrow enclosed hole
+        filled, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 9)
+        self.assertTrue(filled[15:18, 50:53].all())
+        self.assertFalse(filled[25:45, 20:40].any())
+        self.assertFalse(filled[30:32, 40:60].any())
+
+    def test_fill_narrow_holes_leaves_holes_with_a_gap_open(self) -> None:
+        mask = np.zeros((30, 30), dtype=bool)
+        mask[5:25, 5:25] = True
+        mask[10:13, 10:13] = False  # narrow hole with a one-pixel channel to the outside
+        mask[11, 5:10] = False
+        mask[17:20, 17:20] = False  # narrow hole reaching the outside only through diagonal steps
+        mask[[20, 21, 22, 23, 24], [20, 21, 22, 23, 24]] = False
+        filled, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 0)
+        self.assertTrue(np.array_equal(filled, mask))
+        mask[11, 5] = True  # closing the channel's mouth outlines the first hole on all sides
+        closed, added = fill_narrow_holes(mask, radius=4, device="cpu")
+        self.assertEqual(added, 9 + 4)
+        self.assertTrue(closed[10:13, 10:13].all() and closed[11, 6:10].all())
+        self.assertFalse(closed[17:20, 17:20].any())
+
     def test_hard_iou_handles_empty_union(self) -> None:
         empty = np.zeros((4, 4), dtype=bool)
         self.assertEqual(hard_iou(empty, empty), 0.0)
@@ -217,6 +261,102 @@ class MaskFitTests(unittest.TestCase):
                 config=MaskFitConfig(stage_downsample=(2, 1), stage_steps=(1,), stage_lr_scale=(1.0, 1.0)),
                 device="cpu",
             )
+
+
+
+class LayToLengthTests(unittest.TestCase):
+    """A body laid from its first point (a head) at a fixed length: cut, continued along the mask, or off camera."""
+
+    @staticmethod
+    def hook(height: int = 200, width: int = 300):
+        """A 20 px wide body: 200 px along y=100 from x=40, then 100 px down at x=240 (300 px long)."""
+
+        mask = np.zeros((height, width), dtype=bool)
+        mask[90:111, 40:250] = True
+        mask[90:200, 230:251] = True
+        midline = np.concatenate((np.stack((np.linspace(40, 240, 81), np.full(81, 100.0)), 1)[:-1], np.stack((np.full(41, 240.0), np.linspace(100, 200, 41)), 1)))
+        return mask, midline
+
+    @staticmethod
+    def length(points: np.ndarray) -> float:
+        return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+
+    def test_a_longer_body_is_cut_at_the_length_from_its_first_point(self) -> None:
+        mask, midline = self.hook()
+        laid = lay_centerline(midline, mask, 150.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 150.0, places=6)
+        np.testing.assert_array_equal(laid[0], midline[0])
+        np.testing.assert_allclose(laid[-1], [190.0, 100.0], atol=1e-6)
+
+    def test_a_shorter_body_continues_along_the_mask_around_its_bend(self) -> None:
+        mask, midline = self.hook(height=260)
+        # The first 180 px stop short of the bend; the rest of the 280 px follows the mask down, not straight on.
+        laid = lay_centerline(midline[:73], mask, 280.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 280.0, delta=1.0)
+        np.testing.assert_array_equal(laid[0], midline[0])
+        self.assertLess(abs(laid[-1, 0] - 240.0), 8.0)
+        self.assertGreater(laid[-1, 1], 160.0)
+        rows, cols = np.round(laid[:, 1]).astype(int), np.round(laid[:, 0]).astype(int)
+        self.assertTrue(mask[rows, cols].all())
+
+    def test_a_body_past_its_mask_goes_straight_on(self) -> None:
+        mask, midline = self.hook(height=260)
+        # 60 px more than the mask holds: the walk reaches the tip (y=199) and leaves the mask straight down.
+        laid = lay_centerline(midline, mask, 360.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 360.0, delta=1.0)
+        self.assertLess(abs(laid[-1, 0] - 240.0), 8.0)
+        self.assertGreater(laid[-1, 1], 240.0)
+
+    def test_a_body_leaving_the_image_continues_off_camera(self) -> None:
+        mask, midline = self.hook()
+        # The mask runs down to the bottom edge (y=199); a body stopping 30 px above it continues out through it.
+        laid = lay_centerline(midline[:-12], mask, 400.0, 20.0)
+        self.assertAlmostEqual(self.length(laid), 400.0, delta=1.0)
+        self.assertGreater(laid[-1, 1], 250.0)
+
+    def test_a_start_keeps_its_first_point_and_gets_exactly_the_length(self) -> None:
+        mask, midline = self.hook(height=260)
+        start = init_from_centerline(midline[:73], mask, width_px=20.0)
+        laid = lay_start_to_length(start, mask, 280.0)
+        curve = decode_centerline(laid.latent)
+        self.assertEqual(laid.latent[17], 280.0)
+        np.testing.assert_allclose(curve[0], decode_centerline(start.latent)[0], atol=1e-6)
+        self.assertEqual((laid.name, laid.width_px), (start.name, start.width_px))
+        self.assertIs(lay_start_to_length(laid, mask, 280.5), laid)
+
+    def test_a_fixed_length_is_not_fit(self) -> None:
+        latent, _, _, mask = _synthetic_case()
+        config = MaskFitConfig(stage_downsample=(2,), stage_steps=(40,), stage_lr_scale=(1.0,), crop_padding=16, length_fixed=True)
+        start = init_from_centerline(decode_centerline(np.concatenate((latent[:17], [130.0], latent[18:]))), mask, width_px=12.0)
+        result = fit_mask(mask, [start], config=config, device="cpu")
+        self.assertAlmostEqual(result.body_length_px, float(start.latent[17]), delta=1e-3 * float(start.latent[17]))
+
+
+class SeparationPenaltyTests(unittest.TestCase):
+    @staticmethod
+    def hairpin(gap: float) -> torch.Tensor:
+        """Out along y=0, a tight turn, back along y=gap: the two runs are far apart in arc length."""
+
+        out = np.stack((np.linspace(0, 200, 45), np.zeros(45)), 1)
+        turn = np.stack((200 + 0.5 * gap * np.sin(np.linspace(0, np.pi, 10)), 0.5 * gap * (1 - np.cos(np.linspace(0, np.pi, 10)))), 1)
+        back = np.stack((np.linspace(200, 0, 45), np.full(45, gap)), 1)
+        return torch.as_tensor(np.concatenate((out, turn, back)), dtype=torch.float32)[None]
+
+    def test_runs_inside_each_other_pay_and_separate_runs_do_not(self):
+        config = MaskFitConfig(n_points=100, separation_weight=1.0, separation_fraction=1.0)
+        diameter = torch.full((1, 100), 20.0)
+        self.assertGreater(float(separation_penalty(self.hairpin(10.0), diameter, config)), 0.0)
+        self.assertEqual(float(separation_penalty(self.hairpin(25.0), diameter, config)), 0.0)
+
+    def test_a_crossing_in_the_reference_is_exempt(self):
+        config = MaskFitConfig(n_points=100, separation_weight=1.0, separation_fraction=1.0)
+        diameter = torch.full((1, 100), 20.0)
+        closed = self.hairpin(10.0)
+        self.assertEqual(float(separation_penalty(closed, diameter, config, reference=self.hairpin(2.0))), 0.0)
+        self.assertGreater(float(separation_penalty(closed, diameter, config, reference=self.hairpin(25.0))), 0.0)
+
+    def test_zero_weight_disables_it(self):
+        self.assertEqual(float(separation_penalty(self.hairpin(5.0), torch.full((1, 100), 20.0), MaskFitConfig(n_points=100))), 0.0)
 
 
 if __name__ == "__main__":
