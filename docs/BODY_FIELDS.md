@@ -222,7 +222,8 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/fit_recording.py
   [Head-anchored body of fixed length](#head-anchored-body-of-fixed-length)).
   The *end term* is the squared distance of the fit's first point from the
   predicted head, in units of 10 px, times `FIELD_END_WEIGHT` (0.01); the
-  predicted tail only orients starts (below). An end counts only when
+  predicted tail only orients starts (below). The head is the fit stage's
+  head track ([below](#head-track)). An end counts only when
   its heatmap peak is at least 0.3, lies within 20 px of the cleaned mask
   (`END_MASK_PX`) and more than 20 px from the image edge (`END_BORDER_PX`).
   A peak farther off the mask sits on a part the cleanup removed, like the
@@ -837,3 +838,90 @@ The three clips where the variants differ most (independent; propagation):
   coil or off camera. Not measured yet; compare it with the frozen length
   on the sequence set (independent pose jumps, spiral_0528) and hold the
   length only on frames whose head passes the end rules, not per recording.
+
+### Head track
+
+The head used to be each frame's head-heatmap maximum, and the fit follows
+it closely (point 0 lies a median 0.8 px from it on 2023-03-30-01), so the
+head jumped wherever the maximum did. Inside a coil the heatmap is bimodal
+and the maximum switches between its modes (2023-03-30-01 frames 4720 and
+4725: about 95 px to the inner turn and back, kept by propagation), and
+where the head lies against the body the maximum stays below 0.3 for tens
+of frames. The fit stage now chooses the head by tracking it over the
+recording (`head_track.py`) before it fits:
+
+- **Candidates.** The network's head heatmap is reduced on the device to
+  its four strongest modes (`body_proposal.heatmap_modes`: local maxima of
+  a 45 px square, at least 0.02; half-precision ties keep the first pixel,
+  so mode 0 is the old maximum), stored per row in the field store (`heads`
+  `[K, 3]`; the source key names the rule, so older stores are predicted
+  again). The acquisition's nose landmark (`/pos_feature`, confidence above
+  0.9, `head_tracking.py`) is one more candidate. Candidates more than 20 px
+  off the mask are dropped (`head_candidates`), and so is a mode within
+  22 px of a stronger tail peak: inside the 2023-03-30-01 coil (frames
+  4745-4820) the weak head modes and the low-confidence nose sit on the
+  tail (tail peak 1.0 there).
+- **Decode.** A Viterbi pass over the fitted rows chooses one candidate per
+  row or none. A mode costs `-log(value)`, the nose `-log(0.5)` (a mode
+  above 0.5 is preferred to it), and a row without a head
+  `-log(0.3) + 1.5 log 2`: what a 0.3 mode one step away costs, so a head
+  is shown where the old rule showed one unless continuity says otherwise.
+  The transition is the negative log of a 2-D Cauchy density of the head's
+  displacement, scale 8 px per frame of distance (the stored head on
+  2023-03-30-01 moves a median 3.9 px per frame, 99th percentile 13.9 px).
+  A gap of rows without a head costs 1 once plus the per-row cost, its
+  displacement scaled by its frame distance, up to 100 rows; past that
+  the position is forgotten (6 more). Missing frames stretch the scale the
+  same way. An optional `shift_px` per row (image to substrate) is added
+  to every candidate before displacements are measured, for stage moves.
+  The decode of 2,000 rows takes 0.3 s.
+- **Use.** The track is stored as `head_xy` in the state (NaN: no head) and
+  replaces the maximum wherever a fit reads the head: the end term, the
+  trace start laid from the head, and the orientation of the standard
+  starts (`FieldCrop.with_head`; `WorkspaceFields(heads=...)` for the
+  propagate and track stages and the region algorithms; `fit_recording.py`
+  keeps it in its crops). The image-edge rule still applies. A tracked mode
+  below 0.3 counts: the decode keeps one only with continuity behind it (7
+  of 600 rows on 2023-03-30-01 f4440-5039, none on f6000-7999).
+- **Order of the stage.** Every row's fields are read (or predicted and
+  stored) first, then the head is decoded, then the rows are fit; reading
+  the masks and fields twice adds 1.2 s per 2,000 workspace rows.
+  `fit_recording.py` segments every slab first and keeps the masks as their
+  bounding boxes (about 10 KB a frame) for the fit pass.
+
+Measured on flv-c3 A5500s against 4bda5cc (body-net masks,
+`nir-flv-labels-279`, fast preset; files under the data directory's
+`runs/baselines/4bda5cc_*` and `runs/head_track/`). Cells are frames with
+IoU below 0.9 / pose jumps over a body width / length jumps / in-view
+changes, then head-tail flips (`fixes.orientation_flips`' test) and head
+moves over a body width between consecutive frames:
+
+| | Before: independent | After: independent | Before: propagated | After: propagated |
+|---|---|---|---|---|
+| sequence set (7 clips) | 111 / 44 / 0 / 48; 12; 36 | 78 / 35 / 0 / 48; 6; 15 | 15 / 11 / 0 / 30; 6; 19 | 12 / 3 / 0 / 30; 0; 4 |
+| spiral_0528 | 83 / 30 / 0 / 11; 10; 31 | 53 / 21 / 0 / 11; 6; 11 | 11 / 9 / 0 / 5; 4; 17 | 8 / 3 / 0 / 5; 0; 3 |
+| spiral_0131 | 9 / 9 / 0 / 6; 2; 4 | 6 / 7 / 0 / 6; 0; 1 | 0 / 2 / 0 / 6; 2; 2 | 0 / 0 / 0 / 6; 0; 1 |
+| 2023-03-30-01 f4640-4839 | 71 / 39 / 0 / 0; 14; 44 | 67 / 32 / 0 / 0; 12; 34 | 8 / 1 / 0 / 0; 0; 8 | 6 / 0 / 0 / 0; 0; 0 |
+| workspace 2023-03-30-01 f6000-7999 | 29 / 0 / 0 / 91; 18; 22 | 37 / 0 / 0 / 99; 0; 0 | 12 / 1 / 0 / 39; 10; 14 | 11 / 1 / 0 / 37; 0; 0 |
+
+- **The flips are gone.** Frames 4720 and 4725 keep the head on the right
+  end (549,357 and 546,374, the nose 552,354 and 543,375); in 4640-4839 the
+  final head is within 20 px of a nose of confidence above 0.1 on 159 of
+  180 frames (156 before) and never moves more than a body width between
+  frames (8 times before; 90th / 99th percentile step 13.2 / 98.9 px →
+  8.4 / 29.2 px). On the 2,000-frame workspace head-tail flips go from 18
+  to 0 independently and from 10 to 0 after propagation.
+- **The coil stays unanchored.** From 4768 to 4815 no head mode lies near
+  the head and the nose is either unconfident or on the tail, so the track
+  shows no head there and the independent fits still jump (32 pose jumps in
+  the window against 39); propagation holds them as before.
+- **More independent frames below 0.9 on the workspace** (29 → 37): all 8
+  are frames (7841-7888) where the old fit put the head off camera and the
+  tail in view; the track and the nose (confidence 1.0) put the head in
+  view, and the independent fit then squeezes the body into the image.
+  After propagation all 8 are above 0.95 (and above the old poses, which
+  kept the head off camera on 7886-7888).
+- **Cost.** The sequence set takes 207 s against 200 s (the fits no longer
+  overlap the network pass); the workspace analysis 127 s against 124 s.
+- `scripts/evaluate_field_fitting.py` fits single held-out frames, with no
+  sequence to track, so it reads the old rule and is unchanged.

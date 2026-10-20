@@ -6,13 +6,14 @@ propagate and track stages and the region refits score their fits against
 its A-P field and ends and start them from its trace.  Each stage used to
 run the network again on its frames.  The store keeps, per workspace row,
 the part of the prediction those readers use (:class:`body_proposal.FieldCrop`:
-A-P and crossings on the mask grown by a margin, the end peaks)::
+A-P and crossings on the mask grown by a margin, the head heatmap's modes
+and the tail's peak)::
 
     <workspace>/fields/chunk_NNNNN.npz   FIELD_CHUNK_ROWS rows per file
 
 Each chunk records the :func:`source_key` of the predictions in it: the
-weights' digest, the flat-field switch, the dataset and the crossing
-threshold.  A chunk with another key reads as empty and is replaced on the
+weights' digest, the flat-field switch, the dataset, the crossing
+threshold and the head modes' rule.  A chunk with another key reads as empty and is replaced on the
 next write, so predictions of another model are never mixed in.  Writes are
 atomic (``os.replace``); two writers of one chunk at once can lose each
 other's new rows, which only means predicting them again.
@@ -29,7 +30,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .body_proposal import OVERLAP_THRESHOLD, FieldCrop
+from .body_proposal import HEAD_MODE_FLOOR, HEAD_MODE_RADIUS_PX, HEAD_MODES, OVERLAP_THRESHOLD, FieldCrop, in_view
 
 FIELDS_DIR = "fields"
 FIELD_CHUNK_ROWS = 256
@@ -46,7 +47,7 @@ def _digest(path: str, size: int, mtime_ns: int) -> str:
 
 
 def source_key(checkpoint: str | Path, flat_field: bool, dataset: str) -> str:
-    """What the stored fields depend on besides the frames: the weights, the flat field, the dataset and the crossing threshold."""
+    """What the stored fields depend on besides the frames: the weights, the flat field, the dataset, the crossing threshold and the head modes' rule."""
 
     path = Path(checkpoint).resolve()
     if path.is_file():
@@ -55,7 +56,8 @@ def source_key(checkpoint: str | Path, flat_field: bool, dataset: str) -> str:
     else:
         # Weights that are gone match no stored digest; their own key keeps a stub's fields apart.
         weights = f"missing:{path}"
-    return f"{weights}|flat_field={bool(flat_field)}|{dataset}|overlap>={OVERLAP_THRESHOLD}"
+    modes = f"head_modes={HEAD_MODES},r{HEAD_MODE_RADIUS_PX},>={HEAD_MODE_FLOOR}"
+    return f"{weights}|flat_field={bool(flat_field)}|{dataset}|overlap>={OVERLAP_THRESHOLD}|{modes}"
 
 
 def _pack(crops: dict[int, FieldCrop], key: str) -> dict[str, np.ndarray]:
@@ -69,7 +71,8 @@ def _pack(crops: dict[int, FieldCrop], key: str) -> dict[str, np.ndarray]:
         "key": np.array(key), "rows": rows,
         "shape": np.array([c.shape for c in ordered], dtype=np.int64).reshape(-1, 2),
         "box": np.array([c.box for c in ordered], dtype=np.int64).reshape(-1, 4),
-        "peaks": np.array([(c.head, c.tail) for c in ordered], dtype=np.float64).reshape(-1, 2, 3),
+        "heads": np.array([c.heads for c in ordered], dtype=np.float64).reshape(-1, HEAD_MODES, 3),
+        "tail": np.array([c.tail for c in ordered], dtype=np.float64).reshape(-1, 3),
         "support": np.concatenate(support) if ordered else np.zeros(0, np.uint8), "support_offsets": offsets(support),
         "ap": np.concatenate(ap) if ordered else np.zeros(0, np.float32), "ap_offsets": offsets(ap),
         "crossing": np.concatenate(crossing) if ordered else np.zeros(0, np.uint8), "crossing_offsets": offsets(crossing),
@@ -87,10 +90,10 @@ def _unpack(chunk: dict[str, np.ndarray], k: int) -> FieldCrop:
     a, b = chunk["crossing_offsets"][k : k + 2]
     crossing = np.zeros(support.shape, dtype=bool)
     crossing[support] = np.unpackbits(chunk["crossing"][a:b], count=int(support.sum())).astype(bool)
-    head, tail = (tuple(float(v) for v in peak) for peak in chunk["peaks"][k])
+    heads = chunk["heads"][k]
     return FieldCrop(
         shape=(int(chunk["shape"][k][0]), int(chunk["shape"][k][1])), box=(y0, y1, x0, x1), support=support, ap=ap, crossing=crossing,
-        head=head, tail=tail,
+        heads=heads, tail=tuple(float(v) for v in chunk["tail"][k]), head=in_view(heads[0]),
     )
 
 

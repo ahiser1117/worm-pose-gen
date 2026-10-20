@@ -71,8 +71,21 @@ class RecordingMaskCacheTests(unittest.TestCase):
         np.testing.assert_array_equal(self.rows([2], cache)[2], self.masks[2])
         self.assertEqual(self.model.calls, 3)
 
+    def packed_bytes(self, *rows: int) -> int:
+        """The largest packed size of these rows' masks, as the cache keeps them (their bounding boxes)."""
+
+        sizes = []
+        for row in rows:
+            probe = runner._PackedMaskCache()
+            probe.put(row, self.masks[row], int(self.masks[row].sum()))
+            sizes.append(probe.nbytes)
+        return max(sizes)
+
+    def test_masks_are_kept_as_their_bounding_box(self) -> None:
+        self.assertLess(self.packed_bytes(0), np.packbits(self.masks[0].ravel()).nbytes)
+
     def test_evicted_masks_fall_back_to_equivalent_segmentation(self) -> None:
-        packed_bytes = np.packbits(self.masks[0].ravel()).nbytes
+        packed_bytes = self.packed_bytes(0, 2)
         cache = runner._PackedMaskCache(max_bytes=packed_bytes)
         first = self.rows([0], cache)
         self.rows([2], cache)
@@ -87,13 +100,14 @@ class RecordingMaskCacheTests(unittest.TestCase):
         self.assertIsNone(disabled.get(0))
 
     def test_lru_keeps_recently_read_masks(self) -> None:
-        packed_bytes = np.packbits(self.masks[0].ravel()).nbytes
+        # Row 1's mask is empty and packs to nothing; rows 0, 2 and 3 pack to one byte each.
+        packed_bytes = self.packed_bytes(0, 2, 3)
         cache = runner._PackedMaskCache(max_bytes=2 * packed_bytes)
-        for row in (0, 1):
+        for row in (0, 3):
             cache.put(row, self.masks[row], int(self.masks[row].sum()))
         cache.get(0)
         cache.put(2, self.masks[2], 8)
-        self.assertIsNone(cache.get(1))
+        self.assertIsNone(cache.get(3))
         self.assertIsNotNone(cache.get(0))
         self.assertIsNotNone(cache.get(2))
 

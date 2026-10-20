@@ -1371,7 +1371,7 @@ def build_context(
             if mask is not None and int(np.asarray(mask).sum()) >= max(1, min_pixels):
                 masks[row] = mask
         mask_revisions = {str(row): workspace.mask_revision(row) for row in wanted}
-    with workspace_fields(workspace, _segment_params(workspace), resolved) as fields_of:
+    with workspace_fields(workspace, _segment_params(workspace), resolved, state.get("head_xy")) as fields_of:
         evidence, network_starts = body_field_inputs(fields_of, masks, setup, range(first, last + 1) if trace_starts else ())
     return RegionContext(
         workspace=workspace, first=first, last=last, anchor_before=anchor_before, anchor_after=anchor_after, masks=masks,

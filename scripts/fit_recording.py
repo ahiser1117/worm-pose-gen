@@ -7,7 +7,10 @@ segmenter (or, with ``--mask-source body_net``, the ``--body-net`` network's
 mask output), cleaned (probability at or above ``--threshold``; then, unless
 ``--no-fill-holes``, the narrow holes the mask encloses filled; every
 component is kept), and then fit in GPU batches with
-``worm_pose_gen.batch_fit.fit_masks``.  Per frame the run records the latent,
+``worm_pose_gen.batch_fit.fit_masks``.  With ``--body-net`` every frame is
+segmented and predicted first, the head is tracked over the whole stretch
+(``worm_pose_gen.head_track``, ``head_xy`` in ``poses.npz``), and then the
+frames are fit.  Per frame the run records the latent,
 width scale and profile, centerline, body length, in-view fraction, final
 energy and overlap, mask statistics, and per-stage timing.
 
@@ -56,7 +59,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -81,13 +84,16 @@ from worm_pose_gen.pipeline import (
     SegmentParams,
     TrackParams,
     fit_frames,
+    decode_heads,
     fit_setup,
     fit_statistics,
+    head_inputs,
     independent_copies,
     load_mask_model,
     mask_checkpoint,
     new_arrays,
     propagation_pass,
+    recording_nose,
     resolve_prior,
     segment_frames,
     segment_slabs,
@@ -262,24 +268,32 @@ def build_config(args: argparse.Namespace) -> BatchFitConfig:
 
 
 class _PackedMaskCache:
-    """Run-local LRU with at most 128 MiB of packed mask data by default."""
+    """Run-local LRU with at most 512 MiB of packed mask data by default.
 
-    def __init__(self, max_bytes: int = 128 * 1024 * 1024) -> None:
+    A mask is kept as the bits of its bounding box (a 732x968 frame's worm
+    packs to about 10 KB instead of 88 KB), so the masks of a whole
+    recording's fit usually stay until the fit pass reads them again.
+    """
+
+    def __init__(self, max_bytes: int = 512 * 1024 * 1024) -> None:
         self.max_bytes = max(0, int(max_bytes))
         self.nbytes = 0
-        self._entries: OrderedDict[int, tuple[np.ndarray, tuple[int, int], int]] = OrderedDict()
+        self._entries: OrderedDict[int, tuple[np.ndarray, tuple[int, ...], int]] = OrderedDict()
 
     def put(self, row: int, mask: np.ndarray, worm_pixels: int) -> None:
         previous = self._entries.pop(int(row), None)
         if previous is not None:
             self.nbytes -= previous[0].nbytes
-        packed = np.packbits(np.asarray(mask, dtype=bool).ravel())
+        body = np.asarray(mask, dtype=bool)
+        rows, cols = np.flatnonzero(body.any(1)), np.flatnonzero(body.any(0))
+        box = (int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1) if len(rows) else (0, 0, 0, 0)
+        packed = np.packbits(body[box[0] : box[1], box[2] : box[3]].ravel())
         if packed.nbytes > self.max_bytes:
             return
         while self._entries and self.nbytes + packed.nbytes > self.max_bytes:
             _, (evicted, _, _) = self._entries.popitem(last=False)
             self.nbytes -= evicted.nbytes
-        self._entries[int(row)] = (packed, (int(mask.shape[0]), int(mask.shape[1])), int(worm_pixels))
+        self._entries[int(row)] = (packed, (int(body.shape[0]), int(body.shape[1]), *box), int(worm_pixels))
         self.nbytes += packed.nbytes
 
     def get(self, row: int) -> tuple[np.ndarray, int] | None:
@@ -287,8 +301,9 @@ class _PackedMaskCache:
         if entry is None:
             return None
         self._entries.move_to_end(int(row))
-        packed, shape, worm_pixels = entry
-        mask = np.unpackbits(packed, count=shape[0] * shape[1]).astype(bool).reshape(shape)
+        packed, (height, width, y0, y1, x0, x1), worm_pixels = entry
+        mask = np.zeros((height, width), dtype=bool)
+        mask[y0:y1, x0:x1] = np.unpackbits(packed, count=(y1 - y0) * (x1 - x0)).astype(bool).reshape(y1 - y0, x1 - x0)
         return mask, worm_pixels
 
 
@@ -358,25 +373,28 @@ def main() -> int:
     skipped: dict[str, int] = {"empty_mask": 0, "small_mask": 0, "no_starts": 0, "fit_error": 0}
     timing = {stage: 0.0 for stage in STAGES}
 
-    # Independent fits, slab by slab: segment, clean, start, fit, store.  A slab is segmented and its starts
-    # submitted on a background thread while the slab before it fits on the GPU.
+    # Every slab segmented (and predicted by the body-field network) first, so the head can be tracked over the
+    # whole stretch; then the independent fits, slab by slab, the next slab's starts computed while this one fits.
     mask_cache = _PackedMaskCache()
     pool = ProcessPoolExecutor(max_workers=args.init_workers) if args.init_workers > 0 else None
     cleanup = ThreadPoolExecutor(max_workers=CLEANUP_WORKERS)
     # A network that made the masks made the fit's predictions with them: they are reused, not predicted again.
     predictor = None if args.body_net is None or isinstance(model, BodyNetMasks) else field_predictor(args.body_net, frames, device)
     field_crops: dict[int, Any] = {}
-
-    def segmented() -> Iterator[tuple[Any, ...]]:
-        slabs = [indices[slab_start : slab_start + args.slab] for slab_start in range(0, n, args.slab)]
-        for slab_start, slab, (masks, stats, seg_timing, mask_predictions) in zip(
-            range(0, n, args.slab), slabs, segment_slabs(frames, model, slabs, segmentation, device, pool=cleanup), strict=True
+    slabs = [list(range(slab_start, min(slab_start + args.slab, n))) for slab_start in range(0, n, args.slab)]
+    fit_rows_of: list[list[int]] = []
+    nose = recording_nose(args.recording, indices, image_shape) if args.body_net is not None else None
+    heads: dict[int, Any] = {}
+    try:
+        t0 = time.perf_counter()
+        slab_frames = [[indices[row] for row in slab] for slab in slabs]
+        for slab, (masks, stats, seg_timing, mask_predictions) in zip(
+            slabs, segment_slabs(frames, model, slab_frames, segmentation, device, pool=cleanup), strict=True
         ):
-            slab_rows = list(range(slab_start, slab_start + len(slab)))
             fit_masks_here: list[np.ndarray] = []
             fit_rows: list[int] = []
             fit_predictions: list[Any] = []
-            for k, (row, mask, frame_stats) in enumerate(zip(slab_rows, masks, stats, strict=True)):
+            for k, (row, mask, frame_stats) in enumerate(zip(slab, masks, stats, strict=True)):
                 mask_cache.put(row, mask, frame_stats["worm_pixels"])
                 store_mask_stats(arrays, row, frame_stats)
                 if frame_stats["worm_pixels"] == 0:
@@ -388,31 +406,48 @@ def main() -> int:
                     fit_rows.append(row)
                     if mask_predictions is not None:
                         fit_predictions.append(mask_predictions[k])
+            fit_rows_of.append(fit_rows)
             predictions = fit_predictions or None
             if predictor is not None and fit_rows:
                 t_fields = time.perf_counter()
                 predictions = predictor.predict([indices[row] for row in fit_rows])
                 seg_timing["fields"] = time.perf_counter() - t_fields
-            crops = None
             if predictions is not None:
                 # What the fits read of each prediction (all they read of it, and small enough for the start pool),
                 # kept so the later passes score against the same one.
-                crops = [crop_fields(p, mask) for p, mask in zip(predictions, fit_masks_here, strict=True)]
-                field_crops.update(zip(fit_rows, crops))
-            yield slab, slab_rows, fit_masks_here, fit_rows, crops, seg_timing, submit_starts(fit_masks_here, setup, pool, crops)
-
-    try:
-        t0 = time.perf_counter()
-        for slab, slab_rows, fit_masks_here, fit_rows, crops, seg_timing, starts in prefetched(segmented()):
-            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, starts, skipped=skipped, predictions=crops)
-            for stage, seconds in {**seg_timing, **fit_timing}.items():
+                for row, prediction, mask in zip(fit_rows, predictions, fit_masks_here, strict=True):
+                    field_crops[row] = crop_fields(prediction, mask)
+                    heads[row] = head_inputs(field_crops[row], mask, nose[row])
+            for stage, seconds in seg_timing.items():
                 timing[stage] += seconds
-            fitted_here = int(arrays["fitted"][slab_rows].sum())
+        print(
+            f"segmented {n} frames: network {1000 * timing['network'] / n:.0f} ms/frame, cleanup {1000 * timing['cleanup'] / n:.0f},"
+            f" {time.perf_counter() - t0:.1f} s",
+            flush=True,
+        )
+        head_track = None
+        if field_crops:
+            head_track = decode_heads(arrays, heads)
+            field_crops = {row: crop.with_head(arrays["head_xy"][row]) for row, crop in field_crops.items()}
+            print(f"head track: {json.dumps(head_track)}", flush=True)
+
+        def fit_inputs(slab: list[int], fit_rows: list[int]) -> tuple[Any, ...]:
+            by_row = _segment_cached_rows(fit_rows, frames, model, arrays["frame_index"], segmentation, device, mask_cache)
+            fit_rows = [row for row in fit_rows if row in by_row]
+            fit_masks_here = [by_row[row] for row in fit_rows]
+            crops = [field_crops[row] for row in fit_rows] if field_crops else None
+            return slab, fit_masks_here, fit_rows, crops, submit_starts(fit_masks_here, setup, pool, crops)
+
+        t0 = time.perf_counter()
+        for slab, fit_masks_here, fit_rows, crops, starts in prefetched(fit_inputs(slab, rows) for slab, rows in zip(slabs, fit_rows_of, strict=True)):
+            fit_timing = fit_frames(fit_masks_here, fit_rows, setup, arrays, device, starts, skipped=skipped, predictions=crops)
+            for stage, seconds in fit_timing.items():
+                timing[stage] += seconds
+            fitted_here = int(arrays["fitted"][slab].sum())
             print(
-                f"frames {slab[0]}-{slab[-1]}: fit {1000 * fit_timing['fit'] / len(slab):.0f} ms/frame"
-                f" (init {1000 * fit_timing['init'] / len(slab):.0f}, network {1000 * seg_timing['network'] / len(slab):.0f},"
-                f" cleanup {1000 * seg_timing['cleanup'] / len(slab):.0f}), fitted {fitted_here}/{len(slab)},"
-                f" median iou {np.nanmedian(arrays['iou'][slab_rows]) if fitted_here else float('nan'):.3f},"
+                f"frames {indices[slab[0]]}-{indices[slab[-1]]}: fit {1000 * fit_timing['fit'] / len(slab):.0f} ms/frame"
+                f" (init {1000 * fit_timing['init'] / len(slab):.0f}), fitted {fitted_here}/{len(slab)},"
+                f" median iou {np.nanmedian(arrays['iou'][slab]) if fitted_here else float('nan'):.3f},"
                 f" {time.perf_counter() - t0:.1f} s",
                 flush=True,
             )
@@ -434,6 +469,8 @@ def main() -> int:
         if missing:
             predicted = fields.predict([indices[row] for row in missing])
             field_crops.update({row: crop_fields(p, masks[row]) for row, p in zip(missing, predicted, strict=True)})
+            if "head_xy" in arrays:
+                field_crops.update({row: field_crops[row].with_head(arrays["head_xy"][row]) for row in missing})
         return [field_crops[r] for r in rows]
 
     # Per-frame ambiguity signals (plan step 4) from the stored arrays; the
@@ -520,6 +557,7 @@ def main() -> int:
         "total_ms_per_frame": 1000.0 * total_seconds / n,
         "frames_skipped": skipped,
         **fit_statistics(arrays, config, prior, orient=not args.no_orient),
+        "head_track": head_track,
         "track_length": track_info,
         "propagation": propagation_info,
         "outputs": {

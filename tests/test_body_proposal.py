@@ -6,7 +6,8 @@ import torch
 
 from worm_pose_gen.body_net import OUTPUTS
 from worm_pose_gen.body_proposal import (
-    OVERLAP_THRESHOLD, FieldPrediction, RecordingFieldPredictor, field_evidence, network_inputs, propose_trace, trace_start,
+    OVERLAP_THRESHOLD, FieldPrediction, RecordingFieldPredictor, field_evidence, head_candidates, heatmap_modes, network_inputs, propose_trace,
+    trace_start,
 )
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets
 from worm_pose_gen.latent import decode_centerline
@@ -235,6 +236,7 @@ class RecordingPredictorTests(unittest.TestCase):
             np.testing.assert_array_equal(got.crossing, whole.overlap >= OVERLAP_THRESHOLD)
             self.assertEqual(got.peak("head"), whole.peak("head"))
             self.assertEqual(got.peak("tail"), whole.peak("tail"))
+            np.testing.assert_array_equal(got.head_modes(), whole.head_modes())
         np.testing.assert_array_equal(field_evidence(fields[0], mask).ap, field_evidence(full[0], mask).ap)
 
     def test_consecutive_calls_reuse_their_shared_neighbours(self):
@@ -249,6 +251,37 @@ class RecordingPredictorTests(unittest.TestCase):
         self.assertEqual(frames.read, [[0, 1, 2, 3, 4, 5, 6], [7, 8, 9]])
         fresh = network_inputs({k: torch.as_tensor(f) for k, f in enumerate(self.raw)}, [5, 6, 7], (1, 2))
         torch.testing.assert_close(captured[-1], fresh, rtol=0, atol=0)
+
+
+class HeadModeTests(unittest.TestCase):
+    def test_modes_are_separated_local_maxima_strongest_first(self):
+        heatmap = 0.9 * point_heatmap(SHAPE, np.array([100.0, 100.0]), 6.0) + 0.5 * point_heatmap(SHAPE, np.array([200.0, 120.0]), 6.0)
+        heatmap = np.maximum(heatmap, 0.25 * point_heatmap(SHAPE, np.array([110.0, 105.0]), 3.0))  # a shoulder 11 px from the peak
+        heatmap[50, 300] = 0.01  # below the floor
+        modes = heatmap_modes(torch.as_tensor(heatmap, dtype=torch.float32)[None])[0].numpy()
+        np.testing.assert_allclose(modes[:2], [[100, 100, 0.9], [200, 120, 0.5]], atol=1e-6)
+        self.assertTrue(np.isnan(modes[2:]).all())
+
+    def test_tied_pixels_give_one_mode_where_argmax_finds_it(self):
+        heatmap = np.zeros(SHAPE, np.float32)
+        heatmap[40, 60:63] = 0.7  # a plateau, as the half-precision outputs give
+        heatmap[200, 300] = 0.7
+        modes = heatmap_modes(torch.as_tensor(heatmap)[None])[0].numpy()
+        prediction = FieldPrediction(heatmap, heatmap, heatmap, heatmap, heatmap)
+        self.assertEqual(sorted(map(tuple, modes[:2, :2])), [(60.0, 40.0), (300.0, 200.0)])
+        self.assertTrue(np.isnan(modes[2:]).all())
+        self.assertIn(prediction.peak("head")[:2], [(60.0, 40.0)])
+
+    def test_head_candidates_keep_heads_on_the_mask(self):
+        centerline, mask = looped_body()
+        heatmap = point_heatmap(SHAPE, centerline[0], 6.0) + 0.5 * point_heatmap(SHAPE, np.array([30.0, 30.0]), 6.0)
+        prediction = FieldPrediction(mask.astype(np.float32), mask.astype(np.float32), heatmap.astype(np.float32), heatmap, heatmap)
+        modes, nose = head_candidates(prediction, mask, np.array([30.0, 30.0]))
+        np.testing.assert_allclose(modes[0, :2], centerline[0])
+        self.assertTrue(np.isnan(modes[1:]).all(), "the mode 100 px off the body is no candidate")
+        self.assertTrue(np.isnan(nose).all())
+        _, nose = head_candidates(prediction, mask, centerline[3])
+        np.testing.assert_array_equal(nose, centerline[3])
 
 
 class StubModule(torch.nn.Module):
