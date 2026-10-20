@@ -6,11 +6,6 @@ import torch
 
 from worm_pose_gen.anchors import render_centerline_mask
 from worm_pose_gen.mask_fit import render_tube_segments
-from worm_pose_gen.renderer import render_worm
-
-
-def _sample_mask(points, diameters):
-    return render_worm(points, diameters, 64, 64)["tube_mask"]
 
 
 def _segment_mask(points, diameters):
@@ -33,12 +28,12 @@ class TubeContactTests(unittest.TestCase):
         dx = (12.0 - x_grid).clamp_min(0) + (x_grid - 52.0).clamp_min(0)
         distance = torch.sqrt(dx.square() + (y_grid - 32.0).square() + torch.finfo(torch.float32).eps)
         expected = torch.sigmoid((diameters[:, :1, None] / 2 - distance) / 0.8)
-        for render in (_sample_mask, _segment_mask):
+        for render in (_segment_mask,):
             with self.subTest(renderer=render.__name__):
                 torch.testing.assert_close(render(points, diameters), expected)
 
     def test_nose_contact_preserves_midbody_coverage(self) -> None:
-        for render in (_sample_mask, _segment_mask, _numpy_mask):
+        for render in (_segment_mask, _numpy_mask):
             # A narrow nose approaches and overlaps a horizontal, wider body.
             # Contact, including a hidden nose, must not subtract body pixels.
             for nose_y in (29.5, 30.0, 32.0, 40.0):
@@ -58,7 +53,7 @@ class TubeContactTests(unittest.TestCase):
                     )
 
     def test_covered_body_pixel_does_not_push_nose_away(self) -> None:
-        for render in (_sample_mask, _segment_mask):
+        for render in (_segment_mask,):
             with self.subTest(renderer=render.__name__):
                 points = torch.tensor([[
                     [32.0, 30.0], [32.0, 15.0], [8.0, 15.0],

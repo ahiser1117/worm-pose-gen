@@ -1,7 +1,7 @@
 """On-disk workspace for one recording range.
 
 A workspace is the place the pipeline stages and the user's fixes read from
-and write back to (``docs/APP_PLAN.md`` section 4); the app keeps one per
+and write back to; the app keeps one per
 recording, always the whole recording (``docs/APP_SIMPLIFICATION.md``)::
 
     <workspaces>/<name>/

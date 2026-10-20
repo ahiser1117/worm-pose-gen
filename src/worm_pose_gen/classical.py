@@ -28,8 +28,7 @@ class ClassicalConfig:
     # only when they connect to the high-confidence largest component. This can
     # recover faint worm sections without retaining disconnected dark debris.
     # Disabled by default: the interactively tuned 61/3/4.25/2.05/8 setting cut
-    # 30-frame stress acceptance from 11 to 3 frames (see
-    # docs/final_algorithm_tuned_local_darkness_unannotated30) and was reverted.
+    # 30-frame stress acceptance from 11 to 3 frames and was reverted.
     connected_foreground_z: float | None = None
     close_radius: int = 2
     min_area: int = 2_500

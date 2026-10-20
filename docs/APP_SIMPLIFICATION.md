@@ -2,8 +2,8 @@
 
 Status: implemented on branch `app-simplification` (waves 1–3, 2026-10-07).
 This document collects the decisions of the app simplification pass. It
-replaces `UI_TASK_TABS_PLAN.md` (deleted) and the UI sections of
-`APP_PLAN.md`. Section 5 ends with what was built differently from the text
+replaces `UI_TASK_TABS_PLAN.md` and the UI sections of `APP_PLAN.md` (both
+in the git history). Section 5 ends with what was built differently from the text
 above it. Section 1 (storage) comes first because the
 model picker, Labeling and Training pages are built on it; the page-by-page
 reviews follow as sections 2–4.
@@ -667,11 +667,10 @@ wave the app still starts and its tests pass.
 `scripts/migrate_to_library.py`, `scripts/publish.py`, tests)
 
 - `Libraries(lab: Path | None, personal: Path)`. The lab root is looked up
-  by hostname (`LAB_LIBRARY_BY_HOST`: flv-c2/c3/c4 →
-  `/store1/shared/worm-pose-models`) and is read-only to the app. The
-  personal root defaults by host as well (flv-c →
-  `/temp_data4/<user>/worm-pose-library`, elsewhere
-  `~/worm-pose-library`). `--lab-library` and `--library` override them.
+  by hostname (`LAB_LIBRARY_BY_HOST`: flv-c* → store1, Engaging →
+  `/orcd/data/flavell/001/shared/worm-pose-models`) and is read-only to the
+  app. The personal root is `library/` in the data directory
+  (`settings.json`). `--lab-library` and `--library` override them.
 - References are strings: `lab:<id>` and `mine:<id>`.
 - **Setup** (`setups/<id>.json`) holds: `name`, `description`, `video`
   (`dataset_path`, default `/img_nir`; `flat_field`), `pixel_size_um`, `fps`,
@@ -885,7 +884,7 @@ queue.
   imported from runs need their `imported_summary.json` renamed to
   `summary.json`. Recordings registered by hand in the old
   `recordings_registry.json` must be added again with **Add recording**.
-  `docs/pose_review/notes.json` is kept as data.
+  `docs/pose_review/notes.json` was kept as data (now in the git history).
 
 ### Wave 2 contracts between the pages
 

@@ -977,11 +977,10 @@ def render_tube_segments(
 ) -> Tensor:
     """Soft tube occupancy from distance to the centerline *polyline*.
 
-    ``worm_pose_gen.renderer.render_worm`` uses disks at centerline samples.
-    That makes occupancy between samples depend on sample
-    spacing, so lengthening the body shrinks the rendered tube everywhere and
-    the length gradient carries a consistent shortening bias.  Distance to the
-    polyline segments removes that bias. Diameter is interpolated along each
+    Disks at the centerline samples (an earlier renderer) make occupancy
+    between samples depend on sample spacing, so lengthening the body shrinks
+    the rendered tube everywhere and the length gradient carries a consistent
+    shortening bias.  Distance to the polyline segments removes that bias. Diameter is interpolated along each
     segment, and occupancy is their union. A narrow nose or tail can therefore
     touch or overlap the wider body without cutting into its silhouette.
     Shapes: ``[B,N,2]`` points, ``[B,N]`` diameters. ``pixel_origin_xy``

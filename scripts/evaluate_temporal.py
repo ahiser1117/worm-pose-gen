@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Label-free temporal consistency of a body-field network on the clips of docs/temporal_eval_set.json.
+"""Label-free temporal consistency of a body-field network on the clips of eval_sets/temporal_eval_set.json.
 
 See :mod:`worm_pose_gen.temporal_eval` for the clips and metrics.  Writes
 ``<output-dir>/temporal_eval.json`` (per-clip metrics, a summary over all
@@ -8,7 +8,7 @@ clips and per group) and ``<output-dir>/predictions/<clip>.npz`` (for
 frame cache without a model.  Example::
 
     scripts/project_env.sh env CUDA_VISIBLE_DEVICES=3 uv run --no-sync --frozen python scripts/evaluate_temporal.py \\
-        --model mine:on-food-finetune-329 --output-dir /temp_data4/alex/external_artifacts/arch_survey/temporal/on-food-finetune-329
+        --model mine:on-food-finetune-329 --output-dir <data dir>/runs/temporal/on-food-finetune-329
 """
 
 from __future__ import annotations

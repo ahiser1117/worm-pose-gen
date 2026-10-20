@@ -303,7 +303,7 @@ visible ground-truth points lie a mean of less than half a body width from
 the fitted midline; *A-P* is the mean error of the fit's rendered A-P field
 over the mask; *head* is the fraction with the head at the true head end;
 IoU is the median. On flv-c3
-(`docs/pose_pipeline_fields/heldout_field_fitting.json`):
+(`docs/pose_pipeline_fields/heldout_field_fitting.json`, in the git history):
 
 | Fitter | Traced: within ½ w | A-P | head | IoU | Accepted: within ½ w | A-P | head | IoU |
 |---|---|---|---|---|---|---|---|---|
@@ -320,10 +320,10 @@ pulls it off the mask.
 
 ### Sequence set
 
-The seven 300-frame clips of `docs/sequence_eval_set.json`
+The seven 300-frame clips of `eval_sets/sequence_eval_set.json`
 (`scripts/evaluate_sequence_set.py` with
 `'--extra=--body-net checkpoints/body_net/best.ckpt'`), fit on flv-c3
-A5500s; the result files are in `docs/pose_pipeline_fields/`. Each cell is
+A5500s; the result files were in `docs/pose_pipeline_fields/` (git history). Each cell is
 frames with IoU below 0.9 / pose jumps over a body width / length jumps over
 3% / in-view changes (`propagation.continuity_summary`).
 
@@ -516,7 +516,7 @@ head and tail both pass the end rules fits its standard starts head first
 only (see *Orientation from the ends* above). The propagation and track
 passes refit warm poses in one orientation and are unchanged. Measured on
 flv-c3 against the state before, with `nir-body-lags3` (the lab model of
-nir-flv; result files in `docs/pose_pipeline_fields/orientation_starts/`):
+nir-flv; result files in `docs/pose_pipeline_fields/orientation_starts/`, git history):
 
 | | Before | One orientation |
 |---|---|---|
@@ -547,7 +547,7 @@ first and fits the standard starts (the skeleton, oriented as above) only
 for frames whose trace fit reaches an IoU below `TRACE_FIT_IOU` (0.95) or
 that have no trace; the lower energy of both fits wins. Measured on
 2026-10-15 (flv-c4, body-net masks, `nir-flv-labels-279`, fast preset;
-files in `/temp_data4/alex/external_artifacts/opt/idea7/`):
+result files kept outside the repository):
 
 - Fitting every start on its own showed that where a skeleton start won
   (1,069 of 2,000 frames of 2023-03-30-01, f6000-7999), the trace's own fit
@@ -675,7 +675,7 @@ The trace start's prior width, one orientation where the ends are clear,
 the region algorithms' evidence and the body-net mask toggle together,
 against the state before any of them, on flv-c3 A5500s with
 `nir-body-lags3` and `checkpoints/segmenter/best.ckpt`, each run with a
-fresh prior cache (result files in `docs/pose_pipeline_fields/integration/`).
+fresh prior cache (result files in `docs/pose_pipeline_fields/integration/`, git history).
 Cells as in the sequence set above; the held-out rows are the pipeline's
 `both` variant of `scripts/evaluate_field_fitting.py`. Frames below 0.9 of
 the body-net-mask runs are scored against their own masks.
@@ -718,7 +718,7 @@ body. Measured as ablations against the combined state, on flv-c3
 (A5500s; C's sequence runs and the final held-out run on its A6000),
 with `nir-body-lags3`, `checkpoints/segmenter/best.ckpt`, a fresh prior
 cache per run and `--ambiguous-frames 0` (result files in
-`docs/pose_pipeline_fields/head_anchored/`; the base re-run reproduces the
+`docs/pose_pipeline_fields/head_anchored/`, git history; the base re-run reproduces the
 combined state's counts exactly):
 
 - **A**: the trace start laid from the head at the prior's length (fits

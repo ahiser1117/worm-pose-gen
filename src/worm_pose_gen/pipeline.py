@@ -2,7 +2,7 @@
 
 ``scripts/fit_recording.py`` grew into one long function that segments,
 bootstraps a prior, fits, scores, propagates, refits and summarises.  The app
-(docs/APP_PLAN.md, section 5) needs each of those steps as a job that can be
+needs each of those steps as a job that can be
 rerun on its own over a workspace, so the per-frame logic lives here and the
 script composes it.  Every stage reads its inputs from the workspace and
 writes its outputs back (``worm_pose_gen.workspace``): masks and their

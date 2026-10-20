@@ -9,7 +9,7 @@ validation split stays honest), flat-fields them as the pipeline does and
 saves them as uint8 (:mod:`worm_pose_gen.unlabeled_clips`).  Example::
 
     scripts/build_unlabeled_clips.py --setup lab:nir-flv --dataset mine:on-food-finetune \\
-        --output /temp_data4/alex/external_artifacts/arch_survey/semi/clips --per-recording 10 --length 64 --workers 32
+        --output <data dir>/runs/unlabeled_clips --per-recording 10 --length 64 --workers 32
 """
 
 from __future__ import annotations

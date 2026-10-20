@@ -6,11 +6,11 @@ Three 300-frame clips are fit end to end by ``scripts/fit_recording.py`` with
 on (the defaults), no video and no residual images, and each recording's
 prior pinned to its cached file (no bootstrap):
 
-``spiral_0131``    a tight spiral (``docs/sequence_eval_set.json``)
+``spiral_0131``    a tight spiral (``eval_sets/sequence_eval_set.json``)
 ``edge_0528``      the body at the image border with pieces breaking off (same manifest)
 ``ordinary_0131``  2024-01-31-02 frames 4350-4649: ordinary crawling, fully in
                    view, outside every window of the mask scan
-                   (``docs/pose_pipeline_step4/clip_candidates/``)
+                   (from ``scripts/find_sequence_clips.py``)
 
 Per run: wall seconds, each stage's seconds and ms per frame (the run's
 ``summary.json``), and quality: frames with IoU below 0.9, median IoU, and
@@ -60,7 +60,7 @@ the verdict into the report).  KEEP only if all hold:
 Command (about 28 minutes; runs go to a new directory under ``--runs-dir``):
 
     ssh -o BatchMode=yes flv-c3 "cd /home/alex/git/worm-pose-gen; and env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 \\
-        uv run --no-sync python scripts/benchmark_pose_runtime.py --repeat 2 --baseline docs/pose_pipeline_fields/runtime_baseline.json"
+        uv run --no-sync python scripts/benchmark_pose_runtime.py --repeat 2 --baseline <data dir>/runs/runtime_benchmark/<run>/runtime.json"
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ from worm_pose_gen.run_records import git_revision, timestamp_slug, utc_now
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = PROJECT_ROOT / "docs" / "sequence_eval_set.json"
+MANIFEST = PROJECT_ROOT / "eval_sets" / "sequence_eval_set.json"
 BODY_NET = PROJECT_ROOT / "checkpoints" / "body_net" / "best.ckpt"
 MANIFEST_CLIPS = ("spiral_0131", "edge_0528")
 ORDINARY = {"name": "ordinary_0131", "recording": "/store1/shared/all_data_raw/prj_aversion/2024-01-31/2024-01-31-02.h5", "start": 4350, "frames": 300}

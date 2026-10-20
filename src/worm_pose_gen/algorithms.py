@@ -1,7 +1,6 @@
 """The algorithm registry: the pipeline's methods as plugins that run on a region of a workspace.
 
-Phase 3 of ``docs/APP_PLAN.md`` (sections 2 and 6), behind the Workspace page's
-Refit and Relabel fixes (``docs/APP_SIMPLIFICATION.md``).  A region is a run of
+Behind the Workspace page's Refit and Relabel fixes (``docs/APP_SIMPLIFICATION.md``).  A region is a run of
 rows ``first..last`` of a workspace between two anchors, rows outside it
 whose stored poses are trusted.  An algorithm takes the region's masks, the
 workspace's fit configuration and prior, and the anchors, and produces

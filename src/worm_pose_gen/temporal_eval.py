@@ -1,6 +1,6 @@
 """Temporal consistency of a body-field network on fixed clips, measured without labels.
 
-The clips are listed in ``docs/temporal_eval_set.json``: the seven sequence
+The clips are listed in ``eval_sets/temporal_eval_set.json``: the seven sequence
 clips, held-out stretches of test recordings (two of them through the
 self-contacts of the ``nir-flv-labels-b2`` benchmark) and stretches of another
 project's recordings no model trains on.  Their flat-fielded frames, with
@@ -44,12 +44,13 @@ import torch
 
 from .body_net import OUTPUTS
 from .body_proposal import END_THRESHOLD, OVERLAP_THRESHOLD, _probabilities, network_inputs
+from .settings import CACHE_DIR
 from .temporal_context import MAX_LAG
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = PROJECT_ROOT / "docs" / "temporal_eval_set.json"
-DEFAULT_CACHE = Path("/temp_data4/alex/external_artifacts/arch_survey/clip_cache")
+DEFAULT_MANIFEST = PROJECT_ROOT / "eval_sets" / "temporal_eval_set.json"
+DEFAULT_CACHE = CACHE_DIR / "temporal_clips"
 # Median fitted body width on the sequence set (px); a head that moves more
 # than this between frames (0.05 s) has jumped.
 BODY_WIDTH_PX = 41.0

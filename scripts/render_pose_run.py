@@ -11,7 +11,7 @@ images re-run the segmenter on the few frames they need.
 Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/render_pose_run.py \\
-        /temp_data4/alex/external_artifacts/poses/<run> --scale 0.5 --residual-frames 6 --frames 451,1052
+        <data dir>/runs/poses/<run> --scale 0.5 --residual-frames 6 --frames 451,1052
 """
 
 from __future__ import annotations

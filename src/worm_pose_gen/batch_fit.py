@@ -90,7 +90,7 @@ class BatchFitConfig(MaskFitConfig):
     final_render_rows: int = 8
 
 
-# Measured on the 30-frame stress set (docs/POSE_PIPELINE_PLAN.md, step 1):
+# Measured on the 30-frame stress set (step 1 of the pose pipeline plan, in the git history):
 # median IoU deficit against the 550-step ``fit_mask`` reference and cost per
 # frame on an RTX 6000 Ada with two starts (skeleton and straight moments).
 #   fast       -0.008 IoU   0.25 s/frame

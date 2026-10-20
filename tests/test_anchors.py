@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+from scipy import ndimage
 
 from worm_pose_gen.anchors import (
     AnchorConfig,
@@ -8,7 +9,6 @@ from worm_pose_gen.anchors import (
     extend_centerline_to_mask_boundary,
     extract_mask_anchor,
 )
-from worm_pose_gen.segmentation import fill_small_enclosed_holes
 
 
 def easy_tube() -> np.ndarray:
@@ -152,9 +152,7 @@ class AnchorTests(unittest.TestCase):
         porous = easy_tube()
         porous[38:41, 45:48] = False
         porous[39:42, 82:84] = False
-        cleaned, count, area = fill_small_enclosed_holes(porous, max_hole_area=12)
-        self.assertEqual(count, 2)
-        self.assertEqual(area, 15)
+        cleaned = ndimage.binary_fill_holes(porous)
         result = extract_mask_anchor(cleaned, config=self.config())
         self.assertTrue(result.accepted, result.rejection_reasons)
         self.assertGreater(float(result.qc["mask_render_iou"]), 0.75)

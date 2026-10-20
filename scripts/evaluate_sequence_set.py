@@ -3,7 +3,7 @@
 
 The set is a manifest of clips, each a recording and a frame range chosen
 for coils, self-contact, enclosed holes, dropped fragments, or camera exits
-(``docs/sequence_eval_set.json``, frame ranges only, no copies).  Each clip
+(``eval_sets/sequence_eval_set.json``, frame ranges only, no copies).  Each clip
 is fit with ``scripts/fit_recording.py`` (video and residual images
 included), the ambiguity signals are summarized per clip, and residual
 images of the most ambiguous frames are rendered.  Results go to
@@ -28,11 +28,12 @@ import numpy as np
 
 from worm_pose_gen.ambiguity import FLAG_NAMES
 from worm_pose_gen.run_records import git_revision, utc_now
+from worm_pose_gen.settings import RUNS_DIR
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = PROJECT_ROOT / "docs" / "sequence_eval_set.json"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "docs" / "pose_pipeline_step4"
+DEFAULT_MANIFEST = PROJECT_ROOT / "eval_sets" / "sequence_eval_set.json"
+DEFAULT_OUTPUT_DIR = RUNS_DIR / "sequence_set"
 
 
 def parse_args() -> argparse.Namespace:

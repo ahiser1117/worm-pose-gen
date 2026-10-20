@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the region algorithms on the ambiguous stretches of the sequence set.
 
-Each clip of ``docs/sequence_eval_set.json`` is analysed once into a
+Each clip of ``eval_sets/sequence_eval_set.json`` is analysed once into a
 workspace under ``--root`` (the default stages: segment, prior, fit with
 ``--body-net``, ambiguity, propagate, track), then every algorithm of
 ``--algorithms`` runs on every stretch the propagate stage refit, with the
@@ -16,7 +16,7 @@ over 3%, orientation flips, and seconds.
 Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/evaluate_region_algorithms.py \\
-        --root /temp_data4/alex/external_artifacts/region_eval --body-net <library>/models/nir-body-lags3/weights.ckpt \\
+        --root <data dir>/runs/region_eval --body-net <library>/models/nir-body-lags3/weights.ckpt \\
         --output region_eval.json
 """
 
@@ -34,7 +34,7 @@ from worm_pose_gen.workspace import Workspace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = PROJECT_ROOT / "docs" / "sequence_eval_set.json"
+DEFAULT_MANIFEST = PROJECT_ROOT / "eval_sets" / "sequence_eval_set.json"
 DEFAULT_ALGORITHMS = "independent_multistart,beam_path,slow_refit,fixed_body_smoother,mirror"
 COUNTS = ("frames", "frames_below_0_9", "pose_jumps_over_width", "length_jumps_over_3pct", "orientation_flips")
 

@@ -217,9 +217,8 @@ of the segmenter (`--checkpoint`), cleaned the same way; the segmenter is the
 default, as its masks score better on the held-out labels
 ([Masks from the network](BODY_FIELDS.md#masks-from-the-network)).
 
-Runtime improvements and reproducible GPU 3 benchmarks are documented in
-[Runtime optimization](RUNTIME_OPTIMIZATION.md). The default optimizations
-preserve fitting schedules. `--compile-energy` additionally compiles the whole
+The default runtime optimizations preserve fitting schedules
+(`scripts/benchmark_pose_runtime.py` measures them). `--compile-energy` additionally compiles the whole
 independent fitting loss; it adds startup cost and should be benchmarked on
 your workload before enabling.
 
@@ -285,14 +284,12 @@ candidate is stored (`hypotheses_*` arrays, `path_*`, `prediction_xy`), with
 the path's choice and where it overrode the lowest energy.
 
 The sequence evaluation set, seven 300-frame clips with coils, self-contact,
-fragments and camera exits, is the manifest `docs/sequence_eval_set.json`;
+fragments and camera exits, is the manifest `eval_sets/sequence_eval_set.json`;
 `scripts/find_sequence_clips.py` proposes such clips from a mask-only scan
-and `scripts/evaluate_sequence_set.py` fits and scores the set. The plan
-this belongs to, with measurements, is
-[`POSE_PIPELINE_PLAN.md`](POSE_PIPELINE_PLAN.md);
-`scripts/evaluate_width_model_unannotated30.py` and
-`scripts/evaluate_recording_prior_unannotated30.py` compare width models and
-priors on the 30-frame set.
+and `scripts/evaluate_sequence_set.py` fits and scores the set
+(`eval_sets/heldout_sequence_set.json` holds held-out clips in the same
+format, `eval_sets/temporal_eval_set.json` the clips of
+`scripts/evaluate_temporal.py`).
 
 ## Segment with a fine-tuned network
 
@@ -312,157 +309,36 @@ The hand labels of the old store (`segmentation_v1`,
 (`scripts/migrate_to_library.py`). New labels are made on the pose app's
 Labeling page. They go into your personal dataset for the setup.
 
-Targeted labeling rounds are manifests: coils, self-contact, holes,
-fragments and camera-edge frames across 13 recordings in
-`docs/labeling_round_2/manifest.json` (built by
-`scripts/build_labeling_manifest.py` from the clip-candidate scans), and 34
-held-out self-contact frames in `docs/labeling_round_3_contact/manifest.json`.
-`worm-pose-app --queue <manifest>` opens one as a Labeling queue; the
-splits come from the dataset, per recording.
+A targeted labeling round is a manifest of frames
+(`scripts/build_labeling_manifest.py` builds one from the clip-candidate
+scans of `scripts/find_sequence_clips.py`); `./worm-pose-app --queue
+<manifest>` opens it as a Labeling queue. The splits come from the dataset,
+per recording.
 
-## Research history
+## History
 
-Research code for a conservative 2D *C. elegans* pose pipeline on NIR video.
-The repository is organized around one geometric algorithm:
-
-`local-darkness mask -> skeleton pose -> smooth containing body -> narrow-notch repair -> curvature-aware endpoint extension`
-
-and, as of September 2026, its intended replacement: a generative body model
-fit directly to the segmentation mask
-(`flat field -> local-darkness mask -> render tube model -> optimize pose against the mask`),
-documented in [`MASK_FIT_EXPERIMENT.md`](MASK_FIT_EXPERIMENT.md).
-
-The canonical description, evidence boundary, current results, and limitations
-are in
-[`POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md`](POSE_ESTIMATION_TO_ENDPOINT_CURVE_EXTENSION.md).
-
-This remains research code. The algorithm has been exercised on one annotated
-development frame and an annotation-free 30-frame stress set; it is not
-deployment-authorized, and the protected holdout remains unopened. The
-annotation-matched 30-frame audit is permanently retired: the exact source
-frames behind 21 of the 30 manual traces were lost with their corrupted
-recordings, and substituting other frames under those traces would be invalid.
-
-### Algorithm stages
-
-The integrated document above is the main entry point. These focused reports
-and their adjacent generated assets retain the evidence for each stage:
-
-1. [`POSE_ESTIMATION_EXPLAINER.md`](POSE_ESTIMATION_EXPLAINER.md) —
-   conservative classical extraction from a real frame.
-2. [`SMOOTH_BODY_PRIOR_EXPERIMENT.md`](SMOOTH_BODY_PRIOR_EXPERIMENT.md) —
-   smooth midline and containing-width model.
-3. [`BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md`](BOUNDARY_NOTCH_REPAIR_EXPERIMENT.md) —
-   geometry-only narrow-notch repair.
-4. [`ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md`](ENDPOINT_CURVE_EXTENSION_EXPERIMENT.md) —
-   local constant-curvature continuation to the completed-body boundary.
-5. [`final_algorithm_unannotated30/FRAME_STEPS.md`](final_algorithm_unannotated30/FRAME_STEPS.md) —
-   per-frame diagnostics for the 30-frame operational stress run.
-6. Section 8 of the integrated document — three follow-on runs on the same 30
-   frames: recording-level flat-fielding with field-of-view completion
-   (`docs/final_algorithm_edge_aware_unannotated30/`), visible-only
-   edge-censored repair (`docs/final_algorithm_edge_censored_unannotated30/`),
-   and the rejected interactively tuned segmentation setting
-   (`docs/final_algorithm_tuned_local_darkness_unannotated30/`).
-7. [`MASK_FIT_EXPERIMENT.md`](MASK_FIT_EXPERIMENT.md) — the first
-   generative-model step: the frame is flat-fielded, segmented, and the
-   20-value body model plus a width scale is rendered as a soft tube and fit
-   directly to the mask by gradient descent, producing a pose on all 27 worm
-   frames of the stress set.
-8. [`SEGMENTATION_LABELING.md`](SEGMENTATION_LABELING.md) — the
-   learned-segmentation loop: hand labels, a pretrained ResNet-18 U-Net
-   fine-tuned with Lightning, and how the labels were made and moved into
-   the library.
-9. [`BODY_FIELDS.md`](BODY_FIELDS.md) — the body-field network's
-   targets (A-P field, head/tail, overlap) built from the hand labels, and
-   the network's evidence and trace starts in the pose fitter (`--body-net`).
-
-### Rebuild the documented one-frame progression
-
-Run the stages in order because the endpoint builder consumes the notch-repair
-arrays:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_pose_estimation_explainer.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_smooth_body_prior_experiment.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_boundary_notch_repair_experiment.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/build_endpoint_curve_extension_experiment.py
-```
-
-### Tune the local-darkness segmentation
-
-Launch the local browser app against the cached proxy frames:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python -m \
-  worm_pose_gen.heuristic_tuner
-```
-
-Then open `http://127.0.0.1:8766`. The controls recompute the same local
-background, denoising, threshold, closing, and largest-component stages used by
-the classical extractor, starting from the frozen `ClassicalConfig` defaults
-(`31 px` background radius, `2 px` denoise radius, `2.6 z` cutoff, hysteresis
-disabled, `2 px` closing). Optional connected hysteresis admits a lower cutoff
-only where it remains connected to the high-confidence worm component; the
-downloaded JSON maps directly to `ClassicalConfig`.
-
-Settings that look clean in the tuner must be evaluated on the 30-frame stress
-run before promotion. The one setting promoted so far (`61 / 3 / 4.25 / 2.05 /
-8`) cut acceptance from 11 to 3 of 30 frames and was reverted; its run is kept
-under `docs/final_algorithm_tuned_local_darkness_unannotated30/`.
-
-Use `--proxy-hdf5 /path/to/proxy_labels.h5` or `--port PORT` to override the
-defaults. The app binds to localhost and does not modify the source HDF5.
-
-### Evaluate the frozen pipeline
-
-The annotation-free stress run accepts exactly three `--recording` arguments
-when the documented default recordings are unavailable:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_final_geometry_unannotated30.py \
-  --recording /path/to/first.h5 \
-  --recording /path/to/second.h5 \
-  --recording /path/to/third.h5 \
-  --workers 3
-```
-
-The mask fit and the two follow-on comparisons use the same three recordings
-and frame positions:
-
-```bash
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_mask_fit_unannotated30.py
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_edge_aware_geometry_unannotated30.py --workers 3
-scripts/project_env.sh uv run --no-sync --frozen python \
-  scripts/evaluate_edge_censored_geometry_unannotated30.py --workers 3
-```
-
-`scripts/evaluate_final_geometry_primary30.py` is the annotation-matched audit.
-It requires readable copies of the exact source frames, which no longer exist,
-so it cannot run to completion. It is kept because the unannotated evaluators
-import its per-frame fitting code.
+The pipeline grew out of a classical, one-frame geometric method (local
+darkness mask, skeleton, smooth body, notch repair, endpoint extension),
+then a body model fitted to the mask, then the learned segmenter and
+body-field network, temporal propagation and the app. The reports and
+evidence of each step (the step-by-step pose pipeline plan, the
+architecture survey of October 2026, the runtime optimizations, the
+classical method's experiments) were removed from the tree in October 2026
+and are in the git history.
 
 ## Repository layout
 
-- `src/worm_pose_gen/` contains reusable geometry, classical extraction, the
-  mask fitter, the pipeline stages, the segmenter and the body-field network,
-  the library (`library/`), the pose app (`app/`, its browser UI in
-  `app_ui/`), and supporting research modules.
-- `scripts/` contains environment setup, the builders and evaluators of the
-  geometric pipeline, the fitting and evaluation scripts, and the library's
-  command-line steps (`train.py`, `evaluate_model.py`, `migrate_to_library.py`,
-  `publish.py`), and the test runner (`run_tests.py`).
-- `docs/` contains the current algorithm narrative and its generated evidence.
-- `tests/` contains focused geometry tests plus reusable-library coverage.
-- `experiments/` retains machine-readable research outputs. The primary audit
-  consumes the frozen selection manifest and baseline metrics stored there;
-  historical narrative notes and embedded runners have been removed.
-- `artifacts/` and `configs/` remain as data from the earlier research program;
-  they are not part of the current documentation or script workflow.
+- `src/worm_pose_gen/`: the pipeline stages (`pipeline.py`) and the fitting
+  behind them, the segmenter and the body-field network, the library
+  (`library/`), the pose app (`app/`, its browser UI in `app_ui/`), and
+  `settings.py` (where the data directory is).
+- `scripts/`: install (`bootstrap_environment.sh`, `preflight.py`), the
+  library's command-line steps (`train.py`, `evaluate_model.py`,
+  `publish.py`, `sync_lab_library.sh`), fitting and evaluation tools, and the
+  test runner (`run_tests.py`).
+- `eval_sets/`: the evaluation clip manifests (frame ranges of raw
+  recordings).
+- `tests/`: unit tests; `tests/browser/` drives the app's pages.
+- `docs/`: this reference, the app's design (`APP_SIMPLIFICATION.md`), the
+  body-field network (`BODY_FIELDS.md`) and the labeling loop
+  (`SEGMENTATION_LABELING.md`).

@@ -13,9 +13,9 @@ Inputs are the ``predictions/<clip>.npz`` of ``scripts/evaluate_temporal.py``
 runs::
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/render_field_comparison.py --clip contact_0618_12 \\
-        --run baseline=/temp_data4/alex/external_artifacts/arch_survey/temporal/on-food-finetune-329 \\
-        --run semi=/temp_data4/alex/external_artifacts/arch_survey/temporal/arch-semi-1 \\
-        --output /temp_data4/alex/external_artifacts/arch_survey/videos/contact_0618_12.mp4
+        --run baseline=<data dir>/runs/temporal/on-food-finetune-329 \\
+        --run semi=<data dir>/runs/temporal/arch-semi-1 \\
+        --output <data dir>/runs/videos/contact_0618_12.mp4
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # Learned segmentation: bootstrap, label, fine-tune, repeat
 
-The mask fit in [`MASK_FIT_EXPERIMENT.md`](MASK_FIT_EXPERIMENT.md) made the
+The mask fit (`MASK_FIT_EXPERIMENT.md`, in the git history) made the
 segmentation mask the only evidence for the pose, so mask defects (clipped
 thin tails, debris fused to the body, interior texture) now show up directly
 as pose errors. This document describes the loop that replaces the
@@ -161,7 +161,7 @@ queues:
   of some image types (self-contact, at the edge, in pieces, no worm, clear);
 - **Browse labels**: existing labels by recording, split and status, lowest
   body fit IoU first;
-- a labeling manifest such as `docs/labeling_round_2/manifest.json`, opened
+- a labeling manifest (`scripts/build_labeling_manifest.py`), opened
   with `worm-pose-app --queue <manifest>` (its split policies are not used:
   splits are per recording in the library).
 
@@ -254,11 +254,12 @@ out of training entirely.
    --stride 20` runs the segmenter over a recording and flags samples with a
    short skeleton for a whole worm (a coil), filled holes, fragments, or a
    mask on the image border, grouped into windows with a montage per
-   recording under `docs/pose_pipeline_step4/clip_candidates/`. Frames whose
+   recording under `runs/clip_candidates/` in the data directory. Frames whose
    HDF5 chunks need a compression plugin that is not installed are skipped
    and counted.
-2. **Manifest.** `scripts/build_labeling_manifest.py` turns the scans into
-   `docs/labeling_round_2/manifest.json`: per recording, the peak, first and
+2. **Manifest.** `scripts/build_labeling_manifest.py` turns the scans into a
+   manifest (round 2's, `docs/labeling_round_2/manifest.json`, is in the git
+   history): per recording, the peak, first and
    last frame of each candidate window (coils and holes first, up to 30),
    six border-touching samples, and six ordinary frames spread over the
    recording; frames already in the store are skipped. Each recording
@@ -268,9 +269,8 @@ out of training entirely.
 3. **Labeling.** The standalone labeler of the time (since removed) walked
    the manifest's queued frames in order, skipping labeled ones, and each
    save pledged the recording's split (`SegmentationStore.save(...,
-   split=...)`). Today `worm-pose-app --queue
-   docs/labeling_round_2/manifest.json` opens the manifest as a Labeling
-   queue.
+   split=...)`). Today `./worm-pose-app --queue <manifest>` opens a
+   manifest as a Labeling queue.
 4. **Retrain and re-evaluate.** After the round, retrain and re-evaluate;
    then re-evaluate hole filling and the largest-component rule on the
    sequence set (`scripts/evaluate_sequence_set.py`), since a segmenter that
@@ -321,9 +321,7 @@ frame are better. The remaining 328 manifest frames, including every frame
 of the held-out animals, are still to be labeled, so the test split does
 not yet measure a new animal.
 
-The seven figures of this session are copied to
-`pose_pipeline_step5c/segmenter_plots/`. The pose pipeline's view of the
-new model, including a held-out plate on which it paints a dark streak as
-worm, is in `POSE_PIPELINE_PLAN.md`, step 5c.
-
-![Per-frame IoU of the headline models](pose_pipeline_step5c/segmenter_plots/iou_ecdf.png)
+The seven figures of this session, and the pose pipeline's view of the new
+model (including a held-out plate on which it paints a dark streak as worm),
+were in `docs/pose_pipeline_step5c/` and `POSE_PIPELINE_PLAN.md`, step 5c,
+now in the git history.

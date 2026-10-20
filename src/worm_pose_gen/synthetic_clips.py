@@ -1,4 +1,4 @@
-"""Synthetic self-contact clips for body-field training (proposal P3 of docs/MODEL_ARCHITECTURE_PROPOSALS.md).
+"""Synthetic self-contact clips for body-field training (proposal P3 of the October 2026 architecture survey, in the git history).
 
 Coils and self-contacts are rare in the hand labels and their targets (tube
 fits to hand masks) are least reliable exactly there.  A synthetic item has

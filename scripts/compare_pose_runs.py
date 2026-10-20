@@ -11,7 +11,7 @@ Example:
 
     scripts/project_env.sh uv run --no-sync --frozen python scripts/compare_pose_runs.py \\
         --run <step1 run> --run <6 coefficients> --run <12 coefficients> \\
-        --frames 131,1021,1052 --output-dir docs/pose_pipeline_step2
+        --frames 131,1021,1052 --output-dir <data dir>/runs/pose_run_comparison
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import torch
 from worm_pose_gen.flat_field import apply_flat_field
 from worm_pose_gen.recordings import DATASET_PATH, RecordingSource
 from worm_pose_gen.pose_run import clean_mask, cleanup_options, draw_residual, render_tube, run_label
-from worm_pose_gen.settings import CACHE_DIR
+from worm_pose_gen.settings import CACHE_DIR, RUNS_DIR
 from worm_pose_gen.segmenter import load_segmenter
 
 
@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run", action="append", type=Path, dest="runs", required=True, help="run directory (repeat, in display order)")
     parser.add_argument("--label", action="append", dest="labels", help="panel label per run (default: the run's width model)")
     parser.add_argument("--frames", required=True, help="comma-separated frame indices")
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "docs" / "pose_pipeline_step2")
+    parser.add_argument("--output-dir", type=Path, default=RUNS_DIR / "pose_run_comparison")
     parser.add_argument("--prefix", default="residual", help="output file prefix")
     parser.add_argument("--pad", type=int, default=24, help="pixels around the union of crop windows")
     parser.add_argument("--max-width", type=int, default=1800, help="downscale wider strips to this width")
