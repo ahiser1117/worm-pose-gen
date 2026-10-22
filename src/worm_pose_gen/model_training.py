@@ -97,7 +97,7 @@ PARAMETERS: tuple[dict[str, Any], ...] = (
      "help": "AdamW's decoupled weight decay, on every parameter"},
     {"name": "ap_weight", "label": "A-P loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0, "advanced": True,
      "kinds": ["body_net"]},
-    {"name": "heatmap_weight", "label": "Head/tail loss weight", "type": "float", "default": 0.5, "min": 0.0, "max": 100.0,
+    {"name": "heatmap_weight", "label": "Head/tail loss weight", "type": "float", "default": 0.1, "min": 0.0, "max": 100.0,
      "advanced": True, "kinds": ["body_net"]},
     {"name": "overlap_weight", "label": "Overlap loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0,
      "advanced": True, "kinds": ["body_net"]},
