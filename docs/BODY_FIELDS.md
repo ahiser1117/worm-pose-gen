@@ -7,7 +7,9 @@ twice by body parts far apart along the body), from the flat-fielded frame
 plus symmetric difference channels `frame[t+lag] - frame[t-lag]`. A hand
 label only says which pixels are worm, so the other targets come from
 fitting the tube model to the hand mask and orienting it head first
-(`body_targets.py`). A wrong head end or a bad fit silently teaches the
+(`body_targets.py`). The overlap is the exception: the tube marks every
+place the body lies over itself but also where body parts only touch, so a
+person draws it ([Overlap](#overlap)). A wrong head end or a bad fit silently teaches the
 network the wrong thing, so every label's body can be confirmed or corrected
 on the pose app's Labeling page. The pose fitter can score its fits against the network's
 predictions and start them from its traces
@@ -127,6 +129,32 @@ ten points, more around loops, and check the preview's IoU.
 A part of the body that leaves the camera and re-enters cannot be traced
 through; its pixels take the A-P value of the nearest traced segment.
 
+## Overlap
+
+The overlap output trains on what people draw, not on the tube fit's
+crossings. The tube fit marks every true crossing, but it also marks lens-shaped
+slivers wherever body parts only touch. Its overlap is about 0.1% of the
+worm, and plain BCE taught both body models of October 2026 to predict no
+overlap at all: on their own training labels, no overlap pixel reached
+probability 0.5. A label therefore carries an optional drawn `overlap`
+(a subset of its worm pixels; an all-zero one means it was reviewed and has
+none), and `model_eval.overlap_state` decides what each label trains:
+
+| state | label | overlap trains |
+|---|---|---|
+| `drawn` / `none` | a person drew the overlap, or marked No overlap | as drawn |
+| `clear` | nothing drawn; the body trains and its tube crosses nowhere | as no overlap |
+| `review` | nothing drawn; the tube crosses somewhere | nothing until a person draws it |
+| none | the body does not train (mask only, poor fit, no targets) | nothing, unless drawn |
+
+A drawn overlap trains even on a mask-only label, and the A-P field is
+undefined on it. Pseudo-label items train no overlap (theirs is the tube's).
+Synthetic clips train their rendered overlap, which is exact. The loss
+weights overlap pixels up (`overlap_pos_weight`, 30 by default), and
+validation logs `val_overlap_ap` and `val_overlap_recall` (at 0.5).
+Browse labels filters on the state; **Overlap to review** lists the frames
+to draw.
+
 ## Correct on the Labeling page
 
 The Labeling page's body tools work on the frame's current mask
@@ -162,17 +190,25 @@ The Labeling page's body tools work on the frame's current mask
   proposal's points; accepting the edit makes it the proposal, so editing
   again (or **Use proposal**) starts from the edited version.
 - **Mask only**: the body is unclear and the label trains the mask only.
+- **Overlap** (O) switches the brushes and mask proposals to the overlap
+  channel. **Overlap** (W) paints overlap on worm pixels only, and **Erase** (E) removes it.
+  Painting background on the mask also erases the overlap under it.
+  **Network** (N) proposes the body model's overlap probability at the Cut slider,
+  and **Tube fit** proposes the tube's crossings; **Apply** (A) takes the proposal.
+  **No overlap** (V) marks the frame reviewed with none. Undo and Revert
+  cover the mask and the overlap together.
 
 Layers are the Mask, the A-P field (the body's, else the proposal's), the
-Midline with head and tail (and the acquisition nose), and the Proposal;
-`--dev` adds the overlap, the tube outline and a stored trace. The temporal
+drawn Overlap, the Midline with head and tail (and the acquisition nose),
+and the Proposal; `--dev` adds the tube fit's overlap, the tube outline and
+a stored trace. The temporal
 context shows the 33 context frames (Frames, with an offset and Play) or
 the Difference channel the network sees for a lag of 1 to 16.
 
 Saving writes a label revision with the body as decided (a trace, a head
 end, or the automatic orientation) and starts a job that builds its targets.
 The same operations are available headless: `POST /api/labeling/proposal`,
-`/api/labeling/fit` and `/api/labeling/save` (`app/labeling.py`).
+`/api/labeling/overlap`, `/api/labeling/fit` and `/api/labeling/save` (`app/labeling.py`).
 
 Coverage: `tests/test_body_fields.py` (record staleness, nose choice,
 traces through a crossing, camera exits), `tests/test_body_proposal.py`,

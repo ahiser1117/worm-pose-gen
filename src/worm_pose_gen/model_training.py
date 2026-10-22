@@ -64,7 +64,7 @@ from . import library
 from .jobs import report_progress
 from .library import Libraries, LabelRecord
 from .library.roots import check_id, parse_ref
-from .model_eval import add_library_arguments, body_used, libraries_from, prepare_targets
+from .model_eval import add_library_arguments, body_used, libraries_from, overlap_state, overlap_target, prepare_targets
 from .workspace import utc_now
 
 
@@ -101,6 +101,8 @@ PARAMETERS: tuple[dict[str, Any], ...] = (
      "advanced": True, "kinds": ["body_net"]},
     {"name": "overlap_weight", "label": "Overlap loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0,
      "advanced": True, "kinds": ["body_net"]},
+    {"name": "overlap_pos_weight", "label": "Overlap positive weight", "type": "float", "default": 30.0, "min": 1.0, "max": 10000.0,
+     "advanced": True, "kinds": ["body_net"], "help": "how much more an overlap pixel counts than a non-overlap one: they are about 0.1% of the worm"},
     {"name": "min_fit_iou", "label": "Minimum body fit IoU", "type": "float", "default": 0.9, "min": 0.0, "max": 1.0, "advanced": True,
      "kinds": ["body_net"], "help": "unreviewed labels whose body fit is worse train the mask only"},
     {"name": "seed", "label": "Seed", "type": "int", "default": 0, "min": 0, "max": 2**31 - 1, "advanced": True},
@@ -315,7 +317,7 @@ class LabelDataset:
             if built is None:
                 raise FileNotFoundError(f"{record.key}: body targets are not built")
             arrays = built[1] if body_used(record, built[0], self.min_fit_iou) else None
-            targets = body_target_rows(mask, arrays)
+            targets = body_target_rows(mask, arrays, overlap_target(label, built[0], self.min_fit_iou))
         frames = label.context[needed].astype(np.float32)
         if self.augment and self.fiber_share > 0:
             from .synthetic_clips import add_fibers
@@ -414,7 +416,8 @@ def build_module(libraries: Libraries, plan_: Plan) -> Any:
         return SegmentationModule(pretrained=True, **common)
     from .body_net import BodyFieldModule
 
-    body = dict(ap_weight=p["ap_weight"], heatmap_weight=p["heatmap_weight"], overlap_weight=p["overlap_weight"], **common)
+    body = dict(ap_weight=p["ap_weight"], heatmap_weight=p["heatmap_weight"], overlap_weight=p["overlap_weight"],
+                overlap_pos_weight=p["overlap_pos_weight"], **common)
     if plan_.request.start_from:
         return BodyFieldModule.load_from_checkpoint(
             str(library.weights_path(libraries, plan_.request.start_from)), map_location="cpu", pretrained=False,
@@ -571,9 +574,13 @@ def train(
 
             checkpoint = export_body_checkpoint(checkpoint, run_dir / "body.ckpt", network=semi.export)
         records = plan_.train + plan_.val
-        used = sum(
-            body_used(r, library.cached_meta(libraries, r), p.get("min_fit_iou", 0.9)) for r in records
-        ) if plan_.kind == "body_net" else 0
+        used, overlap_states = 0, {}
+        if plan_.kind == "body_net":
+            metas = [library.cached_meta(libraries, r) for r in records]
+            used = sum(body_used(r, meta, p.get("min_fit_iou", 0.9)) for r, meta in zip(records, metas))
+            for r, meta in zip(records, metas):
+                overlap = overlap_state(r, meta, p.get("min_fit_iou", 0.9)) or "untrained"
+                overlap_states[overlap] = overlap_states.get(overlap, 0) + 1
         preprocessing = "flat_field" if setup.video.get("flat_field", True) else "none"
         card = {
             "name": name, "kind": plan_.kind, "setup": setup.ref,
@@ -595,7 +602,7 @@ def train(
             "epochs_run": state["epoch"], "best_epoch": best_epoch,
             "best_val_loss": None if best.best_model_score is None else float(best.best_model_score),
             "device": str(torch_device), "git": _git_commit(), "targets_built": prepared,
-            "labels": {"train": len(plan_.train), "val": len(plan_.val), "body_trained": used},
+            "labels": {"train": len(plan_.train), "val": len(plan_.val), "body_trained": used, "overlap": overlap_states},
             "pseudo_labels": None if pseudo is None else pseudo.trained_on(),
         }
         files = {n: run_dir / n for n in ("metrics.csv", "hparams.yaml") if (run_dir / n).exists()}

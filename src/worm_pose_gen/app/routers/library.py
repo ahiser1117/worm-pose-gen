@@ -11,8 +11,9 @@ and set a default model.  A write that names a lab item is refused with 403, sin
 the app never writes the lab library.
 
 Images go to the browser as PNG data URLs: a mask as 0 background, 255
-worm, 128 excluded from the loss (:func:`app.images.mask_to_png_values`), and
-the A-P field as 0 (undefined) or ``1 + round(254 * ap)``.
+worm, 128 excluded from the loss (:func:`app.images.mask_to_png_values`), a
+drawn overlap as 0 or 255, and the A-P field as 0 (undefined) or
+``1 + round(254 * ap)``.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from . import get_state
 from ... import library
+from ...model_eval import DEFAULT_MIN_FIT_IOU, OVERLAP_STATES, overlap_state
 from ..images import data_url, decode_mask_data_url, mask_to_png_values
 from ...recordings import list_recordings
 from ..state import AppState, NotFound, _integer
@@ -207,12 +209,15 @@ def _collection(app: AppState, setup: str) -> library.Collection:
 
 
 def label_row(app: AppState, record: library.LabelRecord, builder: str | None = library.SETUP_DEFAULT) -> dict[str, Any]:
-    """A label as listings show it, with the state of its body targets (built by ``builder``, by default the setup's)."""
+    """A label as listings show it, with the state of its body targets (built by ``builder``, by default the setup's)
+    and what its overlap trains (:func:`model_eval.overlap_state`; ``tube_overlap_px``: where the fitted tube crosses)."""
 
     meta = library.cached_meta(_libraries(app), record, builder)
     return {**record.to_dict(), "targets": "built" if meta is not None else "missing",
             "fit_iou": None if meta is None else meta.get("fit_iou"),
-            "self_contact": None if meta is None else meta.get("self_contact")}
+            "self_contact": None if meta is None else meta.get("self_contact"),
+            "overlap": overlap_state(record, meta, DEFAULT_MIN_FIT_IOU),
+            "tube_overlap_px": None if meta is None else meta.get("overlap_px")}
 
 
 @router.get("/setups/{ref}/collection")
@@ -226,12 +231,15 @@ def collection(ref: str, app: AppState = Depends(get_state)) -> dict[str, Any]:
 
 @router.get("/setups/{ref}/labels")
 def setup_labels(ref: str, recording: str = "", dataset: str = "", split: str = "", status: str = "", contact: str = "",
-                 sort: str = "", app: AppState = Depends(get_state)) -> dict[str, Any]:
+                 overlap: str = "", sort: str = "", app: AppState = Depends(get_state)) -> dict[str, Any]:
     """The setup's labels, filtered; with ``dataset`` each carries its recording's split there, which ``split`` filters on
-    (``none`` for the recordings it does not include).  ``sort=fit_iou`` puts the lowest body fit IoU first."""
+    (``none`` for the recordings it does not include).  ``overlap`` filters on the overlap state
+    (``review``: the tube crosses and nobody has drawn the overlap yet).  ``sort=fit_iou`` puts the lowest body fit IoU first."""
 
     if status and status not in library.STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {library.STATUSES}")
+    if overlap and overlap not in OVERLAP_STATES:
+        raise ValueError(f"unknown overlap state {overlap!r}; expected one of {OVERLAP_STATES}")
     if contact not in ("", "yes", "no"):
         raise ValueError("contact must be yes or no")
     if sort not in SORTS:
@@ -257,6 +265,8 @@ def setup_labels(ref: str, recording: str = "", dataset: str = "", split: str = 
     rows = [label_row(app, record, builder) for record in records]
     if contact:
         rows = [row for row in rows if row["self_contact"] is (contact == "yes")]
+    if overlap:
+        rows = [row for row in rows if row["overlap"] == overlap]
     if sort == "fit_iou":
         rows.sort(key=lambda row: (row["fit_iou"] is None, row["fit_iou"] if row["fit_iou"] is not None else 0.0))
     return {"setup": ref, "dataset": dataset or None, "total": len(rows), "labels": rows}
@@ -306,6 +316,7 @@ def label(ref: str, recording: str, frame: int, revision: int | None = None, sco
         "orientation": record.orientation, "mask_only": record.mask_only,
         "head_xy": None if loaded.head_xy is None else loaded.head_xy.tolist(),
         "trace_xy": None if loaded.trace_xy is None else loaded.trace_xy.tolist(),
+        "overlap": None if loaded.overlap is None else data_url(loaded.overlap * np.uint8(255)),
         "max_lag": loaded.max_lag, "context_valid": loaded.context_valid.tolist(),
         "nose_xy": [xy.tolist() if ok else None for xy, ok in zip(loaded.nose_xy, loaded.nose_valid)],
         "targets": targets_layers(app, record),
@@ -328,7 +339,9 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
     are taken from the frame's current label, so an edit never needs the
     recording.  The body
     fields are ``orientation`` (``auto`` or ``manual`` with ``head_xy``),
-    ``trace_xy`` (head first) and ``mask_only``; ``origin`` is ``spread`` or
+    ``trace_xy`` (head first) and ``mask_only``; ``overlap`` (a PNG like the
+    mask, 255 where the body lies over itself) when it was drawn or
+    reviewed; ``origin`` is ``spread`` or
     ``fix``; ``expected_revision`` is the personal revision the editor
     started from (0 for none).
     """
@@ -360,13 +373,14 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
             }
         try:
             mask = decode_mask_data_url(str(payload.get("mask") or ""), inputs["image"].shape)
+            overlap = None if payload.get("overlap") is None else decode_mask_data_url(str(payload["overlap"]), mask.shape) == 1
         except (OSError, binascii.Error) as error:
-            raise ValueError("mask must contain a readable base64 PNG image") from error
+            raise ValueError("mask and overlap must contain readable base64 PNG images") from error
         expected = payload.get("expected_revision")
         record = collection.save(
             recording=recording, frame=frame, mask=mask, origin=origin,
             orientation=str(payload.get("orientation") or "auto"), head_xy=payload.get("head_xy"),
-            trace_xy=payload.get("trace_xy"), mask_only=bool(payload.get("mask_only")),
+            trace_xy=payload.get("trace_xy"), mask_only=bool(payload.get("mask_only")), overlap=overlap,
             expected_revision=None if expected is None else int(expected), **inputs,
         )
     return {"label": label_row(app, record)}

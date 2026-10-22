@@ -855,10 +855,11 @@ class SyntheticClipDataset:
         stored = tuple(int(lag) for lag in data["lags"])
         if not set(self.lags) <= set(stored):
             raise ValueError(f"{path.name} holds lags {stored}; the model needs {self.lags}")
+        # A rendered body overlaps exactly where its tube does.
         targets = body_target_rows(data["mask"], {
-            "ap": data["ap"].astype(np.float32), "overlap": data["overlap"], "head_xy": data["head_xy"],
+            "ap": data["ap"].astype(np.float32), "head_xy": data["head_xy"],
             "tail_xy": data["tail_xy"], "diameter_px": float(data["diameter_px"]),
-        })
+        }, data["overlap"].astype(bool))
         frames = data["frames"].astype(np.float32)
         if self.augment:
             rng = np.random.default_rng((self.seed, index, int(torch.initial_seed()) % (1 << 31)))

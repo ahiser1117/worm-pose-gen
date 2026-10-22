@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import torch
 
-from worm_pose_gen.body_net import BodyFieldModule, heatmap_focal_loss, load_body_net
+from worm_pose_gen.body_net import OVERLAP_BINS, BodyFieldModule, heatmap_focal_loss, load_body_net, overlap_metrics
 from worm_pose_gen.body_targets import point_heatmap, render_body_targets, self_contact
 from worm_pose_gen.recordings import RecordingSource
 from worm_pose_gen.segmenter import INPUT_STD, ConvNeXtUNet, ResNet18UNet
@@ -116,6 +116,34 @@ class HeatmapLossTests(unittest.TestCase):
         bad = torch.full((1, 16, 16), -6.0)
         bad[0, 2, 2] = 6.0
         self.assertLess(float(heatmap_focal_loss(good, target)), float(heatmap_focal_loss(bad, target)))
+
+
+class OverlapMetricTests(unittest.TestCase):
+    def histograms(self, positive, negative):
+        return [torch.histc(torch.tensor(v), bins=OVERLAP_BINS, min=0.0, max=1.0) for v in (positive, negative)]
+
+    def test_separated_scores_are_perfect(self):
+        metrics = overlap_metrics(*self.histograms([0.9, 0.8, 0.6], [0.1, 0.2, 0.3, 0.05]))
+        self.assertAlmostEqual(float(metrics["ap"]), 1.0)
+        self.assertAlmostEqual(float(metrics["recall"]), 1.0)
+
+    def test_interleaved_scores(self):
+        # Ranked: positive 0.9, negative 0.7, positive 0.4 -> precision 1 at the first, 2/3 at the second.
+        metrics = overlap_metrics(*self.histograms([0.9, 0.4], [0.7]))
+        self.assertAlmostEqual(float(metrics["ap"]), (1.0 + 2.0 / 3.0) / 2.0, places=5)
+        self.assertAlmostEqual(float(metrics["recall"]), 0.5)
+
+    def test_positive_weight_raises_the_cost_of_a_missed_overlap(self):
+        module = BodyFieldModule(lags=(), pretrained=False, overlap_pos_weight=30.0)
+        targets = torch.zeros(1, 8, 4, 4)
+        targets[:, 0] = targets[:, 1] = targets[:, 7] = 1.0  # mask, valid, overlap valid
+        targets[:, 6, 0, 0] = 1.0  # one overlap pixel
+        logits = torch.zeros(1, 5, 4, 4)
+        logits[:, 4] = -5.0
+        weighted = module.loss(logits, targets)[1]["overlap_bce"]
+        module.hparams.overlap_pos_weight = 1.0
+        plain = module.loss(logits, targets)[1]["overlap_bce"]
+        self.assertGreater(float(weighted), 10.0 * float(plain))
 
 
 if __name__ == "__main__":

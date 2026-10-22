@@ -223,13 +223,16 @@ def mask_target(clean: NDArray[np.bool_], tube: NDArray[np.bool_], band_px: floa
 
 
 def target_rows(item: dict[str, NDArray[Any]]) -> NDArray[np.float32]:
-    """The ``[8,H,W]`` body-field target stack of an item; the tail heatmap is NaN (it trains nothing)."""
+    """The ``[8,H,W]`` body-field target stack of an item; the tail heatmap is NaN (it trains nothing).
+
+    Overlap trains nothing either: the item's is the tube's, which also marks
+    body parts that only touch (:func:`model_eval.overlap_state`).
+    """
 
     from .body_net import _TAIL, body_target_rows
 
-    targets = {"ap": item["ap"], "overlap": item["overlap"].astype(bool), "head_xy": item["head_xy"],
-               "tail_xy": np.full(2, np.nan), "diameter_px": float(item["diameter_px"])}
-    rows = body_target_rows(item["mask"], targets)
+    targets = {"ap": item["ap"], "head_xy": item["head_xy"], "tail_xy": np.full(2, np.nan), "diameter_px": float(item["diameter_px"])}
+    rows = body_target_rows(item["mask"], targets, None)
     rows[_TAIL] = np.nan
     return rows
 

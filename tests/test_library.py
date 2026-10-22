@@ -239,7 +239,18 @@ class CollectionTests(unittest.TestCase):
             collection.save(recording="rec-c", frame=1, origin="painted", **inputs)
         with self.assertRaises(ValueError):  # manual without a head or trace
             collection.save(recording="rec-c", frame=1, origin="spread", orientation="manual", **inputs)
+        outside = np.zeros(SHAPE, np.uint8)
+        outside[inputs["mask"] != 1] = 1
+        for overlap in (outside, np.full(SHAPE, 2, np.uint8) * (inputs["mask"] == 1)):  # off the worm; not 0/1
+            with self.assertRaises(ValueError):
+                collection.save(recording="rec-c", frame=1, origin="spread", overlap=overlap, **inputs)
         traced = collection.save(recording="rec-c", frame=1, origin="spread", trace_xy=[[4, 11], [16, 11], [27, 11]], **inputs)
+        self.assertIsNone(traced.overlap_px)
+        self.assertIsNone(traced.load().overlap)
+        reviewed = collection.save(recording="rec-c", frame=1, origin="spread", overlap=np.zeros(SHAPE, bool), **inputs)
+        self.assertEqual(reviewed.overlap_px, 0)  # reviewed: no overlap
+        self.assertEqual(collection.get("rec-c", 1).overlap_px, 0)  # read back from the index
+        self.assertFalse(reviewed.load().overlap.any())
         self.assertEqual((traced.orientation, traced.has_trace, traced.status), ("manual", True, "complete"))
         loaded = traced.load()
         self.assertIsNone(loaded.head_xy)

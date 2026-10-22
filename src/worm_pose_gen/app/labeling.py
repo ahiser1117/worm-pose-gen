@@ -1,7 +1,8 @@
-"""The Labeling page's backend: open a frame, propose and refine its mask, propose or fit its body, save the label.
+"""The Labeling page's backend: open a frame, propose and refine its mask and overlap, propose or fit its body, save the label.
 
 One frame's label is labeled on one page (``docs/APP_SIMPLIFICATION.md``,
-section 3): the mask first, then the body, then Save.  A frame is named by
+section 3): the mask (and where the body lies over itself, the overlap)
+first, then the body, then Save.  A frame is named by
 an *entry* ``{"recording", "frame", "path"?}`` within the current setup;
 ``path`` is the recording file, needed only while the frame has no label
 yet.
@@ -20,8 +21,9 @@ the save.  The mask the frame opens with is the label's; for a frame of a
 Relabel queue the workspace's mask; otherwise the default mask model's
 proposal at a threshold of 0.5 (empty without a model).
 
-**Models.** The ``mask`` model gives the Network proposal and the ``body``
-model (a body-field net) the body proposal: a trace through its predicted
+**Models.** The ``mask`` model gives the Network proposal, and the ``body``
+model (a body-field net) the overlap proposal (its overlap probability) and
+the body proposal: a trace through its predicted
 A-P field (:func:`body_proposal.propose_trace`) fit like a hand trace
 (:func:`body_fields.trace_fit`).  Each is the request's choice
 (``"models": {"mask"?, "body"?}``, any library model with the role's
@@ -31,7 +33,8 @@ the app's device (:mod:`library.inference`); fits run one at a time.
 **Saving** writes a new label revision (:meth:`library.Collection.save`) with
 the body as decided: a trace (traced by hand or the proposal's), a head end
 (``head_xy``: the orientation was flipped or confirmed without a trace),
-neither (the automatic orientation), and ``mask_only``.  The origin is the
+neither (the automatic orientation), and ``mask_only``; and the overlap when
+a person drew or reviewed it (otherwise the label says nothing about it).  The origin is the
 queue's (``fix`` for Relabel, ``spread`` for a frame search); an edit outside
 a queue keeps ``fix`` for a label made by a fix and is ``spread`` otherwise.
 Then a job rebuilds the label's body targets (:mod:`library.targets`).
@@ -274,10 +277,11 @@ class Labeling:
         shape = image.shape
         probability = None
         body: dict[str, Any] = {"trace_xy": None, "head_xy": None, "mask_only": False, "trace_extend": False, "trace_length_px": None}
-        targets = None
+        targets = overlap = None
         if record is not None:
             label = record.load()
             mask, source = label.mask, "label"
+            overlap = label.overlap
             body = {"trace_xy": None if label.trace_xy is None else label.trace_xy.tolist(),
                     "head_xy": None if label.head_xy is None else label.head_xy.tolist(), "mask_only": record.mask_only,
                     "trace_extend": bool(label.meta.get("trace_extend")), "trace_length_px": label.meta.get("trace_length_px")}
@@ -293,6 +297,7 @@ class Labeling:
             "setup": setup, "entry": entry, "width": int(shape[1]), "height": int(shape[0]),
             "image": data_url(image), "image_raw": data_url(inputs["image_raw"]),
             "mask": encode_mask(mask), "mask_source": source,
+            "overlap": None if overlap is None else encode_mask(overlap),
             "probability": None if probability is None else data_url(probability_to_png(probability)),
             "label": None if record is None else label_row(self.app, record), "expected_revision": own_revision,
             "body": body, "targets": targets,
@@ -331,6 +336,17 @@ class Labeling:
         probability = self.probability(setup, inputs, ref)
         if probability is None:
             raise ValueError(f"{setup} has no default mask model yet; use Threshold, or choose a model")
+        return {"probability": data_url(probability_to_png(probability)), "model": ref}
+
+    def overlap(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The body model's overlap probability (PNG, 0..255); the page thresholds it itself."""
+
+        setup, *_, inputs = self._resolve(payload)
+        ref = self.models(setup, payload)["body"]
+        if ref is None:
+            raise ValueError(f"{setup} has no body-field model; choose one with Change")
+        with self.fit_lock:
+            probability = self.model(setup, ref).predict(inputs["context"], inputs["context_valid"]).overlap
         return {"probability": data_url(probability_to_png(probability)), "model": ref}
 
     def refine(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -449,6 +465,7 @@ class Labeling:
         else:
             origin = "fix" if record is not None and record.origin == "fix" else "spread"
         mask = decode_mask(payload.get("mask"), inputs["image"].shape)
+        overlap = None if payload.get("overlap") is None else decode_mask(payload["overlap"], mask.shape) == 1
         trace = _points(payload.get("trace_xy"), "trace_xy")
         head = payload.get("head_xy")
         expected = payload.get("expected_revision")
@@ -457,7 +474,8 @@ class Labeling:
             orientation="manual" if trace is not None or head is not None else "auto", head_xy=head, trace_xy=trace,
             trace_extend=bool(payload.get("trace_extend")) and trace is not None,
             trace_length_px=_positive(payload.get("trace_length_px"), "trace_length_px"),
-            mask_only=bool(payload.get("mask_only")), expected_revision=None if expected is None else int(expected), **inputs,
+            mask_only=bool(payload.get("mask_only")), overlap=overlap, expected_revision=None if expected is None else int(expected),
+            **inputs,
         )
         job = None
         if (mask == 1).any():
