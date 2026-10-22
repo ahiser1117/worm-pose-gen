@@ -9,7 +9,7 @@ import {chartLegend, lossChart} from "./training_charts.js";
 const SETTING_LABELS = {
   max_epochs: "Max epochs", epochs: "Max epochs", learning_rate: "Learning rate", batch_size: "Batch size", crop_size: "Crop size",
   patience: "Patience", plateau_patience: "Plateau patience", encoder_lr_scale: "Encoder LR scale", ap_weight: "A-P loss weight",
-  heatmap_weight: "Head/tail loss weight", overlap_weight: "Overlap loss weight", min_fit_iou: "Minimum body fit IoU", seed: "Seed",
+  heatmap_weight: "Head/tail loss weight", overlap_weight: "Overlap loss weight", overlap_pos_weight: "Overlap positive weight", min_fit_iou: "Minimum body fit IoU", seed: "Seed",
   weight_decay: "Weight decay", lags: "Lags (frames)", context: "Temporal context", encoder: "Encoder",
 };
 

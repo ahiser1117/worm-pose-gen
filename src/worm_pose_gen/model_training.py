@@ -97,10 +97,12 @@ PARAMETERS: tuple[dict[str, Any], ...] = (
      "help": "AdamW's decoupled weight decay, on every parameter"},
     {"name": "ap_weight", "label": "A-P loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0, "advanced": True,
      "kinds": ["body_net"]},
-    {"name": "heatmap_weight", "label": "Head/tail loss weight", "type": "float", "default": 0.1, "min": 0.0, "max": 100.0,
+    {"name": "heatmap_weight", "label": "Head/tail loss weight", "type": "float", "default": 0.5, "min": 0.0, "max": 100.0,
      "advanced": True, "kinds": ["body_net"]},
     {"name": "overlap_weight", "label": "Overlap loss weight", "type": "float", "default": 1.0, "min": 0.0, "max": 100.0,
      "advanced": True, "kinds": ["body_net"]},
+    {"name": "overlap_pos_weight", "label": "Overlap positive weight", "type": "float", "default": 30.0, "min": 1.0, "max": 10000.0,
+     "advanced": True, "kinds": ["body_net"], "help": "how much more an overlap pixel counts than a non-overlap one: they are about 0.1% of the worm"},
     {"name": "min_fit_iou", "label": "Minimum body fit IoU", "type": "float", "default": 0.9, "min": 0.0, "max": 1.0, "advanced": True,
      "kinds": ["body_net"], "help": "unreviewed labels whose body fit is worse train the mask only"},
     {"name": "seed", "label": "Seed", "type": "int", "default": 0, "min": 0, "max": 2**31 - 1, "advanced": True},
@@ -414,7 +416,8 @@ def build_module(libraries: Libraries, plan_: Plan) -> Any:
         return SegmentationModule(pretrained=True, **common)
     from .body_net import BodyFieldModule
 
-    body = dict(ap_weight=p["ap_weight"], heatmap_weight=p["heatmap_weight"], overlap_weight=p["overlap_weight"], **common)
+    body = dict(ap_weight=p["ap_weight"], heatmap_weight=p["heatmap_weight"], overlap_weight=p["overlap_weight"],
+                overlap_pos_weight=p["overlap_pos_weight"], **common)
     if plan_.request.start_from:
         return BodyFieldModule.load_from_checkpoint(
             str(library.weights_path(libraries, plan_.request.start_from)), map_location="cpu", pretrained=False,
