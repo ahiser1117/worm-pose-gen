@@ -126,6 +126,20 @@ class NetworkFieldsApiTests(unittest.TestCase):
         self.assertEqual(len(app.state.app_state.network_fields._cache), 2)
         self.assertIn("is not in workspace", self.get(client, 99, 400)["error"])
 
+    def test_the_fits_head_track_replaces_the_heatmap_head(self):
+        _, client = self.client(self.checkpoint)
+        with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=RecordingStub(prediction())):
+            before = self.get(client, 1)
+            self.assertEqual((before["head_xy"], before["head_source"]), ([30.0, 32.0], "heatmap"))
+            arrays = self.workspace.load_state()
+            arrays["head_xy"] = np.full((FRAMES, 2), np.nan)
+            arrays["head_xy"][1] = (44.0, 31.0)
+            self.workspace.save_state(arrays)
+            # The cached prediction serves; the head comes from the state as it is now.
+            tracked, hidden = self.get(client, 1), self.get(client, 2)
+        self.assertEqual((tracked["cached"], tracked["head_xy"], tracked["head_source"]), (True, [44.0, 31.0], "track"))
+        self.assertEqual((hidden["head_xy"], hidden["head_source"]), (None, "track"))
+
     def test_raw_outputs_on_request(self):
         _, client = self.client(self.checkpoint)
         with mock.patch("worm_pose_gen.body_net.load_body_net", return_value=RecordingStub(prediction(head_peak=0.5))):

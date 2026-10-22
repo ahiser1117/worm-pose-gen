@@ -94,6 +94,7 @@ from worm_pose_gen.pipeline import (
     new_arrays,
     propagation_pass,
     recording_nose,
+    recording_substrate_shift,
     resolve_prior,
     segment_frames,
     segment_slabs,
@@ -427,7 +428,7 @@ def main() -> int:
         )
         head_track = None
         if field_crops:
-            head_track = decode_heads(arrays, heads)
+            head_track = decode_heads(arrays, heads, recording_substrate_shift(args.recording, arrays["frame_index"]))
             field_crops = {row: crop.with_head(arrays["head_xy"][row]) for row, crop in field_crops.items()}
             print(f"head track: {json.dumps(head_track)}", flush=True)
 

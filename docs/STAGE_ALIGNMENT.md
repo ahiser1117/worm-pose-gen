@@ -13,7 +13,7 @@ registering consecutive frames instead (see *Filling with registration*).
 ## The stage track
 
 `/pos_stage` has one row per saved frame, in stage units of 0.1 µm
-(`export_table.STAGE_UM_PER_UNIT`). Failed serial reads are NaN rows: 12% of
+(BehaviorDataNIR.jl: `STAGE_UNIT = 10000` per mm). Failed serial reads are NaN rows: 12% of
 2023-03-30-01, 7-20% of the recordings below, in runs of 1-4 frames and
 occasionally longer. `read_stage` interpolates them linearly in frame index
 and marks a frame unreliable inside a run longer than `MAX_GAP_FRAMES` (4)
@@ -70,14 +70,15 @@ Measured on five recordings (400 anchors, dark-pixel masks except
 
 - **Axes and signs**: stage x is image x and stage y image y, both with
   positive sign (the background moves by `+matrix @ d` when the stage moves
-  by `+d`); rotation under 0.13°. This confirms `export_table`'s convention
-  (found there on fitted centroids).
+  by `+d`); rotation under 0.13°. This confirms the convention `export_table` had
+  found on fitted centroids.
 - **Scale**: 0.0773-0.0786 px per unit, 1.27-1.29 µm/px, 1-2% larger than
   the nominal 1.264 µm/px of the library model metadata.
 - **Time offset**: -0.7 to -0.8 frames: the reading stored with frame t
   was taken about 40 ms after its exposure, so the position at the exposure
   is best estimated by the readings of t and t-1 weighted 0.2/0.8.
-  `export_table` uses their mean (offset -0.5).
+  `export_table` used their mean (offset -0.5) and the nominal µm per
+  stage unit; it now takes the world frame from `substrate_shift_px`.
 - **Consistency**: per quarter of 2023-03-30-01 the diagonal varies by
   ±1% (0.0775-0.0790) and the offset by ±0.08 frames. The quarters of the
   other recordings agree within ±1.5%, except one quarter each of
@@ -309,3 +310,8 @@ offsets = substrate_shift_px(recording, frames, calibration)  # [n, 2]; image xy
                                                               # (registration steps cached, ~1-1.5 min on first use)
 aligned, valid = align_frame(image_s, offsets[i_s].round(), offsets[i_t].round())  # frame s in frame t's camera position
 ```
+
+Callers: the fit stage's head track measures head motion in substrate
+coordinates (`pipeline.recording_substrate_shift`, docs/BODY_FIELDS.md,
+*Head track*), and the export's world frame is the substrate frame
+(`export_table.read_recording_motion`).

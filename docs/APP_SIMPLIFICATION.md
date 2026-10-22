@@ -391,9 +391,12 @@ holds the camera clock in nanoseconds for every camera frame (40 Hz; the
 saved 20 fps frames are those with `q_iter_save` and `q_recording` set).
 The real rate is about 19.5 fps because of dropped frames, so time comes from
 the timestamps. The world position is the image position minus the stage
-position, with stage x/y along image x/y (checked on fitted centroids), and
-the stage is read about half a frame after the exposure. Recordings without
-these datasets export velocity in the image frame, and `export.json` says so.
+position, the stage mapped to image pixels and to the exposures by the
+recording's calibration against the image (`stage_alignment`,
+docs/STAGE_ALIGNMENT.md: about 1.28 µm/px, stage x/y along image x/y, the
+reading about 0.8 frame after the exposure). Recordings without these
+datasets, or whose stage does not calibrate, export velocity in the image
+frame, and `export.json` says so.
 
 ### Decisions (2026-10-07)
 

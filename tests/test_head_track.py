@@ -41,12 +41,35 @@ class HeadTrackTests(unittest.TestCase):
         np.testing.assert_array_equal(track.xy[:12], modes[:12, 0, :2])
         np.testing.assert_array_equal(track.xy[25:], modes[25:, 0, :2])
 
-    def test_a_weak_mode_on_the_track_bridges_a_dip(self):
+    def test_a_weak_mode_on_the_track_bridges_a_dip_at_the_interpolated_place(self):
         modes = walking(30)
-        modes[14:17, 0, 2] = 0.15  # below END_THRESHOLD, where it was
+        modes[14:17, 0, 1] += 4.0  # 4 px off the walk
+        modes[14:17, 0, 2] = 0.15  # below END_THRESHOLD
         modes[14:17, 1] = (400.0, 300.0, 0.25)  # stronger, far off
         track = track_heads(np.arange(30), modes)
-        np.testing.assert_array_equal(track.xy, modes[:, 0, :2])
+        np.testing.assert_array_equal(track.candidate, np.zeros(30))
+        expected = walking(30)[:, 0, :2]
+        np.testing.assert_allclose(track.xy, expected)
+        np.testing.assert_array_equal(np.flatnonzero(track.interpolated), [14, 15, 16])
+
+    def test_weak_heads_interpolate_in_substrate_coordinates(self):
+        modes = walking(30, step=(0.0, 0.0), value=0.6)
+        shift = np.zeros((30, 2))
+        # The stage moves 4 px a frame from frame 10 on; the head stays put on the agar.
+        shift[10:, 0] = -4.0 * np.arange(1, 21)
+        modes[:, 0, 0] -= shift[:, 0]
+        modes[12:18, 0, 2] = 0.2
+        track = track_heads(np.arange(30), modes, shift_px=shift)
+        np.testing.assert_allclose(track.xy, modes[:, 0, :2])
+
+    def test_a_weak_head_beside_a_stretch_out_of_view_is_dropped(self):
+        modes = walking(30)
+        modes[10:15] = np.nan  # out of view
+        modes[15:18, 0, 2] = 0.2  # weak on the way back in
+        track = track_heads(np.arange(30), modes)
+        self.assertTrue(np.isnan(track.xy[10:18]).all())
+        np.testing.assert_array_equal(track.candidate[15:18], -1)
+        np.testing.assert_array_equal(track.xy[18:], modes[18:, 0, :2])
 
     def test_no_heads_anywhere(self):
         modes = np.full((5, K, 3), np.nan)

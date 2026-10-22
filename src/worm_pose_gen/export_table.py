@@ -43,6 +43,7 @@ import torch
 
 from .geometry import curvature as signed_curvature, resample_centerline
 from .run_records import timestamp_slug
+from .stage_alignment import STAGE_DATASET, recording_calibration, substrate_shift_px
 
 
 # Points along the body, head (index 0) to tail, at uniform arc length.  The
@@ -60,13 +61,10 @@ METADATA_FILE = "export.json"
 # ConfocalTrackerControl.jl acquisition files (the flv-c NIR rigs).  Saved
 # frames are the camera rows with ``q_iter_save`` and ``q_recording`` set
 # (the camera runs at twice the saved rate); ``img_timestamp`` is the camera
-# clock in nanoseconds.  ``pos_stage`` has one row per saved frame in stage
-# units of 0.1 µm (BehaviorDataNIR.jl: ``STAGE_UNIT = 10000`` per mm), NaN
-# where the serial read failed.
+# clock in nanoseconds.  The stage (``/pos_stage``) is read through
+# :mod:`stage_alignment`.
 CAMERA_GROUP = "/img_metadata"
-STAGE_DATASET = "/pos_stage"
 TIMESTAMP_SECONDS = 1e-9
-STAGE_UM_PER_UNIT = 0.1
 
 FloatArray = NDArray[np.float64]
 
@@ -214,24 +212,20 @@ def frame_status(fitted: np.ndarray, flagged: np.ndarray, stale: np.ndarray, fix
 
 
 def read_recording_motion(recording: Path, dataset: str, frames: np.ndarray) -> tuple[FloatArray | None, FloatArray | None, dict[str, Any]]:
-    """``(time_s, stage_um, notes)`` of ``frames`` from the recording's acquisition metadata; either is ``None`` when absent.
+    """``(time_s, stage_px, notes)`` of ``frames`` from the recording's acquisition metadata; either is ``None`` when absent.
 
     ``time_s`` is the camera timestamp relative to the recording's first saved
     frame.  It is used only when the saved-frame rows of the camera metadata
     match the frame count of ``dataset`` one to one.
 
-    ``stage_um`` is the stage position at each frame's exposure, in µm, such
-    that ``image position - stage_um`` is the world position, with axes
-    parallel to the image's.  On the flv-c rigs stage x and y run along image
-    x and y, and a worm standing still in the world moves by ``+d`` in the
-    image when the stage moves by ``+d`` (checked on the fitted centroids of
-    2024-01-31-02: of the eight assignments of stage axes and signs to image
-    axes, only this one makes the world centroid smooth).  Stage
-    samples are read about half a saved frame after the exposure
-    (ConfocalTrackerControl's stage loop queries after the image grab and
-    sleeps 25 ms), so the position at the exposure is the mean of the frame's
-    sample and the one before.  Failed reads (NaN, typically 1–4 frames in a
-    row) are linearly interpolated in time, as BehaviorDataNIR.jl does.
+    ``stage_px`` is the stage position at each frame in image pixels, such
+    that ``image position - stage_px`` is the world position: the substrate
+    frame of :func:`stage_alignment.substrate_shift_px` (image pixels of the
+    recording's first frame with a stage reading, axes the image's).  The
+    recording's calibration against the image maps the stage to pixels and
+    to the frames' exposures (:func:`stage_alignment.recording_calibration`,
+    estimated on first use and cached; ``notes["calibration"]``); it is NaN
+    where the stage is unknown (``notes["stage_unknown_frames"]``).
     """
 
     notes: dict[str, Any] = {}
@@ -240,13 +234,22 @@ def read_recording_motion(recording: Path, dataset: str, frames: np.ndarray) -> 
         with h5py.File(recording, "r") as handle:
             total = int(handle[dataset].shape[0])
             times = _saved_frame_times(handle, total, notes)
-            stage = _stage(handle, total, times, notes)
     except (OSError, KeyError) as error:
         notes["error"] = f"recording unreadable: {type(error).__name__}: {error}"
         return None, None, notes
     if len(frames) and (frames.min() < 0 or frames.max() >= total):
         raise ValueError(f"frames outside the {total} frames of {recording}")
-    return (None if times is None else times[frames]), (None if stage is None else stage[frames]), notes
+    stage = None
+    try:
+        calibration = recording_calibration(recording)
+        stage = -substrate_shift_px(recording, frames, calibration)
+        notes["calibration"] = calibration.to_dict()
+        notes["stage_unknown_frames"] = int(np.sum(~np.isfinite(stage).all(axis=1)))
+    except KeyError:
+        notes["stage"] = f"no {STAGE_DATASET}"
+    except (OSError, ValueError) as error:
+        notes["stage"] = f"stage not calibrated: {error}"
+    return (None if times is None else times[frames]), stage, notes
 
 
 def _saved_frame_times(handle: h5py.File, total: int, notes: dict[str, Any]) -> FloatArray | None:
@@ -264,26 +267,6 @@ def _saved_frame_times(handle: h5py.File, total: int, notes: dict[str, Any]) -> 
         notes["time"] = "camera timestamps are not increasing"
         return None
     return seconds
-
-
-def _stage(handle: h5py.File, total: int, times: FloatArray | None, notes: dict[str, Any]) -> FloatArray | None:
-    if STAGE_DATASET not in handle:
-        notes["stage"] = f"no {STAGE_DATASET}"
-        return None
-    raw = np.asarray(handle[STAGE_DATASET], dtype=np.float64)
-    if raw.shape != (total, 2):
-        notes["stage"] = f"{STAGE_DATASET} has shape {raw.shape}, expected ({total}, 2)"
-        return None
-    valid = np.isfinite(raw).all(axis=1)
-    if valid.sum() < 2:
-        notes["stage"] = f"{STAGE_DATASET} has fewer than two readings"
-        return None
-    clock = times if times is not None else np.arange(total, dtype=np.float64)
-    filled = np.stack([np.interp(clock, clock[valid], raw[valid, axis]) for axis in range(2)], axis=1)
-    notes["stage_interpolated_samples"] = int((~valid).sum())
-    at_exposure = filled.copy()
-    at_exposure[1:] = 0.5 * (filled[1:] + filled[:-1])
-    return at_exposure * STAGE_UM_PER_UNIT
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +333,9 @@ def export(
     models, app revision, creation time).  Lengths are in µm when
     ``pixel_size_um`` is given, else in pixels.  Time comes from the camera
     timestamps, else from ``fps``, else it is unknown (null).  Velocity is in
-    the world frame when the recording has stage positions and the pixel size
-    is known, else in the image frame; ``export.json``'s ``velocity`` says
-    which and why.
+    the world frame when the recording has stage positions that calibrate
+    against the image, else in the image frame; ``export.json``'s
+    ``velocity`` says which and why.
     """
 
     frames = np.asarray(frames, dtype=np.int64)
@@ -370,18 +353,20 @@ def export(
     else:
         time_s = np.full(len(frames), np.nan)
         time_info = {"source": "none", "reason": f"{notes.get('time') or notes.get('error')}, and no frame rate was given"}
-    if stage is not None and pixel_size_um:
-        meta = Meta(unit, stage)
+    if stage is not None:
+        meta = Meta(unit, stage * scale)
         velocity = {
             "frame": "world",
-            "stage_dataset": STAGE_DATASET, "stage_um_per_unit": STAGE_UM_PER_UNIT,
-            "stage_interpolated_samples": notes.get("stage_interpolated_samples", 0),
-            "convention": "world = image position - stage position; axes parallel to the image's (x right, y down)",
+            "stage_dataset": STAGE_DATASET, "stage_calibration": notes["calibration"],
+            "stage_unknown_frames": notes["stage_unknown_frames"],
+            "convention": (
+                "world = image position - stage position, the stage mapped to image pixels by the recording's calibration;"
+                " origin: the image position of the recording's first frame with a stage reading; axes the image's (x right, y down)"
+            ),
         }
     else:
         meta = Meta(unit, None)
-        reason = notes.get("stage") or notes.get("error") or "no pixel size, so the stage (µm) and the image (pixels) cannot be combined"
-        velocity = {"frame": "image", "reason": reason}
+        velocity = {"frame": "image", "reason": notes.get("stage") or notes.get("error")}
     velocity["method"] = "central differences of centroid_world over the neighbouring frames (one-sided at the ends)"
     table, columns = build_table(frames, time_s, status, midline, width, meta)
     values, counts = np.unique(np.asarray(status, dtype=str), return_counts=True)

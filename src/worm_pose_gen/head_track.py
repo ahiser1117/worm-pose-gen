@@ -28,6 +28,12 @@ distance, so missing frames (a step, empty masks) stretch the scale.  An
 optional per-frame ``shift_px`` moves the candidates from image to substrate
 coordinates before displacements are measured, so a stage move is not a
 head jump.
+
+A chosen mode below ``INTERPOLATE_BELOW`` (``body_proposal.END_THRESHOLD``)
+only says the head is there about; its position is the straight line, in
+frame index and substrate coordinates, between the nearest rows before and
+after with a head at least that strong.  A weak head with no such row on
+either side before the head leaves view is dropped.
 """
 
 from __future__ import annotations
@@ -51,15 +57,17 @@ MAX_GAP_ROWS = 100
 # head heatmap fires weakly on the tail: 2023-03-30-01 frames 4790-4817).
 TAIL_EXCLUSION_PX = 22.0
 VALUE_FLOOR = 1e-3
+INTERPOLATE_BELOW = 0.3
 
 
 @dataclass(frozen=True)
 class HeadTrack:
-    """Per row: the chosen head ``xy`` (NaN without one), its candidate (``-1`` none, ``0..K-1`` a mode, ``K`` the nose) and its ``value``."""
+    """Per row: the chosen head ``xy`` (NaN without one), its candidate (``-1`` none, ``0..K-1`` a mode, ``K`` the nose), its ``value``, and whether ``xy`` was ``interpolated``."""
 
     xy: NDArray[np.float64]
     candidate: NDArray[np.int64]
     value: NDArray[np.float64]
+    interpolated: NDArray[np.bool_]
 
 
 def _transition(d: NDArray[np.float64], frames: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -156,7 +164,7 @@ def track_heads(
                 lost[t], lost_from[t] = visible[t - 1, leave] + HIDDEN_COST, leave
             else:
                 lost[t] = lost[t - 1] + HIDDEN_COST
-    out = HeadTrack(np.full((n, 2), np.nan), np.full(n, -1, dtype=np.int64), np.full(n, np.nan))
+    out = HeadTrack(np.full((n, 2), np.nan), np.full(n, -1, dtype=np.int64), np.full(n, np.nan), np.zeros(n, dtype=bool))
     if not n:
         return out
     # Back from the cheapest end: a head in the last row, the head lost, or never seen.
@@ -169,4 +177,31 @@ def track_heads(
             continue
         out.xy[t], out.candidate[t], out.value[t] = xy[t, c], c, value[t, c]
         t, c = int(from_row[t, c]), int(from_candidate[t, c])
+    _interpolate_weak(out, frames, None if shift_px is None else np.asarray(shift_px, dtype=np.float64))
     return out
+
+
+def _interpolate_weak(track: HeadTrack, frames: NDArray[np.float64], shift_px: NDArray[np.float64] | None) -> None:
+    """Replace each weak head of ``track`` in place (see the module's docstring)."""
+
+    shown = np.isfinite(track.value)
+    strong = shown & (track.value >= INTERPOLATE_BELOW)
+    weak = np.flatnonzero(shown & ~strong)
+    if not len(weak):
+        return
+    shift = np.zeros_like(track.xy) if shift_px is None else shift_px
+    rows = np.arange(len(frames))
+    # The nearest strong row before and after each row, and the last and next row without a head.
+    before = np.maximum.accumulate(np.where(strong, rows, -1))
+    after = np.minimum.accumulate(np.where(strong, rows, len(rows))[::-1])[::-1]
+    hidden_before = np.maximum.accumulate(np.where(shown, -1, rows))
+    hidden_after = np.minimum.accumulate(np.where(shown, len(rows), rows)[::-1])[::-1]
+    for t in weak:
+        a, b = before[t], after[t]
+        if a < 0 or b >= len(rows) or hidden_before[t] > a or hidden_after[t] < b:
+            track.xy[t], track.candidate[t], track.value[t] = np.nan, -1, np.nan
+            continue
+        w = (frames[t] - frames[a]) / (frames[b] - frames[a])
+        substrate = (1 - w) * (track.xy[a] + shift[a]) + w * (track.xy[b] + shift[b])
+        track.xy[t] = substrate - shift[t]
+        track.interpolated[t] = True

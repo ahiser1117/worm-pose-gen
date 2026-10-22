@@ -872,17 +872,26 @@ recording (`head_track.py`) before it fits:
   A gap of rows without a head costs 1 once plus the per-row cost, its
   displacement scaled by its frame distance, up to 100 rows; past that
   the position is forgotten (6 more). Missing frames stretch the scale the
-  same way. An optional `shift_px` per row (image to substrate) is added
-  to every candidate before displacements are measured, for stage moves.
-  The decode of 2,000 rows takes 0.3 s.
+  same way. Displacements are measured on the agar, not in the image: each
+  row's substrate offset from the stage (`pipeline.recording_substrate_shift`,
+  `stage_alignment.substrate_shift_px`, the recording's calibration
+  estimated on first use and cached) is added to every candidate, so a
+  stage move is not a head jump; rows whose offset is unknown get the
+  straight line between the known ones, and a recording without a stage
+  is decoded in image coordinates. The decode of 2,000 rows takes 0.3 s.
+- **Weak heads.** A chosen mode below 0.3 is placed on the straight line,
+  in frame index and substrate coordinates, between the nearest rows
+  before and after with a head of at least 0.3 (`interpolated` in the
+  stage's `head_track` counts); one with no such row on a side before the
+  head leaves view is dropped.
 - **Use.** The track is stored as `head_xy` in the state (NaN: no head) and
   replaces the maximum wherever a fit reads the head: the end term, the
   trace start laid from the head, and the orientation of the standard
   starts (`FieldCrop.with_head`; `WorkspaceFields(heads=...)` for the
   propagate and track stages and the region algorithms; `fit_recording.py`
-  keeps it in its crops). The image-edge rule still applies. A tracked mode
-  below 0.3 counts: the decode keeps one only with continuity behind it (7
-  of 600 rows on 2023-03-30-01 f4440-5039, none on f6000-7999).
+  keeps it in its crops). The image-edge rule still applies. The
+  Workspace page's Head output layer rings the tracked head (the
+  network-fields route's `head_xy`, `head_source: track`).
 - **Order of the stage.** Every row's fields are read (or predicted and
   stored) first, then the head is decoded, then the rows are fit; reading
   the masks and fields twice adds 1.2 s per 2,000 workspace rows.
@@ -925,3 +934,37 @@ moves over a body width between consecutive frames:
   overlap the network pass); the workspace analysis 127 s against 124 s.
 - `scripts/evaluate_field_fitting.py` fits single held-out frames, with no
   sequence to track, so it reads the old rule and is unchanged.
+
+The table above measured the track in image coordinates, with tracked
+modes below 0.3 kept where they were. Weak-head interpolation and the
+stage's substrate offsets were then measured the same way (flv-c3 A5500s,
+`runs/temporal_consistency/`; cells as above):
+
+| | Independent | Propagated |
+|---|---|---|
+| sequence set, track as above | 78 / 35 / 0 / 48; 6; 15 | 12 / 3 / 0 / 30; 0; 4 |
+| + weak heads interpolated | 81 / 35 / 0 / 48; 6; 15 | 12 / 3 / 0 / 30; 0; 4 |
+| + substrate offsets | 80 / 32 / 0 / 48; 6; 12 | 12 / 3 / 0 / 30; 0; 3 |
+| + offsets filled by registration | 80 / 32 / 0 / 48; 6; 11 | 12 / 3 / 0 / 30; 0; 3 |
+| 2023-03-30-01 f4640-4839, track as above | 67 / 32 / 0 / 0; 12; 34 | 6 / 0 / 0 / 0; 0; 0 |
+| + weak heads interpolated | 69 / 35 / 0 / 0; 12; 36 | 6 / 0 / 0 / 0; 0; 0 |
+| + substrate offsets | 69 / 35 / 0 / 0; 12; 36 | 6 / 0 / 0 / 0; 0; 0 |
+| + offsets filled by registration | 69 / 35 / 0 / 0; 12; 36 | 6 / 0 / 0 / 0; 0; 0 |
+| workspace f6000-7999, track as above | 37 / 0 / 0 / 99; 0; 0 | 11 / 1 / 0 / 37; 0; 0 |
+| + both | 37 / 0 / 0 / 99; 0; 0 | 11 / 1 / 0 / 37; 0; 0 |
+| + both, offsets filled by registration | 37 / 0 / 0 / 101; 0; 0 | 12 / 1 / 0 / 37; 0; 0 |
+
+- **Weak heads are rare.** The decode chooses a mode below 0.3 on 1 of 600
+  window rows and none of the 2,000 workspace rows, so interpolating them
+  changes little; the window's independent counts move within the spread
+  of repeated runs.
+- **Substrate offsets help a little on the sequence set** (independent pose
+  jumps 35 → 32, head moves over a body width 15 → 12, propagated 4 → 3)
+  and change nothing on the window or the workspace, where the stage moves
+  slowly between frames compared with the 8 px scale. Filling the
+  untrusted stage stretches by registration (docs/STAGE_ALIGNMENT.md)
+  changes none of these beyond one count.
+- **Cost.** None once the recording's stage calibration is cached (the
+  workspace analysis takes 127 s with and without it); the first analysis
+  of a recording estimates it and registers its untrusted stage stretches
+  (about 25 s and 1-1.5 min, docs/STAGE_ALIGNMENT.md).

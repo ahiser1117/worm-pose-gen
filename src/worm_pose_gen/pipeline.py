@@ -848,6 +848,28 @@ def recording_nose(recording: str | Path, frame_indices: Sequence[int], image_sh
     return np.asarray(read_head_tracking(recording, np.asarray(frame_indices, dtype=np.int64), tuple(image_shape)).xy, dtype=np.float64)
 
 
+def recording_substrate_shift(recording: str | Path, frame_indices: Sequence[int]) -> np.ndarray | None:
+    """``[n, 2]``: each frame's image-to-substrate offset from the stage (:mod:`stage_alignment`), ``None`` without a usable stage.
+
+    The recording's calibration and the registration that fills its
+    untrusted stage stretches run on first use (about 2 min) and are cached.
+    Frames whose offset is still unknown get the straight line between the
+    known ones.
+    """
+
+    from .stage_alignment import recording_calibration, substrate_shift_px
+
+    frames = np.asarray(frame_indices, dtype=np.int64)
+    try:
+        shift = substrate_shift_px(recording, frames, recording_calibration(recording))
+    except (OSError, KeyError, ValueError):
+        return None
+    known = np.isfinite(shift).all(axis=1)
+    if not known.any():
+        return None
+    return np.stack([np.interp(frames, frames[known], shift[known, axis]) for axis in range(2)], axis=1)
+
+
 def head_inputs(crop: Any, mask: MaskArray, nose_xy: np.ndarray | None) -> HeadInputs:
     """What the head track reads of a row: its fields' head modes and its nose on the mask (``body_proposal.head_candidates``), and the tail's peak."""
 
@@ -860,10 +882,11 @@ def head_inputs(crop: Any, mask: MaskArray, nose_xy: np.ndarray | None) -> HeadI
 def decode_heads(arrays: dict[str, np.ndarray], inputs: dict[int, HeadInputs], shift_px: np.ndarray | None = None) -> dict[str, Any]:
     """The head of every row of ``inputs`` by tracking (:func:`head_track.track_heads`) as ``arrays["head_xy"]`` (NaN: none, and every other row); returns counts.
 
-    ``shift_px`` (``[n, 2]`` over all rows, image to substrate) is passed on
-    for the rows of ``inputs``.  ``argmax_differs`` counts rows whose head
-    is not the one the heatmap's maximum gives (another place, or one of
-    the two missing).
+    ``shift_px`` (``[n, 2]`` over all rows, image to substrate,
+    :func:`recording_substrate_shift`) is passed on for the rows of
+    ``inputs``.  ``argmax_differs`` counts rows whose head is not the one the
+    heatmap's maximum gives (another place, or one of the two missing);
+    ``interpolated`` the weak heads placed between strong ones.
     """
 
     from .body_proposal import END_THRESHOLD, HEAD_MODE_RADIUS_PX
@@ -872,7 +895,7 @@ def decode_heads(arrays: dict[str, np.ndarray], inputs: dict[int, HeadInputs], s
     arrays["head_xy"] = np.full((len(arrays["frame_index"]), 2), np.nan)
     rows = np.array(sorted(inputs), dtype=np.int64)
     if not len(rows):
-        return {"rows": 0, "with_head": 0, "from_nose": 0, "below_end_threshold": 0, "argmax_differs": 0, "seconds": 0.0}
+        return {"rows": 0, "with_head": 0, "from_nose": 0, "below_end_threshold": 0, "interpolated": 0, "argmax_differs": 0, "substrate": shift_px is not None, "seconds": 0.0}
     modes, noses, tails = (np.stack([inputs[int(r)][k] for r in rows]) for k in range(3))
     track = track_heads(
         arrays["frame_index"][rows], modes, tail=tails, nose_xy=noses,
@@ -886,8 +909,8 @@ def decode_heads(arrays: dict[str, np.ndarray], inputs: dict[int, HeadInputs], s
     differs = (shown != np.isfinite(argmax[:, 0])) | (shown & moved)
     return {
         "rows": len(rows), "with_head": int(shown.sum()), "from_nose": int(np.sum(track.candidate == modes.shape[1])),
-        "below_end_threshold": int(np.sum(shown & (track.value < END_THRESHOLD))), "argmax_differs": int(differs.sum()),
-        "seconds": time.perf_counter() - t,
+        "below_end_threshold": int(np.sum(shown & (track.value < END_THRESHOLD))), "interpolated": int(track.interpolated.sum()),
+        "argmax_differs": int(differs.sum()), "substrate": shift_px is not None, "seconds": time.perf_counter() - t,
     }
 
 
@@ -1998,7 +2021,7 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
                 if progress is not None:
                     progress(0.0, f"tracking the head: fields of {len(inputs)}/{len(rows)} frames")
             timing["fields"] += time.perf_counter() - t
-            heads = decode_heads(arrays, inputs)
+            heads = decode_heads(arrays, inputs, recording_substrate_shift(workspace.info.recording, arrays["frame_index"]))
             fields.heads = arrays["head_xy"]
 
         def submitted(slab: list[int]) -> tuple[list[int], list[int], list[MaskArray], list[Any] | None, Iterable[Any], float]:
