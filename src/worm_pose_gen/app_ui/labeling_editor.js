@@ -487,7 +487,7 @@ export class FrameEditor {
     }
     const tube = this.frame.targets?.meta?.overlap_px;
     if (tube == null) return "Overlap: not drawn.";
-    return tube ? `Overlap: to review. The tube fit crosses itself on ${tube} px; the overlap trains nothing until it is drawn or marked none.`
+    return tube ? `Overlap: to review. The tube fit crosses itself on ${tube} px, which trains as the overlap until it is drawn or marked none.`
       : "Overlap: not drawn. The tube fit crosses nowhere, so this frame trains as no overlap.";
   }
 

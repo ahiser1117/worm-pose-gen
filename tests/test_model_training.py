@@ -137,7 +137,7 @@ class LabelDatasetTests(LibraryTestCase):
         store_targets(self.libraries, masked, centerline)
         self.assertFalse(bool(model_training.LabelDataset(self.libraries, [masked], kind="body_net")[0]["targets"][3].any()))
 
-    def test_overlap_trains_where_drawn_or_the_tube_crosses_nowhere(self):
+    def test_overlap_trains_as_drawn_else_as_the_tube_crosses(self):
         record = self.records()[0]
         centerline, inputs = straight_worm()[0], label_inputs(record.frame % 3)[1]
         dataset = lambda r: model_training.LabelDataset(self.libraries, [r], kind="body_net")[0]["targets"]
@@ -146,10 +146,13 @@ class LabelDatasetTests(LibraryTestCase):
         targets = dataset(record)
         self.assertEqual(model_eval.overlap_state(record, library.cached_meta(self.libraries, record), 0.9), "clear")
         self.assertTrue(bool((targets[7] == worm).all()) and not bool(targets[6].any()))
-        # The tube crosses somewhere and nobody has drawn the overlap: it trains nothing.
+        # The tube crosses somewhere and nobody has drawn the overlap: the tube's crossings train.
         store_targets(self.libraries, record, centerline, overlap_px=12)
         self.assertEqual(model_eval.overlap_state(record, library.cached_meta(self.libraries, record), 0.9), "review")
-        self.assertFalse(bool(dataset(record)[7].any()))
+        targets = dataset(record)
+        tube = library.load_targets(self.libraries, record)[1]["overlap"]
+        self.assertTrue(bool((targets[7] == worm).all()))
+        np.testing.assert_array_equal(targets[6].numpy().astype(bool), tube & (inputs["mask"] == 1))
         # Drawn: the drawing trains, and the A-P field is undefined on it.
         collection = library.Collection(self.libraries, "lab:rig")
         overlap = np.zeros(SHAPE, np.uint8)

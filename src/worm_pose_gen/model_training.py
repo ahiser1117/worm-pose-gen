@@ -317,7 +317,7 @@ class LabelDataset:
             if built is None:
                 raise FileNotFoundError(f"{record.key}: body targets are not built")
             arrays = built[1] if body_used(record, built[0], self.min_fit_iou) else None
-            targets = body_target_rows(mask, arrays, overlap_target(label, built[0], self.min_fit_iou))
+            targets = body_target_rows(mask, arrays, overlap_target(label, *built, self.min_fit_iou))
         frames = label.context[needed].astype(np.float32)
         if self.augment and self.fiber_share > 0:
             from .synthetic_clips import add_fibers

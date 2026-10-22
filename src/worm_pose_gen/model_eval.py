@@ -99,8 +99,9 @@ def overlap_state(record: LabelRecord, meta: dict[str, Any] | None, min_fit_iou:
 
     A tube fit marks every true overlap, so a tube that crosses nowhere is a
     label without overlap; where it does cross, it also marks touching body
-    parts, so only a person can say what overlaps.  ``clear``, ``drawn`` and
-    ``none`` train the overlap output; ``review`` and ``None`` do not.
+    parts, so a person's drawing is better.  ``drawn`` and ``none`` train the
+    drawing, ``clear`` no overlap, ``review`` the tube's crossings until
+    someone draws it; ``None`` trains no overlap.
     """
 
     if record.overlap_px is not None:
@@ -110,14 +111,18 @@ def overlap_state(record: LabelRecord, meta: dict[str, Any] | None, min_fit_iou:
     return "review" if int(meta.get("overlap_px") or 0) else "clear"
 
 
-def overlap_target(label: Any, meta: dict[str, Any] | None, min_fit_iou: float) -> NDArray[np.bool_] | None:
-    """The overlap a label trains (:func:`overlap_state`), or ``None`` when it trains none."""
+def overlap_target(
+    label: Any, meta: dict[str, Any] | None, arrays: dict[str, NDArray[Any]] | None, min_fit_iou: float,
+) -> NDArray[np.bool_] | None:
+    """The overlap a label trains (:func:`overlap_state`) given its built targets, or ``None`` when it trains none."""
 
     state = overlap_state(label.record, meta, min_fit_iou)
     if state in ("drawn", "none"):
         return label.overlap.astype(bool)
     if state == "clear":
         return np.zeros(label.mask.shape, dtype=bool)
+    if state == "review":
+        return np.asarray(arrays["overlap"], dtype=bool)
     return None
 
 

@@ -144,7 +144,7 @@ none), and `model_eval.overlap_state` decides what each label trains:
 |---|---|---|
 | `drawn` / `none` | a person drew the overlap, or marked No overlap | as drawn |
 | `clear` | nothing drawn; the body trains and its tube crosses nowhere | as no overlap |
-| `review` | nothing drawn; the tube crosses somewhere | nothing until a person draws it |
+| `review` | nothing drawn; the tube crosses somewhere | the tube's crossings, until a person draws it |
 | none | the body does not train (mask only, poor fit, no targets) | nothing, unless drawn |
 
 A drawn overlap trains even on a mask-only label, and the A-P field is
@@ -153,7 +153,9 @@ Synthetic clips train their rendered overlap, which is exact. The loss
 weights overlap pixels up (`overlap_pos_weight`, 30 by default), and
 validation logs `val_overlap_ap` and `val_overlap_recall` (at 0.5).
 Browse labels filters on the state; **Overlap to review** lists the frames
-to draw.
+to draw. A drawing is better than the tube's crossings, which also mark
+touching body parts; the review frames left after the October 2026 pass
+train on the tube.
 
 ## Correct on the Labeling page
 
