@@ -1,7 +1,8 @@
 // Run from the repo root with Playwright + Chromium available (PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE as for the other checks).
 // Starts tests/browser/labeling_fixture.py (a synthetic CPU app; or uses one already running: LABELING_URL and
 // LABELING_ROOT) and drives the Labeling page: open a Relabel queue, paint, a network proposal, use the body proposal,
-// flip, Save & next, trace a midline (insert, remove, extend the head, drag a point), mask only, Back to workspace, then Browse labels sorted by body fit IoU.
+// flip, Save & next, trace a midline (insert, remove, extend the head, drag a point), paint the overlap, mask only, Back to workspace,
+// then Browse labels sorted by body fit IoU.
 // SCREENSHOTS=<dir> saves the main states.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -265,6 +266,34 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     assert.equal(saved.trace_extend, false);
     assert.match(await status(), /frame 20/);
 
+    // The overlap channel (O): the brushes paint overlap on worm pixels only; S saves it with the label.
+    const overlapNote = () => page.locator('.lb-side').textContent();
+    await page.keyboard.press('o');
+    assert.equal(await button('Overlap (O)').getAttribute('aria-pressed'), 'true');
+    assert.equal(await button('Overlap (W)').isVisible(), true);
+    assert.match(await overlapNote(), /Overlap: not drawn/);
+    await drag([150, midY(150, 20) - 30], [150, midY(150, 20) + 30]);  // across the body, off it at both ends
+    const drawnPx = Number((await overlapNote()).match(/Overlap: (\d+) px drawn/)[1]);
+    assert.ok(drawnPx > 0);
+    await shot('labeling-overlap');
+    await page.keyboard.press('s');
+    await page.waitForFunction(() => /Saved revision 2/.test(document.querySelector('.lb-save-note').textContent));
+    assert.ok(saves.at(-1).overlap.startsWith('data:image/png'));
+    const stored = await (await fetch(`${base}/api/library/setups/lab:nir/labels/2024-05-05-01/20`)).json();
+    assert.deepEqual([stored.label.overlap, stored.label.overlap_px], ['drawn', drawnPx]);  // the server refuses overlap off the worm
+    // No overlap (V) marks the frame reviewed with none; Undo brings the drawing back. The body model proposes overlap (N).
+    await page.keyboard.press('v');
+    assert.match(await overlapNote(), /Overlap: none \(reviewed\)/);
+    await page.keyboard.press('z');
+    assert.match(await overlapNote(), /Overlap: \d+ px drawn/);
+    const overlapRequest = page.waitForRequest(request => request.url().endsWith('/api/labeling/overlap'));
+    await page.keyboard.press('n');
+    await overlapRequest;
+    await page.waitForSelector('.lb-right .row:has(button:text-is("Apply (A)"))', {state: 'visible'});
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('o');
+    assert.equal(await button('Worm (W)').isVisible(), true);
+
     // Temporal context: Difference (D), back to Frames, an offset.
     await page.keyboard.press('d');
     await page.waitForFunction(() => document.querySelector('.lb-context button[aria-pressed="true"]')?.textContent === 'Difference (D)', null, {timeout: 60000});
@@ -303,6 +332,11 @@ const midY = (x, k) => HEIGHT / 2 + 28 * Math.sin((x - 60) / 45 + k * 0.15);
     await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 1);
     assert.match(await page.locator('.lb-entries .lb-entry').textContent(), /frame 30[\s\S]*mask only/);
     await page.locator('[aria-label="Status"]').selectOption('');
+    await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 7);
+    await page.locator('[aria-label="Overlap"]').selectOption('drawn');
+    await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 1);
+    assert.match(await page.locator('.lb-entries .lb-entry').innerText(), /frame 20\b[\s\S]*overlap/);
+    await page.locator('[aria-label="Overlap"]').selectOption('');
     await page.waitForFunction(() => document.querySelectorAll('.lb-entries .lb-entry').length === 7);
     await page.locator('.lb-entries .lb-entry').first().click();
     await page.waitForFunction(() => /frame 5 · saved revision 1 \(lab\)/.test(document.querySelector('.lb-status')?.textContent || ''));

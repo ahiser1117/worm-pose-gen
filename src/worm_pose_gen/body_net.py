@@ -15,7 +15,9 @@ Output channels (:data:`OUTPUTS`):
 ``head``     heatmap logit, penalty-reduced focal loss against a Gaussian
 ``tail``     the same for the tail
 ``overlap``  logit that a mask pixel is covered twice (a crossing), BCE on
-             mask pixels with the rare positives weighted up
+             the mask pixels of items whose overlap is known (for labels a
+             person's drawing, :func:`model_eval.overlap_state`), the rare
+             positives weighted up
              (``overlap_pos_weight``); validation reports its average
              precision and recall at 0.5 (:data:`OVERLAP_BINS`)
 
@@ -96,31 +98,38 @@ _MASK, _VALID, _AP, _AP_VALID, _HEAD, _TAIL, _OVERLAP, _OVERLAP_VALID = range(8)
 TARGET_ROWS = 8
 
 
-def body_target_rows(mask: NDArray[np.uint8], targets: dict[str, NDArray[Any]] | None) -> NDArray[np.float32]:
-    """The ``[8,H,W]`` target stack of a label: its mask, and its body targets where they train the body.
+def body_target_rows(
+    mask: NDArray[np.uint8], targets: dict[str, NDArray[Any]] | None, overlap: NDArray[np.bool_] | None,
+) -> NDArray[np.float32]:
+    """The ``[8,H,W]`` target stack of an item: its mask, its body targets where they train the body, and its overlap.
 
     ``mask`` is the label (0, 1, 255 excluded); ``targets`` the arrays of its
     built body targets (:func:`library.load_targets`), or ``None`` when the
-    label trains the mask only, in which case the A-P and overlap rows are
-    invalid and the heatmaps NaN (they say nothing either way).
+    item trains the mask only, in which case the A-P row is invalid and the
+    heatmaps NaN (they say nothing either way).  ``overlap`` is where the body
+    lies over itself, or ``None`` when that is not known (the overlap row is
+    then invalid); the A-P field is undefined there.
     """
 
     shape = mask.shape
     rows = np.zeros((TARGET_ROWS, *shape), dtype=np.float32)
     rows[_MASK] = mask == 1
     rows[_VALID] = mask != IGNORE_LABEL
+    if overlap is not None:
+        rows[_OVERLAP] = overlap & (mask == 1)
+        rows[_OVERLAP_VALID] = mask == 1
     if targets is None:
         rows[_HEAD] = rows[_TAIL] = np.nan
         return rows
     ap = targets["ap"].astype(np.float32)
     body = (mask == 1) & np.isfinite(ap)
+    if overlap is not None:
+        body &= ~overlap
     rows[_AP] = np.where(body, ap, 0.0)
     rows[_AP_VALID] = body
     sigma = HEATMAP_SIGMA_DIAMETERS * float(targets["diameter_px"])
     rows[_HEAD] = point_heatmap(shape, targets["head_xy"], sigma)
     rows[_TAIL] = point_heatmap(shape, targets["tail_xy"], sigma)
-    rows[_OVERLAP] = targets["overlap"] & (mask == 1)
-    rows[_OVERLAP_VALID] = mask == 1
     return rows
 
 

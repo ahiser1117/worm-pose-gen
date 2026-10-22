@@ -173,9 +173,9 @@ class ItemTest(unittest.TestCase):
             sample = dataset[0]
         self.assertEqual(tuple(sample["image"].shape), (4, *SHAPE))
         self.assertEqual(tuple(sample["targets"].shape), (8, *SHAPE))
-        rows = body_target_rows(item["mask"], {"ap": item["ap"].astype(np.float32), "overlap": item["overlap"],
+        rows = body_target_rows(item["mask"], {"ap": item["ap"].astype(np.float32),
                                                "head_xy": item["head_xy"], "tail_xy": item["tail_xy"],
-                                               "diameter_px": float(item["diameter_px"])})
+                                               "diameter_px": float(item["diameter_px"])}, item["overlap"].astype(bool))
         np.testing.assert_array_equal(sample["targets"].numpy(), rows)
         # The lag-1 channel is the difference of the +1 and -1 frames.
         from worm_pose_gen.segmenter import INPUT_STD

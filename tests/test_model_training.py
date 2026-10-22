@@ -45,13 +45,15 @@ def label_inputs(shift=0):
                             context_valid=np.ones(2 * MAX_LAG + 1, bool))
 
 
-def store_targets(libraries, record, centerline, *, fit_iou=0.97):
-    """Targets as the setup's mask default ``lab:seg`` (set at the end of :func:`make_library`) would build them."""
+def store_targets(libraries, record, centerline, *, fit_iou=0.97, overlap_px=None):
+    """Targets as the setup's mask default ``lab:seg`` (set at the end of :func:`make_library`) would build them;
+    ``overlap_px`` stands in for a tube that crosses itself."""
 
     label = record.load()
     targets = render_body_targets(label.mask == 1, centerline, np.full(len(centerline), 8.0))
     meta = {"has_body": True, "fit_iou": fit_iou, "label": record.identity, "fit_method": "independent",
-            "self_contact": self_contact(centerline, np.full(len(centerline), 8.0))}
+            "self_contact": self_contact(centerline, np.full(len(centerline), 8.0)),
+            "overlap_px": int(targets.overlap.sum()) if overlap_px is None else overlap_px}
     arrays = {"centerline_xy": centerline, "width_profile": np.full(len(centerline), 8.0), "ap": targets.ap.astype(np.float16),
               "overlap": targets.overlap, "head_xy": targets.head_xy, "tail_xy": targets.tail_xy, "diameter_px": np.float64(8.0)}
     write_targets(libraries, record.sha256, "lab:seg", meta, arrays)  # built by the setup's mask default
@@ -134,6 +136,38 @@ class LabelDatasetTests(LibraryTestCase):
         masked = collection.save(recording=record.recording, frame=record.frame, origin="fix", mask_only=True, **inputs)
         store_targets(self.libraries, masked, centerline)
         self.assertFalse(bool(model_training.LabelDataset(self.libraries, [masked], kind="body_net")[0]["targets"][3].any()))
+
+    def test_overlap_trains_where_drawn_or_the_tube_crosses_nowhere(self):
+        record = self.records()[0]
+        centerline, inputs = straight_worm()[0], label_inputs(record.frame % 3)[1]
+        dataset = lambda r: model_training.LabelDataset(self.libraries, [r], kind="body_net")[0]["targets"]
+        worm = torch.as_tensor(inputs["mask"] == 1)
+        # The tube crosses nowhere: no overlap anywhere on the worm.
+        targets = dataset(record)
+        self.assertEqual(model_eval.overlap_state(record, library.cached_meta(self.libraries, record), 0.9), "clear")
+        self.assertTrue(bool((targets[7] == worm).all()) and not bool(targets[6].any()))
+        # The tube crosses somewhere and nobody has drawn the overlap: it trains nothing.
+        store_targets(self.libraries, record, centerline, overlap_px=12)
+        self.assertEqual(model_eval.overlap_state(record, library.cached_meta(self.libraries, record), 0.9), "review")
+        self.assertFalse(bool(dataset(record)[7].any()))
+        # Drawn: the drawing trains, and the A-P field is undefined on it.
+        collection = library.Collection(self.libraries, "lab:rig")
+        overlap = np.zeros(SHAPE, np.uint8)
+        overlap[30:34, 40:46] = 1
+        drawn = collection.save(recording=record.recording, frame=record.frame, origin="fix", overlap=overlap, **inputs)
+        store_targets(self.libraries, drawn, centerline, overlap_px=12)
+        self.assertEqual((drawn.overlap_px, model_eval.overlap_state(drawn, library.cached_meta(self.libraries, drawn), 0.9)), (24, "drawn"))
+        targets = dataset(drawn)
+        np.testing.assert_array_equal(targets[6].numpy(), overlap)
+        self.assertTrue(bool((targets[7] == worm).all()))
+        self.assertFalse(bool(targets[3][overlap == 1].any()))
+        self.assertTrue(bool(targets[3].any()))
+        # A mask-only label still trains the overlap a person drew.
+        masked = collection.save(recording=record.recording, frame=record.frame, origin="fix", mask_only=True, overlap=overlap, **inputs)
+        store_targets(self.libraries, masked, centerline)
+        targets = dataset(masked)
+        self.assertFalse(bool(targets[3].any()))
+        np.testing.assert_array_equal(targets[6].numpy(), overlap)
 
     def test_segmenter_items_augment_and_pad(self):
         dataset = model_training.LabelDataset(self.libraries, self.records(), kind="segmenter", augment=True, crop_size=48)
