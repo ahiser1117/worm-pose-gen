@@ -264,22 +264,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     lengths = {}
     if model is not None:
         lengths = estimate_lengths(spec, str(library.weights_path(libraries, spec["model"])), args.device,
+                                   kind=library.get_card(libraries, spec["model"]).kind,
                                    progress=lambda fraction, message: report_progress(0.7 + 0.29 * fraction, message))
     report_progress(1.0, f"found {len(entries)} frames", result={"entries": entries, "lengths": lengths})
     return 0
 
 
 def estimate_lengths(
-    spec: dict[str, Any], checkpoint: str, device: str | None, *, progress: Callable[[float, str], None] | None = None,
+    spec: dict[str, Any], checkpoint: str, device: str | None, *, kind: str = "segmenter",
+    progress: Callable[[float, str], None] | None = None,
 ) -> dict[str, float | None]:
-    """Each recording's body length from the prior cache, bootstrapping the ones it lacks with the segmenter ``checkpoint``."""
+    """Each recording's body length from the prior cache, bootstrapping the ones it lacks with the masks of ``checkpoint``,
+    a model of ``kind`` (a segmenter, or a body-field network)."""
 
     import torch
 
     from .pipeline import FitParams, Frames, PriorParams, build_fit_config, cached_prior, resolve_prior
 
     video = spec.get("video") or {}
-    params = PriorParams(checkpoint=checkpoint, dataset_root=str(spec.get("dataset_root")), flat_field=bool(video.get("flat_field", True)))
+    masks = {"mask_source": "body_net", "body_net": checkpoint} if kind == "body_net" else {"checkpoint": checkpoint}
+    params = PriorParams(**masks, dataset_root=str(spec.get("dataset_root")), flat_field=bool(video.get("flat_field", True)))
     if spec.get("prior_cache"):
         params = replace(params, prior_cache=str(spec["prior_cache"]))
     config = build_fit_config(FitParams())

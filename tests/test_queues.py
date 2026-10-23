@@ -149,9 +149,15 @@ class FrameSearchTests(unittest.TestCase):
 class FrameSearchJobTests(unittest.TestCase):
     @slow
     def test_the_job_runs_a_library_model_over_the_recordings(self):
+        for kind in ("segmenter", "body_net"):  # the mask model may be either kind (the lab's default is a body-field net)
+            with self.subTest(kind=kind):
+                self.run_job(kind)
+
+    def run_job(self, kind):
         import torch
 
         from tests.test_model_training import save_weights
+        from worm_pose_gen.body_net import BodyFieldModule
         from worm_pose_gen.segmenter import SegmentationModule
 
         with tempfile.TemporaryDirectory() as directory:
@@ -159,9 +165,12 @@ class FrameSearchJobTests(unittest.TestCase):
             libraries = library.Libraries(lab=None, personal=root / "mine")
             library.write_setup(libraries.personal, "rig", name="Rig", fps=20.0, video={"flat_field": False})
             torch.manual_seed(0)
-            save_weights(SegmentationModule(pretrained=False), root / "seg.ckpt")
-            library.create_model(libraries, "seg", {"name": "seg", "kind": "segmenter", "setup": "mine:rig", "outputs": ["mask"],
-                                                    "inputs": library.make_inputs([], fps=20.0, pixel_size_um=1.0)}, root / "seg.ckpt")
+            body = kind == "body_net"
+            lags = [1, 2] if body else []
+            save_weights(BodyFieldModule(lags=tuple(lags), pretrained=False) if body else SegmentationModule(pretrained=False), root / "seg.ckpt")
+            library.create_model(libraries, "seg", {"name": "seg", "kind": kind, "setup": "mine:rig",
+                                                    "outputs": list(library.models.OUTPUTS) if body else ["mask"],
+                                                    "inputs": library.make_inputs(lags, fps=20.0, pixel_size_um=1.0)}, root / "seg.ckpt")
             path = root / "2024-05-05-01.h5"
             write_recording(path, frames=30)
             spec = {"recordings": [{"path": str(path), "id": "2024-05-05-01", "frames": 30, "exclude": [15]}], "frames": 3,
