@@ -7,7 +7,8 @@
 //   #labeling/new                New queue: recordings, a number of frames and optionally image types → Find frames (a job)
 //   #labeling/queue/<id>[/<n>]   a queue's frames (Relabel keyframes from the Workspace, found frames, a manifest),
 //                                filtered by recording, status and image type and sorted; <n> is the entry's place in the queue
-//   #labeling/browse[/<dataset>[/<recording>]]   the setup's labels, filtered, lowest body fit IoU first;
+//   #labeling/browse[/<dataset>[/<recording>]]   the setup's labels, filtered (also by what their overlap trains:
+//                                Overlap to review lists the frames whose tube fit crosses and nobody drew), lowest body fit IoU first;
 //                                with a dataset, with their recordings' splits in it
 //                                (the Training page's Datasets tab links a dataset's recording here)
 //
@@ -38,7 +39,7 @@ const QUEUE_VIEW = {recording: "", status: "", type: "", sort: "order"};
 let ctx, root, left, editor;
 const page = {
   setups: [], setup: null, mode: "home",
-  queue: null, index: -1, queueView: {...QUEUE_VIEW}, browse: {rows: [], token: 0, filters: {recording: "", split: "", status: "", contact: false}},
+  queue: null, index: -1, queueView: {...QUEUE_VIEW}, browse: {rows: [], token: 0, filters: {recording: "", split: "", status: "", overlap: "", contact: false}},
   poll: null, visible: false,
 };
 
@@ -418,7 +419,7 @@ async function openBrowse(datasetRef = null, recording = "") {
       ctx.toast(`Could not open ${datasetRef}: ${error.message}`, "error");
       datasetRef = null;
     }
-    Object.assign(f, {recording, split: "", status: "", contact: false});
+    Object.assign(f, {recording, split: "", status: "", overlap: "", contact: false});
   }
   if (!datasetRef) f.split = "";
   page.mode = "browse";
@@ -443,6 +444,7 @@ async function openBrowse(datasetRef = null, recording = "") {
       el("div", {class: "row lb-tight"},
         datasetRef ? select("split", [["", "All splits"], ["train", "Train"], ["val", "Validation"], ["test", "Test"], ["none", "Not included"]], "Split") : null,
         select("status", [["", "Any status"], ["complete", "Complete"], ["mask_only", "Mask only"], ["auto", "Body unconfirmed"]], "Status")),
+      select("overlap", [["", "Any overlap"], ...Object.entries(OVERLAP_TEXT).map(([state, text]) => [state, text[0]])], "Overlap"),
       el("label", {class: "inline", title: "Bodies that touch or cross themselves: the hard frames"}, contact, "Self-contact only"),
       page.browse.count),
     el("section", {class: "section lb-fill"}, el("div", {class: "note lb-sort"}, "Lowest body fit IoU first"), page.browse.list),
@@ -457,7 +459,8 @@ async function loadBrowse() {
   let rows = [];
   try {
     rows = (await api(`/api/library/setups/${encodeURIComponent(page.setup)}/labels${query({
-      dataset: page.browse.dataset, recording: f.recording, split: f.split, status: f.status, contact: f.contact ? "yes" : "", sort: "fit_iou",
+      dataset: page.browse.dataset, recording: f.recording, split: f.split, status: f.status, overlap: f.overlap, contact: f.contact ? "yes" : "",
+      sort: "fit_iou",
     })}`)).labels;
   } catch (error) {
     ctx.toast(error.message, "error");
@@ -469,6 +472,11 @@ async function loadBrowse() {
 }
 
 const STATUS_TEXT = {complete: "complete", mask_only: "mask only", auto: "body unconfirmed"};
+// What a label's overlap trains (model_eval.overlap_state): the filter's text and the row's badge.
+const OVERLAP_TEXT = {
+  review: ["Overlap to review", "review"], drawn: ["Overlap drawn", "overlap"], none: ["Reviewed: no overlap", "no overlap"],
+  clear: ["Tube fit crosses nowhere", ""],
+};
 
 function renderBrowseList() {
   const rows = page.browse.rows;
@@ -478,6 +486,7 @@ function renderBrowseList() {
       el("span", {}, `frame ${row.frame}`),
       el("span", {class: "note lb-sub", title: row.recording}, `${STATUS_TEXT[row.status] || row.status} · ${row.recording}`)),
     row.split ? el("span", {class: "badge"}, row.split) : null,
+    OVERLAP_TEXT[row.overlap]?.[1] ? el("span", {class: "badge", title: OVERLAP_TEXT[row.overlap][0]}, OVERLAP_TEXT[row.overlap][1]) : null,
     el("span", {class: "lb-iou", title: row.targets === "built" ? "Body fit IoU: how well the body fitted to the mask covers it" : "Body targets not built yet"},
       row.fit_iou == null ? "—" : row.fit_iou.toFixed(3)))));
 }

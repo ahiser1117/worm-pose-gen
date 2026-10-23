@@ -2,8 +2,9 @@
 
 The picker (``GET /api/training/models``) is one row per model of a setup,
 lab and personal mixed: its inputs (lags in frames and seconds), outputs and
-what a missing output means in plain words, what it was trained on, which
-default roles it fills, and its numbers on one benchmark (``benchmark``,
+what a missing output means in plain words, what it was trained on, its
+recipe (:func:`model_training.recipe`, which the Train form starts from),
+which default roles it fills, and its numbers on one benchmark (``benchmark``,
 default the setup's first lab benchmark), or the evaluation job filling
 them in.  A setup without models lists the lab models of the other setups
 instead (``others: true``), with their numbers on their own benchmark: how a
@@ -13,7 +14,8 @@ Jobs go through ``POST /api/jobs`` like every other job:
 
 - ``{"kind": "train", "setup", "dataset": ref, "start_from": ref | null,
   "context": "none" | "short", "encoder": one of ``model_training.ENCODERS``,
-  "params": {...}, "name", "notes"}`` checks
+  "params": {...}, "pseudo_labels": [ref, ...], "pseudo_fraction", "fiber_share",
+  "name", "notes"}`` checks
   the request (:func:`model_training.plan`) and queues
   ``python -m worm_pose_gen.model_training`` (prepare targets, train,
   evaluate on every benchmark, write the card);
@@ -88,10 +90,12 @@ def _job_summary(record: JobRecord) -> dict[str, Any]:
 
 def _trained_on(card: library.ModelCard) -> dict[str, Any]:
     entries = list(card.trained_on)
+    labels = [e for e in entries if "dataset" in e]
     return {
-        "labels": sum(int(e.get("counts", {}).get("train", 0)) + int(e.get("counts", {}).get("val", 0)) for e in entries),
-        "recordings": sum(int(e.get("recordings") or 0) for e in entries),
-        "datasets": [e.get("dataset") for e in entries],
+        "labels": sum(int(e.get("counts", {}).get("train", 0)) + int(e.get("counts", {}).get("val", 0)) for e in labels),
+        "recordings": sum(int(e.get("recordings") or 0) for e in labels),
+        "datasets": [e["dataset"] for e in labels],
+        "pseudo_labels": [ref for e in entries for ref in e.get("pseudo_labels", [])],
     }
 
 
@@ -114,7 +118,7 @@ def model_row(app: AppState, card: library.ModelCard, setup: library.Setup, benc
         "inputs": card.inputs, "outputs": list(card.outputs), "missing": missing_outputs(card.outputs),
         "roles": [role for role, needed in ROLE_OUTPUTS.items() if all(name in card.outputs for name in needed)],
         "default_for": sorted(role for role, ref in setup.defaults.items() if ref == card.ref),
-        "trained_on": _trained_on(card), "parent": card.parent, "author": card.author, "created_at": card.created_at,
+        "trained_on": _trained_on(card), "recipe": model_training.recipe(card), "parent": card.parent, "author": card.author, "created_at": card.created_at,
         "notes": card.notes, "benchmark": benchmark,
         "evaluation": _evaluation(evaluations.get(benchmark)) if benchmark else None,
         "evaluating": None if job is None else _job_summary(job),
@@ -240,7 +244,8 @@ def training_job(app: AppState, payload: dict[str, Any]) -> tuple[JobSpec, list[
     with _found():
         planned = model_training.plan(app.libraries, request, taken=_taken_names(app))
     params = {**planned.summary(), "setup": request.setup, "dataset": request.dataset, "start_from": request.start_from,
-              "context": request.context, "encoder": planned.encoder, "notes": request.notes}
+              "context": request.context, "encoder": planned.encoder, "pseudo_labels": list(request.pseudo_labels),
+              "pseudo_fraction": request.pseudo_fraction, "fiber_share": request.fiber_share, "notes": request.notes}
     spec = JobSpec(kind="train", params=params, label=f"Train {planned.request.name}")
     return spec, model_training.command(app.libraries, request, planned)
 

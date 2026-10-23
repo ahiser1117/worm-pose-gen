@@ -1,4 +1,4 @@
-"""Self-training pseudo-labels: frame selection on synthetic workspace states, target building, items, the sampler, one epoch."""
+"""Self-training pseudo-labels: frame selection on synthetic workspace states, target building, items, library sets, the sampler, one epoch and its recipe."""
 
 from pathlib import Path
 import tempfile
@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 import torch
 
-from worm_pose_gen import model_training, pseudo_labels
+from worm_pose_gen import library, model_training, pseudo_labels
 from worm_pose_gen.body_net import _AP_VALID, _HEAD, _MASK, _TAIL, _VALID, BodyFieldModule
 from worm_pose_gen.pose_run import render_tube
 from worm_pose_gen.pseudo_labels import IGNORE, PseudoLabelDataset, SelectionParams, select_rows
@@ -154,31 +154,54 @@ class DatasetTests(unittest.TestCase):
             total, parts = module.loss(module(batch["image"]), batch["targets"])
             self.assertTrue(torch.isfinite(total))
             self.assertEqual(float(parts["tail_focal"]), 0.0)
-            self.assertEqual(dataset.trained_on()["counts"], {"pseudo": 3, "bridged": 1, "clear": 2})
+            self.assertEqual(dataset.counts(), {"counts": {"pseudo": 3, "bridged": 1, "clear": 2}, "recordings": 1})
             with self.assertRaisesRegex(ValueError, "offsets"):
                 PseudoLabelDataset([Path(root) / "items"], lags=(2,))
 
 
+class PseudoLabelSetTests(LibraryTestCase):
+    def test_a_set_is_a_library_item_of_its_setup(self):
+        pseudo = library.create_pseudo_labels(self.libraries, "self", setup="lab:rig", description="confident fits")
+        write_items(pseudo.root, count=4)
+        self.assertEqual([p.ref for p in library.list_pseudo_labels(self.libraries, "lab:rig")], ["mine:self"])
+        summary = library.get_pseudo_labels(self.libraries, "mine:self").summary()
+        self.assertEqual((summary["items"], summary["counts"], summary["recordings"]), (4, {"bridged": 1, "clear": 3}, 1))
+        with self.assertRaises(FileExistsError):
+            library.create_pseudo_labels(self.libraries, "self", setup="lab:rig")
+        with self.assertRaisesRegex(LookupError, "unknown pseudo-label set"):
+            library.get_pseudo_labels(self.libraries, "lab:self")
+
+
 class TrainWithPseudoLabelsTests(LibraryTestCase):
     def test_one_cpu_epoch_with_pseudo_labels_writes_them_on_the_card(self):
-        items = self.root / "items"
-        write_items(items, count=4, offsets=(-2, -1, 0, 1, 2))  # the fixture's body net has lags 1 and 2
+        pseudo = library.create_pseudo_labels(self.libraries, "self", setup="lab:rig")
+        write_items(pseudo.root, count=4, offsets=(-2, -1, 0, 1, 2))  # the fixture's body net has lags 1 and 2
         with self.assertRaisesRegex(ValueError, "pseudo-label fraction"):
             model_training.plan(self.libraries, model_training.TrainRequest(
-                setup="lab:rig", dataset="lab:base", start_from="lab:body", pseudo_labels=[str(items)]))
+                setup="lab:rig", dataset="lab:base", start_from="lab:body", pseudo_labels=["mine:self"]))
+        with self.assertRaisesRegex(LookupError, "unknown pseudo-label set"):
+            model_training.plan(self.libraries, model_training.TrainRequest(
+                setup="lab:rig", dataset="lab:base", start_from="lab:body", pseudo_labels=["mine:other"], pseudo_fraction=0.5))
         request = model_training.TrainRequest(
             setup="lab:rig", dataset="lab:base", start_from="lab:body", name="selftrained", notes="pseudo",
-            params={"max_epochs": 1, "batch_size": 2, "crop_size": 64}, pseudo_labels=[str(items)], pseudo_fraction=0.5,
+            params={"max_epochs": 1, "batch_size": 2, "crop_size": 64, "learning_rate": 1e-4}, pseudo_labels=["mine:self"],
+            pseudo_fraction=0.5, fiber_share=0.5,
         )
         card = model_training.train(self.libraries, request, device="cpu", num_workers=0)
         self.assertEqual(card.trained_on[0]["counts"], {"train": 2, "val": 1, "test": 0})
-        self.assertEqual(card.trained_on[1]["counts"]["pseudo"], 4)
+        self.assertEqual(card.trained_on[1], {"pseudo_labels": ["mine:self"], "counts": {"pseudo": 4, "bridged": 1, "clear": 3},
+                                              "recordings": 1})
         self.assertEqual(card.hparams["pseudo_fraction"], 0.5)
-        self.assertEqual(card.hparams["pseudo_labels"], [str(items)])
+        self.assertEqual(card.hparams["pseudo_labels"], ["mine:self"])
+        # The recipe repeats the run: its settings, the set and the shares; from scratch, the context its lags are.
+        recipe = model_training.recipe(card)
+        self.assertEqual({k: recipe[k] for k in ("pseudo_labels", "pseudo_fraction", "fiber_share", "context")},
+                         {"pseudo_labels": ["mine:self"], "pseudo_fraction": 0.5, "fiber_share": 0.5, "context": None})
+        self.assertEqual((recipe["params"]["learning_rate"], recipe["params"]["max_epochs"]), (1e-4, 1))
         argv = model_training.command(self.libraries, request, model_training.plan(
             self.libraries, model_training.TrainRequest(setup="lab:rig", dataset="lab:base", start_from="lab:body", name="other",
-                                                        pseudo_labels=[str(items)], pseudo_fraction=0.5)))
-        self.assertIn("--pseudo-labels", argv)
+                                                        pseudo_labels=["mine:self"], pseudo_fraction=0.5)))
+        self.assertEqual(argv[argv.index("--pseudo-labels") + 1], "mine:self")
 
 
 if __name__ == "__main__":

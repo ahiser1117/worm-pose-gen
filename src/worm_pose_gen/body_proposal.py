@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from scipy import ndimage
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 
 from .batch_fit import BodyFieldEvidence
 from .body_net import OUTPUTS, BodyFieldModule
@@ -48,6 +49,13 @@ END_BORDER_PX = 20.0
 # body; such an end is not used.  Real tails lie up to 16 px off reviewed
 # masks, which miss the thin tip.
 END_MASK_PX = 20.0
+# The head heatmap's modes kept per frame for the head track (:mod:`head_track`):
+# local maxima at least ``HEAD_MODE_RADIUS_PX`` apart (the maximum of a
+# square of twice that plus one; about a body width, 44 px at nir-flv), the
+# strongest ``HEAD_MODES`` of those reaching ``HEAD_MODE_FLOOR``.
+HEAD_MODES = 4
+HEAD_MODE_RADIUS_PX = 22
+HEAD_MODE_FLOOR = 0.02
 # Pixels predicted as a crossing above this are left out of the bands.
 OVERLAP_THRESHOLD = 0.5
 MIN_BAND_PIXELS = 20
@@ -64,11 +72,43 @@ Peak = tuple[float, float, float]
 Box = tuple[slice, slice]
 
 
+def heatmap_modes(heatmaps: Tensor, k: int = HEAD_MODES, radius: int = HEAD_MODE_RADIUS_PX, floor: float = HEAD_MODE_FLOOR) -> Tensor:
+    """``[B, k, 3]`` (x, y, value) modes of ``[B, H, W]`` heatmaps, strongest first, NaN past the last.
+
+    A mode is a pixel equal to the maximum of the square of half-width
+    ``radius`` around it (a separable max-pool) and at least ``floor``.  The
+    network's half-precision outputs often tie between neighbouring pixels;
+    of tied maxima within one square only the first in raster order is a
+    mode, so the first mode is the pixel ``np.argmax`` finds.
+    """
+
+    size = 2 * radius + 1
+    pooled = F.max_pool2d(heatmaps[:, None], (1, size), 1, (0, radius))
+    pooled = F.max_pool2d(pooled, (size, 1), 1, (radius, 0))[:, 0]
+    candidates = torch.where((heatmaps >= pooled) & (heatmaps >= floor), heatmaps, torch.full_like(heatmaps, -1.0))
+    values, index = candidates.flatten(1).topk(4 * k, 1)
+    width = heatmaps.shape[-1]
+    x, y = index % width, index // width
+    near = ((x[:, :, None] - x[:, None, :]).abs() <= radius) & ((y[:, :, None] - y[:, None, :]).abs() <= radius)
+    tied = near & (values[:, :, None] == values[:, None, :]) & (index[:, None, :] < index[:, :, None])
+    values = torch.where(tied.any(-1), -1.0, values)
+    values, order = values.topk(k, 1)
+    index = index.gather(1, order)
+    modes = torch.stack(((index % width).double(), (index // width).double(), values.double()), -1)
+    return torch.where((values >= floor)[..., None], modes, torch.full_like(modes, float("nan")))
+
+
+def in_view(peak: Peak | NDArray[np.float64]) -> tuple[float, float] | None:
+    """A peak's (x, y) when it reaches ``END_THRESHOLD``."""
+
+    return (float(peak[0]), float(peak[1])) if float(peak[2]) >= END_THRESHOLD else None
+
+
 @dataclass(frozen=True)
 class FieldPrediction:
     """Per-pixel network outputs for one frame, as probabilities (A-P as a value in [0, 1]).
 
-    The trace and the evidence read a prediction only through :meth:`peak`,
+    The trace and the evidence read a prediction only through :meth:`end`,
     :meth:`ap_in` and :meth:`crossing_in`, which :class:`FieldCrop` (the part
     a workspace keeps) answers too.
     """
@@ -86,6 +126,14 @@ class FieldPrediction:
         index = int(np.argmax(heatmap))
         y, x = np.unravel_index(index, heatmap.shape)
         return float(x), float(y), float(heatmap.flat[index])
+
+    def head_modes(self) -> NDArray[np.float64]:
+        return heatmap_modes(torch.from_numpy(np.ascontiguousarray(self.head, dtype=np.float32))[None])[0].numpy()
+
+    def end(self, name: str) -> tuple[float, float] | None:
+        """The ``head`` or ``tail`` in view: the heatmap's maximum when it reaches ``END_THRESHOLD``."""
+
+        return in_view(self.peak(name))
 
     def ap_in(self, box: Box) -> NDArray[np.float32]:
         return self.ap[box]
@@ -107,8 +155,12 @@ class FieldCrop:
 
     The A-P field (float32, as predicted: rounding it moves fits) and the
     crossings on ``support``, the frame's mask grown by
-    ``CROP_MARGIN_PX`` within its box ``(y0, y1, x0, x1)``, and the peaks of
-    the end heatmaps.  :meth:`covers` says whether a mask lies on the
+    ``CROP_MARGIN_PX`` within its box ``(y0, y1, x0, x1)``, the head
+    heatmap's modes (``heads``, :func:`heatmap_modes`) and the tail
+    heatmap's peak.  ``head`` is the head the fit uses: the strongest mode
+    when it reaches ``END_THRESHOLD`` (:func:`crop_fields`), or the
+    recording's head track (:meth:`with_head`, :mod:`head_track`); ``None``
+    is no head in view.  :meth:`covers` says whether a mask lies on the
     support, which is where the trace and the evidence read the fields;
     elsewhere A-P is NaN and nothing is a crossing.
     """
@@ -118,11 +170,21 @@ class FieldCrop:
     support: NDArray[np.bool_]
     ap: NDArray[np.float32]
     crossing: NDArray[np.bool_]
-    head: Peak
+    heads: NDArray[np.float64]
     tail: Peak
+    head: tuple[float, float] | None
 
-    def peak(self, name: str) -> Peak:
-        return self.head if name == "head" else self.tail
+    def head_modes(self) -> NDArray[np.float64]:
+        return self.heads
+
+    def end(self, name: str) -> tuple[float, float] | None:
+        return self.head if name == "head" else in_view(self.tail)
+
+    def with_head(self, xy: NDArray[np.float64] | Sequence[float]) -> FieldCrop:
+        """This crop with ``xy`` as its head (NaN: no head in view)."""
+
+        x, y = (float(v) for v in xy)
+        return replace(self, head=(x, y) if np.isfinite(x) and np.isfinite(y) else None)
 
     def _in(self, values: NDArray[Any], box: Box, fill: Any) -> NDArray[Any]:
         rows, cols = (range(*s.indices(n)) for s, n in zip(box, self.shape))
@@ -149,7 +211,7 @@ class FieldCrop:
 
 
 def crop_fields(prediction: FieldPrediction, mask: NDArray[np.generic]) -> FieldCrop:
-    """The part of ``prediction`` the fit of ``mask`` reads (an empty region and the peaks for an empty mask)."""
+    """The part of ``prediction`` the fit of ``mask`` reads (an empty region and the ends for an empty mask)."""
 
     body = np.asarray(mask, dtype=bool)
     height, width = body.shape
@@ -162,7 +224,8 @@ def crop_fields(prediction: FieldPrediction, mask: NDArray[np.generic]) -> Field
     ap = np.where(support, prediction.ap_in(region), np.nan).astype(np.float32)
     return FieldCrop(
         shape=(height, width), box=(y0, y1, x0, x1), support=support, ap=ap,
-        crossing=prediction.crossing_in(region) & support, head=prediction.peak("head"), tail=prediction.peak("tail"),
+        crossing=prediction.crossing_in(region) & support, heads=prediction.head_modes(), tail=prediction.peak("tail"),
+        head=prediction.end("head"),
     )
 
 
@@ -216,24 +279,31 @@ def _predictions(probability: Tensor) -> list[FieldPrediction]:
 
 @dataclass(frozen=True)
 class FrameFields:
-    """What the pipeline reads of a frame's prediction: the mask probability, A-P, crossings and the end peaks.
+    """What the pipeline reads of a frame's prediction: the mask probability, A-P, crossings, the head's modes and the tail's peak.
 
     The mask and A-P are the network's float32 sigmoids, as in a
-    :class:`FieldPrediction`; the head and tail heatmaps are reduced to their
-    peaks and the overlap to its crossings on the device, so a frame moves
-    less than half of a full prediction to the host.  It answers
-    :meth:`peak`, :meth:`ap_in` and :meth:`crossing_in` as a
+    :class:`FieldPrediction`; the head heatmap is reduced to its modes
+    (:func:`heatmap_modes`), the tail heatmap to its peak and the overlap to
+    its crossings on the device, so a frame moves less than half of a full
+    prediction to the host.  It answers :meth:`peak`, :meth:`head_modes`,
+    :meth:`end`, :meth:`ap_in` and :meth:`crossing_in` as a
     :class:`FieldPrediction` does.
     """
 
     mask: NDArray[np.float32]
     ap: NDArray[np.float32]
     crossing: NDArray[np.bool_]
-    head: Peak
+    heads: NDArray[np.float64]
     tail: Peak
 
     def peak(self, name: str) -> Peak:
-        return self.head if name == "head" else self.tail
+        return tuple(float(v) for v in self.heads[0]) if name == "head" else self.tail
+
+    def head_modes(self) -> NDArray[np.float64]:
+        return self.heads
+
+    def end(self, name: str) -> tuple[float, float] | None:
+        return in_view(self.peak(name))
 
     def ap_in(self, box: Box) -> NDArray[np.float32]:
         return self.ap[box]
@@ -254,19 +324,20 @@ def _to_host(values: Tensor) -> Tensor:
 class _FieldTransfer:
     """A batch's :class:`FrameFields` on their way to the host.
 
-    The peaks and crossings are found on the device and the copies are only
+    The head's modes, the tail's peak and the crossings are found on the device and the copies are only
     started, so the host can read the next batch's frames while the device
     finishes this one; :meth:`fields` waits for them.
     """
 
     def __init__(self, probability: Tensor) -> None:
         width = probability.shape[-1]
-        # Each end's first maximum, as np.argmax finds it in a FieldPrediction.
-        values, index = probability[:, OUTPUTS.index("head") : OUTPUTS.index("tail") + 1].flatten(2).max(2)
-        peaks = torch.stack(((index % width).double(), (index // width).double(), values.double()), -1)
+        # The tail's first maximum, as np.argmax finds it in a FieldPrediction.
+        value, index = probability[:, OUTPUTS.index("tail")].flatten(1).max(1)
+        tail = torch.stack(((index % width).double(), (index // width).double(), value.double()), -1)
+        heads = heatmap_modes(probability[:, OUTPUTS.index("head")])
         maps = probability[:, : OUTPUTS.index("ap") + 1]
         crossing = probability[:, OUTPUTS.index("overlap")] >= OVERLAP_THRESHOLD
-        self.host = [_to_host(t) for t in (maps, crossing, peaks)]
+        self.host = [_to_host(t) for t in (maps, crossing, heads, tail)]
         self.done = None
         if probability.is_cuda:
             self.done = torch.cuda.Event()
@@ -275,10 +346,10 @@ class _FieldTransfer:
     def fields(self) -> list[FrameFields]:
         if self.done is not None:
             self.done.synchronize()
-        maps, crossing, peaks = (t.numpy() for t in self.host)
+        maps, crossing, heads, tails = (t.numpy() for t in self.host)
         return [
-            FrameFields(mask=m[0], ap=m[1], crossing=c, head=tuple(float(v) for v in p[0]), tail=tuple(float(v) for v in p[1]))
-            for m, c, p in zip(maps, crossing, peaks)
+            FrameFields(mask=m[0], ap=m[1], crossing=c, heads=h, tail=tuple(float(v) for v in t))
+            for m, c, h, t in zip(maps, crossing, heads, tails)
         ]
 
 
@@ -356,18 +427,38 @@ class RecordingFieldPredictor:
         return [prediction for probability in self._probabilities(frame_indices) for prediction in _predictions(probability)]
 
 
-def _end(peak: Peak, body: NDArray[np.bool_]) -> FloatArray | None:
-    """The heatmap's peak (x, y); ``None`` below ``END_THRESHOLD`` or more than ``END_MASK_PX`` off ``body``."""
+def _end(point: tuple[float, float] | None, body: NDArray[np.bool_]) -> FloatArray | None:
+    """An end in view (a prediction's ``end(name)``) as (x, y); ``None`` without one or more than ``END_MASK_PX`` off ``body``."""
 
-    if peak[2] < END_THRESHOLD:
+    if point is None:
         return None
-    x, y = int(peak[0]), int(peak[1])
+    x, y = int(point[0]), int(point[1])
     reach = int(np.ceil(END_MASK_PX))
     top, left = max(y - reach, 0), max(x - reach, 0)
     ys, xs = np.nonzero(body[top : y + reach + 1, left : x + reach + 1])
     if not len(ys) or float(np.hypot(ys + top - y, xs + left - x).min()) > END_MASK_PX:
         return None
     return np.array([x, y], dtype=np.float64)
+
+
+def head_candidates(
+    prediction: FieldPrediction | FrameFields | FieldCrop, mask: NDArray[np.bool_], nose_xy: NDArray[np.float64] | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """A frame's head candidates for :mod:`head_track`: the head modes ``[K, 3]`` and the nose ``[2]``, NaN where more than ``END_MASK_PX`` off ``mask``.
+
+    The end rule of :func:`field_evidence` applied before the track, so the
+    track picks among heads the fit can use.
+    """
+
+    body = np.asarray(mask, dtype=bool)
+    modes = np.array(prediction.head_modes(), dtype=np.float64)
+    for mode in modes:
+        if np.isfinite(mode).all() and _end((mode[0], mode[1]), body) is None:
+            mode[:] = np.nan
+    nose = np.full(2, np.nan) if nose_xy is None else np.array(nose_xy, dtype=np.float64)
+    if np.isfinite(nose).all() and _end((nose[0], nose[1]), body) is None:
+        nose[:] = np.nan
+    return modes, nose
 
 
 def _box(mask: NDArray[np.bool_]) -> tuple[slice, slice] | None:
@@ -415,8 +506,8 @@ def propose_trace(
     box = _box(body)
     if box is None:
         return None
-    head = _end(prediction.peak("head"), body)
-    tail = _end(prediction.peak("tail"), body) if tail else None
+    head = _end(prediction.end("head"), body)
+    tail = _end(prediction.end("tail"), body) if tail else None
     # Everything below works on the mask's box; ``origin`` is its corner in the image.
     origin = np.array([box[1].start, box[0].start])
     body = body[box]
@@ -480,7 +571,7 @@ def field_evidence(prediction: FieldPrediction | FieldCrop, mask: NDArray[np.boo
     if box is not None:
         ap[box] = np.where(body[box] & ~prediction.crossing_in(box), prediction.ap_in(box), np.nan)
     return BodyFieldEvidence(
-        ap=ap, head_xy=_scored(_end(prediction.peak("head"), body), body.shape), tail_xy=_scored(_end(prediction.peak("tail"), body), body.shape),
+        ap=ap, head_xy=_scored(_end(prediction.end("head"), body), body.shape), tail_xy=_scored(_end(prediction.end("tail"), body), body.shape),
     )
 
 
@@ -518,7 +609,7 @@ def trace_start(
     """
 
     body = np.asarray(mask, dtype=bool)
-    anchored = length_px is not None and _scored(_end(prediction.peak("head"), body), body.shape) is not None
+    anchored = length_px is not None and _scored(_end(prediction.end("head"), body), body.shape) is not None
     trace = propose_trace(prediction, body, tail=not anchored)
     if trace is None:
         return None

@@ -25,6 +25,7 @@ from worm_pose_gen import export_table, pipeline
 from worm_pose_gen.app import AppConfig, create_app
 from worm_pose_gen.app.exporting import export_workspace, exported_file, list_exports
 from worm_pose_gen.export_table import MIDLINE_POINTS, Meta, body_geometry, build_table, frame_status, read_recording_motion
+from worm_pose_gen.stage_alignment import StageCalibration, read_stage, stage_shift_px
 from tests.test_frame_view import FRAMES, _write_recording, _write_workspace
 
 
@@ -106,11 +107,18 @@ class GeometryAndStatusTests(unittest.TestCase):
 
 
 class RecordingMotionTests(unittest.TestCase):
-    """A worm crawling at a constant world velocity while the stage tracks it, in a ConfocalTrackerControl-shaped file."""
+    """A worm crawling at a constant world velocity while the stage tracks it, in a ConfocalTrackerControl-shaped file.
+
+    The stage's calibration against the image (``stage_alignment``) is given:
+    0.1 µm stage units, ``PIXEL_UM`` µm pixels, readings at the exposure; the
+    offsets are the stage's alone (the blank frames cannot be registered to
+    fill the failed read, ``tests.test_stage_alignment`` covers that).
+    """
 
     FRAMES = 40
     PIXEL_UM = 1.25
     WORLD_UM_PER_S = np.array([100.0, -40.0])
+    CALIBRATION = StageCalibration(matrix=((0.1 / PIXEL_UM, 0.0), (0.0, 0.1 / PIXEL_UM)), offset_frames=0.0, residual_px=1.0, pairs=100, outliers=0)
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -127,15 +135,16 @@ class RecordingMotionTests(unittest.TestCase):
         # The stage keeps the worm near the image centre: image = world + stage (µm), stage lags by a little.
         stage_um = np.round(world - 0.3 * np.sin(np.arange(n))[:, None] * 20.0, 1)
         self.image_um = world + stage_um
-        # The file's samples are read half a frame after the exposure; the reader takes the mean of a
-        # sample and the one before as the exposure position, so store the exact inverse of that.
-        stored = np.empty_like(stage_um)
-        stored[0] = stage_um[0]
-        for k in range(1, n):
-            stored[k] = 2 * stage_um[k] - stored[k - 1]
-        raw = stored / export_table.STAGE_UM_PER_UNIT
+        self.origin_um = stage_um[0]  # the world frame's origin: the image position of the first stage reading
+        raw = stage_um / 0.1
         raw[7] = np.nan  # a failed serial read
         self.missing = 7
+        calibrated = mock.patch.object(export_table, "recording_calibration", return_value=self.CALIBRATION)
+        calibrated.start()
+        self.addCleanup(calibrated.stop)
+        stage_only = mock.patch.object(export_table, "substrate_shift_px", lambda recording, frames, calibration: stage_shift_px(read_stage(recording), frames, calibration))
+        stage_only.start()
+        self.addCleanup(stage_only.stop)
         with h5py.File(self.path, "w") as handle:
             handle.create_dataset("/img_nir", data=np.zeros((n, 4, 4), dtype=np.uint8))
             handle.create_dataset("/pos_stage", data=raw)
@@ -149,10 +158,10 @@ class RecordingMotionTests(unittest.TestCase):
         frames = np.arange(3, self.FRAMES)
         times, stage, notes = read_recording_motion(self.path, "/img_nir", frames)
         np.testing.assert_allclose(times, self.seconds[frames], atol=1e-9)
-        self.assertEqual(notes["stage_interpolated_samples"], 1)
-        world = self.image_um[frames] - stage
-        good = ~np.isin(frames, (self.missing, self.missing + 1))
-        expected = self.seconds[frames, None] * self.WORLD_UM_PER_S + np.array([500.0, 300.0])
+        self.assertEqual((notes["stage_unknown_frames"], notes["calibration"]["offset_frames"]), (0, 0.0))
+        world = self.image_um[frames] - stage * self.PIXEL_UM
+        good = frames != self.missing
+        expected = self.seconds[frames, None] * self.WORLD_UM_PER_S + np.array([500.0, 300.0]) + self.origin_um
         np.testing.assert_allclose(world[good], expected[good], atol=1e-6)
 
     def test_world_velocity_of_the_exported_centroid(self) -> None:
@@ -162,7 +171,7 @@ class RecordingMotionTests(unittest.TestCase):
         offsets = np.stack((np.linspace(-40, 40, 100), np.zeros(100)), axis=1)
         curves = self.image_um[:, None, :] / self.PIXEL_UM + offsets[None]
         midline, width = body_geometry(curves, np.full((self.FRAMES, 100), 6.0), np.ones(self.FRAMES, dtype=bool), self.PIXEL_UM)
-        columns = export_table.motion(midline, width, times, Meta("um", stage))
+        columns = export_table.motion(midline, width, times, Meta("um", stage * self.PIXEL_UM))
         velocity = np.stack((columns["velocity_x"].values, columns["velocity_y"].values), axis=1)
         away = np.abs(frames[:, None] - np.array([self.missing - 1, self.missing, self.missing + 1, self.missing + 2])).min(axis=1) > 0
         np.testing.assert_allclose(velocity[away], np.tile(self.WORLD_UM_PER_S, (away.sum(), 1)), rtol=1e-6, atol=1e-6)

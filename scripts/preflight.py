@@ -33,18 +33,28 @@ def check(failures: list[str], ok: bool, message: str, *, fatal: bool = True) ->
         failures.append(message)
 
 
-def lab_defaults(libraries: Libraries) -> list[tuple[str, str, bool]]:
-    """``(setup, model, weights present)`` for every default model of the lab setups."""
+def default_problem(libraries: Libraries, model: str) -> str:
+    """What a default model lacks: its weights, or the pseudo-label sets its recipe trains with; empty when nothing."""
 
-    rows = []
-    for setup in library.list_setups(libraries):
-        for model in setup.defaults.values():
-            try:
-                present = bool(library.weights_path(libraries, model))
-            except LookupError:
-                present = False
-            rows.append((setup.ref, model, present))
-    return rows
+    try:
+        library.weights_path(libraries, model)
+        card = library.get_card(libraries, model)
+    except LookupError:
+        return "weights missing"
+    missing = []
+    for ref in card.hparams.get("pseudo_labels") or ():
+        try:
+            library.get_pseudo_labels(libraries, ref)
+        except LookupError:
+            missing.append(ref)
+    return f"pseudo-labels of its recipe missing ({', '.join(missing)})" if missing else ""
+
+
+def lab_defaults(libraries: Libraries) -> list[tuple[str, str, str]]:
+    """``(setup, model, problem)`` for every default model of the lab setups (:func:`default_problem`)."""
+
+    return [(setup.ref, model, default_problem(libraries, model))
+            for setup in library.list_setups(libraries) for model in sorted(set(setup.defaults.values()))]
 
 
 def main() -> int:
@@ -62,8 +72,8 @@ def main() -> int:
         readable = libraries.lab.is_dir() and os.access(libraries.lab, os.R_OK | os.X_OK)
         check(failures, readable, f"lab library {libraries.lab}" + ("" if readable else " is not readable from here"), fatal=False)
         if readable:
-            for setup, model, present in lab_defaults(libraries):
-                check(failures, present, f"{setup} default {model}" + ("" if present else ": weights missing"))
+            for setup, model, problem in lab_defaults(libraries):
+                check(failures, not problem, f"{setup} default {model}" + (f": {problem}" if problem else ""))
 
     data = DATA_DIR
     problem = "" if data.is_dir() and os.access(data, os.W_OK) else " is not writable" if data.is_dir() else " does not exist (scripts/bootstrap_environment.sh makes it)"

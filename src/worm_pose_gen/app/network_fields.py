@@ -13,7 +13,9 @@ head and tail as the fitter would score them (:func:`body_proposal.field_evidenc
 against the workspace's current mask for the row, or the predicted mask when
 the row has none): ``None`` when the heatmap peak is below ``END_THRESHOLD``,
 farther than ``END_MASK_PX`` from the mask, or within ``END_BORDER_PX`` of the
-image edge.  With ``outputs`` it also carries every output channel raw, as
+image edge.  When the workspace's fit tracked the head (the state's
+``head_xy``, :mod:`head_track`), ``head_xy`` is the tracked head instead,
+the one the fit used (``head_source``: ``track`` or ``heatmap``).  With ``outputs`` it also carries every output channel raw, as
 the network gives it (``outputs``: ``{channel: PNG of round(255 * value)}``
 over the whole frame, unthresholded and unmasked; ``peaks``: each channel's
 maximum), for the page's model-output layers.  Inference runs one frame at a
@@ -125,13 +127,20 @@ class NetworkFields:
                         self._cache[key] = hit
                         while len(self._cache) > self.entries:
                             self._cache.popitem(last=False)
-                    return self._answer(hit, frame, row, cached=False, outputs=outputs)
-        return self._answer(hit, frame, row, cached=True, outputs=outputs)
+                    return self._answer(hit, frame, row, view.run.arrays.get("head_xy"), cached=False, outputs=outputs)
+        return self._answer(hit, frame, row, view.run.arrays.get("head_xy"), cached=True, outputs=outputs)
 
     @staticmethod
-    def _answer(hit: dict[str, Any], frame: int, row: int, *, cached: bool, outputs: bool) -> dict[str, Any]:
+    def _answer(hit: dict[str, Any], frame: int, row: int, tracked: np.ndarray | None, *, cached: bool, outputs: bool) -> dict[str, Any]:
+        """The response for ``row``; ``tracked`` is the state's head track (read per answer: a refit changes it, not the cached prediction)."""
+
         raw = () if outputs else ("outputs", "peaks")
-        return {**{k: v for k, v in hit.items() if k not in raw}, "frame": int(frame), "row": row, "cached": cached}
+        answer = {**{k: v for k, v in hit.items() if k not in raw}, "frame": int(frame), "row": row, "cached": cached, "head_source": "heatmap"}
+        if tracked is not None:
+            x, y = (float(v) for v in tracked[row])
+            answer["head_xy"] = [x, y] if np.isfinite(x) and np.isfinite(y) else None
+            answer["head_source"] = "track"
+        return answer
 
     def close(self) -> None:
         with self._lock:

@@ -87,6 +87,45 @@ def body_used(record: LabelRecord, meta: dict[str, Any] | None, min_fit_iou: flo
     return record.status == "complete" or float(meta.get("fit_iou") or 0.0) >= float(min_fit_iou)
 
 
+# What a label says about overlap (:func:`overlap_state`).
+OVERLAP_STATES = ("drawn", "none", "clear", "review")
+
+
+def overlap_state(record: LabelRecord, meta: dict[str, Any] | None, min_fit_iou: float) -> str | None:
+    """What a label's overlap trains: ``drawn`` or ``none`` when a person drew it (``none``: reviewed, no overlap);
+    ``clear`` when nobody did but its body trains and the fitted tube crosses nowhere; ``review`` when the tube
+    crosses somewhere and nobody has drawn it yet; ``None`` when its body does not train (no targets, mask only,
+    or a poor fit).
+
+    A tube fit marks every true overlap, so a tube that crosses nowhere is a
+    label without overlap; where it does cross, it also marks touching body
+    parts, so a person's drawing is better.  ``drawn`` and ``none`` train the
+    drawing, ``clear`` no overlap, ``review`` the tube's crossings until
+    someone draws it; ``None`` trains no overlap.
+    """
+
+    if record.overlap_px is not None:
+        return "drawn" if record.overlap_px else "none"
+    if not body_used(record, meta, min_fit_iou):
+        return None
+    return "review" if int(meta.get("overlap_px") or 0) else "clear"
+
+
+def overlap_target(
+    label: Any, meta: dict[str, Any] | None, arrays: dict[str, NDArray[Any]] | None, min_fit_iou: float,
+) -> NDArray[np.bool_] | None:
+    """The overlap a label trains (:func:`overlap_state`) given its built targets, or ``None`` when it trains none."""
+
+    state = overlap_state(label.record, meta, min_fit_iou)
+    if state in ("drawn", "none"):
+        return label.overlap.astype(bool)
+    if state == "clear":
+        return np.zeros(label.mask.shape, dtype=bool)
+    if state == "review":
+        return np.asarray(arrays["overlap"], dtype=bool)
+    return None
+
+
 def mask_model_for(libraries: Libraries, setup_ref: str, device: Any) -> Any:
     """The setup's mask default, for chain fits while building targets; ``None`` when it has none."""
 

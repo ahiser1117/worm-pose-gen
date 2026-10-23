@@ -66,6 +66,7 @@ class Collection:
         return LabelRecord(
             scope=scope, setup=self.setup, recording=recording, frame=int(frame), split=None,
             path=str(self.label_path(scope, recording, frame, entry["revision"])), **{k: entry[k] for k in ENTRY_FIELDS},
+            overlap_px=entry.get("overlap_px"),  # absent: saved before overlap was drawn
         )
 
     def _all(self) -> dict[str, list[LabelRecord]]:
@@ -133,6 +134,7 @@ class Collection:
         trace_extend: bool = False,
         trace_length_px: float | None = None,
         mask_only: bool = False,
+        overlap: np.ndarray | None = None,
         author: str | None = None,
         source_path: str = "",
         dataset_path: str = "/img_nir",
@@ -165,7 +167,7 @@ class Collection:
                 recording=recording, frame=frame, revision=revision, image=image, image_raw=image_raw, mask=mask,
                 context=context, context_valid=context_valid, nose_xy=nose_xy, nose_valid=nose_valid,
                 orientation=orientation, head_xy=head_xy, trace_xy=trace_xy, trace_extend=trace_extend,
-                trace_length_px=trace_length_px, mask_only=mask_only, origin=origin,
+                trace_length_px=trace_length_px, mask_only=mask_only, origin=origin, overlap=overlap,
                 author=author, saved_at=saved_at or utc_now(), source_path=source_path, dataset_path=dataset_path,
                 extra_meta=extra_meta,
             )

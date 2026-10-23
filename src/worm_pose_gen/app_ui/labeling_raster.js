@@ -76,20 +76,43 @@ export function maskOverlay(mask, width, height, preview = false) {
 }
 
 // A round brush dab of `value` with diameter `size` at (x, y); excluded pixels stay as they are only under no brush.
-function dab(mask, width, height, x, y, size, value) {
+// With `within` (a mask) the dab sets only that mask's worm pixels: the overlap is painted on the worm alone.
+function dab(mask, width, height, x, y, size, value, within) {
   const r = size / 2;
   const y0 = Math.max(0, Math.floor(y - r)), y1 = Math.min(height, Math.ceil(y + r));
   const x0 = Math.max(0, Math.floor(x - r)), x1 = Math.min(width, Math.ceil(x + r));
   for (let yy = y0; yy < y1; yy++) {
     for (let xx = x0; xx < x1; xx++) {
-      if ((xx + 0.5 - x) ** 2 + (yy + 0.5 - y) ** 2 <= r * r) mask[yy * width + xx] = value;
+      const i = yy * width + xx;
+      if ((xx + 0.5 - x) ** 2 + (yy + 0.5 - y) ** 2 <= r * r && (!within || within[i] === WORM)) mask[i] = value;
     }
   }
 }
 
-export function stroke(mask, width, height, a, b, size, value) {
+export function stroke(mask, width, height, a, b, size, value, within = null) {
   const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1, size / 4)));
-  for (let i = 0; i <= steps; i++) dab(mask, width, height, a.x + (b.x - a.x) * i / steps, a.y + (b.y - a.y) * i / steps, size, value);
+  for (let i = 0; i <= steps; i++) dab(mask, width, height, a.x + (b.x - a.x) * i / steps, a.y + (b.y - a.y) * i / steps, size, value, within);
+}
+
+// The overlap (1 where the body lies over itself) kept on the worm pixels of `mask` only, in place.
+export function clipToWorm(overlap, mask) {
+  for (let i = 0; i < overlap.length; i++) if (mask[i] !== WORM) overlap[i] = 0;
+  return overlap;
+}
+
+// The overlap as an overlay: green, or cyan for a proposal preview.
+export function overlapOverlay(overlap, width, height, preview = false) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const g = canvas.getContext("2d"), image = g.createImageData(width, height), data = image.data;
+  const [r, gr, b] = preview ? [40, 210, 255] : [70, 235, 110];
+  for (let i = 0; i < overlap.length; i++) {
+    if (!overlap[i]) continue;
+    const o = i * 4;
+    data[o] = r; data[o + 1] = gr; data[o + 2] = b; data[o + 3] = 255;
+  }
+  g.putImageData(image, 0, 0);
+  return canvas;
 }
 
 // A proposal from a 0..255 map: worm where map >= threshold (0..1). The
@@ -109,6 +132,7 @@ export function applyProposal(mask, proposal) {
 }
 
 export function sameMask(a, b) {
+  if (a === null && b === null) return true;  // two overlaps nobody drew
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;

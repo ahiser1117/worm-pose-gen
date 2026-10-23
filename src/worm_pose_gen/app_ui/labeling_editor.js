@@ -9,6 +9,14 @@
 //           network's probability or the frame's darkness, thresholded by one
 //           slider) previews until Apply; Refine runs on the server; Undo and
 //           Revert (to the mask the frame opened with).
+//   overlap where the body lies over itself, a subset of the worm pixels,
+//           painted the same way once the Overlap channel is chosen (O): the
+//           brushes add and erase overlap on worm pixels only, and painting
+//           the mask's background erases the overlap under it. Proposals: the
+//           body model's overlap probability (Network, the same slider) or
+//           the tube fit's crossings (Tube fit). A label without a drawn
+//           overlap says nothing about it; No overlap (V) marks a frame
+//           reviewed with none (model_eval.overlap_state says what trains).
 //   body    what the label will say about the body: "auto" (nobody chose:
 //           the targets builder orients it), "head" (a head end, from Flip or
 //           from accepting the shown body) or "trace" (a midline, head first,
@@ -35,15 +43,16 @@
 //           the choice holds for the setup's frames while the page is open.
 //
 // Layers: Mask (opacity slider, M toggles), A-P field (the body's, else the
-// proposal's), Midline + head/tail (with the acquisition nose), Proposal;
-// with --dev also the overlap, the tube outline and the stored trace.
+// proposal's), Overlap (the drawn one), Midline + head/tail (with the
+// acquisition nose), Proposal; with --dev also the tube fit's overlap, the
+// tube outline and the stored trace.
 
 import {el, post} from "./api.js";
 import {FrameCanvas, drawMidline} from "./frame_canvas.js";
 import {openModelPicker} from "./model_picker.js";
 import {
-  BACKGROUND, WORM, apOverlay, applyProposal, decodeMask, differenceCanvas, encodeMask, grayCanvas, grayOf, loadImage,
-  maskOverlay, reversedAp, sameMask, stroke, thresholded,
+  BACKGROUND, WORM, apOverlay, applyProposal, clipToWorm, decodeMask, differenceCanvas, encodeMask, grayCanvas, grayOf, loadImage,
+  maskOverlay, overlapOverlay, reversedAp, sameMask, stroke, thresholded,
 } from "./labeling_raster.js";
 
 const UNDO_LIMIT = 30;
@@ -52,8 +61,9 @@ const LAYERS = [
   {id: "mask", label: "Mask", key: "M"},
   {id: "ap", label: "A-P"},
   {id: "midline", label: "Midline"},
+  {id: "overlap", label: "Overlap"},
   {id: "proposal", label: "Proposal"},
-  {id: "overlap", label: "Overlap", dev: true},
+  {id: "tube_overlap", label: "Tube overlap", dev: true},
   {id: "tube", label: "Tube", dev: true},
   {id: "stored", label: "Stored trace", dev: true},
 ];
@@ -80,6 +90,7 @@ export class FrameEditor {
     this.request = null;
     this.choices = {};          // per setup: the models chosen on this page, {mask?, body?}
     this.busy = 0;
+    this.channel = "mask";      // what the brushes and proposals paint: "mask" or "overlap"
     this.brush = WORM;
     this.size = 12;
     this.threshold = 0.5;
@@ -142,6 +153,12 @@ export class FrameEditor {
       [WORM]: button(keyed("Worm", "W"), () => this.setBrush(WORM), {"aria-pressed": "true", title: "Paint worm (W)"}),
       [BACKGROUND]: button(keyed("Background", "E"), () => this.setBrush(BACKGROUND), {"aria-pressed": "false", title: "Paint background (E)"}),
     };
+    this.channelButtons = {
+      mask: button("Mask", () => this.setChannel("mask"), {"aria-pressed": "true", title: "Paint the worm mask (O switches)"}),
+      overlap: button(keyed("Overlap", "O"), () => this.setChannel("overlap"), {"aria-pressed": "false", title: "Paint where the body lies over itself, on worm pixels only (O)"}),
+    };
+    this.noOverlapButton = button(keyed("No overlap", "V"), () => this.markNoOverlap(), {title: "Reviewed: the body lies over itself nowhere in this frame (V)"});
+    this.overlapNote = node("p", {class: "note"});
     this.sizeInput = node("input", {type: "range", min: 2, max: 60, step: 1, value: this.size, "aria-label": "Brush size", oninput: (e) => { this.size = Number(e.target.value); this.sizeValue.textContent = `${this.size}px`; }});
     this.sizeValue = node("span", {class: "lb-value"}, `${this.size}px`);
     this.proposalButtons = {
@@ -153,12 +170,13 @@ export class FrameEditor {
     this.applyButton = button("Apply (A)", () => this.applyPreview(), {class: "primary", title: "Take the proposal (A)"});
     this.cancelPreviewButton = button(keyed("Cancel", "Esc"), () => this.cancelPreview());
     this.previewRow = node("div", {class: "row", hidden: true}, this.applyButton, this.cancelPreviewButton);
-    const refine = node("div", {class: "lb-grid"}, ...[
+    this.refineButtons = [
       ["Fill holes", "fill_holes", "Fill narrow holes inside the worm"], ["Largest", "largest", "Keep only the largest piece"],
       ["Grow", "grow", "Grow the mask by one pixel"], ["Shrink", "shrink", "Shrink the mask by one pixel"],
-    ].map(([label, method, title]) => button(label, () => this.refine(method), {title})));
+    ].map(([label, method, title]) => button(label, () => this.refine(method), {title}));
+    const refine = node("div", {class: "lb-grid"}, ...this.refineButtons);
     this.undoButton = button(keyed("Undo", "Z"), () => this.undo(), {title: "Undo (Z)"});
-    this.revertButton = button("Revert", () => this.revert(), {title: "Back to the mask the frame opened with"});
+    this.revertButton = button("Revert", () => this.revert(), {title: "Back to the mask and overlap the frame opened with"});
     const modelRow = (role) => {
       const name = node("span", {class: "lb-model-name"});
       const reset = button("Default", () => this.setModel(role, null), {class: "link", title: "Back to the setup's default model"});
@@ -170,13 +188,15 @@ export class FrameEditor {
     const maskSection = node("section", {class: "section"},
       node("h3", {}, "1 · Mask"),
       modelRow("mask"),
+      node("div", {class: "row lb-group seg"}, this.channelButtons.mask, this.channelButtons.overlap),
+      this.overlapNote,
       node("div", {class: "row"}, this.brushButtons[WORM], this.brushButtons[BACKGROUND]),
       node("div", {class: "row lb-slider"}, node("span", {class: "note"}, "Size"), this.sizeInput, this.sizeValue),
       node("div", {class: "row"}, this.proposalButtons.network, this.proposalButtons.threshold),
       node("div", {class: "row lb-slider"}, node("span", {class: "note"}, "Cut"), this.thresholdInput, this.thresholdValue),
       this.previewRow,
       refine,
-      node("div", {class: "row"}, this.undoButton, this.revertButton),
+      node("div", {class: "row"}, this.undoButton, this.revertButton, this.noOverlapButton),
     );
 
     this.bodyNote = node("p", {class: "note lb-body-note"});
@@ -239,9 +259,15 @@ export class FrameEditor {
       g.drawImage(ap, 0, 0);
     }, false);
     v.setLayer("overlap", (g) => {
-      if (!this.overlapCanvas) return;
+      const overlay = this.previewOverlap ? this.previewOverlapOverlay : this.overlapOverlay;
+      if (!overlay) return;
+      g.globalAlpha = 0.8;
+      g.drawImage(overlay, 0, 0);
+    });
+    v.setLayer("tube_overlap", (g) => {
+      if (!this.tubeOverlapCanvas) return;
       g.globalAlpha = 0.7;
-      g.drawImage(this.overlapCanvas, 0, 0);
+      g.drawImage(this.tubeOverlapCanvas, 0, 0);
     }, false);
     v.setLayer("tube", (g, view) => {
       const fit = this.body?.fit;
@@ -280,7 +306,7 @@ export class FrameEditor {
     v.setLayer("cursor", (g, view) => {
       if (!this.cursor || this.trace || !this.frame) return;
       g.lineWidth = 1 / view.scale;
-      g.strokeStyle = this.brush === WORM ? "#ff46a0" : "#ffffff";
+      g.strokeStyle = this.brush !== WORM ? "#ffffff" : this.channel === "overlap" ? "#46eb6e" : "#ff46a0";
       g.beginPath();
       g.arc(this.cursor.x, this.cursor.y, this.size / 2, 0, Math.PI * 2);
       g.stroke();
@@ -294,7 +320,8 @@ export class FrameEditor {
 
   get dirty() {
     if (!this.frame) return false;
-    return !sameMask(this.mask, this.openedMask) || this.bodyChanged || this.maskOnly.checked !== !!this.frame.body.mask_only;
+    return !sameMask(this.mask, this.openedMask) || !sameMask(this.overlap, this.openedOverlap) || this.bodyChanged
+      || this.maskOnly.checked !== !!this.frame.body.mask_only;
   }
 
   clear() {
@@ -313,7 +340,10 @@ export class FrameEditor {
     this.request = {...request, models: {...this.choices[request.setup]}};
     this._status("Opening the frame…");
     const frame = await post("/api/labeling/open", this.request);
-    const [image, raw, gray, mask] = await Promise.all([loadImage(frame.image), loadImage(frame.image_raw), grayOf(frame.image), decodeMask(frame.mask)]);
+    const [image, raw, gray, mask, overlap, tubeOverlap] = await Promise.all([
+      loadImage(frame.image), loadImage(frame.image_raw), grayOf(frame.image), decodeMask(frame.mask),
+      frame.overlap ? decodeMask(frame.overlap) : null, frame.targets?.overlap ? grayOf(frame.targets.overlap) : null,
+    ]);
     if (generation !== this.generation) return false;
     this.frame = frame;
     this.width = frame.width; this.height = frame.height;
@@ -322,8 +352,14 @@ export class FrameEditor {
     this.probability = frame.probability ? await grayOf(frame.probability) : null;
     this.mask = mask;
     this.openedMask = mask.slice();
+    this.overlap = overlap;  // null: nobody drew or reviewed it
+    this.openedOverlap = overlap ? overlap.slice() : null;
+    this.tubeOverlap = tubeOverlap;
+    this.tubeOverlapCanvas = tubeOverlap ? tubeOverlapCanvas(tubeOverlap, frame.width, frame.height) : null;
+    this.overlapProbability = null;
     this.history = [];
     this.previewMask = null;
+    this.previewOverlap = null;
     this.previewSource = null;
     this.context = null;
     this.contextMode = "frame";
@@ -334,7 +370,6 @@ export class FrameEditor {
     this.body = await this._initialBody(frame);
     this.bodyChanged = false;
     this.maskOnly.checked = !!frame.body.mask_only;
-    this.overlapCanvas = frame.targets?.overlap ? await overlapCanvasOf(frame.targets.overlap, this.width, this.height) : null;
     this.empty.hidden = true;
     this.centerBody.hidden = false;
     this.sideBody.hidden = false;
@@ -388,18 +423,29 @@ export class FrameEditor {
   _syncControls() {
     if (!this.frame) return;
     this.statusLine.textContent = this._describe();
+    const overlapChannel = this.channel === "overlap";
+    for (const [name, b] of Object.entries(this.channelButtons)) b.setAttribute("aria-pressed", String(name === this.channel));
     for (const [value, b] of Object.entries(this.brushButtons)) b.setAttribute("aria-pressed", String(Number(value) === this.brush));
+    this.brushButtons[WORM].textContent = keyed(overlapChannel ? "Overlap" : "Worm", "W");
+    this.brushButtons[BACKGROUND].textContent = keyed(overlapChannel ? "Erase" : "Background", "E");
+    this.proposalButtons.threshold.textContent = overlapChannel ? "Tube fit" : "Threshold";
+    this.proposalButtons.threshold.title = overlapChannel ? "Where the fitted tube crosses itself (also where body parts only touch)" : "Dark pixels";
+    this.proposalButtons.threshold.disabled = overlapChannel && !this.tubeOverlap;
+    for (const b of this.refineButtons) b.disabled = overlapChannel;
+    this.overlapNote.textContent = this._overlapText();
     for (const [name, b] of Object.entries(this.proposalButtons)) b.setAttribute("aria-pressed", String(this.previewSource === name));
     for (const [role, row] of Object.entries(this.modelRows)) {
       const ref = this.frame.models[role], isDefault = ref === this.frame.defaults[role];
       row.name.textContent = ref ? `${ref}${isDefault ? " (default)" : ""}` : "none";
       row.reset.hidden = isDefault;
     }
-    this.proposalButtons.network.disabled = !this.frame.models.mask;
-    this.proposalButtons.network.title = this.frame.models.mask ? `The model's mask: ${this.frame.models.mask} (N)` : "No mask model: choose one with Change";
-    this.previewRow.hidden = !this.previewMask;
+    const networkModel = overlapChannel ? this.frame.models.body : this.frame.models.mask;
+    this.proposalButtons.network.disabled = !networkModel;
+    this.proposalButtons.network.title = !networkModel ? `No ${overlapChannel ? "body" : "mask"} model: choose one with Change`
+      : overlapChannel ? `The body model's overlap: ${networkModel} (N)` : `The model's mask: ${networkModel} (N)`;
+    this.previewRow.hidden = !this.previewMask && !this.previewOverlap;
     this.undoButton.disabled = !this.history.length;
-    this.revertButton.disabled = sameMask(this.mask, this.openedMask);
+    this.revertButton.disabled = sameMask(this.mask, this.openedMask) && sameMask(this.overlap, this.openedOverlap);
     const tracing = !!this.trace, fitted = !!this.trace?.fit;
     this.tracePanel.hidden = !tracing;
     this.fitButton.hidden = this.removeButton.hidden = this.cancelTraceButton.hidden = fitted;
@@ -431,6 +477,18 @@ export class FrameEditor {
     this.proposingBadge.hidden = !proposing;
     this.bodyNote.replaceChildren(...(proposing ? [spinner()] : []), this._bodyText());
     this.saveNextButton.disabled = this.saveButton.disabled = this.busy > 0 || tracing;
+  }
+
+  _overlapText() {
+    if (this.overlap) {
+      let drawn = 0;
+      for (let i = 0; i < this.overlap.length; i++) drawn += this.overlap[i];
+      return drawn ? `Overlap: ${drawn} px drawn.` : "Overlap: none (reviewed).";
+    }
+    const tube = this.frame.targets?.meta?.overlap_px;
+    if (tube == null) return "Overlap: not drawn.";
+    return tube ? `Overlap: to review. The tube fit crosses itself on ${tube} px, which trains as the overlap until it is drawn or marked none.`
+      : "Overlap: not drawn. The tube fit crosses nowhere, so this frame trains as no overlap.";
   }
 
   _bodyText() {
@@ -475,9 +533,12 @@ export class FrameEditor {
     this._renderBase();
   }
 
+  // The mask and overlap overlays; the overlap first loses any pixel the mask no longer has.
   _renderMask() {
     this.maskOverlay = maskOverlay(this.mask, this.width, this.height);
     this.previewOverlay = this.previewMask ? maskOverlay(this.previewMask, this.width, this.height, true) : null;
+    this.overlapOverlay = this.overlap ? overlapOverlay(clipToWorm(this.overlap, this.mask), this.width, this.height) : null;
+    this.previewOverlapOverlay = this.previewOverlap ? overlapOverlay(this.previewOverlap, this.width, this.height, true) : null;
     this.view.redraw();
   }
 
@@ -493,6 +554,32 @@ export class FrameEditor {
 
   setBrush(value) { this.brush = value; this.cancelPreview(); this._syncControls(); }
 
+  setChannel(channel) {
+    if (!this.frame || channel === this.channel) return;
+    this.cancelPreview();
+    this.channel = channel;
+    if (channel === "overlap") { this.view.setLayerVisible("overlap", true); this._syncLayers(); }
+    this._syncControls();
+    this.view.redraw();
+  }
+
+  // Reviewed: the frame has no overlap.
+  markNoOverlap() {
+    if (!this.frame || this.trace) return;
+    this.cancelPreview();
+    this._remember();
+    this.overlap = new Uint8Array(this.mask.length);
+    this._renderMask();
+    this._changed();
+  }
+
+  // One brush segment on the channel being painted: the overlap is added on worm pixels only.
+  _stroke(a, b) {
+    if (this.channel === "mask") { stroke(this.mask, this.width, this.height, a, b, this.size, this.brush); return; }
+    this.overlap ??= new Uint8Array(this.mask.length);
+    stroke(this.overlap, this.width, this.height, a, b, this.size, this.brush === WORM ? 1 : 0, this.brush === WORM ? this.mask : null);
+  }
+
   _pointer({type, x, y}) {
     if (!this.frame) return;
     if (this.trace) { this._tracePointer(type, x, y); return; }
@@ -501,10 +588,10 @@ export class FrameEditor {
       this.cancelPreview();
       this._remember();
       this.painting = {x, y};
-      stroke(this.mask, this.width, this.height, this.painting, {x, y}, this.size, this.brush);
+      this._stroke(this.painting, {x, y});
       this._renderMask();
     } else if (type === "move" && this.painting) {
-      stroke(this.mask, this.width, this.height, this.painting, {x, y}, this.size, this.brush);
+      this._stroke(this.painting, {x, y});
       this.painting = {x, y};
       this._renderMask();
     } else if (type === "up" && this.painting) {
@@ -516,7 +603,7 @@ export class FrameEditor {
   }
 
   _remember() {
-    this.history.push(this.mask.slice());
+    this.history.push({mask: this.mask.slice(), overlap: this.overlap ? this.overlap.slice() : null});
     if (this.history.length > UNDO_LIMIT) this.history.shift();
   }
 
@@ -527,15 +614,16 @@ export class FrameEditor {
 
   undo() {
     if (!this.history.length) return;
-    this.mask = this.history.pop();
+    ({mask: this.mask, overlap: this.overlap} = this.history.pop());
     this._renderMask();
     this._maskEdited();
   }
 
   revert() {
-    if (sameMask(this.mask, this.openedMask)) return;
+    if (sameMask(this.mask, this.openedMask) && sameMask(this.overlap, this.openedOverlap)) return;
     this._remember();
     this.mask = this.openedMask.slice();
+    this.overlap = this.openedOverlap ? this.openedOverlap.slice() : null;
     this.cancelPreview();
     this._renderMask();
     this._maskEdited();
@@ -545,6 +633,7 @@ export class FrameEditor {
 
   async preview(source) {
     if (!this.frame || this.trace) return;
+    if (this.channel === "overlap") { await this._previewOverlap(source); return; }
     if (source === "network" && !this.probability) {
       if (!this.frame.models.mask) { this.ctx.toast("No mask model: choose one with Change, or try Threshold.", "error"); return; }
       this.busy++; this._status("Running the model…"); this._syncControls();
@@ -554,6 +643,27 @@ export class FrameEditor {
         const probability = await grayOf(answer.probability);
         if (frame !== this.frame || model !== frame.models.mask) return;
         this.probability = probability;
+        this._status("");
+      } catch (error) {
+        this._status(error.message, "error");
+        return;
+      } finally { this.busy--; this._syncControls(); }
+    }
+    this.previewSource = source;
+    this._updatePreview();
+  }
+
+  async _previewOverlap(source) {
+    if (source === "threshold" && !this.tubeOverlap) return;
+    if (source === "network" && !this.overlapProbability) {
+      if (!this.frame.models.body) { this.ctx.toast("No body model: choose one with Change.", "error"); return; }
+      this.busy++; this._status("Running the body model…"); this._syncControls();
+      const frame = this.frame, model = frame.models.body;
+      try {
+        const answer = await post("/api/labeling/overlap", this.request);
+        const probability = await grayOf(answer.probability);
+        if (frame !== this.frame || model !== frame.models.body) return;
+        this.overlapProbability = probability;
         this._status("");
       } catch (error) {
         this._status(error.message, "error");
@@ -590,6 +700,11 @@ export class FrameEditor {
       }
     } else {
       this.proposal = null;
+      this.overlapProbability = null;
+      if (this.channel === "overlap" && this.previewSource === "network") {
+        this.cancelPreview();
+        if (used) this.preview("network");
+      }
       this.view.redraw();
       if (used && this.autoPropose && !this.trace) this.requestProposal();
     }
@@ -598,7 +713,12 @@ export class FrameEditor {
 
   _updatePreview() {
     if (!this.previewSource) return;
-    this.previewMask = this.previewSource === "network" ? thresholded(this.probability, this.threshold) : thresholded(this.gray, this.threshold, true);
+    if (this.channel === "overlap") {
+      const proposed = this.previewSource === "network" ? thresholded(this.overlapProbability, this.threshold) : thresholded(this.tubeOverlap, 0.5);
+      this.previewOverlap = clipToWorm(proposed, this.mask);
+    } else {
+      this.previewMask = this.previewSource === "network" ? thresholded(this.probability, this.threshold) : thresholded(this.gray, this.threshold, true);
+    }
     this._renderMask();
     this._syncControls();
   }
@@ -610,18 +730,19 @@ export class FrameEditor {
   }
 
   applyPreview() {
-    if (!this.previewMask) return;
+    if (!this.previewMask && !this.previewOverlap) return;
     this._remember();
-    this.mask = applyProposal(this.mask, this.previewMask);
-    this.previewMask = null;
+    if (this.previewMask) this.mask = applyProposal(this.mask, this.previewMask);
+    else this.overlap = this.previewOverlap;
+    this.previewMask = this.previewOverlap = null;
     this.previewSource = null;
     this._renderMask();
     this._maskEdited();
   }
 
   cancelPreview() {
-    if (!this.previewMask) return;
-    this.previewMask = null;
+    if (!this.previewMask && !this.previewOverlap) return;
+    this.previewMask = this.previewOverlap = null;
     this.previewSource = null;
     this._renderMask();
     this._syncControls();
@@ -925,6 +1046,7 @@ export class FrameEditor {
       ...this.request, mask: encodeMask(this.mask, this.width, this.height), mask_only: this.maskOnly.checked,
       expected_revision: this.frame.expected_revision,
     };
+    if (this.overlap) payload.overlap = encodeMask(clipToWorm(this.overlap, this.mask), this.width, this.height);
     if (body.kind === "trace") {
       payload.trace_xy = body.trace;
       payload.trace_extend = !!body.extend;
@@ -938,7 +1060,7 @@ export class FrameEditor {
 
   async save({next}) {
     if (!this.frame || this.busy || this.trace) return null;
-    if (this.previewMask) this.applyPreview();
+    if (this.previewMask || this.previewOverlap) this.applyPreview();
     this.busy++; this._syncControls();
     this._status("Saving…");
     try {
@@ -948,6 +1070,7 @@ export class FrameEditor {
       this.frame.expected_revision = answer.label.revision;
       this.frame.body = {...this.frame.body, mask_only: this.maskOnly.checked};
       this.openedMask = this.mask.slice();
+      this.openedOverlap = this.overlap ? this.overlap.slice() : null;
       this.bodyChanged = false;
       this.onSaved?.(answer, {next});
       return answer;
@@ -974,9 +1097,10 @@ export class FrameEditor {
       if (key.toLowerCase() === "x" && !event.shiftKey && !event.altKey) { this.setExtend(!this.trace.extend); return true; }
       if (key === "Escape") { this.endTrace(); return true; }
     }
-    if (key === "Escape" && this.previewMask) { this.cancelPreview(); return true; }
+    if (key === "Escape" && (this.previewMask || this.previewOverlap)) { this.cancelPreview(); return true; }
     const actions = {
       w: () => this.setBrush(WORM), e: () => this.setBrush(BACKGROUND),
+      o: () => this.setChannel(this.channel === "mask" ? "overlap" : "mask"), v: () => this.markNoOverlap(),
       "[": () => this._resize(-2), "]": () => this._resize(2),
       n: () => this.preview("network"), a: () => this.applyPreview(), z: () => this.undo(),
       m: () => this.toggleMask(), r: () => this.toggleRaw(), 0: () => this.view.fit(),
@@ -1001,7 +1125,9 @@ export class FrameEditor {
 }
 
 export const SHORTCUTS = [
-  ["W / E", "Worm / Background brush"], ["[ ]", "Brush size"], ["N", "Network proposal"], ["A", "Apply the proposal"],
+  ["W / E", "Worm / Background brush (on the overlap: Overlap / Erase)"], ["O", "Paint the mask / the overlap"],
+  ["V", "No overlap: reviewed, the body lies over itself nowhere"], ["[ ]", "Brush size"],
+  ["N", "Network proposal (of the mask, or of the overlap)"], ["A", "Apply the proposal"],
   ["Z", "Undo"], ["G", "Use the body proposal"], ["H", "Flip head/tail"], ["T", "Trace the midline: click adds a point at the tail (or the head, after clicking the head point), a click on the line inserts one, drag moves one, right-click removes one, points may lie outside the frame; X extends the body off camera to its typical length; Enter fits, Backspace removes the end point, Esc cancels"],
   ["D", "Frames / Difference"], ["Space", "Play the context"], ["← →", "Context offset (or lag)"], ["M", "Mask on/off"],
   ["R", "Raw / flat-fielded frame"], ["0", "Fit the frame to the view"], ["Enter", "Save & next"], ["S", "Save"],
@@ -1077,8 +1203,8 @@ function drawTube(g, view, centerline, widths, {color = "#e6ebef", width = 1} = 
   g.stroke();
 }
 
-async function overlapCanvasOf(url, width, height) {
-  const values = await grayOf(url);
+// The tube fit's overlap (0/255 grey values), yellow.
+function tubeOverlapCanvas(values, width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const g = canvas.getContext("2d"), image = g.createImageData(width, height);

@@ -20,7 +20,8 @@ Stages and what they read and write:
 - ``prior``: frames spread over the whole recording -> ``recording_prior.json``
   (bootstrap, the cache, or a given file).
 - ``fit``: masks + prior -> the independent multi-start fit of every row with
-  a mask (algorithm ``independent_fit``).
+  a mask (algorithm ``independent_fit``); with the body-field network, first
+  the head of every row by tracking (``head_xy``, :mod:`head_track`).
 - ``ambiguity``: state -> the per-frame signals, flags and score.
 - ``propagate``: state + masks -> chains through the ambiguous stretches, one
   path per stretch, the hypotheses arrays (``chain_forward``,
@@ -76,6 +77,8 @@ import torch
 from .ambiguity import FLAG_NAMES, compute_ambiguity, summarize_ambiguity
 from .batch_fit import PRESETS, BatchFitConfig, fit_masks
 from .field_store import FieldStore, source_key
+from .head_track import track_heads
+from .head_tracking import read_head_tracking
 from .prefetch import prefetched
 from .recordings import DATASET_PATH, RecordingSource
 from .mask_fit import (
@@ -833,6 +836,82 @@ def body_field_inputs(
         laid = [network_trace_start(p, masks[r], setup) for r, p in traced]
     starts.update({row: start for (row, _), start in zip(traced, laid, strict=True) if start is not None})
     return evidence, starts
+
+
+# A row's head candidates for the track: modes [K, 3], nose [2] (NaN off the mask) and the tail's peak [3].
+HeadInputs = tuple[np.ndarray, np.ndarray, np.ndarray]
+
+
+def recording_nose(recording: str | Path, frame_indices: Sequence[int], image_shape: tuple[int, int]) -> np.ndarray:
+    """``[n, 2]``: the acquisition's nose landmark of these frames where it is confident (:mod:`head_tracking`), NaN elsewhere."""
+
+    return np.asarray(read_head_tracking(recording, np.asarray(frame_indices, dtype=np.int64), tuple(image_shape)).xy, dtype=np.float64)
+
+
+def recording_substrate_shift(recording: str | Path, frame_indices: Sequence[int]) -> np.ndarray | None:
+    """``[n, 2]``: each frame's image-to-substrate offset from the stage (:mod:`stage_alignment`), ``None`` without a usable stage.
+
+    The recording's calibration and the registration that fills its
+    untrusted stage stretches run on first use (about 2 min) and are cached.
+    Frames whose offset is still unknown get the straight line between the
+    known ones.
+    """
+
+    from .stage_alignment import recording_calibration, substrate_shift_px
+
+    frames = np.asarray(frame_indices, dtype=np.int64)
+    try:
+        shift = substrate_shift_px(recording, frames, recording_calibration(recording))
+    except (OSError, KeyError, ValueError):
+        return None
+    known = np.isfinite(shift).all(axis=1)
+    if not known.any():
+        return None
+    return np.stack([np.interp(frames, frames[known], shift[known, axis]) for axis in range(2)], axis=1)
+
+
+def head_inputs(crop: Any, mask: MaskArray, nose_xy: np.ndarray | None) -> HeadInputs:
+    """What the head track reads of a row: its fields' head modes and its nose on the mask (``body_proposal.head_candidates``), and the tail's peak."""
+
+    from .body_proposal import head_candidates
+
+    modes, nose = head_candidates(crop, mask, nose_xy)
+    return modes, nose, np.asarray(crop.tail, dtype=np.float64)
+
+
+def decode_heads(arrays: dict[str, np.ndarray], inputs: dict[int, HeadInputs], shift_px: np.ndarray | None = None) -> dict[str, Any]:
+    """The head of every row of ``inputs`` by tracking (:func:`head_track.track_heads`) as ``arrays["head_xy"]`` (NaN: none, and every other row); returns counts.
+
+    ``shift_px`` (``[n, 2]`` over all rows, image to substrate,
+    :func:`recording_substrate_shift`) is passed on for the rows of
+    ``inputs``.  ``argmax_differs`` counts rows whose head is not the one the
+    heatmap's maximum gives (another place, or one of the two missing);
+    ``interpolated`` the weak heads placed between strong ones.
+    """
+
+    from .body_proposal import END_THRESHOLD, HEAD_MODE_RADIUS_PX
+
+    t = time.perf_counter()
+    arrays["head_xy"] = np.full((len(arrays["frame_index"]), 2), np.nan)
+    rows = np.array(sorted(inputs), dtype=np.int64)
+    if not len(rows):
+        return {"rows": 0, "with_head": 0, "from_nose": 0, "below_end_threshold": 0, "interpolated": 0, "argmax_differs": 0, "substrate": shift_px is not None, "seconds": 0.0}
+    modes, noses, tails = (np.stack([inputs[int(r)][k] for r in rows]) for k in range(3))
+    track = track_heads(
+        arrays["frame_index"][rows], modes, tail=tails, nose_xy=noses,
+        shift_px=None if shift_px is None else np.asarray(shift_px, dtype=np.float64)[rows],
+    )
+    arrays["head_xy"][rows] = track.xy
+    argmax = np.where((modes[:, 0, 2] >= END_THRESHOLD)[:, None], modes[:, 0, :2], np.nan)
+    shown = np.isfinite(track.xy[:, 0])
+    with np.errstate(invalid="ignore"):
+        moved = np.linalg.norm(track.xy - argmax, axis=1) > HEAD_MODE_RADIUS_PX
+    differs = (shown != np.isfinite(argmax[:, 0])) | (shown & moved)
+    return {
+        "rows": len(rows), "with_head": int(shown.sum()), "from_nose": int(np.sum(track.candidate == modes.shape[1])),
+        "below_end_threshold": int(np.sum(shown & (track.value < END_THRESHOLD))), "interpolated": int(track.interpolated.sum()),
+        "argmax_differs": int(differs.sum()), "substrate": shift_px is not None, "seconds": time.perf_counter() - t,
+    }
 
 
 def frame_starts(mask: MaskArray, setup: FitSetup, prediction: Any = None) -> tuple[list[Initialization], Initialization | None]:
@@ -1644,14 +1723,19 @@ class WorkspaceFields:
     stored yet, or a mask edit reaching past the stored region) the row is
     predicted, ``PREDICTION_SLAB`` at a time, and its fields are stored.  The
     network is loaded only for such a row.  ``stored`` and ``predicted``
-    count the rows served each way.
+    count the rows served each way.  With ``heads`` (the state's
+    ``head_xy``, the fit stage's head track) a row's fields carry its
+    tracked head instead of the heatmap's maximum.
     """
 
-    def __init__(self, workspace: Any, checkpoint: str | Path, params: SegmentParams | PriorParams, device: torch.device) -> None:
+    def __init__(
+        self, workspace: Any, checkpoint: str | Path, params: SegmentParams | PriorParams, device: torch.device, heads: np.ndarray | None = None,
+    ) -> None:
         self.workspace = workspace
         self.checkpoint = checkpoint
         self.params = params
         self.device = device
+        self.heads = heads
         self.store = workspace_field_store(workspace, checkpoint, params)
         self.predictor: Any = None
         self.stored = 0
@@ -1672,7 +1756,9 @@ class WorkspaceFields:
             fresh = {row: crop_fields(prediction, masks[row]) for row, prediction in zip(slab, predictions, strict=True)}
             self.store.put(fresh)
             found.update(fresh)
-        return [found[r] for r in rows]
+        if self.heads is None:
+            return [found[r] for r in rows]
+        return [found[r].with_head(self.heads[r]) for r in rows]
 
     def close(self) -> None:
         self.store.flush()
@@ -1681,14 +1767,19 @@ class WorkspaceFields:
 
 
 @contextmanager
-def workspace_fields(workspace: Any, params: SegmentParams, device: torch.device) -> Iterator[WorkspaceFields | None]:
-    """The network's fields of workspace rows when the workspace's fit used the network (its ``fit_params.body_net``), else ``None``."""
+def workspace_fields(
+    workspace: Any, params: SegmentParams, device: torch.device, heads: np.ndarray | None = None,
+) -> Iterator[WorkspaceFields | None]:
+    """The network's fields of workspace rows when the workspace's fit used the network (its ``fit_params.body_net``), else ``None``.
+
+    ``heads`` is the state's ``head_xy``, the fit stage's head track.
+    """
 
     checkpoint = (read_summary(workspace).get("fit_params") or {}).get("body_net")
     if not checkpoint:
         yield None
         return
-    fields = WorkspaceFields(workspace, checkpoint, params, device)
+    fields = WorkspaceFields(workspace, checkpoint, params, device, heads)
     try:
         yield fields
     finally:
@@ -1909,9 +2000,29 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     timing = {"init": 0.0, "fit": 0.0, "fields": 0.0}
     pool = ProcessPoolExecutor(max_workers=params.init_workers) if params.init_workers > 0 and rows else None
     fields = WorkspaceFields(workspace, params.body_net, SegmentParams.from_dict(all_params), device) if params.body_net and rows else None
+    heads: dict[str, Any] | None = None
+    # A fit without the network has no head track; one with it tracks the head afresh.
+    arrays.pop("head_xy", None)
     done = 0
     try:
         masks_of = workspace_masks_of(workspace)
+        if fields is not None:
+            # Every row's fields first (stored, or predicted and stored), so the head is tracked over the whole recording.
+            t = time.perf_counter()
+            shape = workspace_image_shape(workspace)
+            nose = recording_nose(workspace.info.recording, workspace.frame_index[rows], shape) if shape else np.full((len(rows), 2), np.nan)
+            nose_of = dict(zip(rows, nose))
+            inputs: dict[int, HeadInputs] = {}
+            for slab in _slabs(rows, params.slab):
+                masks_by_row = masks_of(slab)
+                slab_rows = [r for r in slab if r in masks_by_row]
+                for row, crop in zip(slab_rows, fields(slab_rows, masks_by_row), strict=True):
+                    inputs[row] = head_inputs(crop, masks_by_row[row], nose_of[row])
+                if progress is not None:
+                    progress(0.0, f"tracking the head: fields of {len(inputs)}/{len(rows)} frames")
+            timing["fields"] += time.perf_counter() - t
+            heads = decode_heads(arrays, inputs, recording_substrate_shift(workspace.info.recording, arrays["frame_index"]))
+            fields.heads = arrays["head_xy"]
 
         def submitted(slab: list[int]) -> tuple[list[int], list[int], list[MaskArray], list[Any] | None, Iterable[Any], float]:
             masks_by_row = masks_of(slab)
@@ -1948,6 +2059,7 @@ def run_fit(workspace: Any, params: FitParams, *, device: torch.device, progress
     result = {"frames_fit": len(fitted_rows), "frames_skipped": skipped, "seconds": timing, "iou": stats["iou"]}
     if fields is not None:
         result["fields"] = {"stored": fields.stored, "predicted": fields.predicted}
+        result["head_track"] = heads
     update_summary(
         workspace,
         {
@@ -2098,7 +2210,7 @@ def run_propagate(
     fixed = placed_rows(arrays, provenance["algorithm"], provenance["job"])
     old_hypotheses = workspace.load_hypotheses() if fixed.any() else {}
     # The pass writes a fresh set of hypotheses for every stretch frame; older ones are replaced.
-    with workspace_fields(workspace, SegmentParams.from_dict(all_params), device) as fields_of:
+    with workspace_fields(workspace, SegmentParams.from_dict(all_params), device, arrays.get("head_xy")) as fields_of:
         outcome = propagation_pass(
             arrays, workspace_masks_of(workspace), setup, params, device, image_shape=image_shape, progress=progress, fixed=fixed,
             fields_of=fields_of,
@@ -2138,7 +2250,7 @@ def run_track(
     run_ambiguity(workspace, AmbiguityParams(), device=device, progress=None, job=job)
     arrays = workspace_arrays(workspace, setup.config)
     stretches = [(int(a), int(b)) for a, b in ((read_summary(workspace).get("propagation") or {}).get("stretches") or [])]
-    with workspace_fields(workspace, SegmentParams.from_dict(all_params), device) as fields_of:
+    with workspace_fields(workspace, SegmentParams.from_dict(all_params), device, arrays.get("head_xy")) as fields_of:
         info, refit = track_length_pass(
             arrays, workspace_masks_of(workspace), setup, params, device, stretches=stretches, image_shape=image_shape,
             fields_of=fields_of,

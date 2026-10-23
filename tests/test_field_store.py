@@ -36,10 +36,11 @@ class FieldCropTests(unittest.TestCase):
         grown[:20, :20] = True
         self.assertFalse(crop.covers(grown))
 
-    def test_an_empty_mask_keeps_the_peaks(self) -> None:
+    def test_an_empty_mask_keeps_the_ends(self) -> None:
         crop = crop_fields(self.prediction, np.zeros(SHAPE, bool))
         self.assertEqual(crop.support.size, 0)
-        self.assertEqual(crop.head, self.prediction.peak("head"))
+        self.assertEqual(crop.head, self.prediction.end("head"))
+        self.assertEqual(tuple(crop.heads[0]), self.prediction.peak("head"))
         self.assertIsNone(field_evidence(crop, np.zeros(SHAPE, bool)).head_xy)
 
 
@@ -59,6 +60,7 @@ class FieldStoreTests(unittest.TestCase):
             for name in ("support", "ap", "crossing"):
                 np.testing.assert_array_equal(getattr(loaded[3], name), getattr(crop, name))
             self.assertEqual((loaded[3].box, loaded[3].head, loaded[3].tail), (crop.box, crop.head, crop.tail))
+            np.testing.assert_array_equal(loaded[3].heads, crop.heads)
             self.assertEqual(loaded[FIELD_CHUNK_ROWS + 1].support.size, 0)
             # A later write merges into the chunk.
             store.put({5: crop})
@@ -110,6 +112,22 @@ class WorkspaceFieldsTests(unittest.TestCase):
                 self.assertTrue(third[1].covers(edited))
                 again.close()
                 self.assertTrue(FieldStore(directory, fields.store.key).get([3])[3].covers(edited))
+
+    def test_rows_carry_the_tracked_head(self) -> None:
+        centerline, mask = looped_body()
+        predictor = _Predictor(prediction_from(centerline, mask))
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = mock.Mock(path=Path(directory), frame_index=np.arange(100, 110), info=mock.Mock(settings={}))
+            heads = np.full((10, 2), np.nan)
+            heads[2] = (100.0, 150.0)
+            with mock.patch.object(pipeline, "field_predictor", return_value=predictor), mock.patch.object(pipeline, "workspace_frames"):
+                fields = pipeline.WorkspaceFields(workspace, "stub.ckpt", pipeline.SegmentParams(flat_field=False), "cpu", heads)
+                tracked, hidden = fields([2, 3], {2: mask, 3: mask})
+                fields.close()
+        self.assertEqual(tracked.head, (100.0, 150.0))
+        self.assertIsNone(hidden.head)
+        np.testing.assert_array_equal(field_evidence(tracked, mask).head_xy, (100.0, 150.0))
+        self.assertIsNone(field_evidence(hidden, mask).head_xy)
 
 
 if __name__ == "__main__":

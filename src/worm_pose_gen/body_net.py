@@ -15,7 +15,11 @@ Output channels (:data:`OUTPUTS`):
 ``head``     heatmap logit, penalty-reduced focal loss against a Gaussian
 ``tail``     the same for the tail
 ``overlap``  logit that a mask pixel is covered twice (a crossing), BCE on
-             mask pixels
+             the mask pixels of items whose overlap is known (for labels a
+             person's drawing, :func:`model_eval.overlap_state`), the rare
+             positives weighted up
+             (``overlap_pos_weight``); validation reports its average
+             precision and recall at 0.5 (:data:`OVERLAP_BINS`)
 
 Targets are a label's mask and its built body targets
 (:mod:`library.targets`); :mod:`model_training` reads them from the library
@@ -46,6 +50,8 @@ HEATMAP_PEAK = 0.95
 HEATMAP_PRIOR_LOGIT = -4.6
 # Full-resolution decoder width shared by the five outputs (the segmenter uses 16).
 FINAL_CHANNELS = 32
+# Probability bins of the validation overlap histograms that average precision is computed from.
+OVERLAP_BINS = 200
 
 
 def _augment(
@@ -92,31 +98,38 @@ _MASK, _VALID, _AP, _AP_VALID, _HEAD, _TAIL, _OVERLAP, _OVERLAP_VALID = range(8)
 TARGET_ROWS = 8
 
 
-def body_target_rows(mask: NDArray[np.uint8], targets: dict[str, NDArray[Any]] | None) -> NDArray[np.float32]:
-    """The ``[8,H,W]`` target stack of a label: its mask, and its body targets where they train the body.
+def body_target_rows(
+    mask: NDArray[np.uint8], targets: dict[str, NDArray[Any]] | None, overlap: NDArray[np.bool_] | None,
+) -> NDArray[np.float32]:
+    """The ``[8,H,W]`` target stack of an item: its mask, its body targets where they train the body, and its overlap.
 
     ``mask`` is the label (0, 1, 255 excluded); ``targets`` the arrays of its
     built body targets (:func:`library.load_targets`), or ``None`` when the
-    label trains the mask only, in which case the A-P and overlap rows are
-    invalid and the heatmaps NaN (they say nothing either way).
+    item trains the mask only, in which case the A-P row is invalid and the
+    heatmaps NaN (they say nothing either way).  ``overlap`` is where the body
+    lies over itself, or ``None`` when that is not known (the overlap row is
+    then invalid); the A-P field is undefined there.
     """
 
     shape = mask.shape
     rows = np.zeros((TARGET_ROWS, *shape), dtype=np.float32)
     rows[_MASK] = mask == 1
     rows[_VALID] = mask != IGNORE_LABEL
+    if overlap is not None:
+        rows[_OVERLAP] = overlap & (mask == 1)
+        rows[_OVERLAP_VALID] = mask == 1
     if targets is None:
         rows[_HEAD] = rows[_TAIL] = np.nan
         return rows
     ap = targets["ap"].astype(np.float32)
     body = (mask == 1) & np.isfinite(ap)
+    if overlap is not None:
+        body &= ~overlap
     rows[_AP] = np.where(body, ap, 0.0)
     rows[_AP_VALID] = body
     sigma = HEATMAP_SIGMA_DIAMETERS * float(targets["diameter_px"])
     rows[_HEAD] = point_heatmap(shape, targets["head_xy"], sigma)
     rows[_TAIL] = point_heatmap(shape, targets["tail_xy"], sigma)
-    rows[_OVERLAP] = targets["overlap"] & (mask == 1)
-    rows[_OVERLAP_VALID] = mask == 1
     return rows
 
 
@@ -139,6 +152,22 @@ def heatmap_focal_loss(logits: Tensor, target: Tensor, alpha: float = 2.0, beta:
     return (positive_loss + negative_loss) / positive.sum(dims).clamp_min(1)
 
 
+def overlap_metrics(positive: Tensor, negative: Tensor) -> dict[str, Tensor]:
+    """Average precision and recall at 0.5 from histograms of the overlap probability on positive and negative pixels.
+
+    Thresholds are the bin edges, highest first, so the average precision is
+    exact up to ties within a bin.
+    """
+
+    true = positive.flip(0).cumsum(0)
+    false = negative.flip(0).cumsum(0)
+    precision = true / (true + false).clamp_min(1.0)
+    total = positive.sum().clamp_min(1.0)
+    average_precision = (precision * positive.flip(0)).sum() / total
+    recall = positive[positive.numel() // 2 :].sum() / total
+    return {"ap": average_precision, "recall": recall}
+
+
 def peak_xy(logits: Tensor) -> Tensor:
     """``[B,2]`` (x, y) of each map's maximum."""
 
@@ -159,6 +188,7 @@ class BodyFieldModule(L.LightningModule):
         ap_weight: float = 1.0,
         heatmap_weight: float = 0.1,
         overlap_weight: float = 1.0,
+        overlap_pos_weight: float = 30.0,
         plateau_patience: int = 2,
         encoder: str = "resnet18",
     ) -> None:
@@ -197,10 +227,12 @@ class BodyFieldModule(L.LightningModule):
         tail = heatmap_focal_loss(logits[:, 3], targets[:, _TAIL]).mean()
 
         overlap_valid = targets[:, _OVERLAP_VALID]
-        overlap = F.binary_cross_entropy_with_logits(logits[:, 4], targets[:, _OVERLAP], reduction="none")
+        hp = self.hparams
+        overlap = F.binary_cross_entropy_with_logits(
+            logits[:, 4], targets[:, _OVERLAP], reduction="none", pos_weight=logits.new_tensor(float(hp.overlap_pos_weight)),
+        )
         overlap = (overlap * overlap_valid).sum() / overlap_valid.sum().clamp_min(1.0)
 
-        hp = self.hparams
         total = (
             bce + hp.dice_weight * dice + hp.ap_weight * ap
             + hp.heatmap_weight * (head + tail) + hp.overlap_weight * overlap
@@ -245,7 +277,32 @@ class BodyFieldModule(L.LightningModule):
             for name, values in self.endpoint_metrics(logits.float(), targets).items():
                 if values.numel():
                     self.log(f"{stage}_{name}", values.mean(), batch_size=values.numel(), on_epoch=True)
+            self._count_overlap(logits[:, 4].float(), targets)
         return total
+
+    def _count_overlap(self, logits: Tensor, targets: Tensor) -> None:
+        """Add the batch's overlap probabilities to the epoch's histograms of positive and negative pixels."""
+
+        probability = torch.sigmoid(logits)
+        valid = targets[:, _OVERLAP_VALID] > 0
+        positive = targets[:, _OVERLAP] > 0
+        counts = [torch.histc(probability[valid & which], bins=OVERLAP_BINS, min=0.0, max=1.0) for which in (positive, ~positive)]
+        stacked = torch.stack(counts)
+        self._overlap_counts = stacked if getattr(self, "_overlap_counts", None) is None else self._overlap_counts + stacked
+
+    def _log_overlap(self, stage: str) -> None:
+        counts, self._overlap_counts = getattr(self, "_overlap_counts", None), None
+        if counts is None or counts[0].sum() == 0:
+            return
+        metrics = overlap_metrics(counts[0], counts[1])
+        for name, value in metrics.items():
+            self.log(f"{stage}_overlap_{name}", value)
+
+    def on_validation_epoch_end(self) -> None:
+        self._log_overlap("val")
+
+    def on_test_epoch_end(self) -> None:
+        self._log_overlap("test")
 
     def training_step(self, batch: dict[str, Tensor], batch_index: int) -> Tensor:
         return self._step(batch, "train")

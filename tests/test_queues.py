@@ -362,6 +362,36 @@ class LabelingApiTests(LabelingApiBase):
         self.assertEqual((reopened["body"]["trace_xy"], reopened["body"]["trace_extend"], reopened["body"]["trace_length_px"]), (trace, True, 640.0))
         self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(6, path=False)}, 404)
 
+    def test_overlap_is_saved_reopened_listed_and_proposed(self):
+        overlap = np.zeros_like(self.masks[5])
+        overlap[self.masks[5] == 1] = 1
+        overlap[:, 30:] = 0
+        request = {"setup": "mine:rig", "entry": self.entry(5)}
+        off_worm = self.client.post("/api/labeling/save", json={**request, "mask": mask_url(self.masks[5]), "overlap": mask_url(1 - self.masks[5])})
+        self.assertIn("only mark worm pixels", off_worm.json()["error"])
+        saved = self.call("POST", "/api/labeling/save", {**request, "mask": mask_url(self.masks[5]), "overlap": mask_url(overlap)})
+        self.assertEqual((saved["label"]["overlap_px"], saved["label"]["overlap"]), (int(overlap.sum()), "drawn"))
+        reopened = self.call("POST", "/api/labeling/open", request)
+        np.testing.assert_array_equal(decode_mask_data_url(reopened["overlap"], overlap.shape), overlap)
+        # A label nobody drew the overlap of: to review where its tube fit crosses, else it trains as none.
+        plain = self.call("POST", "/api/labeling/save", {"setup": "mine:rig", "entry": self.entry(6), "mask": mask_url(self.masks[6])})
+        self.assertIsNone(self.call("POST", "/api/labeling/open", {"setup": "mine:rig", "entry": self.entry(6)})["overlap"])
+        record = library.Collection(self.libraries, "mine:rig").get("2024-05-05-01", 6)
+        self.assertEqual(plain["label"]["overlap"], None)  # no targets yet
+        write_targets(self.libraries, record.sha256, None, {"has_body": True, "fit_iou": 0.97, "overlap_px": 9}, {})
+        listed = lambda state: [row["frame"] for row in self.call("GET", f"/api/library/setups/mine:rig/labels?overlap={state}")["labels"]]
+        self.assertEqual((listed("drawn"), listed("review"), listed("clear")), ([5], [6], []))
+        self.call("GET", "/api/library/setups/mine:rig/labels?overlap=maybe", None, 400)
+        # The body model's overlap probability is the overlap proposal.
+        self.assertIn("no body-field model", self.client.post("/api/labeling/overlap", json=request).json()["error"])
+        stub = mock.Mock()
+        stub.predict.return_value = Outputs(mask=np.ones(overlap.shape, np.float32), overlap=np.full(overlap.shape, 0.8, np.float32))
+        with mock.patch.object(self.state.labeling, "models", return_value={"mask": None, "body": "mine:stub"}), \
+                mock.patch.object(self.state.labeling, "model", return_value=stub):
+            answer = self.call("POST", "/api/labeling/overlap", request)
+        self.assertEqual(answer["model"], "mine:stub")
+        self.assertTrue(answer["probability"].startswith("data:image/png"))
+
     def test_a_request_chooses_its_mask_and_body_models(self):
         weights = self.root / "stand-in.ckpt"
         weights.write_bytes(b"stand-in")

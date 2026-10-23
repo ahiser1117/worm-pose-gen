@@ -24,6 +24,12 @@ A revision is an immutable ``.npz`` file
     continued off camera to the recording's typical body length.
 ``head_xy`` (optional)
     the head end a person chose without tracing (orientation ``manual``).
+``overlap`` (optional)
+    the pixels where the body lies over itself, drawn by a person (1, a
+    subset of the worm pixels; 0 elsewhere).  Its presence means the frame
+    was reviewed for overlap: an all-zero array says it has none.  Without
+    it the label says nothing about overlap (:func:`model_eval.overlap_state`
+    decides what it trains).
 ``meta``
     JSON: ``recording``, ``frame``, ``revision``, ``orientation`` (``auto``
     or ``manual``), ``mask_only`` (the body is unclear and the label trains
@@ -34,6 +40,9 @@ A revision is an immutable ``.npz`` file
     to, as the Labeling page showed it; ``None`` for the recording's
     length from its labels), and for migrated labels where they came from
     (``migrated_from``).
+
+The index records ``overlap_px`` (the drawn overlap's size; ``None``
+without one) so listings need not open the file.
 
 A label's *status* is ``mask_only``; else ``complete`` when a person
 settled its body (a trace or a manual orientation) or the frame holds no
@@ -110,6 +119,7 @@ class LabelRecord:
     width: int
     source_path: str
     dataset_path: str
+    overlap_px: int | None = None
     path: str = field(repr=False, default="")
 
     @property
@@ -149,6 +159,7 @@ class Label:
     nose_valid: NDArray[np.bool_]
     trace_xy: NDArray[np.float64] | None
     head_xy: NDArray[np.float64] | None
+    overlap: NDArray[np.uint8] | None
     meta: dict[str, Any]
 
     @property
@@ -164,7 +175,7 @@ def read_label(path: Path, record: LabelRecord) -> Label:
         record=record, image=arrays["image"], image_raw=arrays["image_raw"], mask=arrays["mask"],
         context=arrays["context"], context_valid=arrays["context_valid"].astype(bool),
         nose_xy=arrays["nose_xy"].astype(np.float64), nose_valid=arrays["nose_valid"].astype(bool),
-        trace_xy=arrays.get("trace_xy"), head_xy=arrays.get("head_xy"), meta=meta,
+        trace_xy=arrays.get("trace_xy"), head_xy=arrays.get("head_xy"), overlap=arrays.get("overlap"), meta=meta,
     )
 
 
@@ -203,6 +214,7 @@ def encode_label(
     trace_xy: Any,
     mask_only: bool,
     origin: str,
+    overlap: NDArray[np.generic] | None = None,
     trace_extend: bool = False,
     trace_length_px: float | None = None,
     author: str,
@@ -214,7 +226,8 @@ def encode_label(
     """Validate a label and return its ``.npz`` bytes and the index entry describing it.
 
     A trace makes the orientation ``manual`` (its first point is the head);
-    a ``manual`` orientation without a trace needs ``head_xy``.
+    a ``manual`` orientation without a trace needs ``head_xy``.  ``overlap``
+    (0/1) may only mark worm pixels.
     """
 
     image = _uint8(image, "image")
@@ -253,6 +266,14 @@ def encode_label(
         raise ValueError("a manual orientation without a trace needs head_xy (x, y)")
     if orientation == "auto":
         head = None
+    drawn = None
+    if overlap is not None:
+        drawn = np.asarray(overlap)
+        drawn = _uint8(drawn.astype(np.uint8) if drawn.dtype == bool else drawn, "overlap", shape)
+        if not np.isin(drawn, (0, 1)).all():
+            raise ValueError("overlap values must be 0 or 1")
+        if (drawn.astype(bool) & (labels != 1)).any():
+            raise ValueError("overlap may only mark worm pixels")
 
     meta = {
         **(extra_meta or {}),
@@ -270,6 +291,8 @@ def encode_label(
         arrays["trace_xy"] = trace
     if head is not None:
         arrays["head_xy"] = head
+    if drawn is not None:
+        arrays["overlap"] = drawn
     buffer = io.BytesIO()
     np.savez_compressed(buffer, meta=json.dumps(meta), **arrays)
     data = buffer.getvalue()
@@ -279,6 +302,7 @@ def encode_label(
         "empty": not bool((labels == 1).any()), "foreground_fraction": float((labels == 1).mean()),
         "ignore_fraction": float((labels == IGNORE).mean()), "height": int(shape[0]), "width": int(shape[1]),
         "source_path": str(source_path), "dataset_path": str(dataset_path),
+        "overlap_px": None if drawn is None else int(drawn.sum()),
     }
     return data, entry
 

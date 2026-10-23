@@ -22,7 +22,8 @@
 // /api/workspaces/<name>: status, issues, fixes, kymograph, frame, mask,
 // network-fields (the body model's A-P field and its raw output channels) and
 // mask-probability (the mask model's). The Model outputs menu offers one
-// optional layer per channel, unthresholded, grouped by model; when the body
+// optional layer per channel, unthresholded, grouped by model (the Head and
+// Tail channels with a ring on the end the fit used); when the body
 // model also gave the masks there is no mask model and one group.
 
 import {api, el, post, query} from "./api.js";
@@ -54,6 +55,14 @@ const OUTPUTS = [
 const FIELDS_CACHE = 32;
 const STATE_WORDS = {unreviewed: "to review", reviewed: "looks OK", fixed: "fixed"};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const drawRing = (g, view, [x, y], color) => {
+  const px = 1 / view.scale;
+  g.lineWidth = 2 * px;
+  g.strokeStyle = color;
+  g.beginPath();
+  g.arc(x, y, 9 * px, 0, Math.PI * 2);
+  g.stroke();
+};
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const range = ([a, b]) => (a === b ? `${a}` : `${a}–${b}`);
 
@@ -153,9 +162,12 @@ export class WorkspaceView {
     const view = this.canvas;
     view.setLayer("mask", (g) => { if (this.maskOverlay && !this.mask?.active) g.drawImage(this.maskOverlay, 0, 0); });
     view.setLayer("ap", (g) => { if (this.fields) g.drawImage(this.fields.ap, 0, 0); });
-    view.setLayer("outputs", (g) => {
+    view.setLayer("outputs", (g, v) => {
       if (this.outputs.has(PROBABILITY.id) && this.probability) g.drawImage(this.probability.canvas, 0, 0);
       for (const output of OUTPUTS) if (this.outputs.has(output.id) && this.fields?.outputs) g.drawImage(this.fields.outputs[output.id], 0, 0);
+      // The ends the fit used (the head track's head, else the heatmap's), as rings over their channels.
+      if (this.outputs.has("head") && this.fields?.head) drawRing(g, v, this.fields.head, "#57d68d");
+      if (this.outputs.has("tail") && this.fields?.tail) drawRing(g, v, this.fields.tail, "#ff5d5d");
     });
     view.setLayer("dev", (g, v) => this.dev?.drawLayers(g, v));
     view.setLayer("outline", (g, v) => { const pose = this.current?.pose; if (pose) drawOutline(g, v, pose.centerline_xy, pose.width_profile); });
@@ -524,7 +536,7 @@ export class WorkspaceView {
     if (cached && (cached.outputs || !withOutputs)) { show(cached); return; }
     try {
       const fields = await api(`${this.base}/network-fields${query({frame, outputs: withOutputs ? 1 : null})}`);
-      const entry = {ap: colorize(await decodeGray(fields.ap), AP_LUT), outputs: null, peaks: fields.peaks || null};
+      const entry = {ap: colorize(await decodeGray(fields.ap), AP_LUT), outputs: null, peaks: fields.peaks || null, head: fields.head_xy, tail: fields.tail_xy, headSource: fields.head_source};
       if (withOutputs) {
         entry.outputs = Object.fromEntries(await Promise.all(OUTPUTS.map(async (output) => [output.id, colorize(await decodeGray(fields.outputs[output.id]), output.lut)])));
       }
@@ -594,7 +606,7 @@ export class WorkspaceView {
       const role = status.mask_source === "body_net" ? "masks and body" : "body";
       groups.push(el("div", {class: "ws-outputs-group", dataset: {model: "body"}}, el("h4", {}, `Body model · ${name("body")} (${role})`), OUTPUTS.map((output) => box(output, peaks[output.id]))));
     }
-    body.replaceChildren(el("span", {class: "note"}, "Raw, unthresholded: stronger colour is a higher value"), ...groups);
+    body.replaceChildren(el("span", {class: "note"}, "Raw, unthresholded: stronger colour is a higher value; a ring marks the head or tail the fit used"), ...groups);
   }
 
   renderLayers() {

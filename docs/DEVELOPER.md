@@ -93,7 +93,10 @@ collection, whether its labels train, validate, test or are not included;
 every recording starts not included, so you choose its split in the
 Training page's Datasets tab. A **label** revision stores the frame,
 its context frames, the mask and the human body fields. A **benchmark** is a
-frozen list of test-label revisions. A **model** is a card (`model.json`),
+frozen list of test-label revisions. A **pseudo-label set** holds
+self-training items: frames the pipeline fitted confidently, with targets
+rendered from its fits and their context frames
+(`worm_pose_gen.pseudo_labels`, `library.pseudo_sets`). A **model** is a card (`model.json`),
 `weights.ckpt`, its training records and its evaluations. Items are named
 `lab:<id>` or `mine:<id>`.
 
@@ -109,7 +112,8 @@ It writes setup `nir-flv`, its label collection, dataset `nir-labels` (splits pe
 benchmark `nir-v1`, and the model cards of the segmenter run
 (`--segmenter-run`, `nir-hand284`) and the body-field net run. Publishing a
 personal setup, your labels of a setup (`publish.py labels lab:nir-flv`), a
-dataset's splits or a model into the lab library is a developer step:
+dataset's splits, a benchmark, a pseudo-label set or a model into the lab
+library is a developer step:
 
 ```bash
 scripts/project_env.sh uv run --no-sync --frozen python scripts/publish.py model mine:copper-ft \
@@ -117,7 +121,9 @@ scripts/project_env.sh uv run --no-sync --frozen python scripts/publish.py model
 ```
 
 A published item is frozen: an id the lab already has is refused.
-`--default` is repeatable (`--default body --default mask`). Publishing
+`--default` is repeatable (`--default body --default mask`). Publish what an
+item refers to first (the script says what is missing): a model's setup,
+parent, datasets and pseudo-label sets, a benchmark's labels. Publishing
 writes the flv copy of the lab library; copy it to Engaging afterwards:
 
 ```bash
@@ -140,6 +146,18 @@ scratch, learning rate, batch size, patience, loss weights and more). A
 model keeps the one checkpoint with the lowest validation loss, and the
 evaluations go to `models/<id>/evaluations/`. The code is in
 `worm_pose_gen.model_training` and `worm_pose_gen.model_eval`.
+
+A body-field run can mix in pseudo-label sets (`--pseudo-labels lab:<id>`,
+repeatable, at `--pseudo-fraction` of every epoch) and fibre distractors
+on a share of the hand labels (`--fiber-share`). With the form parameters
+they make a model's recipe (`model_training.recipe`), which the Train tab
+fills in from the model it starts from, or from scratch from the setup's
+default body model. The lab default `lab:arch-combo-self-fib` was trained
+this way: a fine-tune of `lab:on-food-finetune-329` at learning rate 1e-4
+(patience 10, plateau 3) with `lab:self-train-r1` at 0.5 and fibres at 0.5;
+its parent was trained from scratch with the short context at the default
+settings. Build a new set from analysed workspaces with
+`scripts/build_pseudo_labels.py --set <id> --setup lab:nir-flv --workspaces ...`.
 
 ## Jobs and the HTTP API
 
