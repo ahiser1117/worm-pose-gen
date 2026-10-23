@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from worm_pose_gen import library, model_eval, model_training
 from worm_pose_gen.app import AppConfig, create_app
-from worm_pose_gen.library.roots import write_json
+from worm_pose_gen.library.roots import read_json, write_json
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_model_training import make_library  # noqa: E402
@@ -116,6 +116,28 @@ class TrainingApiTests(unittest.TestCase):
         evaluation = self.post("/api/jobs", {"kind": "evaluate", "model": "lab:seg", "benchmark": "lab:rig-v1"})
         self.assertEqual(evaluation["command"][1:3], ["-m", "worm_pose_gen.model_eval"])
         self.post("/api/jobs", {"kind": "evaluate", "model": "lab:seg", "benchmark": "lab:none"}, status=404)
+
+    def test_recipe_and_pseudo_labels(self):
+        library.create_pseudo_labels(self.libraries, "self", setup="lab:rig", scope="lab")
+        write_json(self.libraries.lab / "pseudo_labels" / "self" / "index.json",
+                   {"items": [{"file": "a.npz", "kind": "clear", "recording": "/data/rec-x.h5"}]})
+        self.assertEqual([(p["ref"], p["items"]) for p in self.get("/api/library/pseudo-labels", setup="lab:rig")["pseudo_labels"]],
+                         [("lab:self", 1)])
+        path = library.models.model_dir(self.libraries.lab, "body") / "model.json"
+        card = read_json(path)
+        write_json(path, {**card, "hparams": {**card["hparams"], "learning_rate": 1e-4, "pseudo_labels": ["lab:self"],
+                                              "pseudo_fraction": 0.5, "fiber_share": 0.5}})
+        rows = {row["ref"]: row for row in self.get("/api/training/models", setup="lab:rig")["models"]}
+        recipe = rows["lab:body"]["recipe"]
+        self.assertEqual((recipe["pseudo_labels"], recipe["pseudo_fraction"], recipe["fiber_share"], recipe["params"]["learning_rate"]),
+                         (["lab:self"], 0.5, 0.5, 1e-4))
+        job = self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:body",
+                                      "pseudo_labels": ["lab:self"], "pseudo_fraction": 0.5, "fiber_share": 0.5})
+        command = job["command"]
+        self.assertEqual((command[command.index("--pseudo-labels") + 1], command[command.index("--fiber-share") + 1]), ("lab:self", "0.5"))
+        self.assertEqual(job["spec"]["params"]["pseudo_labels"], ["lab:self"])
+        self.post("/api/jobs", {"kind": "train", "setup": "lab:rig", "dataset": "lab:base", "start_from": "lab:body",
+                                "pseudo_labels": ["lab:missing"], "pseudo_fraction": 0.5}, status=404)
 
     def test_fill_missing_evaluations_once(self):
         filled = self.post("/api/training/evaluations", {"setup": "lab:rig"})

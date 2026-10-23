@@ -1,6 +1,10 @@
 // Train tab: start a training job for the setup. Starting from a body-field
 // model or from scratch trains a body-field net; starting from a mask-only
-// segmenter fine-tunes the segmenter. The form is checked by the server as it
+// segmenter fine-tunes the segmenter. The form starts from a model's recipe
+// (model_training.recipe): a fine-tune takes the chosen model's settings, and
+// from scratch takes the setup's default body model's context, encoder,
+// pseudo-label sets and fibre share, so a run trains the way that model was
+// trained, on the labels of the chosen dataset. The form is checked by the server as it
 // changes (POST /api/training/plan: the kind, the label counts and the
 // generated name), and Start submits one `train` job (POST /api/jobs), which
 // prepares body targets, trains, evaluates on every benchmark and writes the
@@ -49,8 +53,9 @@ function runOnFields(compute) {
 export async function render(container, page, params) {
   const {ctx} = page;
   const setup = page.setup;
-  const [models, {datasets}, schema] = await Promise.all([
+  const [models, {datasets}, schema, {pseudo_labels: pseudoSets}] = await Promise.all([
     loadModels(setup.ref), api(`/api/library/datasets?setup=${encodeURIComponent(setup.ref)}`), api("/api/training/schema"),
+    api(`/api/library/pseudo-labels?setup=${encodeURIComponent(setup.ref)}`),
   ]);
   const byRef = Object.fromEntries(models.models.map((m) => [m.ref, m]));
   const requested = decodeURIComponent(params || "");
@@ -78,9 +83,26 @@ export async function render(container, page, params) {
   const dataList = datasets.length ? dataSelect
     : el("p", {class: "note"}, "No dataset for this setup yet: make one in the Datasets tab and choose its recordings' splits.");
 
+  // ----- extra data: pseudo-label sets and fibre distractors (body-field nets only)
+  const scope = (ref) => (ref.startsWith("lab:") ? "Lab" : "Mine");
+  const pseudoBoxes = pseudoSets.map((set) => el("label", {class: "inline", title: set.description || ""},
+    el("input", {type: "checkbox", name: "pseudo_labels", value: set.ref, onchange: () => check()}),
+    `${set.name} (${scope(set.ref)} · ${set.items} items from ${set.recordings} recordings)`));
+  const shareField = (name, label, help) => {
+    const input = el("input", {type: "number", name, value: 0, step: "any", min: 0, max: 1, oninput: () => check()});
+    return {input, element: el("label", {class: "tr-field", title: help}, label, input)};
+  };
+  const pseudoShare = shareField("pseudo_fraction", "Pseudo-label share", "share of every epoch drawn from the checked pseudo-label sets");
+  const fiberShare = shareField("fiber_share", "Fibre share", "share of hand labels given fibre distractors on the agar");
+  const recipeNote = el("p", {class: "note"});
+  const recipeRow = el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Extra data"), el("div", {},
+    pseudoSets.length ? el("div", {class: "row"}, pseudoBoxes) : el("p", {class: "note"}, "No pseudo-label sets for this setup."),
+    el("div", {class: "tr-fields"}, pseudoSets.length ? pseudoShare.element : null, fiberShare.element), recipeNote));
+
   // ----- settings
   let kind = (byRef[start]?.kind === "segmenter") ? "segmenter" : "body_net";
   const edited = new Set();
+  let recipeParams = {};
   const fields = {};
   const shown = el("div", {class: "tr-fields"});
   const advanced = el("div", {class: "tr-fields"});
@@ -90,7 +112,7 @@ export async function render(container, page, params) {
     shown.replaceChildren();
     advanced.replaceChildren();
     for (const p of schema.parameters.filter(appliesTo)) {
-      const value = edited.has(p.name) && fields[p.name] ? fields[p.name].value : defaultOf(p);
+      const value = edited.has(p.name) && fields[p.name] ? fields[p.name].value : (recipeParams[p.name] ?? defaultOf(p));
       const field = numberField(p, value, () => { edited.add(p.name); check(); });
       fields[p.name] = field.querySelector("input");
       (p.advanced ? advanced : shown).append(field);
@@ -106,11 +128,14 @@ export async function render(container, page, params) {
   const request = () => {
     const values = {};
     for (const [key, input] of Object.entries(fields)) if (input.isConnected && input.value !== "") values[key] = Number(input.value);
+    const body = kind === "body_net";
+    const pseudo = body ? pseudoBoxes.map((box) => box.querySelector("input")).filter((input) => input.checked).map((input) => input.value) : [];
     return {
       setup: setup.ref, dataset: datasets.length ? dataSelect.value : "", start_from: startSelect.value || null,
       context: startSelect.value ? "none" : (container.querySelector('input[name="context"]:checked')?.value || "none"),
       encoder: startSelect.value ? "resnet18" : (container.querySelector('input[name="encoder"]:checked')?.value || "resnet18"),
-      params: values, name: name.dataset.edited ? name.value.trim() : "", notes: notes.value.trim(),
+      params: values, pseudo_labels: pseudo, pseudo_fraction: pseudo.length ? Number(pseudoShare.input.value) : 0,
+      fiber_share: body ? Number(fiberShare.input.value) : 0, name: name.dataset.edited ? name.value.trim() : "", notes: notes.value.trim(),
     };
   };
 
@@ -137,13 +162,35 @@ export async function render(container, page, params) {
     }, 200);
   }
 
+  // A fine-tune repeats its model's recipe; from scratch repeats the default body model's, without its learning settings.
+  const applyRecipe = (model, fineTune) => {
+    const recipe = model?.recipe;
+    recipeParams = fineTune && recipe ? recipe.params : {};
+    edited.clear();
+    drawFields();
+    const sets = new Set(recipe?.pseudo_labels || []);
+    for (const box of pseudoBoxes) { const input = box.querySelector("input"); input.checked = sets.has(input.value); }
+    pseudoShare.input.value = recipe?.pseudo_fraction || 0;
+    fiberShare.input.value = recipe?.fiber_share || 0;
+    if (!fineTune) {
+      for (const radio of contextRadios) radio.querySelector("input").checked = radio.querySelector("input").value === (recipe?.context || "none");
+      for (const radio of encoderRadios) radio.querySelector("input").checked = radio.querySelector("input").value === (recipe?.encoder || "resnet18");
+    }
+    const missing = [...sets].filter((ref) => !pseudoSets.some((set) => set.ref === ref));
+    recipeNote.className = missing.length ? "note error" : "note";
+    recipeNote.textContent = !recipe ? ""
+      : `${fineTune ? "Settings" : "Context, encoder and extra data"} as ${model.name} was trained.`
+        + (missing.length ? ` Its pseudo-labels ${missing.join(", ")} are not in a library you can read.` : "");
+  };
+
   const onStart = () => {
     const ref = startSelect.value;
     const model = byRef[ref];
-    const next = model?.kind === "segmenter" ? "segmenter" : "body_net";
-    if (next !== kind) { kind = next; drawFields(); }
+    kind = model?.kind === "segmenter" ? "segmenter" : "body_net";
+    applyRecipe(model || byRef[setup.defaults?.body], !!model);
     contextRow.hidden = !!ref;
     encoderRow.hidden = !!ref;
+    recipeRow.hidden = kind !== "body_net";
     kindNote.textContent = `${KIND_TEXT[kind]} ${model ? `Keeps its inputs: ${lagsText(model.inputs)}.` : "Starts from the encoder's pretrained weights."}`;
     check();
   };
@@ -167,6 +214,7 @@ export async function render(container, page, params) {
     contextRow,
     encoderRow,
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Training data"), el("div", {}, dataList, summary)),
+    recipeRow,
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Settings"), el("div", {}, shown,
       el("details", {class: "tr-advanced"}, el("summary", {}, "Advanced"), advanced))),
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, "Name"), el("div", {}, name)),
@@ -175,7 +223,6 @@ export async function render(container, page, params) {
     el("div", {class: "tr-form-row"}, el("span", {class: "tr-form-label"}, ""), el("div", {class: "row"}, startButton,
       runOn.can ? null : el("span", {class: "note error"}, `Training is unavailable: ${runOn.reason}`))),
   );
-  drawFields();
   onStart();
   container.append(form);
   return () => clearTimeout(timer);

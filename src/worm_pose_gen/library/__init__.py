@@ -19,6 +19,7 @@ holds everything the app creates.  Items are named ``lab:<id>`` or
         dataset.json                       setup, name
         splits.json                        recording -> split; a recording not in it is not included
       benchmarks/<benchmark>.json          a frozen list of test-label revisions
+      pseudo_labels/<set>/                 self-training items from the pipeline's confident fits
       models/<model>/
         model.json                         the model card
         weights.ckpt
@@ -33,7 +34,8 @@ helpers), :mod:`.setups` (setups, default models, recording -> setup),
 (per-recording splits over a collection), :mod:`.labels` (the label
 revision file), :mod:`.targets` (the body
 target cache), :mod:`.benchmarks`, :mod:`.models` (cards, weights,
-evaluations), :mod:`.inference` (running a model).
+evaluations, recipes), :mod:`.pseudo_sets` (self-training items),
+:mod:`.inference` (running a model).
 
 Reading labels for training and evaluation
 ------------------------------------------
@@ -73,6 +75,7 @@ from .models import (
     ModelCard, create_model, evaluation_path, evaluations, get_card, list_models, make_inputs, save_evaluation,
     training_dir, weights_path, write_model,
 )
+from .pseudo_sets import PseudoLabelSet, create_pseudo_labels, get_pseudo_labels, list_pseudo_labels
 from .roots import LAB_LIBRARY_BY_HOST, Libraries, make_ref, parse_ref
 from .setups import (
     Setup, add_recording_folder, converted_path, converted_recording, create_setup, defaults_log, get_setup, list_setups,
@@ -83,10 +86,10 @@ from .targets import SETUP_DEFAULT, build_targets, cached_meta, load_targets, ta
 
 __all__ = [
     "BENCHMARK_ORIGINS", "Benchmark", "Collection", "Dataset", "LAB_LIBRARY_BY_HOST", "Label", "LabelRecord", "Libraries", "ModelCard",
-    "ORIGINS", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "add_recording_folder", "benchmark_labels",
-    "build_targets", "cached_meta", "converted_path", "converted_recording", "create_dataset", "create_model", "create_setup", "defaults_log", "evaluation_path",
-    "evaluations", "fingerprint", "freeze_benchmark", "get_benchmark", "get_card", "get_setup", "labels",
-    "list_benchmarks", "list_datasets", "list_models", "list_setups", "load_targets", "make_inputs", "make_ref",
+    "ORIGINS", "PseudoLabelSet", "SETUP_DEFAULT", "SPLITS", "STATUSES", "Setup", "add_recording_folder", "benchmark_labels",
+    "build_targets", "cached_meta", "converted_path", "converted_recording", "create_dataset", "create_model", "create_pseudo_labels", "create_setup", "defaults_log", "evaluation_path",
+    "evaluations", "fingerprint", "freeze_benchmark", "get_benchmark", "get_card", "get_pseudo_labels", "get_setup", "labels",
+    "list_benchmarks", "list_datasets", "list_models", "list_pseudo_labels", "list_setups", "load_targets", "make_inputs", "make_ref",
     "parse_ref", "recording_folders", "recording_id", "recording_sources", "register_recording", "remove_recording_folder", "save_evaluation", "set_default",
     "setup_for_recording", "target_builder", "trained_on", "training_dir", "weights_path", "write_benchmark", "write_model", "write_setup",
 ]

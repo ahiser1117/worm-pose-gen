@@ -51,15 +51,19 @@ function settings(card) {
 }
 
 function labelsUsed(details) {
+  const entries = (details.card.trained_on || []).filter((e) => e.dataset);
+  const pseudo = (details.card.trained_on || []).filter((e) => e.pseudo_labels);
+  const pseudoNote = pseudo.length ? el("p", {class: "note"}, pseudo.map((e) =>
+    `Pseudo-labels ${e.pseudo_labels.join(", ")}: ${e.counts?.pseudo ?? 0} items from ${e.recordings} recordings`).join("; ")) : null;
   if (!details.labels.length) {
-    const entries = details.card.trained_on || [];
-    return el("p", {class: "note"}, entries.length
+    return el("div", {}, el("p", {class: "note"}, entries.length
       ? entries.map((e) => `${e.dataset}: ${e.counts?.train ?? 0} train, ${e.counts?.val ?? 0} val labels from ${e.recordings} recordings (fingerprint ${e.fingerprint})`).join("; ")
-      : "No record of the labels used.");
+      : "No record of the labels used."), pseudoNote);
   }
   return el("div", {},
-    el("p", {class: "note"}, `${details.label_count} label revisions of ${(details.card.trained_on || []).map((e) => e.dataset).join(", ") || "the dataset"}; `
+    el("p", {class: "note"}, `${details.label_count} label revisions of ${entries.map((e) => e.dataset).join(", ") || "the dataset"}; `
       + "the exact list is in training/labels.json."),
+    pseudoNote,
     el("table", {class: "data"},
       el("thead", {}, el("tr", {}, el("th", {}, "Recording"), el("th", {class: "num"}, "Train"), el("th", {class: "num"}, "Val"))),
       el("tbody", {}, details.labels.map((r) => el("tr", {}, el("td", {}, r.recording),

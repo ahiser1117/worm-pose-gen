@@ -1,4 +1,4 @@
-"""The library for the Workspace, Labeling and Training pages: setups, recordings, labels, datasets, benchmarks, models.
+"""The library for the Workspace, Labeling and Training pages: setups, recordings, labels, datasets, benchmarks, pseudo-label sets, models.
 
 Everything is read from both libraries (:mod:`worm_pose_gen.library`) and
 named by reference (``lab:<id>``, ``mine:<id>``); references go in paths as
@@ -387,6 +387,14 @@ def save_label(ref: str, payload: dict[str, Any] = Body(...), app: AppState = De
 
 
 # --------------------------------------------------------------------------- benchmarks and models
+
+
+@router.get("/pseudo-labels")
+def pseudo_labels(setup: str = "", app: AppState = Depends(get_state)) -> dict[str, Any]:
+    """The pseudo-label sets a body-field run can mix in (:mod:`library.pseudo_sets`)."""
+
+    with _found():
+        return {"pseudo_labels": [p.summary() for p in library.list_pseudo_labels(_libraries(app), setup or None)]}
 
 
 @router.get("/benchmarks")

@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tests"))
 
 from test_model_training import label_inputs, make_library, store_targets  # noqa: E402
+from test_pseudo_labels import write_items  # noqa: E402
 from worm_pose_gen import library, model_eval  # noqa: E402
 from worm_pose_gen.app import AppConfig, create_app  # noqa: E402
 from worm_pose_gen.jobs import JobSpec  # noqa: E402
@@ -56,10 +57,13 @@ def personal_items(libraries, root: Path) -> None:
             writer.writerow([epoch, epoch * 5, "", round(0.9 / (epoch + 1) ** 0.5 + 0.12 + 0.01 * (epoch > 15) * (epoch - 15), 4)])
             writer.writerow([epoch, epoch * 5 + 4, round(1.1 / (epoch + 1) ** 0.6 + 0.05, 4), ""])
     records = library.labels(libraries, "mine:copper", "train") + library.labels(libraries, "mine:copper", "val")
+    pseudo = library.create_pseudo_labels(libraries, "copper-self", setup="lab:rig", name="Copper self-training")
+    write_items(pseudo.root, count=4, offsets=(-2, -1, 0, 1, 2))  # the body nets' lags 1 and 2
     library.create_model(libraries, "copper-ft", {
         "name": "copper-ft", "kind": "body_net", "setup": "lab:rig", "outputs": ["mask", "ap", "head", "tail", "overlap"],
         "inputs": library.make_inputs([1, 2], fps=20.0, pixel_size_um=2.0), "trained_on": library.trained_on("mine:copper", records),
-        "parent": "lab:body", "hparams": {"max_epochs": 300, "learning_rate": 3e-4, "batch_size": 4, "lags": [1, 2], "min_fit_iou": 0.9},
+        "parent": "lab:body", "hparams": {"max_epochs": 300, "learning_rate": 1e-4, "batch_size": 4, "lags": [1, 2], "min_fit_iou": 0.9,
+                                          "pseudo_labels": ["mine:copper-self"], "pseudo_fraction": 0.5, "fiber_share": 0.5},
         "notes": "Fine-tune on the copper plates; heads looked better on copper-1.",
     }, root / "body.ckpt", training_files={"metrics.csv": metrics}, training_records={
         "labels.json": {"train": [r.identity for r in records if r.split == "train"], "val": [r.identity for r in records if r.split == "val"]},

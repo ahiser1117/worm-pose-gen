@@ -160,7 +160,11 @@ newer version.
 **Models** lists the lab's models and yours with their scores on a
 benchmark (mask IoU, head/tail correct, A-P error); ★ marks the setup's
 defaults. **Use as default** makes a model your default for a setup (only
-for you). **Train from this** starts a training run from a model.
+for you). **Train from this** starts a training run from a model, with the
+settings and extra data that model was trained with (its recipe): for the
+lab's default, pseudo-labels from the pipeline's confident fits and fibre
+distractors. **From scratch** under Start from trains fresh weights with the
+default model's recipe.
 **Datasets** shows the labels by recording and split: a dataset says which
 recordings train, validate or test a model, so it can combine the lab's
 labels with yours. A trained model is evaluated on the setup's benchmarks

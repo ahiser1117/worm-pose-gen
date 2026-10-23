@@ -157,11 +157,20 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await form.locator('input[name="name"]').inputValue(), 'copper-4');
     assert.equal(await form.locator('select[name="dataset"]').inputValue(), 'mine:copper');
     assert(await form.locator('input[name="crop_size"]').isHidden());
+    // A fine-tune repeats the model's recipe: its settings, pseudo-label sets and fibre share.
+    assert.equal(await form.locator('input[name="learning_rate"]').inputValue(), '0.0001');
+    assert(await form.locator('input[name="pseudo_labels"][value="mine:copper-self"]').isChecked());
+    assert.equal(await form.locator('input[name="pseudo_fraction"]').inputValue(), '0.5');
+    assert.equal(await form.locator('input[name="fiber_share"]').inputValue(), '0.5');
     await form.locator('select[name="start_from"]').selectOption('');
     assert(await page.getByText('Temporal context').isVisible());
+    // From scratch: the default body model's extra data, the learning settings' defaults.
+    assert(await form.locator('input[name="pseudo_labels"][value="mine:copper-self"]').isChecked());
+    assert.equal(await form.locator('input[name="learning_rate"]').inputValue(), '0.0003');
     await form.locator('select[name="start_from"]').selectOption('lab:seg');
     assert.match(await form.locator('.tr-kind').innerText(), /Fine-tunes the mask-only segmenter/);
     assert.equal(await form.locator('input[name="patience"]').inputValue(), '5');
+    assert(await page.getByText('Extra data').isHidden());
     await shot(page, 'train');
     await form.locator('select[name="start_from"]').selectOption('mine:copper-ft');
     await form.locator('input[name="max_epochs"]').fill('1');
@@ -179,6 +188,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(card.card.notes, 'one epoch from the browser test');
     assert.equal(card.card.hparams.crop_size, 64);
     assert.equal(card.card.parent, 'mine:copper-ft');
+    assert.deepEqual([card.card.hparams.pseudo_labels, card.card.hparams.fiber_share], [['mine:copper-self'], 0.5]);
 
     // ----- The picker, as the Workspace opens it.
     const chosen = page.evaluate(() => import('/static/model_picker.js').then(m => m.openModelPicker({toast() {}}, {setup: 'lab:rig', role: 'body', current: 'mine:copper-ft'})));

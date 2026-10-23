@@ -37,6 +37,14 @@ Starting from a mask-only segmenter fine-tunes the segmenter: it stays
 until a body-field model matches its mask IoU (section 4, decision 1).  A
 fine-tune keeps its parent's lags.
 
+**Recipes.**  Beside its dataset's labels a body-field run can mix in
+pseudo-label sets (:mod:`library.pseudo_sets`, a share of every epoch) and
+fibre distractors on a share of the hand labels.  A model's :func:`recipe`
+is those choices and its form parameters, read from its card: the Train tab
+fills the form with the recipe of the model it starts from (or, from
+scratch, of the setup's default body model), so a new run trains the way
+that model was trained, on the labels of the dataset chosen now.
+
 Progress goes to the job file (:func:`jobs.report_progress`): the phase,
 the epoch, and the loss curve so far, which the Models tab draws live.
 ``python -m worm_pose_gen.model_training`` is the command a ``train`` job
@@ -161,16 +169,16 @@ class TrainRequest:
     encoder: str = "resnet18"
     params: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
-    # Command line only.  Self-training: directories of pseudo-label items
-    # (:mod:`pseudo_labels`) making up ``pseudo_fraction`` of every epoch.
+    # Self-training: pseudo-label sets (library references, :mod:`library.pseudo_sets`)
+    # making up ``pseudo_fraction`` of every epoch.
     pseudo_labels: list[str] = field(default_factory=list)
     pseudo_fraction: float = 0.0
-    # Rendered synthetic items (:mod:`synthetic_clips`) making up
-    # ``synthetic_fraction`` of every epoch.
-    synthetic: str = ""
-    synthetic_fraction: float = 0.0
     # Share of hand-label items that get fibre distractors (synthetic_clips.add_fibers).
     fiber_share: float = 0.0
+    # Command line only.  Rendered synthetic items (:mod:`synthetic_clips`)
+    # making up ``synthetic_fraction`` of every epoch.
+    synthetic: str = ""
+    synthetic_fraction: float = 0.0
     # Semi-supervised training on unlabeled video (:class:`semi_supervised.SemiConfig` settings), body-field models only.
     semi: dict[str, Any] | None = None
 
@@ -256,6 +264,10 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
         raise ValueError(f"{request.dataset} has no validation labels (no labeled recording is in the val split)")
     if request.pseudo_labels and (kind != "body_net" or not 0.0 < float(request.pseudo_fraction) < 1.0):
         raise ValueError("pseudo-labels train a body-field model at a pseudo-label fraction in (0, 1)")
+    for ref in request.pseudo_labels:
+        pseudo = library.get_pseudo_labels(libraries, ref)
+        if pseudo.setup != setup.ref:
+            raise ValueError(f"{ref} holds pseudo-labels of {pseudo.setup}, not of {setup.ref}")
     if float(request.pseudo_fraction) + float(request.synthetic_fraction) >= 1.0:
         raise ValueError("the pseudo-label and synthetic fractions together must stay below 1 (hand labels fill the rest)")
     request.name = request.name.strip() if request.name else suggest_name(libraries, request.dataset, len(train), taken)
@@ -263,6 +275,23 @@ def plan(libraries: Libraries, request: TrainRequest, *, taken: Sequence[str] = 
     if model_exists(libraries, request.name) or request.name in taken:
         raise ValueError(f"a model named {request.name} already exists; choose another name")
     return Plan(request=request, kind=kind, lags=tuple(lags), encoder=encoder, params=params, train=train, val=val, parent_kind=parent_kind)
+
+
+def recipe(card: library.ModelCard) -> dict[str, Any]:
+    """How a model was trained, as a Train request repeats it: the temporal context and encoder a run from
+    scratch takes, the form parameters on its card, and the pseudo-label sets and fibre share it mixed in."""
+
+    hparams = card.hparams
+    lags = tuple(int(lag) for lag in card.inputs.get("lags_frames") or ())
+    return {
+        "model": card.ref,
+        "context": next((key for key, value in CONTEXTS.items() if value == lags), None),
+        "encoder": str(hparams.get("encoder") or "resnet18"),
+        "params": {p["name"]: hparams[p["name"]] for p in parameters_for(card.kind) if hparams.get(p["name"]) is not None},
+        "pseudo_labels": list(hparams.get("pseudo_labels") or []),
+        "pseudo_fraction": float(hparams.get("pseudo_fraction") or 0.0),
+        "fiber_share": float(hparams.get("fiber_share") or 0.0),
+    }
 
 
 # --------------------------------------------------------------------------- data
@@ -499,7 +528,8 @@ def train(
         if request.pseudo_labels:
             from .pseudo_labels import PseudoLabelDataset
 
-            pseudo = PseudoLabelDataset(request.pseudo_labels, lags=plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
+            directories = [library.get_pseudo_labels(libraries, ref).root for ref in request.pseudo_labels]
+            pseudo = PseudoLabelDataset(directories, lags=plan_.lags, augment=True, crop_size=p["crop_size"], seed=p["seed"])
         synthetic = None
         if request.synthetic and request.synthetic_fraction > 0:
             from .synthetic_clips import SyntheticClipDataset
@@ -582,11 +612,12 @@ def train(
                 overlap = overlap_state(r, meta, p.get("min_fit_iou", 0.9)) or "untrained"
                 overlap_states[overlap] = overlap_states.get(overlap, 0) + 1
         preprocessing = "flat_field" if setup.video.get("flat_field", True) else "none"
+        pseudo_trained_on = None if pseudo is None else {"pseudo_labels": list(request.pseudo_labels), **pseudo.counts()}
         card = {
             "name": name, "kind": plan_.kind, "setup": setup.ref,
             "inputs": library.make_inputs(plan_.lags, fps=setup.fps, pixel_size_um=setup.pixel_size_um, preprocessing=preprocessing),
             "outputs": ["mask"] if plan_.kind == "segmenter" else list(library.models.OUTPUTS),
-            "trained_on": library.trained_on(request.dataset, records) + ([] if pseudo is None else [pseudo.trained_on()]),
+            "trained_on": library.trained_on(request.dataset, records) + ([] if pseudo is None else [pseudo_trained_on]),
             "parent": request.start_from or None,
             "hparams": {**p, "lags": list(plan_.lags), "context": None if request.start_from else request.context,
                         **({"encoder": plan_.encoder} if plan_.kind == "body_net" else {}),
@@ -603,7 +634,7 @@ def train(
             "best_val_loss": None if best.best_model_score is None else float(best.best_model_score),
             "device": str(torch_device), "git": _git_commit(), "targets_built": prepared,
             "labels": {"train": len(plan_.train), "val": len(plan_.val), "body_trained": used, "overlap": overlap_states},
-            "pseudo_labels": None if pseudo is None else pseudo.trained_on(),
+            "pseudo_labels": pseudo_trained_on,
         }
         files = {n: run_dir / n for n in ("metrics.csv", "hparams.yaml") if (run_dir / n).exists()}
         created = library.create_model(
@@ -642,8 +673,8 @@ def command(libraries: Libraries, request: TrainRequest, plan_: Plan) -> list[st
         argv += [f"--{key.replace('_', '-')}", str(value)]
     if request.notes:
         argv += ["--notes", request.notes]
-    for directory in request.pseudo_labels:
-        argv += ["--pseudo-labels", directory]
+    for ref in request.pseudo_labels:
+        argv += ["--pseudo-labels", ref]
     if request.pseudo_labels:
         argv += ["--pseudo-fraction", str(request.pseudo_fraction)]
     if request.synthetic:
@@ -667,7 +698,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="encoder from scratch: " + "; ".join(f"{k}: {v}" for k, v in ENCODERS.items()))
     parser.add_argument("--notes", default="")
     parser.add_argument("--pseudo-labels", action="append", default=[],
-                        help="a directory of pseudo-label items (pseudo_labels.py) to mix in at --pseudo-fraction; repeatable")
+                        help="a pseudo-label set (lab:<id> or mine:<id>) to mix in at --pseudo-fraction; repeatable")
     parser.add_argument("--pseudo-fraction", type=float, default=0.0, help="share of every epoch drawn from the pseudo-labels")
     parser.add_argument("--synthetic", default="", help="directory of rendered synthetic items (synthetic_clips) to mix in")
     parser.add_argument("--synthetic-fraction", type=float, default=0.0, help="share of each epoch's items that are synthetic")

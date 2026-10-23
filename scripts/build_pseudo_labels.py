@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Build self-training pseudo-label items from analysed workspaces, and a contact sheet to audit them.
+"""Build a pseudo-label set from analysed workspaces, and a contact sheet to audit one.
 
-    build_pseudo_labels.py --workspaces <ws dir>... --output <items dir> [--clear-limit N] [--jobs J] [--rebuild]
-    build_pseudo_labels.py --sheet <items dir> --sheet-count 48 [--sheet-kind bridged]
+    build_pseudo_labels.py --set <id> --setup lab:nir-flv --workspaces <ws dir>... [--clear-limit N] [--jobs J] [--rebuild]
+    build_pseudo_labels.py --sheet lab:self-train-r1 --sheet-count 48 [--sheet-kind bridged]
 
 Each workspace must have been analysed through the propagate stage
 (``pipeline.main --stages segment,prior,fit,ambiguity,propagate,track``).
-Selection and targets are :mod:`worm_pose_gen.pseudo_labels`'; the output
-directory holds one directory per workspace (an ``.npz`` per item and its
+Selection and targets are :mod:`worm_pose_gen.pseudo_labels`'; the set
+(``mine:<id>`` in the personal library, :mod:`worm_pose_gen.library.pseudo_sets`)
+holds one directory per workspace (an ``.npz`` per item and its
 ``index.json``) and a merged ``index.json`` over all of them (the items, the
 selection parameters and every workspace's selection counts), so workspaces
-can be added as their analyses finish.  The sheet
+can be added as their analyses finish.  Training names the set
+(``--pseudo-labels mine:<id>``); ``scripts/publish.py pseudo-labels`` copies
+it into the lab library.  The sheet
 shows each sampled item twice: the frame as is, and with the A-P target
 (head red to tail blue), the ignored band (yellow) and the head (green ring).
 """
@@ -59,15 +62,25 @@ def merge(output: Path) -> dict:
 
 
 def build(args: argparse.Namespace) -> None:
+    from worm_pose_gen import library
+    from worm_pose_gen.model_eval import libraries_from
     from worm_pose_gen.pseudo_labels import SelectionParams
 
+    libraries = libraries_from(args)
+    try:
+        pseudo = library.get_pseudo_labels(libraries, f"mine:{args.set}")
+    except LookupError:
+        if not args.setup:
+            sys.exit(f"mine:{args.set} is a new set: name its setup with --setup")
+        pseudo = library.create_pseudo_labels(libraries, args.set, setup=args.setup, name=args.name, description=args.description)
+    output = pseudo.root
     params = {f.name: getattr(args, f.name) for f in fields(SelectionParams) if getattr(args, f.name, None) is not None}
-    todo = [w for w in args.workspaces if args.rebuild or not (Path(args.output) / Path(w).name / "index.json").exists()]
-    jobs = [(str(w), str(args.output), params, args.clear_limit, args.seed) for w in todo]
+    todo = [w for w in args.workspaces if args.rebuild or not (output / Path(w).name / "index.json").exists()]
+    jobs = [(str(w), str(output), params, args.clear_limit, args.seed) for w in todo]
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         for workspace, found, workspace_counts in pool.map(build_one, jobs):
             print(f"{Path(workspace).name}: {len(found)} items {workspace_counts}", flush=True)
-    print(json.dumps(merge(args.output)), flush=True)
+    print(json.dumps({"set": pseudo.ref, **merge(output)}), flush=True)
 
 
 def tile(item: dict, size: int) -> np.ndarray:
@@ -106,9 +119,12 @@ def tile(item: dict, size: int) -> np.ndarray:
 def sheet(args: argparse.Namespace) -> None:
     from PIL import Image, ImageDraw
 
+    from worm_pose_gen import library
+    from worm_pose_gen.model_eval import libraries_from
     from worm_pose_gen.pseudo_labels import read_index
 
-    index = read_index(args.sheet)
+    directory = library.get_pseudo_labels(libraries_from(args), args.sheet).root
+    index = read_index(directory)
     entries = [e for e in index["items"] if args.sheet_kind in (None, e["kind"])]
     rng = np.random.default_rng(args.seed)
     chosen = [entries[k] for k in sorted(rng.choice(len(entries), size=min(args.sheet_count, len(entries)), replace=False))]
@@ -118,14 +134,14 @@ def sheet(args: argparse.Namespace) -> None:
     draw = ImageDraw.Draw(canvas)
     listing = []
     for k, entry in enumerate(chosen):
-        with np.load(Path(args.sheet) / entry["file"]) as archive:
+        with np.load(directory / entry["file"]) as archive:
             item = {name: archive[name] for name in archive.files}
         x, y = (k % columns) * 2 * size, (k // columns) * (size + 16)
         canvas.paste(Image.fromarray(tile(item, size)), (x, y + 16))
         caption = f"{k}: {entry['workspace'][:18]} f{entry['frame']} {entry['kind'][0]} {entry['iou']:.3f}"
         draw.text((x + 2, y + 2), caption, fill=(255, 255, 255))
         listing.append({"tile": k, **entry})
-    output = Path(args.sheet_output or Path(args.sheet).parent / f"audit_{args.sheet_kind or 'all'}.jpg")
+    output = Path(args.sheet_output or Path.cwd() / f"audit_{args.sheet.replace(':', '_')}_{args.sheet_kind or 'all'}.jpg")
     output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output, quality=88)
     output.with_suffix(".json").write_text(json.dumps(listing, indent=1))
@@ -133,18 +149,23 @@ def sheet(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from worm_pose_gen.model_eval import add_library_arguments
     from worm_pose_gen.pseudo_labels import SelectionParams
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_library_arguments(parser)
     parser.add_argument("--workspaces", nargs="*", type=Path, default=[])
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--set", default=None, help="id of the personal pseudo-label set to build or add to")
+    parser.add_argument("--setup", default=None, help="the setup the workspaces' recordings belong to (a new set)")
+    parser.add_argument("--name", default="", help="a new set's name (default: its id)")
+    parser.add_argument("--description", default="", help="a new set's description")
     parser.add_argument("--clear-limit", type=int, default=None, help="at most this many clear items per workspace (random)")
     parser.add_argument("--jobs", type=int, default=4)
-    parser.add_argument("--rebuild", action="store_true", help="rebuild workspaces already built in --output")
+    parser.add_argument("--rebuild", action="store_true", help="rebuild workspaces already built in the set")
     parser.add_argument("--seed", type=int, default=0)
     for f in fields(SelectionParams):
         parser.add_argument(f"--{f.name.replace('_', '-')}", dest=f.name, type=type(f.default), default=None)
-    parser.add_argument("--sheet", type=Path, default=None, help="an items directory to audit")
+    parser.add_argument("--sheet", default=None, help="a pseudo-label set to audit (lab:<id> or mine:<id>)")
     parser.add_argument("--sheet-count", type=int, default=48)
     parser.add_argument("--sheet-kind", choices=("clear", "bridged"), default=None)
     parser.add_argument("--sheet-output", type=Path, default=None)
@@ -154,8 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.sheet is not None:
         sheet(args)
     else:
-        if not args.workspaces or args.output is None:
-            parser.error("--workspaces and --output are required to build")
+        if not args.workspaces or args.set is None:
+            parser.error("--workspaces and --set are required to build")
         build(args)
     print("done")
     return 0

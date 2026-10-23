@@ -7,7 +7,8 @@ inside coils and contacts that propagation bridged from clear frames on both
 sides.  This module selects such frames from an analysed workspace, renders
 body-field targets from the fitted tube, stores them with their temporal
 context, and serves them to training beside the hand labels
-(:mod:`model_training`, ``--pseudo-labels``).
+(:mod:`model_training`, ``--pseudo-labels``); a set of them is a library item
+(:mod:`library.pseudo_sets`).
 
 **Selection** (:func:`select_rows`, :class:`SelectionParams`).  A row is
 
@@ -348,7 +349,6 @@ class PseudoLabelDataset:
 
     def __init__(self, directories: Sequence[Path | str], *, lags: Sequence[int], augment: bool = False, crop_size: int | None = None,
                  seed: int = 0) -> None:
-        self.directories = [str(directory) for directory in directories]
         self.items: list[Path] = []
         self.entries: list[dict[str, Any]] = []
         self.lags = tuple(int(lag) for lag in lags)
@@ -366,12 +366,11 @@ class PseudoLabelDataset:
     def __len__(self) -> int:
         return len(self.items)
 
-    def trained_on(self) -> dict[str, Any]:
-        """The model card's ``trained_on`` entry for these items (no train/val counts: they are not labels)."""
+    def counts(self) -> dict[str, Any]:
+        """The items by kind and their recordings, for the model card's ``trained_on`` (no train/val counts: they are not labels)."""
 
         kinds = [entry["kind"] for entry in self.entries]
         return {
-            "dataset": "pseudo-labels:" + ",".join(Path(d).name for d in self.directories), "pseudo_labels": self.directories,
             "counts": {"pseudo": len(self.entries), **{kind: kinds.count(kind) for kind in sorted(set(kinds))}},
             "recordings": len({Path(entry["recording"]).stem for entry in self.entries}),
         }
