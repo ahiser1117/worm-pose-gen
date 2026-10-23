@@ -15,6 +15,72 @@ does. Where things go is `worm_pose_gen.settings`: one data directory
 `cache/` (flat fields, recording priors) and `runs/` (script outputs).
 `scripts/preflight.py` checks an install.
 
+## The app in more detail
+
+What the README leaves out for lab members.
+
+**Install and data.** The checkout and its Python environment take about
+5 GB. `--data-dir` is saved in `settings.json`; without it the data
+directory is `user_data/` inside the checkout. To move it, move its contents
+and run `scripts/bootstrap_environment.sh --data-dir <new folder>`. In the
+preflight output a `warn` line is something the app works without (no GPU,
+the lab library not reachable, little free space).
+
+| | |
+|---|---|
+| Data directory | `library/` labels, datasets, models and recording folders; `workspaces/` one per opened recording, with its exports; `cache/` flat fields and body-size priors, rebuilt when missing; `runs/` outputs of command-line scripts |
+| Lab library (read-only) | `/storage/fs/store1/shared/worm-pose-models` on flv, `/orcd/data/flavell/001/shared/worm-pose-models` on Engaging |
+| The checkout | the code, `.venv`, `settings.json` |
+
+**Serving.** The app listens on 127.0.0.1 only and has no login, so it is
+reachable through an ssh tunnel or by anyone logged in to the same machine.
+When port 8768 is taken it uses the next free one and prints that. It uses
+the GPUs of its machine, the least busy one per analysis (`--gpus 2,3`
+limits them; `./worm-pose-app --help` lists the options). On Engaging the
+printed `ssh` command goes through the login node to the job's node, and
+**Run on → SLURM** sends analyses and training to the cluster, so they keep
+running after the interactive job ends.
+
+**Recordings.** A recording folder is searched two levels deep for `.h5`
+recordings and `.avi` videos; each new file is checked in the background,
+and one that cannot be read says why (damaged on disk, or an HDF5
+compression plugin that is not installed). A video is converted to an HDF5
+recording when opened (about a minute per ten minutes of video). The
+Recordings screen lists a setup's recordings (a setup is a microscope; the
+lab's rigs are `NIR behaviour camera (flv rigs)`), analysed ones first, with
+their status.
+
+**Workspace.** Four layers (keys 1–4): mask, midline (head a square, tail a
+circle), outline, and the A-P field from head to tail. At the bottom are the
+transport, the issue track and the curvature kymograph: drag to scrub,
+right-drag to select a range for a fix. Flip works on a whole issue or one
+frame; Refit chooses its method from the issue's reasons; saving an edited
+mask refits around it; Relabel sends keyframes to Labeling and rebuilds the
+stretch once they are labeled. **Re-analyse…** runs the analysis again, for
+example with another model.
+
+**Exports.** `workspaces/<workspace>/exports/<recording>_<time>/` holds a
+Parquet table with one row per frame and `export.json` (units, models,
+setup). Columns: frame, time, status (automatic, reviewed, fixed or
+unresolved), the midline from head to tail, curvature, width profile, head
+and tail positions, centroid and velocity. Lengths are in µm, positions in
+image coordinates (origin top left, y down); each column's unit and
+description are also in the Parquet metadata.
+
+**Labeling.** A label is one frame's mask and its body (the midline from the
+head). Queues: a workspace's Relabel keyframes, **New queue** (frames spread
+over chosen recordings, favouring the ones the model is least sure of) and
+**Browse labels**. Without a GPU the model's proposal takes 15–20 s per frame
+and is made only on **Propose**.
+
+**Training.** Models are scored on a benchmark (mask IoU, head/tail correct,
+A-P error). **Use as default** sets a personal default for a setup. **Train
+from this** fills the form with the model's recipe (settings, pseudo-label
+sets, fibre share); **From scratch** under Start from uses the default body
+model's recipe on fresh weights. A dataset says which recordings train,
+validate or test a model, combining the lab's labels with yours; a trained
+model is evaluated on the setup's benchmarks.
+
 ## Tests
 
 Python tests use `unittest`. `scripts/run_tests.py` runs them on the CPU,
@@ -241,7 +307,7 @@ independent fitting loss; it adds startup cost and should be benchmarked on
 your workload before enabling.
 
 To look at the poses of a recording, analyse it in the pose app (the
-Workspace page; see the [README](../README.md#the-workspace-page)). With `--dev` it shows every layer
+Workspace page; see the [README](../README.md#analyse-a-recording)). With `--dev` it shows every layer
 and per-frame series the pipeline produces.
 
 By default the run first bootstraps a recording prior: frames spread over
