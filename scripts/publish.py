@@ -91,12 +91,19 @@ def lab_ref(libraries: Libraries, ref: str | None) -> str | None:
 
 
 def staged_copy(source: Path, target: Path) -> Path:
-    """Copy a directory to a hidden staging path beside ``target``; the caller renames it into place."""
+    """Copy a directory to a hidden staging path beside ``target``; the caller renames it into place.
+
+    Everything in the copy is made readable by everyone: the lab reads it,
+    and a personal file may be private (``write_json`` wrote 0600 files
+    before it set the permissions of an ordinary new file).
+    """
 
     staging = target.with_name(f".{target.name}.partial")
     if staging.exists():
         shutil.rmtree(staging)
     shutil.copytree(source, staging, ignore=shutil.ignore_patterns(".lock", "*.partial"))
+    for path in (staging, *staging.rglob("*")):
+        path.chmod(path.stat().st_mode | (0o555 if path.is_dir() else 0o444))
     return staging
 
 

@@ -40,6 +40,7 @@ class PublishTests(unittest.TestCase):
         }, weights)
         library.save_evaluation(self.libraries, "mine:rig2-ft", "lab:v1", {"iou_mean": 0.9})
         library.save_evaluation(self.libraries, "mine:rig2-ft", "mine:rig2-labels-b1", {"iou_mean": 0.8})
+        (self.libraries.personal / "models" / "rig2-ft" / "evaluations" / "lab.v1.json").chmod(0o600)  # private, as old app writes were
         for overlays in ("lab.v1", "mine.rig2-labels-b1"):  # the worst frames' overlays beside each score
             (self.libraries.personal / "models" / "rig2-ft" / "evaluations" / overlays).mkdir()
             (self.libraries.personal / "models" / "rig2-ft" / "evaluations" / overlays / "worst1.png").write_bytes(b"png")
@@ -61,6 +62,8 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(set(library.evaluations(self.libraries, "lab:rig2-ft")), {"lab:v1"})  # personal-benchmark scores stay personal
         self.assertEqual(sorted(p.name for p in (self.libraries.lab / "models" / "rig2-ft" / "evaluations").iterdir()),
                          ["lab.v1", "lab.v1.json"])
+        published = [self.libraries.lab / "models" / "rig2-ft", *(self.libraries.lab / "models" / "rig2-ft").rglob("*")]
+        self.assertEqual([p.name for p in published if p.stat().st_mode & 0o004 == 0], [])  # the lab can read all of it
         self.assertEqual(library.get_setup(self.libraries, "lab:rig2").defaults, {"body": "lab:rig2-ft"})
         self.assertEqual(library.defaults_log(self.libraries, "lab:rig2")[0]["reason"], "first model for rig 2")
         published = library.labels(self.libraries, "lab:rig2-labels")
